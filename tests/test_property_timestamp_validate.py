@@ -34,9 +34,6 @@ from simplebroker._exceptions import TimestampError
 from simplebroker._timestamp import TimestampGenerator
 
 NS_PER_S = 1_000_000_000
-# Hybrid timestamps zero their bottom 12 bits for a logical counter; parsed
-# wall-clock inputs are quantized to this granularity (4096 ns).
-QUANTUM = LOGICAL_COUNTER_MASK + 1
 
 
 @given(st.text(max_size=64))
@@ -103,24 +100,18 @@ def test_explicit_unit_suffixes_agree(n: int) -> None:
     assert TimestampGenerator.validate(f"{n * NS_PER_S}ns") == expected
 
 
-@given(st.integers(min_value=0, max_value=4_102_444_800))  # 1970 .. 2100-01-01
+@given(st.integers(min_value=0, max_value=9_000_000_000))
+@example(4_638_902_403)  # 2117 float conversion crossed one 4096ns grain
 def test_iso_datetimes_agree_with_unix_seconds(n: int) -> None:
-    """An ISO datetime and its unix-seconds form agree to within one logical
-    quantum. NOT exact equality: the ISO path multiplies a float (datetime
-    .timestamp() * 1e9, _timestamp.py:459) whose rounding can land one 4096ns
-    quantum away from the integer-math suffix path. Asserting exact equality
-    here WILL flake — do not 'fix' a failure by tightening this."""
+    """Equivalent ISO and integral-second bounds select the same grain."""
     iso = datetime.fromtimestamp(n, tz=UTC).isoformat()
-    assert (
-        abs(TimestampGenerator.validate(iso) - TimestampGenerator.validate(f"{n}s"))
-        <= QUANTUM
-    )
+    assert TimestampGenerator.validate(iso) == TimestampGenerator.validate(f"{n}s")
 
 
 @given(st.dates(min_value=date(1970, 1, 1), max_value=date(2200, 12, 31)))
 def test_date_only_iso_means_midnight_utc(d: date) -> None:
     """A bare YYYY-MM-DD parses identically to its explicit midnight-UTC
-    datetime (both run through the same float path, so equality is exact)."""
+    datetime through the same exact integer epoch conversion."""
     assert TimestampGenerator.validate(d.isoformat()) == TimestampGenerator.validate(
         f"{d.isoformat()}T00:00:00Z"
     )

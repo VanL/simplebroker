@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import warnings
+from io import StringIO
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pytest
 
@@ -19,11 +21,16 @@ from simplebroker import (
     DumpClockSkewWarning,
     LoadResult,
     Queue,
+    commands,
     dump_lines,
     load_lines,
     open_broker,
 )
 from simplebroker._constants import LOGICAL_COUNTER_MASK, NS_PER_SECOND
+from simplebroker._dump import (
+    _emit_load_clock_skew_warning,
+    _load_clock_skew_warning_sink,
+)
 from simplebroker.ext import OperationalError, TimestampError
 
 
@@ -209,6 +216,130 @@ def test_load_warns_and_proceeds_at_future_skew_limit(
     warning = str(caught[0].message)
     assert f"{header:019d}" in warning
     assert "at most 4095 broker-global generated IDs" in warning
+
+
+def test_quiet_cmd_load_does_not_hide_another_threads_clock_skew_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    entered = threading.Event()
+    release = threading.Event()
+    failures: list[BaseException] = []
+
+    def blocked_time_ns() -> int:
+        entered.set()
+        if not release.wait(timeout=5):
+            raise AssertionError("test did not release blocked load")
+        return header - NS_PER_SECOND
+
+    monkeypatch.setattr("simplebroker._dump._time_ns", blocked_time_ns)
+    monkeypatch.setattr(commands.sys, "stdin", StringIO(_load_header(header)))
+
+    def load_quietly() -> None:
+        try:
+            commands.cmd_load(str(tmp_path / "quiet.db"), quiet=True)
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            failures.append(exc)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DumpClockSkewWarning)
+        thread = threading.Thread(target=load_quietly)
+        thread.start()
+        assert entered.wait(timeout=5)
+        warnings.warn("foreign skew", DumpClockSkewWarning, stacklevel=1)
+        release.set()
+        thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert failures == []
+    assert [str(item.message) for item in caught] == ["foreign skew"]
+
+
+class _LoadAbort(BaseException):
+    pass
+
+
+def test_load_warning_sink_restores_outer_nested_policy() -> None:
+    routed: list[tuple[str, str]] = []
+
+    with _load_clock_skew_warning_sink(
+        lambda message: routed.append(("outer", message))
+    ):
+        _emit_load_clock_skew_warning("before")
+        with _load_clock_skew_warning_sink(
+            lambda message: routed.append(("inner", message))
+        ):
+            _emit_load_clock_skew_warning("nested")
+        _emit_load_clock_skew_warning("after")
+
+    assert routed == [
+        ("outer", "before"),
+        ("inner", "nested"),
+        ("outer", "after"),
+    ]
+
+
+def test_cmd_load_warning_policy_resets_after_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    monkeypatch.setattr(
+        "simplebroker._dump._time_ns",
+        lambda: header - NS_PER_SECOND,
+    )
+    monkeypatch.setattr(commands.sys, "stdin", StringIO(_load_header(header)))
+
+    assert commands.cmd_load(str(tmp_path / "successful-command.db"), quiet=True) == 0
+
+    with (
+        open_broker(_db(tmp_path, "after-success.db")) as broker,
+        pytest.warns(DumpClockSkewWarning),
+    ):
+        load_lines(broker, [_load_header(header)])
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("load failed"), _LoadAbort()])
+def test_cmd_load_warning_policy_resets_after_every_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+) -> None:
+    class Connection:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get_connection(self) -> object:
+            return object()
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            commands,
+            "DBConnection",
+            lambda _target, **_kwargs: Connection(),
+        )
+        patch.setattr(commands, "load_lines", fail)
+        with pytest.raises(type(failure)) as raised:
+            commands.cmd_load("ignored", quiet=True)
+        assert raised.value is failure
+
+    header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    monkeypatch.setattr(
+        "simplebroker._dump._time_ns",
+        lambda: header - NS_PER_SECOND,
+    )
+    with (
+        open_broker(_db(tmp_path, f"reset-{type(failure).__name__}.db")) as broker,
+        pytest.warns(DumpClockSkewWarning),
+    ):
+        load_lines(broker, [_load_header(header)])
 
 
 def test_load_clock_skew_uses_physical_grain_boundary(

@@ -222,7 +222,9 @@ the `cmd_*` boundary unchanged. The single post-parse CLI boundary classifies
 and renders them; `load` retains one CLI-local translator because `[SB-IO-4]`
 owns its `broker load:` recovery dialect. Shared selector validation runs
 before config or target access, which prevents direct-call grammar drift and
-the invalid exact-ID delete-without-queue mutation path.
+the invalid exact-ID delete-without-queue mutation path. Queue-wide and
+all-queue delete derive their result from the backend's affected-row count:
+positive is `0`, while zero is the same no-match `2` used by exact-ID delete.
 
 CLI argument normalization remains a preparse pass because root options and
 the destructive global actions must be recognized before subcommand dispatch.
@@ -244,6 +246,13 @@ bounds for execution and defend direct Python callers. Global cleanup, status,
 and vacuum actions share the same preparse JSON-mode owner; vacuum adds no
 success payload or action-specific serializer.
 
+Non-exact timestamp-bound admission strips once and rejects inputs over 128
+Unicode code points before digit folding, regular expressions, integer
+conversion, or diagnostic echo. Exact message-ID mode retains its separate
+19-decimal-digit grammar. ISO conversion uses integer UTC `timedelta` fields,
+so an ISO instant and its equivalent integral-unit spelling enter the same
+hybrid grain without float rounding.
+
 Unknown backend entry-point lookup raises the private
 `UnknownBackendPluginError`, which remains a `RuntimeError` for compatible
 callers. Project resolution catches that type to add install guidance; other
@@ -259,9 +268,13 @@ change the JSON code.
 
 Quiet warning policy is also invocation-local. Message-newline and
 alias-shadow commentary is gated at its producer by `ContextVar` state rather
-than by a process-wide warnings filter. A quiet command therefore cannot hide
-an owned warning emitted by a concurrent loud command, and unrelated runtime
-warnings never match the suppression boundary.
+than by a process-wide warnings filter. Dump clock-skew warnings use the same
+ownership rule through a private `_dump.py` producer sink: direct
+`load_lines()` retains ordinary Python warning behavior, while `cmd_load`
+installs only its loud stderr sink or quiet no-op for the current dynamic
+context and restores the prior token on every exit. A quiet command therefore
+cannot hide an owned warning emitted by a concurrent loud command, and
+unrelated runtime warnings never match the suppression boundary.
 
 Retry timing overrides are test-scoped dynamic context, not process
 configuration. `_retry.test_config()` therefore uses a `ContextVar` token and
@@ -336,7 +349,7 @@ that seven-module slice, so adding rows to those tables does not change 74.
 | ID and status | Persistent-state owner | Baseline table candidate | Existing integration proof | Classification evidence |
 |---------------|------------------------|---------------------------------|----------------------------|-------------------------|
 | `SM-SQLITE-SCHEMA` (confirmed) | `simplebroker/_backends/sqlite/schema.py` | `tests/test_sqlite_schema.py` | `tests/test_sqlite_schema.py`; runner setup/error suites | Durable schema version and objects decide which migration, repair, commit, or rollback event is legal on later setup calls. |
-| `SM-DUMP-LOAD` (confirmed) | `simplebroker/_dump.py::load_lines` plus destination broker state | `tests/test_dump_load.py` | `tests/test_dump_load.py`; `tests/test_property_dump_load.py`; cross-backend dump/load suites | Header, batch, and already-applied durable records change the legal next input and retry outcome across iterator callbacks and broker writes. |
+| `SM-DUMP-LOAD` (confirmed) | `simplebroker/_dump.py::load_lines` plus destination broker state | `tests/test_dump_load.py` | `tests/test_dump_load.py`; `tests/test_cli_dump_load.py`; `tests/test_property_dump_load.py`; cross-backend dump/load suites | Header, batch, and already-applied durable records change the legal next input and retry outcome across iterator callbacks and broker writes. Clock-skew presentation is producer-routed dynamic context: command-local loud/quiet sinks restore by token, while direct and concurrent foreign warnings retain ordinary Python behavior. |
 | `SM-TIMESTAMP-GENERATOR` (confirmed) | `simplebroker/_timestamp.py::TimestampGenerator` plus backend high-water state; realizes `[SB-ID-1]` through `[SB-ID-3]` | timestamp edge/resilience table beside `tests/test_timestamp_resilience.py` | `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`, including `SHARED_INSTANCE_SERIALIZATION`; timestamp edge, property, resilience, and released-backend latest-pending suites | Local counter, backend high-water mark, CAS result, physical clock, fork identity, and shared-instance lock ownership govern the next allocation action across calls and processes. One generator lock covers candidate selection, durable compare-and-advance or conflict refresh, and cache publication; CAS alone cannot prevent a stale local publication. |
 | `SM-DARWIN-XATTR` (confirmed) | `simplebroker/_phaselock.py` Darwin-provider cache | `tests/test_phaselock.py` | `tests/test_phaselock.py` | Process-cached discovery success or failure controls later xattr reads; ERANGE changes the probe/read transition. |
 | `SM-PHASE-LOCK` (confirmed) | `simplebroker/_phaselock.py::PhaseLockService` | `tests/test_phaselock.py` | `tests/test_phaselock.py` | Advisory ownership and durable markers determine whether later processes wait, run, skip, cancel, or fail. |
@@ -346,10 +359,10 @@ that seven-module slice, so adding rows to those tables does not change 74.
 | `SM-DELIVERY-POISON` (confirmed) | `simplebroker/db.py` sidecar and transactional-generator ownership | `tests/test_cross_thread_finalization_poisoning.py` | cross-thread poisoning, generator, and released-backend probe suites | Owner identity, suspended transaction, poison, and first cause govern legal `next`, `throw`, `close`, commit, and rollback effects across threads and yields. |
 | `SM-POLLING` (confirmed) | `simplebroker/watcher.py::PollingStrategy` | `tests/test_watcher.py` | watcher, burst-mode, edge-case, stop, and race suites | Waiter identity, burst/backoff phase, activity hints, and stop state persist across waits and callbacks. As required by `[SB-API-6]`, all four direct constructor defaults come from one ambient-free canonical config snapshot; `BaseWatcher` passes its retained resolved values explicitly. |
 | `SM-ACTIVITY-WAITER` (confirmed) | First-party concrete waiter `_closed` state; manifest representative `simplebroker_redis.plugin.RedisMultiQueueActivityWaiter` | Redis real-waiter lifecycle transition table | PostgreSQL and Redis real-waiter lifecycle suites; PostgreSQL notify and Redis integration replacement tests | Resource-local open/closed state governs whether cleanup may run. The first close transitions to terminal before cleanup; ordinary failures preserve all independently safe cleanup attempts and ordered failure evidence, while interruptions stop the current attempt. Every later close is a no-op. |
-| `SM-WATCHER-LIFECYCLE` (confirmed) | `simplebroker/watcher.py::BaseWatcher` | `WATCHER_LIFECYCLE_TRANSITIONS` in `tests/test_watcher_transition_tables.py` | watcher lifecycle, cleanup, edge-case, concurrency, stop, and race suites, including `STOP_RACES_START` and `ERROR_HANDLER_FAILURE` | Thread state, waiter attachment, retry state, terminal exception propagation, stop state, and the lock-protected cleanup owner govern legal start, run, stop, join, and cleanup calls. Run or stop-before-run claims cleanup before blocking work; join timeout does not transfer ownership, and cleanup failure reopens a retry/finalizer path. Generic `TERMINAL_ERROR` remains retry exhaustion. `ERROR_HANDLER_FAILURE` bypasses retry, cleans runtime resources, and propagates the original error-handler exception once with the handler exception as cause; ordinary cleanup failure is secondary note evidence and leaves cleanup retryable. The state is encoded in the established `_run_thread` ownership slot so pinned downstream subclass snapshots do not gain a new shared instance field. |
+| `SM-WATCHER-LIFECYCLE` (confirmed) | `simplebroker/watcher.py::BaseWatcher` | `WATCHER_LIFECYCLE_TRANSITIONS` in `tests/test_watcher_transition_tables.py` | watcher lifecycle, cleanup, edge-case, concurrency, stop, and race suites, including `STOP_RACES_START`, `ERROR_HANDLER_FAILURE`, and consume-iterator owner-thread close tests | Thread state, waiter attachment, retry state, terminal exception propagation, stop state, the active consume iterator, and the lock-protected cleanup owner govern legal start, run, stop, join, and cleanup calls. Consume mode checks stop before every explicit `next()` and closes its iterator exactly once on the advancing thread. Ordinary close failures are terminal with no active failure, remain note evidence during retryable or error-handler failures, and cannot be swallowed by clean-stop handling; a close `BaseException` retains lifecycle priority. Run or stop-before-run claims cleanup before blocking work; join timeout does not transfer ownership, and runtime cleanup failure reopens a retry/finalizer path. Generic `TERMINAL_ERROR` remains retry exhaustion. `ERROR_HANDLER_FAILURE` bypasses retry, cleans runtime resources, and propagates the original error-handler exception once with the handler exception as cause. The state is encoded in the established `_run_thread` ownership slot so pinned downstream subclass snapshots do not gain a new shared instance field. |
 | `SM-CLI-WATCH` (confirmed) | `simplebroker/commands.py::cmd_watch` callback and output lifecycle | `tests/test_cli_watch.py` | `tests/test_cli_watch.py`; watcher subprocess and command-helper suites | Callback results, one-time warning, output health, interrupt state, and watcher cleanup persist across callbacks and shutdown. `CALLBACK_ERROR_CONTINUES` remains the distinct path where the error handler elects to continue; it is not terminal `ERROR_HANDLER_FAILURE`. |
 | `SM-PG-LISTENER` (confirmed) | `extensions/simplebroker_pg/simplebroker_pg/runner.py::_SharedActivityListener` | PostgreSQL notify/lifecycle table | PostgreSQL notify and runner-lifecycle suites | Readiness, registrations, listener-thread failure, notification routing, and closed state persist across callbacks and threads. |
-| `SM-PG-VACUUM` (confirmed) | `extensions/simplebroker_pg/simplebroker_pg/plugin.py::vacuum` plus maintenance lease | PostgreSQL maintenance table | PostgreSQL maintenance and plugin contract-edge suites | Durable lease, advisory lock, transaction result, and maintenance result govern later delete, compact, unlock, and release actions. |
+| `SM-PG-VACUUM` (confirmed) | `extensions/simplebroker_pg/simplebroker_pg/plugin.py::vacuum` plus maintenance lease | PostgreSQL maintenance table | PostgreSQL maintenance, runner-lifecycle, and state-machine suites, including real-session contender and replacement probes when PostgreSQL is available | Durable lease depth, attached checkout identity, advisory-lock outcome, transaction result, discard outcome, and release outcome govern later delete, compact, unlock, physical-session replacement, and logical lease release actions. Every open batch is settled even for a body `BaseException`; ordinary rollback failure is retained as a note. An uncertain advisory-lock acquisition or unlock detaches and closes the checkout while preserving positive lease depth; a completed try-lock or unlock `false` is definite and reusable. Explicit failure resolution keeps body, rollback, unlock, discard, and release evidence ordered without erasing `BaseException`. |
 | `SM-REDIS-BROADCAST` (confirmed) | Redis `core.py::broadcast` plus Lua script and Redis allocation state | Redis broadcast table beside atomicity tests | Redis atomicity, broadcast, and integration suites | Atomic target selection, persisted high-water state, capacity, Lua status, and retry count govern the next Python and server action. |
 | `SM-REDIS-WRITE` (confirmed) | Redis `core.py::_write_message` plus the process-local target write-lock registry, `scripts.py::WRITE_MESSAGE`, persisted high-water, and row indexes; realizes `[SB-ID-2]` | `REDIS_WRITE_TRANSITIONS` | `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py::test_redis_write_fires_transition_table`; real-Valkey same-target serialization, stale-fence, visibility, monotone-resync, and command-count tests in `test_redis_atomicity.py` | Process and target identity, the shared write lock, locally reserved candidate, server high-water, Lua result, and shared conflict count govern serialization, fork reset, refresh, monotone resync, retry, commit, or terminal failure. High-water and row publication share the successful Lua visibility point; Pub/Sub and maintenance remain post-commit. |
 | `SM-REDIS-ACTIVITY-LISTENER` (confirmed) | Redis `plugin.py::_SharedRedisActivityListener` | Redis listener lifecycle table | Redis plugin contract-edge and pool suites | Readiness, registrations/refcounts, read failure, notification routing, stop, and closed state persist across callbacks and threads. |
@@ -399,6 +412,9 @@ findings must update source, registry, and policy evidence atomically.
 
 ## Related Plan
 
+- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
+  — watcher iterator admission and cleanup, PostgreSQL vacuum discard, delete
+  results, load-warning locality, and bounded exact timestamp conversion
 - completed: [2026-08-24-failure-path-and-contract-findings-resolution-plan](../plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md)
   — adds the terminal watcher callback-failure lifecycle row
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —

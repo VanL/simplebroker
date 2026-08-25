@@ -12,7 +12,7 @@ import pytest
 
 from simplebroker import Queue
 from simplebroker._runner import SetupPhase, SQLiteRunner
-from simplebroker.db import BrokerCore, BrokerDB
+from simplebroker.db import BrokerCore, BrokerDB, DBConnection
 
 pytestmark = [pytest.mark.sqlite_only]
 
@@ -58,6 +58,23 @@ class RecordingRunner:
 
     def is_setup_complete(self, phase: SetupPhase) -> bool:
         return self._inner.is_setup_complete(phase)
+
+
+class ShutdownRecordingSQLiteRunner(SQLiteRunner):
+    """Real SQLite runner that records its destructive lifecycle hooks."""
+
+    def __init__(self, db_path: str):
+        super().__init__(db_path)
+        self.close_calls = 0
+        self.shutdown_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        super().close()
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+        super().close()
 
 
 @pytest.mark.parametrize("persistent", [False, True])
@@ -113,6 +130,44 @@ def test_injected_runner_is_caller_owned_across_close_and_finalizer(
         observer.close()
         runner.close()
     assert runner.close_calls == 1
+
+
+def test_sql_borrowed_runner_masks_destructive_verbs_across_teardown(
+    tmp_path: Path,
+) -> None:
+    """Core, manager, and queue teardown leave an injected runner usable."""
+
+    runner_path = tmp_path / "borrowed-runner.db"
+    decoy_path = tmp_path / "decoy.db"
+    runner = ShutdownRecordingSQLiteRunner(str(runner_path))
+    try:
+        connection = DBConnection(str(decoy_path), runner=runner)
+        try:
+            core = connection.get_connection()
+            core.write("tasks", "before-shutdown")
+            core.shutdown()
+        finally:
+            connection.close()
+
+        queue = Queue("tasks", db_path=str(decoy_path), runner=runner)
+        try:
+            queue.write("after-shutdown")
+        finally:
+            queue.close()
+
+        observer = Queue("tasks", db_path=str(decoy_path), runner=runner)
+        try:
+            assert observer.peek_many(with_timestamps=False) == [
+                "before-shutdown",
+                "after-shutdown",
+            ]
+        finally:
+            observer.close()
+
+        assert runner.shutdown_calls == 0
+        assert runner.close_calls == 0
+    finally:
+        runner.shutdown()
 
 
 def test_queue_delete_owns_an_explicit_transaction_and_commits_once(

@@ -180,6 +180,49 @@ status publication remains an atomic replace through an exclusively created
 temporary file, so that new generation uses the umask active for that
 publication.
 
+## PostgreSQL vacuum session ownership
+
+PostgreSQL vacuum uses a session advisory lock because deletion batches commit
+independently and exclusion must survive those commits. The runner therefore
+leases one physical checkout across lock acquisition, every successful batch,
+maintenance, and unlock. A transaction advisory lock would end at the first
+batch commit and cannot satisfy this boundary.
+
+Batch begin releases its provisional leased-operation lock if replacement
+checkout fails, and cleans an acquired checkout plus that lock when interrupted
+before it can publish the transaction marker. Every later failed open batch
+attempts rollback, including a body `BaseException`, so that same lock is
+settled before session unlock and logical release. An ordinary rollback failure
+remains a note on a body `BaseException`; a rollback `BaseException` retains
+priority with the body as explicit cause and context.
+
+A leased begin, commit, or rollback failure detaches and physically closes its
+checkout instead of returning it as an ordinary idle pool connection. Logical
+lease depth remains positive and a later operation acquires a replacement.
+This is necessary even when a later unlock on the replacement returns `false`:
+the failed session may own the session advisory lock, so it must be dead before
+`false` can safely mean that no reusable session retains the lock.
+
+If the acquisition or unlock query raises, completion is unknown: the
+server may have granted or retained the lock before the response was lost.
+An unhandled uncertain acquisition would be worse than an uncertain unlock —
+the pooled survivor would make every later vacuum observe try-lock `false`
+and silently no-op. The PostgreSQL
+runner detaches that checkout under its leased-operation lock followed by its
+lease lock, clears transaction markers, then closes and pool-returns the
+physical connection. Session close releases any residual server lock, and the
+pool supplies a replacement instead of reusing the uncertain session. The
+logical lease depth remains positive so an outer process-session borrower
+keeps ownership; vacuum's final release removes only vacuum's nested level.
+A completed unlock returning `false` proves that session does not own the lock
+and needs no discard or warning.
+
+Body, rollback, unlock, discard, and logical-release failures are recorded
+separately and resolved explicitly. Ordinary cleanup failures do not erase a
+body `BaseException`; a cleanup `BaseException` retains priority while prior
+failures remain inspectable through context or ordered notes. This is backend
+session cleanup under `[SB-OPS-6]`, after queue delivery has already completed.
+
 ## Deferred storage alternatives
 
 ### [ALT-IMPL09-001] Add a claimed-row index from the million-row vacuum probe
@@ -223,6 +266,8 @@ Promoted to: none
 
 ## Related Plans
 
+- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
+  — PostgreSQL vacuum session discard after uncertain unlock
 - completed: 2026-08-24-comprehensive-review-findings-remediation-plan —
   read-only SQLite ownership admission and claim-preserving cross-backend move
 

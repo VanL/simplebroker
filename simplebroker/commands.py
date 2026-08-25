@@ -34,7 +34,7 @@ from ._constants import (
     ResolvedConfig,
     snapshot_config,
 )
-from ._dump import DumpClockSkewWarning, dump_lines, load_lines
+from ._dump import _load_clock_skew_warning_sink, dump_lines, load_lines
 from ._exceptions import (
     DatabaseError,
     MessageError,
@@ -1078,9 +1078,9 @@ def cmd_delete(
     # For full queue or all queues deletion, use DBConnection
     with DBConnection(db_path, config=resolved_config) as conn:
         db = cast(BrokerDB, conn.get_connection())
-        db.delete(canonical_queue)
+        deleted_count = db.delete(canonical_queue)
 
-    return EXIT_SUCCESS
+    return EXIT_SUCCESS if deleted_count > 0 else EXIT_QUEUE_EMPTY
 
 
 def cmd_rename(
@@ -1422,28 +1422,12 @@ def cmd_load(
 
     with DBConnection(db_path, config=resolved_config) as conn:
         broker = conn.get_connection()
-        with warnings.catch_warnings():
-            default_showwarning = warnings.showwarning
 
-            def showwarning(
-                message: Warning | str,
-                category: type[Warning],
-                filename: str,
-                lineno: int,
-                file: Any = None,
-                line: str | None = None,
-            ) -> None:
-                if issubclass(category, DumpClockSkewWarning):
-                    if not quiet:
-                        print(
-                            f"broker load: warning: {message}",
-                            file=sys.stderr,
-                        )
-                    return
-                default_showwarning(message, category, filename, lineno, file, line)
+        def show_clock_skew(message: str) -> None:
+            if not quiet:
+                print(f"broker load: warning: {message}", file=sys.stderr)
 
-            warnings.showwarning = showwarning
-            warnings.simplefilter("always", DumpClockSkewWarning)
+        with _load_clock_skew_warning_sink(show_clock_skew):
             load_lines(broker, sys.stdin, force=force, config=resolved_config)
     return EXIT_SUCCESS
 

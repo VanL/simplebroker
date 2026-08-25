@@ -37,6 +37,9 @@ EVIDENCE_MANIFESTS = {
             "test_queue_delete_rolls_back_a_mutation_failure_and_preserves_the_error",
         },
         "tests/test_safety_fixes.py": {"test_delete_with_all_flag"},
+        "tests/test_commands_error_ownership.py": {
+            "test_cmd_delete_missing_queue_reports_no_match_without_output"
+        },
         "extensions/simplebroker_redis/tests/test_redis_atomicity.py": {
             "test_delete_queue_script_rechecks_reservation_without_partial_mutation",
             "test_delete_all_reports_real_partial_completion_when_later_queue_reserved",
@@ -65,6 +68,19 @@ EVIDENCE_MANIFESTS = {
             "test_vacuum_removes_claimed_only_queue_existence"
         },
         "tests/test_vacuum_compact.py": {"test_vacuum_compact_database_size_reduction"},
+        "extensions/simplebroker_pg/tests/test_pg_maintenance.py": {
+            "test_vacuum_leases_connection_for_advisory_lock_lifetime",
+            "test_vacuum_unlock_false_releases_without_warning",
+            "test_vacuum_discards_checkout_when_unlock_completion_is_unknown",
+            "test_vacuum_body_base_exception_survives_ordinary_rollback_failure",
+        },
+        "extensions/simplebroker_pg/tests/test_pg_runner_lifecycle.py": {
+            "test_discard_thread_connection_preserves_nested_lease_for_replacement",
+            "test_leased_commit_failure_closes_advisory_lock_session_before_replacement",
+        },
+        "extensions/simplebroker_pg/tests/test_pg_state_machine_transitions.py": {
+            "test_pg_vacuum_fires_transition_table"
+        },
     },
     "SB-OPS-7": {
         "tests/test_cleanup.py": {

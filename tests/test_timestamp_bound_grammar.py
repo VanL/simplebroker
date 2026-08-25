@@ -104,6 +104,56 @@ def test_public_validator_preserves_integral_timestamp_forms(
     assert TimestampGenerator.validate(timestamp) == expected
 
 
+def test_iso_bound_uses_exact_epoch_nanoseconds_before_hybrid_quantization() -> None:
+    expected = 4_638_902_402_999_996_416
+
+    assert TimestampGenerator.validate("2117-01-01T00:00:03Z") == expected
+    assert TimestampGenerator.validate("4638902403s") == expected
+
+
+def test_public_bound_length_limit_fires_above_not_at_128_code_points() -> None:
+    at_limit = f"  {'9' * 128}\t"
+    unicode_at_limit = "٩" * 128
+    over_limit = "9" * 129
+    unicode_over_limit = "٩" * 129
+
+    with pytest.raises(TimestampError) as at_limit_error:
+        TimestampGenerator.validate(at_limit)
+    assert "exceeds 128 Unicode code points" not in str(at_limit_error.value)
+
+    with pytest.raises(TimestampError) as unicode_at_limit_error:
+        TimestampGenerator.validate(unicode_at_limit)
+    assert "exceeds 128 Unicode code points" not in str(unicode_at_limit_error.value)
+
+    for value in (over_limit, unicode_over_limit):
+        with pytest.raises(TimestampError) as over_limit_error:
+            TimestampGenerator.validate(value)
+        message = str(over_limit_error.value)
+        assert "exceeds 128 Unicode code points" in message
+        assert value not in message
+        _assert_finer_grain_guidance(message)
+
+
+def test_oversized_bound_is_rejected_before_unicode_digit_folding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailIfRegexRuns:
+        def fullmatch(self, _value: str) -> None:
+            raise AssertionError("oversized input reached regular-expression work")
+
+    def fail_if_folded(_character: str) -> int:
+        raise AssertionError("oversized input reached Unicode digit folding")
+
+    monkeypatch.setattr("simplebroker._timestamp.unicodedata.decimal", fail_if_folded)
+    monkeypatch.setattr(
+        "simplebroker._timestamp._SCIENTIFIC_NOTATION_RE",
+        FailIfRegexRuns(),
+    )
+
+    with pytest.raises(TimestampError, match="exceeds 128 Unicode code points"):
+        TimestampGenerator.validate("٩" * 129)
+
+
 def test_public_validator_preserves_exact_hybrid_message_ids() -> None:
     expected = 1_837_025_672_140_161_024
     assert TimestampGenerator.validate("1837025672140161024") == expected
@@ -128,6 +178,51 @@ def test_cli_bound_flags_reject_fractions_on_stderr(
     assert err.startswith("simplebroker: error: Invalid timestamp:")
     _assert_finer_grain_guidance(err)
     assert "\n" not in err
+    assert "Traceback" not in err
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "9" * 10_000,
+        f"{'9' * 9_998}e9",
+        "٩" * 10_000,
+        "2024-01-15T00:00:00Z" * 500,
+        f"  {'9' * 10_000}  ",
+    ],
+    ids=["numeric", "scientific-looking", "unicode", "date-like", "padded"],
+)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["plain", "json"])
+def test_cli_rejects_hostile_oversized_bound_with_bounded_diagnostic(
+    workdir,
+    hostile: str,
+    json_mode: bool,
+) -> None:
+    mode_args = ("--json",) if json_mode else ()
+
+    rc, out, err = run_cli(
+        "peek",
+        "bound_queue",
+        *mode_args,
+        "--after",
+        hostile,
+        cwd=workdir,
+        timeout=5,
+    )
+
+    assert rc == 1
+    assert out == ""
+    assert len(err) < 512
+    assert hostile not in err
+    if json_mode:
+        payload = json.loads(err)
+        assert payload["error"] == "INVALID_TIMESTAMP"
+        assert payload["retryable"] is False
+        message = payload["message"]
+    else:
+        assert err.startswith("simplebroker: error: Invalid timestamp:")
+        message = err
+    assert "exceeds 128 Unicode code points" in message
     assert "Traceback" not in err
 
 

@@ -58,6 +58,13 @@ another dispatch in every mode; it does not undo the already-committed consume
 claim or move, any state already materialized by an existing batch boundary,
 and it does not advance peek progress past the failed id.
 
+In `QueueWatcher` batch consume, if stop is set when control returns from the
+current handler, the watcher checks it before the next stream advancement. The
+current row retains its committed claim, but no later row from that run is
+claimed or dispatched. This is an admission guarantee at the handler boundary,
+not linearizability against a concurrent stop that races between the check and
+iterator advancement.
+
 _Implementation mapping_:
 - `simplebroker/commands.py`
 - `simplebroker/watcher.py`
@@ -266,7 +273,7 @@ _Implementation mapping_:
 | Clause | Firing gates |
 |--------|--------------|
 | [SB-DELIVERY-1] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_watcher.py::TestErrorScenarios::test_consuming_watcher_queue_preservation_on_failure` |
-| [SB-DELIVERY-2] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_watcher_error_handler_contract.py` (consume, peek, and move terminal-callback matrix); `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_handler_failure_isolation`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_transaction_safety` |
+| [SB-DELIVERY-2] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_watcher_error_handler_contract.py` (consume, peek, and move terminal-callback matrix); `tests/test_watcher_stop_contract.py::test_batch_consume_checks_handler_stop_before_next_iterator_advance`, `test_batch_consume_handler_stop_leaves_later_message_pending`; `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_handler_failure_isolation`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_transaction_safety` |
 | [SB-DELIVERY-3] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_move.py`; `tests/test_move_by_id.py`; `tests/test_move_claim_patterns.py`; first-party PostgreSQL and Redis exact-ID move tests |
 | [SB-DELIVERY-4] | `tests/test_peek_generator_lifecycle.py`; `tests/test_delivery_contract_sb_delivery.py::test_live_peek_stream_rejects_naive_cursor_completeness`, `::test_closeable_peek_lifecycle_contract_is_bound_to_real_backends`; `tests/test_agent_kernel_contract.py` |
 | [SB-DELIVERY-5] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_generator_methods.py`; `extensions/simplebroker_redis/tests/test_redis_batches.py` |
@@ -276,6 +283,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
+  — handler-boundary consume admission and owner-thread iterator cleanup
 - completed: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
   — public closeable read, move, and stream iterator contract
 - completed: [2026-08-24-peek-generator-close-contract-plan](../plans/2026-08-24-peek-generator-close-contract-plan.md)

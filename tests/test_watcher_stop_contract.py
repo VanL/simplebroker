@@ -7,7 +7,7 @@ from typing import Any, NoReturn
 
 import pytest
 
-from simplebroker._exceptions import StopException
+from simplebroker._exceptions import OperationalError, StopException
 from simplebroker.watcher import PollingStrategy, QueueWatcher, StopWatching
 
 from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
@@ -29,6 +29,41 @@ class _CountingWaiter:
         self.close_calls += 1
 
 
+class _TrackedBatchIterator:
+    """Closeable batch iterator with directly observable ownership and failures."""
+
+    def __init__(
+        self,
+        items: list[tuple[str, int]],
+        *,
+        next_error: BaseException | None = None,
+        close_error: BaseException | None = None,
+    ) -> None:
+        self._items = iter(items)
+        self._next_error = next_error
+        self._close_error = close_error
+        self.next_calls = 0
+        self.close_calls = 0
+        self.advance_threads: list[int] = []
+        self.close_threads: list[int] = []
+
+    def __iter__(self) -> _TrackedBatchIterator:
+        return self
+
+    def __next__(self) -> tuple[str, int]:
+        self.next_calls += 1
+        self.advance_threads.append(threading.get_ident())
+        if self._next_error is not None:
+            raise self._next_error
+        return next(self._items)
+
+    def close(self) -> None:
+        self.close_calls += 1
+        self.close_threads.append(threading.get_ident())
+        if self._close_error is not None:
+            raise self._close_error
+
+
 class _WaiterWatcher(QueueWatcher):
     """Use a counted native waiter while retaining the active-backend queue path."""
 
@@ -45,6 +80,268 @@ class _WaiterWatcher(QueueWatcher):
 
 def _remaining_messages(broker, queue: str) -> list[str]:
     return list(broker.peek_generator(queue, with_timestamps=False))
+
+
+def test_batch_consume_checks_handler_stop_before_next_iterator_advance(
+    broker_target: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    iterator = _TrackedBatchIterator([("first", 1), ("second", 2)])
+    handled: list[str] = []
+    watcher: QueueWatcher
+
+    def handler(message: str, _timestamp: int) -> None:
+        handled.append(message)
+        watcher._stop_event.set()
+
+    watcher = QueueWatcher(
+        "batch_iterator_stop_admission",
+        handler,
+        db=broker_target,
+        batch_processing=True,
+    )
+    monkeypatch.setattr(
+        watcher._queue_obj,
+        "stream_messages",
+        lambda **_kwargs: iterator,
+    )
+
+    try:
+        with pytest.raises(StopWatching):
+            watcher._consume_all_messages()
+    finally:
+        watcher.stop(join=False)
+
+    assert handled == ["first"]
+    assert iterator.next_calls == 1
+    assert iterator.close_calls == 1
+    assert iterator.close_threads == iterator.advance_threads
+
+
+def test_batch_consume_handler_stop_leaves_later_message_pending(
+    broker: Any,
+    broker_target: Any,
+) -> None:
+    broker.write("batch_handler_stop", "first")
+    broker.write("batch_handler_stop", "second")
+    handled: list[str] = []
+    watcher: QueueWatcher
+
+    def handler(message: str, _timestamp: int) -> None:
+        handled.append(message)
+        watcher.stop(join=False)
+
+    watcher = QueueWatcher(
+        "batch_handler_stop",
+        handler,
+        db=broker_target,
+        batch_processing=True,
+    )
+
+    watcher.run()
+
+    assert handled == ["first"]
+    assert _remaining_messages(broker, "batch_handler_stop") == ["second"]
+
+
+def test_batch_iterators_close_once_on_exhaustion_after_handler_continuation(
+    broker_target: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    populated = _TrackedBatchIterator([("first", 1), ("second", 2)])
+    empty = _TrackedBatchIterator([])
+    iterators = iter([populated, empty])
+    handled: list[str] = []
+
+    def handler(message: str, _timestamp: int) -> None:
+        handled.append(message)
+        if message == "first":
+            raise ValueError("ordinary handler failure")
+
+    watcher = QueueWatcher(
+        "batch_iterator_exhaustion",
+        handler,
+        db=broker_target,
+        batch_processing=True,
+        config={"BROKER_LOGGING_ENABLED": False},
+    )
+    monkeypatch.setattr(
+        watcher._queue_obj,
+        "stream_messages",
+        lambda **_kwargs: next(iterators),
+    )
+
+    try:
+        assert watcher._consume_all_messages() is True
+    finally:
+        watcher.stop(join=False)
+
+    assert handled == ["first", "second"]
+    assert populated.close_calls == 1
+    assert empty.close_calls == 1
+    assert populated.close_threads == [threading.get_ident()]
+    assert empty.close_threads == [threading.get_ident()]
+
+
+def test_batch_iterator_close_failure_without_active_failure_surfaces(
+    broker_target: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnformattableCloseFailure(RuntimeError):
+        def __str__(self) -> str:
+            raise RuntimeError("close failure was stringified")
+
+    close_failure = UnformattableCloseFailure("batch iterator close failed")
+    iterator = _TrackedBatchIterator([], close_error=close_failure)
+
+    class NoRetryWatcher(QueueWatcher):
+        def _handle_retry(
+            self,
+            e: Exception,
+            retry_count: int,
+            max_retries: int,
+        ) -> bool:
+            del e, retry_count, max_retries
+            pytest.fail("iterator cleanup failure entered retry")
+
+    watcher = NoRetryWatcher(
+        "batch_iterator_close_failure",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+        batch_processing=True,
+    )
+    monkeypatch.setattr(
+        watcher._queue_obj,
+        "stream_messages",
+        lambda **_kwargs: iterator,
+    )
+
+    with pytest.raises(UnformattableCloseFailure) as raised:
+        watcher.run()
+
+    assert raised.value is close_failure
+    assert iterator.close_calls == 1
+    assert not watcher.is_running()
+    assert not watcher._finalizer.alive
+
+
+def test_batch_iterator_close_failure_is_note_on_retryable_failure(
+    broker_target: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_failure = OperationalError("database is locked")
+    close_failure = RuntimeError("batch iterator close failed")
+    iterator = _TrackedBatchIterator(
+        [],
+        next_error=operation_failure,
+        close_error=close_failure,
+    )
+    watcher = QueueWatcher(
+        "batch_iterator_retryable_failure",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+        batch_processing=True,
+    )
+    monkeypatch.setattr(
+        watcher._queue_obj,
+        "stream_messages",
+        lambda **_kwargs: iterator,
+    )
+
+    try:
+        with pytest.raises(OperationalError, match="database is locked") as raised:
+            watcher._consume_all_messages()
+    finally:
+        watcher.stop(join=False)
+
+    assert raised.value is operation_failure
+    assert raised.value.__notes__ == [
+        (
+            "Watcher batch iterator close also failed: "
+            "RuntimeError: batch iterator close failed"
+        )
+    ]
+    assert iterator.close_calls == 1
+
+
+def test_batch_iterator_close_failure_during_clean_stop_is_terminal(
+    broker_target: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_failure = RuntimeError("batch iterator close failed during stop")
+    iterator = _TrackedBatchIterator([("first", 1)], close_error=close_failure)
+    watcher: QueueWatcher
+
+    class NoRetryWatcher(QueueWatcher):
+        def _handle_retry(
+            self,
+            e: Exception,
+            retry_count: int,
+            max_retries: int,
+        ) -> bool:
+            del e, retry_count, max_retries
+            pytest.fail("clean-stop iterator cleanup failure entered retry")
+
+    def handler(_message: str, _timestamp: int) -> None:
+        watcher.stop(join=False)
+
+    watcher = NoRetryWatcher(
+        "batch_iterator_clean_stop_failure",
+        handler,
+        db=broker_target,
+        batch_processing=True,
+    )
+    monkeypatch.setattr(
+        watcher._queue_obj,
+        "stream_messages",
+        lambda **_kwargs: iterator,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="batch iterator close failed during stop",
+    ) as raised:
+        watcher.run()
+
+    assert raised.value is close_failure
+    assert isinstance(raised.value.__cause__, StopWatching)
+    assert iterator.close_calls == 1
+    assert not watcher.is_running()
+    assert not watcher._finalizer.alive
+
+
+def test_batch_iterator_close_base_exception_keeps_cleanup_priority(
+    broker_target: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CloseInterrupted(BaseException):
+        pass
+
+    close_interruption = CloseInterrupted("batch iterator close interrupted")
+    iterator = _TrackedBatchIterator([("first", 1)], close_error=close_interruption)
+    watcher: QueueWatcher
+
+    def handler(_message: str, _timestamp: int) -> None:
+        watcher.stop(join=False)
+
+    watcher = QueueWatcher(
+        "batch_iterator_close_interrupt",
+        handler,
+        db=broker_target,
+        batch_processing=True,
+    )
+    monkeypatch.setattr(
+        watcher._queue_obj,
+        "stream_messages",
+        lambda **_kwargs: iterator,
+    )
+
+    with pytest.raises(CloseInterrupted, match="close interrupted") as raised:
+        watcher.run()
+
+    assert raised.value is close_interruption
+    assert isinstance(raised.value.__context__, StopWatching)
+    assert iterator.close_calls == 1
 
 
 @pytest.mark.parametrize("stop_exception", [StopWatching, StopException])

@@ -24,6 +24,24 @@ single shared conflict budget and the post-commit wakeup/maintenance order;
 never narrow one `TimestampGenerator` instance's lock below its complete
 allocation, durable advance or refresh, and cache-publication transition.
 
+## Selection-bound conversion boundary
+
+`TimestampGenerator.validate()` owns syntax-to-integer conversion but not the
+later selection semantics. Exact message-ID mode keeps its strict 19-decimal-
+digit grammar. Non-exact bounds strip once, then reject values over 128 Unicode
+code points before digit folding, regular-expression work, integer conversion,
+or echoing the rejected value. This is a fixed work gate, not a new timestamp
+format or configuration surface.
+
+Accepted ISO datetimes are normalized to aware UTC and converted relative to
+the Unix epoch from integer `timedelta.days`, `.seconds`, and `.microseconds`.
+The implementation never calls float `timestamp()` or `total_seconds()` on
+this path. Clearing the logical-counter bits therefore produces exactly the
+same hybrid bound as an equivalent integral seconds, milliseconds, or
+nanoseconds spelling. Range failures in the distinct exact-ID owner name the
+public concept as a message ID, while the legacy serialized `timestamp` field
+remains unchanged.
+
 ## Why zero is rejected at insertion
 
 ID `0` is the empty-high-water and lower-bound origin. New exact insertion is
@@ -206,6 +224,9 @@ not pass/fail thresholds.
 
 ## Related plan
 
+- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
+  — bounded timestamp-bound admission, integer ISO conversion, and message-ID
+  diagnostic ownership
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
   source `23d6c9d1` (local-only pin); see the ledger in
   `docs/plans/README.md`

@@ -18,6 +18,7 @@ from simplebroker._backend_plugins import BackendPlugin
 from simplebroker._exceptions import DataError, IntegrityError, OperationalError
 from simplebroker._runner import SetupPhase
 
+from ._failure_order import capture_ordinary_pg_cleanup
 from ._identifiers import activity_channel_name
 from .validation import quote_ident
 
@@ -819,6 +820,49 @@ class PostgresRunner:
         if not self._thread_connection_leased():
             self._return_thread_conn()
 
+    def _discard_thread_connection(self) -> None:
+        """Close an uncertain checkout without releasing its logical lease."""
+
+        self._check_fork()
+        conn_to_discard: psycopg.Connection[Any] | None = None
+        with self._leased_operation_lock, self._lease_lock:
+            transaction_held_operation_lock = self._transaction_uses_leased_connection()
+            if self._leased_conn is not None:
+                conn_to_discard = self._leased_conn
+                self._leased_conn = None
+            else:
+                conn_to_discard = getattr(self._thread_local, "conn", None)
+                if conn_to_discard is not None:
+                    delattr(self._thread_local, "conn")
+            self._clear_transaction_state()
+            if transaction_held_operation_lock:
+                # begin_immediate() retains one acquisition until transaction
+                # settlement. Discard is that settlement for an uncertain
+                # checkout; the context manager releases its own acquisition.
+                self._leased_operation_lock.release()
+
+        if conn_to_discard is None:
+            return
+        try:
+            conn_to_discard.close()
+        finally:
+            # Even if close() fails, the pool must get its slot back so a
+            # replacement checkout can be created; putconn discards a broken
+            # or closed connection rather than serving it again.
+            self._pool.putconn(conn_to_discard)
+
+    def _discard_thread_connection_after_failure(
+        self,
+        failure: BaseException,
+    ) -> None:
+        """Detach a failed leased checkout without hiding its primary failure."""
+
+        capture_ordinary_pg_cleanup(
+            primary=failure,
+            phase="connection discard",
+            action=self._discard_thread_connection,
+        )
+
     def _clear_transaction_state(self) -> None:
         if hasattr(self._thread_local, "in_transaction"):
             delattr(self._thread_local, "in_transaction")
@@ -875,18 +919,32 @@ class PostgresRunner:
             if not leased and not self._in_transaction():
                 self._return_thread_conn_after_operation()
 
-    def begin_immediate(self) -> None:
-        self._check_fork()
+    def _checkout_begin_connection(
+        self,
+    ) -> tuple[psycopg.Connection[Any], bool, bool]:
+        """Checkout for BEGIN and retain the shared lock only for a lease."""
+
         shared_lock_acquired = False
         if self._has_leased_connection():
             self._leased_operation_lock.acquire()
             shared_lock_acquired = True
 
-        conn = self._get_thread_conn()
-        leased = self._uses_leased_connection(conn)
+        try:
+            conn = self._get_thread_conn()
+            leased = self._uses_leased_connection(conn)
+        except BaseException:
+            if shared_lock_acquired:
+                self._leased_operation_lock.release()
+            raise
+
         if shared_lock_acquired and not leased:
             self._leased_operation_lock.release()
             shared_lock_acquired = False
+        return conn, leased, shared_lock_acquired
+
+    def begin_immediate(self) -> None:
+        self._check_fork()
+        conn, leased, shared_lock_acquired = self._checkout_begin_connection()
 
         try:
             with conn.cursor() as cur:
@@ -894,20 +952,25 @@ class PostgresRunner:
             self._thread_local.in_transaction = True
             self._thread_local.transaction_uses_leased_conn = leased
         except psycopg.Error as exc:
-            if leased:
-                self._return_leased_conn(conn)
-            else:
-                self._return_thread_conn()
-            if shared_lock_acquired:
-                self._leased_operation_lock.release()
-            raise _translate_error(exc) from exc
-        except Exception:
-            if leased:
-                self._return_leased_conn(conn)
-            else:
-                self._return_thread_conn()
-            if shared_lock_acquired:
-                self._leased_operation_lock.release()
+            failure = _translate_error(exc)
+            try:
+                if leased:
+                    self._discard_thread_connection_after_failure(failure)
+                else:
+                    self._return_thread_conn()
+            finally:
+                if shared_lock_acquired:
+                    self._leased_operation_lock.release()
+            raise failure from exc
+        except BaseException as failure:
+            try:
+                if leased:
+                    self._discard_thread_connection_after_failure(failure)
+                else:
+                    self._return_thread_conn()
+            finally:
+                if shared_lock_acquired:
+                    self._leased_operation_lock.release()
             raise
 
     def commit(self) -> None:
@@ -919,13 +982,19 @@ class PostgresRunner:
             conn.commit()
         except psycopg.Error as exc:
             failed = True
+            failure = _translate_error(exc)
             if leased:
-                self._clear_transaction_state()
-                self._return_leased_conn(conn)
-                self._leased_operation_lock.release()
+                self._discard_thread_connection_after_failure(failure)
             else:
                 self._return_thread_conn()
-            raise _translate_error(exc) from exc
+            raise failure from exc
+        except BaseException as failure:
+            failed = True
+            if leased:
+                self._discard_thread_connection_after_failure(failure)
+            else:
+                self._return_thread_conn()
+            raise
         finally:
             if not failed:
                 self._finish_transaction(leased=leased)
@@ -940,13 +1009,19 @@ class PostgresRunner:
             self.invalidate_meta_cache()
         except psycopg.Error as exc:
             failed = True
+            failure = _translate_error(exc)
             if leased:
-                self._clear_transaction_state()
-                self._return_leased_conn(conn)
-                self._leased_operation_lock.release()
+                self._discard_thread_connection_after_failure(failure)
             else:
                 self._return_thread_conn()
-            raise _translate_error(exc) from exc
+            raise failure from exc
+        except BaseException as failure:
+            failed = True
+            if leased:
+                self._discard_thread_connection_after_failure(failure)
+            else:
+                self._return_thread_conn()
+            raise
         finally:
             if not failed:
                 self._finish_transaction(leased=leased)

@@ -50,6 +50,10 @@ EVIDENCE_MANIFESTS = {
             "test_load_rejects_excessive_future_skew_before_mutation",
             "test_load_force_warns_and_accepts_excessive_future_skew",
             "test_load_typed_config_override_changes_skew_limit",
+            "test_quiet_cmd_load_does_not_hide_another_threads_clock_skew_warning",
+            "test_cmd_load_warning_policy_resets_after_success",
+            "test_cmd_load_warning_policy_resets_after_every_failure",
+            "test_load_warning_sink_restores_outer_nested_policy",
             "test_load_header_floor_persists_when_local_cache_is_ahead",
             "test_load_header_floor_observes_concurrent_durable_winner",
             "test_load_header_floor_final_read_failure_is_outcome_ambiguous",
@@ -68,6 +72,8 @@ EVIDENCE_MANIFESTS = {
             "test_load_timestamp_floor_failure_uses_command_diagnostic",
             "test_load_force_does_not_bypass_format_validation",
             "test_cmd_load_ambiguous_timestamp_failure_gives_recovery_guidance",
+            "test_cmd_load_reemits_unrelated_warnings",
+            "test_cmd_load_preserves_unrelated_warning_error_timing",
         },
         "extensions/simplebroker_pg/tests/test_pg_dump_load_pipe.py": {
             "test_postgres_header_only_load_restores_last_timestamp_floor"

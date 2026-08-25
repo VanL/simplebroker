@@ -40,8 +40,12 @@ SB_CLI_5_EVIDENCE = {
     "test_public_validator_rejects_sign_and_underscore_pseudonumerics_with_guidance",
     "test_public_validator_rejects_scientific_notation_with_guidance",
     "test_public_validator_preserves_integral_timestamp_forms",
+    "test_iso_bound_uses_exact_epoch_nanoseconds_before_hybrid_quantization",
+    "test_public_bound_length_limit_fires_above_not_at_128_code_points",
+    "test_oversized_bound_is_rejected_before_unicode_digit_folding",
     "test_public_validator_preserves_exact_hybrid_message_ids",
     "test_cli_bound_flags_reject_fractions_on_stderr",
+    "test_cli_rejects_hostile_oversized_bound_with_bounded_diagnostic",
     "test_cli_json_scientific_notation_error_has_actionable_guidance",
     "test_cli_bound_help_teaches_integral_limit_and_alternatives",
 }

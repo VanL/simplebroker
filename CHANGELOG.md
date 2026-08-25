@@ -29,6 +29,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- SQL-backed caller-injected runners are no longer shut down through a
+  borrowed core's stronger lifecycle path; both borrowed `close()` and
+  `shutdown()` preserve caller ownership.
+- Consume-mode watchers now check stop before each batch iterator advancement,
+  so a handler-requested stop cannot claim or dispatch the next row. The
+  iterator is closed exactly once on its advancing thread with explicit
+  cleanup-failure precedence.
+- PostgreSQL vacuum now settles interrupted batch setup and transactions, and
+  discards the physical session when advisory-lock acquisition or unlock
+  completion is uncertain.
+  A possibly lock-owning checkout cannot re-enter the pool, while nested
+  logical lease ownership and ordered failure evidence are preserved.
+- Named-queue and all-queue delete now return no-match exit `2` when zero rows
+  are affected, matching exact-ID delete; positive deletions still return `0`.
+- Load clock-skew warning presentation is now invocation-local. Quiet load no
+  longer replaces process-wide warning hooks or suppresses another thread's
+  warning, while direct `load_lines()` retains ordinary Python warning
+  behavior.
+- Timestamp bounds now reject non-exact inputs over 128 Unicode code points
+  before expensive parsing or diagnostic echo, and ISO bounds use exact
+  integer epoch arithmetic so equivalent integral-unit spellings select the
+  same hybrid grain. Out-of-range message-ID diagnostics now name the message
+  ID concept.
 - Public `simplebroker.commands` functions now consistently raise invalid-input
   and operational failures for direct Python callers while the CLI alone
   translates them to diagnostics and exit `1`. This also rejects conflicting

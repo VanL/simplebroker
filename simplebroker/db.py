@@ -367,7 +367,7 @@ def _build_process_session_core_factory(
 
 
 class _BorrowedRunner:
-    """Delegate SQLRunner operations without taking ownership of close()."""
+    """Delegate SQLRunner operations without taking lifecycle ownership."""
 
     def __init__(self, runner: SQLRunner, *, backend_plugin: BackendPlugin):
         self._runner = runner
@@ -392,6 +392,9 @@ class _BorrowedRunner:
         self._runner.rollback()
 
     def close(self) -> None:
+        """Borrowed runners remain caller-owned."""
+
+    def shutdown(self) -> None:
         """Borrowed runners remain caller-owned."""
 
     def setup(self, phase: SetupPhase) -> None:

@@ -28,7 +28,7 @@ def normalize_message_id(value: object, *, name: str = "message_id") -> int:
         if value < 0:
             raise ValueError(f"{name} must be non-negative")
         if value >= SQLITE_MAX_INT64:
-            raise ValueError(f"{name} exceeds maximum timestamp value")
+            raise ValueError(f"{name} exceeds maximum message ID value")
         return value
 
     if isinstance(value, str):

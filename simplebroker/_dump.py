@@ -17,7 +17,9 @@ from __future__ import annotations
 import json
 import time
 import warnings
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -52,6 +54,36 @@ LOAD_BATCH_SIZE: Final[int] = 1000
 
 class DumpClockSkewWarning(UserWarning):
     """A dump watermark is physically ahead of the loading host's clock."""
+
+
+_LOAD_CLOCK_SKEW_WARNING_SINK: ContextVar[Callable[[str], None] | None] = ContextVar(
+    "simplebroker_load_clock_skew_warning_sink", default=None
+)
+
+
+@contextmanager
+def _load_clock_skew_warning_sink(
+    sink: Callable[[str], None],
+) -> Iterator[None]:
+    """Route only this invocation's load skew notice to ``sink``."""
+    token = _LOAD_CLOCK_SKEW_WARNING_SINK.set(sink)
+    try:
+        yield
+    finally:
+        _LOAD_CLOCK_SKEW_WARNING_SINK.reset(token)
+
+
+def _emit_load_clock_skew_warning(message: str) -> None:
+    """Emit through invocation policy or ordinary Python warnings."""
+    sink = _LOAD_CLOCK_SKEW_WARNING_SINK.get()
+    if sink is not None:
+        sink(message)
+        return
+    warnings.warn(
+        message,
+        DumpClockSkewWarning,
+        stacklevel=4,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,14 +241,12 @@ def _check_future_skew(
         (MAX_LOGICAL_COUNTER - 1) - (header_last_ts & LOGICAL_COUNTER_MASK),
     )
     skew_seconds = future_skew_ns / NS_PER_SECOND
-    warnings.warn(
+    _emit_load_clock_skew_warning(
         "dump header last_ts "
         f"{header_last_ts:019d} is {skew_seconds:.3f} seconds ahead "
         "of local wall time; apparent clock skew leaves at most "
         f"{remaining_ids} broker-global generated IDs before writes "
-        "wait for wall time and may raise TimestampError",
-        DumpClockSkewWarning,
-        stacklevel=3,
+        "wait for wall time and may raise TimestampError"
     )
     if future_skew_ns > max_future_skew_ns and not force:
         raise _error(

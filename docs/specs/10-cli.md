@@ -287,6 +287,14 @@ Fractional seconds are unsupported in every grammar. Use integer `ms`, integer
 three grammars is rejected with an actionable bound-parse error that states this
 limitation.
 
+After surrounding whitespace is stripped, a timestamp-bound string longer
+than 128 Unicode code points is invalid. It is rejected before Unicode digit
+folding, regular-expression grammar checks, or integer conversion, and its
+diagnostic does not echo the complete rejected value. ISO inputs are converted
+to epoch nanoseconds using integer arithmetic before the low logical-counter
+bits are cleared. An accepted ISO instant and an equivalent integral `s`, `ms`,
+or `ns` spelling therefore select the same hybrid bound.
+
 Exact single-message targeting (`-m` / `--message`) is not this clause: it
 accepts only an exact 19-digit broker message id and is owned by `[SB-ID-4]`.
 A malformed `-m` value errors on stderr and exits `1`; a well-formed id with
@@ -316,6 +324,9 @@ _Verification_:
 
 ## Related Plans
 
+- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
+  — delete no-match parity, invocation-owned load warnings, exact ISO bounds,
+  and bounded hostile-input rejection
 - completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)
   — exposes the existing root-action JSON grammar in help without changing its
   preprocessing or compatibility boundary
@@ -369,6 +380,11 @@ _Verification_:
   `tests/test_invalid_config_lifecycle.py::test_cli_reports_invalid_environment_before_parsing`
 - `tests/test_documented_exit_codes.py` — [SB-CLI-1] + README link
 - `tests/test_agent_kernel_contract.py` — [SB-CLI-1] + kernel link
+- `[SB-CLI-1]` queue/all delete result parity:
+  `tests/test_commands_error_ownership.py::test_cmd_delete_missing_queue_reports_no_match_without_output`,
+  `tests/test_commands_error_ownership.py::test_cmd_delete_all_empty_reports_no_match_without_output`,
+  `tests/test_commands_error_ownership.py::test_cmd_delete_nonempty_reports_success`, and
+  `tests/test_safety_fixes.py::test_delete_no_match_uses_queue_empty_exit_without_output`
 - `[SB-CLI-1]` interrupt split:
   `tests/test_cli_main.py::test_keyboard_interrupt_handling`,
   `tests/test_cli_main.py::test_pre_dispatch_keyboard_interrupt_handling`,
@@ -397,6 +413,9 @@ _Verification_:
   `tests/test_json_output.py` (selector, timestamp, JSON, empty, quiet, and
   concurrent loud/quiet matrix, plus repeated direct and in-process CLI
   invocations),
+  `tests/test_dump_load.py::test_quiet_cmd_load_does_not_hide_another_threads_clock_skew_warning`,
+  `tests/test_dump_load.py::test_cmd_load_warning_policy_resets_after_success`,
+  `tests/test_dump_load.py::test_cmd_load_warning_policy_resets_after_every_failure`,
   `tests/test_watcher_transition_tables.py::test_cmd_watch_quiet_suppresses_owned_newline_warning`,
   `tests/test_watcher_transition_tables.py::test_cmd_watch_json_newline_payload_has_no_plain_framing_warning`, and
   `tests/test_alias_cli.py::test_quiet_alias_policy_does_not_hide_concurrent_loud_warning`
@@ -445,7 +464,13 @@ _Verification_:
   - `tests/test_timestamp_bound_grammar.py::test_public_validator_rejects_sign_and_underscore_pseudonumerics_with_guidance`
   - `tests/test_timestamp_bound_grammar.py::test_public_validator_rejects_scientific_notation_with_guidance`
   - `tests/test_timestamp_bound_grammar.py::test_public_validator_preserves_integral_timestamp_forms`
+  - `tests/test_timestamp_bound_grammar.py::test_iso_bound_uses_exact_epoch_nanoseconds_before_hybrid_quantization`
+  - `tests/test_timestamp_bound_grammar.py::test_public_bound_length_limit_fires_above_not_at_128_code_points`
+  - `tests/test_timestamp_bound_grammar.py::test_oversized_bound_is_rejected_before_unicode_digit_folding`
   - `tests/test_timestamp_bound_grammar.py::test_public_validator_preserves_exact_hybrid_message_ids`
   - `tests/test_timestamp_bound_grammar.py::test_cli_bound_flags_reject_fractions_on_stderr`
+  - `tests/test_timestamp_bound_grammar.py::test_cli_rejects_hostile_oversized_bound_with_bounded_diagnostic`
   - `tests/test_timestamp_bound_grammar.py::test_cli_json_scientific_notation_error_has_actionable_guidance`
   - `tests/test_timestamp_bound_grammar.py::test_cli_bound_help_teaches_integral_limit_and_alternatives`
+  - `tests/test_property_timestamp_validate.py::test_iso_datetimes_agree_with_unix_seconds`
+  - `tests/test_timestamp_selection_contract_sb_select.py::test_cli_equivalent_iso_and_seconds_bounds_select_the_same_rows`

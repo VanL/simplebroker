@@ -99,6 +99,15 @@ def test_normalize_message_id_rejects_out_of_range_ints(value: int) -> None:
         normalize_message_id(value)
 
 
+def test_normalize_message_id_range_error_names_message_id_concept() -> None:
+    with pytest.raises(ValueError) as caught:
+        normalize_message_id(SQLITE_MAX_INT64)
+
+    message = str(caught.value)
+    assert "message ID" in message
+    assert "timestamp" not in message
+
+
 @pytest.mark.parametrize("value", [None, True, False, 1.0, object()])
 def test_normalize_message_id_rejects_non_id_types(value: object) -> None:
     with pytest.raises(TypeError):

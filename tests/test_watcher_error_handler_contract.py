@@ -18,6 +18,72 @@ def _pending_messages(broker: Any, queue: str) -> list[str]:
     return list(broker.peek_generator(queue, with_timestamps=False))
 
 
+def test_batch_iterator_close_failure_is_secondary_to_error_handler_failure(
+    broker_target: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnformattableCloseFailure(RuntimeError):
+        def __str__(self) -> str:
+            raise RuntimeError("close failure was stringified")
+
+    handler_failure = ValueError("handler failed before iterator cleanup")
+    callback_failure = RuntimeError("error handler failed before iterator cleanup")
+    close_failure = UnformattableCloseFailure("batch iterator close failed")
+    close_calls = 0
+    owner_thread = threading.get_ident()
+    close_thread: int | None = None
+
+    class CloseFailingIterator:
+        def __init__(self) -> None:
+            self._items = iter([("first", 1)])
+
+        def __iter__(self) -> CloseFailingIterator:
+            return self
+
+        def __next__(self) -> tuple[str, int]:
+            return next(self._items)
+
+        def close(self) -> None:
+            nonlocal close_calls, close_thread
+            close_calls += 1
+            close_thread = threading.get_ident()
+            raise close_failure
+
+    def handler(_message: str, _timestamp: int) -> NoReturn:
+        raise handler_failure
+
+    def error_handler(_exc: Exception, _message: str, _timestamp: int) -> NoReturn:
+        raise callback_failure
+
+    watcher = QueueWatcher(
+        "batch_iterator_callback_failure",
+        handler,
+        db=broker_target,
+        batch_processing=True,
+        error_handler=error_handler,
+        config={"BROKER_LOGGING_ENABLED": False},
+    )
+    monkeypatch.setattr(
+        watcher._queue_obj,
+        "stream_messages",
+        lambda **_kwargs: CloseFailingIterator(),
+    )
+
+    with pytest.raises(RuntimeError, match="error handler failed") as raised:
+        watcher.run()
+
+    assert raised.value is callback_failure
+    assert raised.value.__cause__ is handler_failure
+    assert raised.value.__notes__ == [
+        (
+            "Watcher batch iterator close also failed: "
+            "UnformattableCloseFailure: batch iterator close failed"
+        )
+    ]
+    assert close_calls == 1
+    assert close_thread == owner_thread
+
+
 def test_consume_error_handler_failure_is_terminal_and_visible_without_logging(
     broker: Any, broker_target: Any
 ) -> None:

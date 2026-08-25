@@ -94,6 +94,22 @@ def test_delete_with_all_flag(workdir):
     assert rc == 2  # EXIT_QUEUE_EMPTY
 
 
+@pytest.mark.parametrize(
+    "delete_args",
+    [("missing",), ("--all",)],
+    ids=["missing-named-queue", "empty-all"],
+)
+def test_delete_no_match_uses_queue_empty_exit_without_output(
+    workdir,
+    delete_args: tuple[str, ...],
+) -> None:
+    rc, out, err = run_cli("delete", *delete_args, cwd=workdir)
+
+    assert rc == 2
+    assert out == ""
+    assert err == ""
+
+
 def test_message_size_utf8_bytes(workdir):
     """Test that message size validation uses UTF-8 byte count, not char count."""
     # Create a message with multi-byte UTF-8 characters

@@ -6,6 +6,7 @@ import ast
 import re
 from pathlib import Path
 
+from simplebroker import Queue
 from simplebroker._constants import EXIT_SUCCESS
 
 from .conftest import run_cli
@@ -217,3 +218,34 @@ def test_cli_after_iso_string_parses(workdir: Path) -> None:
     )
     assert rc == EXIT_SUCCESS, err
     assert "hello" in out
+
+
+def test_cli_equivalent_iso_and_seconds_bounds_select_the_same_rows(
+    workdir: Path,
+) -> None:
+    db = workdir / "select-equivalent.db"
+    bound = 4_638_902_402_999_996_416
+    with Queue("q", db_path=str(db)) as queue:
+        queue.insert_messages(
+            [
+                ("at-bound", bound),
+                ("next-grain", bound + 4_096),
+            ]
+        )
+
+    outputs: list[str] = []
+    for spelling in ("2117-01-01T00:00:03Z", "4638902403s"):
+        rc, out, err = run_cli(
+            "-f",
+            str(db),
+            "peek",
+            "q",
+            "--all",
+            "--after",
+            spelling,
+            cwd=workdir,
+        )
+        assert rc == EXIT_SUCCESS, err
+        outputs.append(out)
+
+    assert outputs == ["next-grain", "next-grain"]

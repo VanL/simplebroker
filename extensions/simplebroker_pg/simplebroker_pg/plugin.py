@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -23,6 +22,13 @@ from simplebroker._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 
 from . import _sql as pg_sql
 from ._constants import POSTGRES_SCHEMA_VERSION
+from ._failure_order import (
+    capture_pg_step,
+    resolve_pg_vacuum_acquire_failure,
+    resolve_pg_vacuum_pre_release_failure,
+    resolve_pg_vacuum_release_failure,
+    resolve_pg_vacuum_rollback_failure,
+)
 from ._identifiers import stable_lock_key
 from .runner import (
     PostgresActivityWaiter,
@@ -77,6 +83,11 @@ if TYPE_CHECKING:
         def invalidate_meta_cache(self) -> None: ...
 
         def is_schema_bootstrapped(self) -> bool: ...
+
+    class _VacuumRunner(_SchemaAwareRunner, Protocol):
+        """First-party runner operations used by PostgreSQL vacuum recovery."""
+
+        def _discard_thread_connection(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +335,134 @@ def verify_env(
         ),
         target=None,
         schema=schema,
+    )
+
+
+def _run_vacuum_batch(runner: SQLRunner, batch_size: int) -> int:
+    """Delete and settle one claimed-message batch."""
+
+    rows = list(
+        runner.run(
+            pg_sql.DELETE_CLAIMED_BATCH_COUNT,
+            (batch_size,),
+            fetch=True,
+        )
+    )
+    deleted_count = int(rows[0][0]) if rows else 0
+    if deleted_count == 0:
+        runner.rollback()
+    else:
+        runner.commit()
+    return deleted_count
+
+
+def _run_vacuum_body(
+    runner: SQLRunner,
+    *,
+    compact: bool,
+    config: Mapping[str, Any],
+) -> None:
+    """Delete claimed rows and run maintenance while the session lock is held."""
+
+    had_claimed_messages = False
+    batch_size = int(config["BROKER_VACUUM_BATCH_SIZE"])
+    while True:
+        runner.begin_immediate()
+        batch_step = capture_pg_step(
+            "body",
+            lambda: _run_vacuum_batch(runner, batch_size),
+        )
+        if batch_step.failure is not None:
+            rollback_step = capture_pg_step(
+                "rollback",
+                runner.rollback,
+            )
+            raise resolve_pg_vacuum_rollback_failure(
+                batch_step.failure,
+                rollback_step.failure,
+            )
+
+        deleted_count = batch_step.value
+        assert deleted_count is not None
+        if deleted_count == 0:
+            break
+        had_claimed_messages = True
+
+    if compact:
+        for statement in (
+            pg_sql.COMPACT_TABLE_MESSAGES,
+            pg_sql.COMPACT_TABLE_META,
+            pg_sql.COMPACT_TABLE_ALIASES,
+        ):
+            runner.run(statement)
+    elif had_claimed_messages:
+        for statement in (
+            "ANALYZE messages",
+            "ANALYZE meta",
+            "ANALYZE aliases",
+        ):
+            runner.run(statement)
+
+
+def _run_vacuum_before_release(
+    runner: SQLRunner,
+    *,
+    lock_key: int,
+    compact: bool,
+    config: Mapping[str, Any],
+) -> BaseException | None:
+    """Run every vacuum phase before logical lease release and select failure."""
+
+    lock_step = capture_pg_step(
+        "lock",
+        lambda: list(
+            runner.run(
+                "SELECT pg_try_advisory_lock(?)",
+                (lock_key,),
+                fetch=True,
+            )
+        ),
+    )
+    if lock_step.failure is not None:
+        discard_step = capture_pg_step(
+            "discard",
+            lambda: cast("_VacuumRunner", runner)._discard_thread_connection(),
+        )
+        return resolve_pg_vacuum_acquire_failure(
+            lock_step.failure,
+            discard_step.failure,
+        )
+
+    rows = lock_step.value
+    if not rows or not rows[0][0]:
+        return None
+
+    body_step = capture_pg_step(
+        "body",
+        lambda: _run_vacuum_body(runner, compact=compact, config=config),
+    )
+    unlock_step = capture_pg_step(
+        "unlock",
+        lambda: list(
+            runner.run(
+                "SELECT pg_advisory_unlock(?)",
+                (lock_key,),
+                fetch=True,
+            )
+        ),
+    )
+    discard_failure: BaseException | None = None
+    if unlock_step.failure is not None:
+        discard_step = capture_pg_step(
+            "discard",
+            lambda: cast("_VacuumRunner", runner)._discard_thread_connection(),
+        )
+        discard_failure = discard_step.failure
+
+    return resolve_pg_vacuum_pre_release_failure(
+        body_step.failure,
+        unlock_step.failure,
+        discard_failure,
     )
 
 
@@ -747,7 +886,7 @@ class PostgresBackendPlugin:
             (stable_lock_key("aliases", schema_name),),
         )
 
-    def vacuum(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-018] exception
+    def vacuum(
         self,
         runner: SQLRunner,
         *,
@@ -757,68 +896,35 @@ class PostgresBackendPlugin:
         schema_name = cast("_SchemaAwareRunner", runner).schema
         lock_key = stable_lock_key("vacuum", schema_name)
         leased = lease_runner_thread_connection(runner)
-        try:
-            rows = list(
-                runner.run("SELECT pg_try_advisory_lock(?)", (lock_key,), fetch=True)
+        pre_release_step = capture_pg_step(
+            "pre-release",
+            lambda: _run_vacuum_before_release(
+                runner,
+                lock_key=lock_key,
+                compact=compact,
+                config=config,
+            ),
+        )
+        pre_release_failure = (
+            pre_release_step.failure
+            if pre_release_step.failure is not None
+            else pre_release_step.value
+        )
+
+        release_failure = None
+        if leased:
+            release_step = capture_pg_step(
+                "release",
+                lambda: release_runner_thread_connection(runner),
             )
-            if not rows or not rows[0][0]:
-                return
+            release_failure = release_step.failure
 
-            had_claimed_messages = False
-            batch_size = int(config["BROKER_VACUUM_BATCH_SIZE"])
-            try:
-                while True:
-                    runner.begin_immediate()
-                    try:
-                        rows = list(
-                            runner.run(
-                                pg_sql.DELETE_CLAIMED_BATCH_COUNT,
-                                (batch_size,),
-                                fetch=True,
-                            )
-                        )
-                        deleted_count = int(rows[0][0]) if rows else 0
-                        if deleted_count == 0:
-                            runner.rollback()
-                            break
-                        had_claimed_messages = True
-                        runner.commit()
-                    except Exception:
-                        runner.rollback()
-                        raise
-
-                if compact:
-                    for statement in (
-                        pg_sql.COMPACT_TABLE_MESSAGES,
-                        pg_sql.COMPACT_TABLE_META,
-                        pg_sql.COMPACT_TABLE_ALIASES,
-                    ):
-                        runner.run(statement)
-                elif had_claimed_messages:
-                    for statement in (
-                        "ANALYZE messages",
-                        "ANALYZE meta",
-                        "ANALYZE aliases",
-                    ):
-                        runner.run(statement)
-            finally:
-                unlock_rows = list(
-                    runner.run(
-                        "SELECT pg_advisory_unlock(?)",
-                        (lock_key,),
-                        fetch=True,
-                    )
-                )
-                if not unlock_rows or not unlock_rows[0][0]:
-                    warnings.warn(
-                        "Postgres vacuum advisory lock release failed; "
-                        "cleanup lock may remain held by the backend session",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-        finally:
-            if leased:
-                release_runner_thread_connection(runner)
+        primary = resolve_pg_vacuum_release_failure(
+            pre_release_failure,
+            release_failure,
+        )
+        if primary is not None:
+            raise primary
 
     def create_activity_waiter(
         self,

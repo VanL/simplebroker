@@ -57,7 +57,11 @@ hierarchy. `close()` releases resources owned by a handle or runner.
 shared or process-wide substrate; an implementation may alias the operations
 when the scopes coincide. `close_owned_runner()` prefers callable `shutdown()`
 and falls back to `close()`, but only at a SimpleBroker-owned runner boundary.
-An explicitly injected runner remains caller-owned.
+An explicitly injected runner remains caller-owned. For SQL-backed cores,
+`_BorrowedRunner` encodes that boundary by making both destructive lifecycle
+verbs, `close()` and `shutdown()`, no-ops while continuing to delegate
+operational runner methods. This keeps the SQL borrowed-wrapper teardown paths
+ownership-safe without adding an owner flag to the public runner surface.
 
 ### Suspended closeable Queue operations
 
@@ -281,6 +285,9 @@ The core lifecycle proof is in `tests/test_process_broker_session.py`.
 Public closeable Queue-operation release is proved in
 `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`.
 Owned-runner verb selection is proved in `tests/test_runner_lifecycle.py`.
+Caller-owned injected-runner retention across direct and manager-driven
+teardown is proved in
+`tests/test_custom_runner_integration.py::test_sql_borrowed_runner_masks_destructive_verbs_across_teardown`.
 Activity-waiter terminal transitions and cleanup order are proved in
 `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py` and
 `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`.
@@ -294,6 +301,8 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
+- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
+  — caller-owned borrowed-runner shutdown masking
 - completed: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
   — public closeable Queue iterator ownership
 - completed: 2026-08-24-comprehensive-review-findings-remediation-plan — target

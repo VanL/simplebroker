@@ -6,7 +6,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Self
@@ -522,17 +522,34 @@ class _VacuumScenario:
     hold_lock: bool = False
     compact: bool = False
     fail_at: str | tuple[str, ...] | None = None
+    base_exception_at: str | tuple[str, ...] | None = None
     refuse_unlock: bool = False
+    fail_unlock_before_execution: bool = False
+    fail_lock_after_execution: bool = False
+    prove_discard_releases_lock: bool = False
     expected_events: tuple[str, ...] = ()
     expected_claimed: int = 0
     expected_error: str | None = None
+    expected_error_type: type[BaseException] = RuntimeError
     expected_contexts: tuple[str, ...] = ()
-    expected_warning: bool = False
+    expected_cause: str | None = None
+    expected_notes: tuple[str, ...] = ()
 
 
 def _vacuum_fails_at(scenario: _VacuumScenario, point: str) -> bool:
     fail_at = scenario.fail_at
     return fail_at == point or isinstance(fail_at, tuple) and point in fail_at
+
+
+def _vacuum_raises_base_at(scenario: _VacuumScenario, point: str) -> bool:
+    base_exception_at = scenario.base_exception_at
+    return base_exception_at == point or (
+        isinstance(base_exception_at, tuple) and point in base_exception_at
+    )
+
+
+class _VacuumAbort(BaseException):
+    pass
 
 
 def _vacuum_sql_point(sql: str) -> str | None:
@@ -569,6 +586,8 @@ class _RealVacuumHarness:
         self._begin = pg_runner.begin_immediate
         self._commit = pg_runner.commit
         self._rollback = pg_runner.rollback
+        self._discard = pg_runner._discard_thread_connection
+        self.lock_backend_pid: int | None = None
 
     def install(self) -> None:
         self.monkeypatch.setattr(self.runner, "run", self.run)
@@ -585,6 +604,11 @@ class _RealVacuumHarness:
         self.monkeypatch.setattr(self.runner, "begin_immediate", self.begin)
         self.monkeypatch.setattr(self.runner, "commit", self.commit)
         self.monkeypatch.setattr(self.runner, "rollback", self.rollback)
+        self.monkeypatch.setattr(
+            self.runner,
+            "_discard_thread_connection",
+            self.discard,
+        )
 
     def run(
         self,
@@ -597,11 +621,26 @@ class _RealVacuumHarness:
         if point is not None:
             self.events.append(point)
         if point == "unlock":
-            rows = list(self._run(sql, params, fetch=fetch))
+            if self.scenario.fail_unlock_before_execution:
+                self._raise_at(point)
+            unlock_rows = list(self._run(sql, params, fetch=fetch))
             self._raise_at(point)
-            return [(False,)] if self.scenario.refuse_unlock else rows
+            return [(False,)] if self.scenario.refuse_unlock else unlock_rows
+        if point == "lock" and self.scenario.fail_lock_after_execution:
+            lock_rows = list(self._run(sql, params, fetch=fetch))
+            self._record_lock_backend_pid()
+            self._raise_at(point)
+            return lock_rows
         self._raise_at(point)
-        return self._run(sql, params, fetch=fetch)
+        result = self._run(sql, params, fetch=fetch)
+        if point == "lock":
+            self._record_lock_backend_pid()
+        return result
+
+    def _record_lock_backend_pid(self) -> None:
+        connection = self.runner._leased_conn
+        assert connection is not None
+        self.lock_backend_pid = connection.info.backend_pid
 
     def lease(self) -> None:
         self.events.append("lease")
@@ -626,8 +665,15 @@ class _RealVacuumHarness:
         self._rollback()
         self._raise_at("rollback")
 
+    def discard(self) -> None:
+        self.events.append("discard")
+        self._discard()
+        self._raise_at("discard")
+
     def _raise_at(self, point: str | None) -> None:
         if point is not None and _vacuum_fails_at(self.scenario, point):
+            if _vacuum_raises_base_at(self.scenario, point):
+                raise _VacuumAbort(f"{point} aborted")
             raise RuntimeError(f"{point} failed")
 
     def execute(self) -> BaseException | None:
@@ -640,15 +686,52 @@ class _RealVacuumHarness:
                     (stable_lock_key("vacuum", self.runner.schema),),
                 )
 
-        caught: Exception | None = None
+        caught: BaseException | None = None
         try:
-            PostgresBackendPlugin().vacuum(
-                self.runner,
-                compact=self.scenario.compact,
-                config={"BROKER_VACUUM_BATCH_SIZE": 100},
-            )
-        except RuntimeError as exc:
-            caught = exc
+            if self.scenario.expected_error is None:
+                PostgresBackendPlugin().vacuum(
+                    self.runner,
+                    compact=self.scenario.compact,
+                    config={"BROKER_VACUUM_BATCH_SIZE": 100},
+                )
+            else:
+                with pytest.raises(BaseException) as raised:
+                    PostgresBackendPlugin().vacuum(
+                        self.runner,
+                        compact=self.scenario.compact,
+                        config={"BROKER_VACUUM_BATCH_SIZE": 100},
+                    )
+                caught = raised.value
+            if self.scenario.prove_discard_releases_lock:
+                assert self.lock_backend_pid is not None
+                with (
+                    psycopg.connect(
+                        self.runner.dsn,
+                        autocommit=True,
+                        connect_timeout=5,
+                    ) as contender,
+                    contender.cursor() as cursor,
+                ):
+                    cursor.execute(
+                        "SELECT pg_try_advisory_lock(%s)",
+                        (stable_lock_key("vacuum", self.runner.schema),),
+                    )
+                    assert cursor.fetchone() == (True,)
+                    cursor.execute(
+                        "SELECT pg_advisory_unlock(%s)",
+                        (stable_lock_key("vacuum", self.runner.schema),),
+                    )
+                replacement_pid = int(
+                    next(
+                        iter(
+                            self.runner.run(
+                                "SELECT pg_backend_pid()",
+                                fetch=True,
+                            )
+                        )
+                    )[0]
+                )
+                assert replacement_pid != self.lock_backend_pid
         finally:
             if lock_connection is not None:
                 lock_connection.close()
@@ -834,6 +917,34 @@ PG_VACUUM_TRANSITIONS = (
         ),
     ),
     TransitionCase(
+        transition_id="ROLLBACK-BASE-PRECEDENCE",
+        start_state="delete-batch-open",
+        event="delete fails ordinarily and required rollback is interrupted",
+        guard="the rollback failure is outside Exception",
+        next_state="failed-during-rollback",
+        effects="still unlocks and releases the connection lease",
+        expected_result="rollback BaseException wins with delete failure as its cause",
+        payload=_VacuumScenario(
+            claimed_messages=1,
+            fail_at=("delete", "rollback"),
+            base_exception_at="rollback",
+            expected_error="rollback aborted",
+            expected_error_type=_VacuumAbort,
+            expected_contexts=("delete failed",),
+            expected_cause="delete failed",
+            expected_claimed=1,
+            expected_events=(
+                "lease",
+                "lock",
+                "begin",
+                "delete",
+                "rollback",
+                "unlock",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
         transition_id="MAINTENANCE-FAILURE",
         start_state="delete-scan-complete",
         event="first compact statement fails",
@@ -909,6 +1020,7 @@ PG_VACUUM_TRANSITIONS = (
                 "delete",
                 "rollback",
                 "unlock",
+                "discard",
                 "release",
             ),
         ),
@@ -918,12 +1030,11 @@ PG_VACUUM_TRANSITIONS = (
         start_state="unlocking",
         event="server reports advisory unlock false",
         guard="maintenance body completed",
-        next_state="idle-with-unlock-warning",
-        effects="warns that the session lock may remain and releases the lease",
-        expected_result="warning does not replace successful maintenance",
+        next_state="idle",
+        effects="releases the lease without warning because this session owns no such lock",
+        expected_result="successful maintenance",
         payload=_VacuumScenario(
             refuse_unlock=True,
-            expected_warning=True,
             expected_events=(
                 "lease",
                 "lock",
@@ -936,16 +1047,253 @@ PG_VACUUM_TRANSITIONS = (
         ),
     ),
     TransitionCase(
-        transition_id="UNLOCK-FAILURE",
+        transition_id="UNLOCK-QUERY-FAILURE-DISCARD",
         start_state="unlocking",
-        event="advisory unlock query fails",
-        guard="maintenance body completed",
-        next_state="failed",
-        effects="releases the connection lease in the outer finalizer",
-        expected_result="unlock failure propagates",
+        event="advisory unlock transport fails before server execution",
+        guard="the leased backend session still owns the advisory lock",
+        next_state="failed-after-session-discard",
+        effects="closes the uncertain session, releasing its lock, then releases the lease",
+        expected_result="unlock failure propagates and the runner uses a replacement session",
+        payload=_VacuumScenario(
+            fail_at="unlock",
+            fail_unlock_before_execution=True,
+            prove_discard_releases_lock=True,
+            expected_error="unlock failed",
+            expected_events=(
+                "lease",
+                "lock",
+                "begin",
+                "delete",
+                "rollback",
+                "unlock",
+                "discard",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="UNLOCK-RESPONSE-LOST-DISCARD",
+        start_state="unlocking",
+        event="advisory unlock transport fails after server execution",
+        guard="the client cannot prove whether the server released the lock",
+        next_state="failed-after-session-discard",
+        effects="closes the uncertain session and releases the logical lease",
+        expected_result="unlock failure propagates after conservative discard",
         payload=_VacuumScenario(
             fail_at="unlock",
             expected_error="unlock failed",
+            expected_events=(
+                "lease",
+                "lock",
+                "begin",
+                "delete",
+                "rollback",
+                "unlock",
+                "discard",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="LOCK-QUERY-FAILURE-DISCARD",
+        start_state="acquiring",
+        event="advisory lock transport fails before server execution",
+        guard="the client cannot prove the lock was never granted",
+        next_state="failed-after-session-discard",
+        effects="closes the uncertain session before any batch work, then releases the lease",
+        expected_result="acquisition failure propagates after conservative discard",
+        payload=_VacuumScenario(
+            fail_at="lock",
+            expected_error="lock failed",
+            expected_events=(
+                "lease",
+                "lock",
+                "discard",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="LOCK-RESPONSE-LOST-DISCARD",
+        start_state="acquiring",
+        event="advisory lock transport fails after server execution",
+        guard="the leased backend session owns the lock but the client never saw the grant",
+        next_state="failed-after-session-discard",
+        effects="closes the lock-owning session so a later vacuum cannot silently no-op forever",
+        expected_result="acquisition failure propagates and a contender can acquire the lock",
+        payload=_VacuumScenario(
+            fail_at="lock",
+            fail_lock_after_execution=True,
+            prove_discard_releases_lock=True,
+            expected_error="lock failed",
+            expected_events=(
+                "lease",
+                "lock",
+                "discard",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="LOCK-FAILURE-DISCARD-ORDINARY",
+        start_state="acquiring",
+        event="advisory lock query and session discard both fail ordinarily",
+        guard="acquisition completion is unknown",
+        next_state="failed-after-cleanup",
+        effects="keeps the acquisition failure primary and records the discard failure",
+        expected_result="acquisition failure propagates with the discard failure as a note",
+        payload=_VacuumScenario(
+            fail_at=("lock", "discard"),
+            expected_error="lock failed",
+            expected_notes=("discard failed",),
+            expected_events=(
+                "lease",
+                "lock",
+                "discard",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="LOCK-FAILURE-DISCARD-BASE",
+        start_state="acquiring",
+        event="advisory lock query fails and session discard is interrupted",
+        guard="the discard failure is outside Exception",
+        next_state="failed-after-cleanup",
+        effects="lets the discard interruption win while the acquisition failure stays inspectable",
+        expected_result="the discard BaseException propagates with acquisition failure as context",
+        payload=_VacuumScenario(
+            fail_at=("lock", "discard"),
+            base_exception_at="discard",
+            expected_error="discard aborted",
+            expected_error_type=_VacuumAbort,
+            expected_contexts=("lock failed",),
+            expected_cause="lock failed",
+            expected_events=(
+                "lease",
+                "lock",
+                "discard",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="BODY-BASE-ORDINARY-CLEANUP",
+        start_state="delete-batch-open",
+        event="body aborts and unlock, discard, and release all fail ordinarily",
+        guard="the body failure is outside Exception",
+        next_state="failed-after-cleanup",
+        effects="discards the session and records each ordinary cleanup failure",
+        expected_result="the body BaseException remains primary",
+        payload=_VacuumScenario(
+            fail_at=("delete", "unlock", "discard", "release"),
+            base_exception_at="delete",
+            expected_error="delete aborted",
+            expected_error_type=_VacuumAbort,
+            expected_notes=("unlock failed", "discard failed", "release failed"),
+            expected_events=(
+                "lease",
+                "lock",
+                "begin",
+                "delete",
+                "rollback",
+                "unlock",
+                "discard",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="BODY-BASE-ROLLBACK-ORDINARY",
+        start_state="delete-batch-open",
+        event="body aborts and transaction rollback fails ordinarily",
+        guard="the body failure is outside Exception",
+        next_state="failed-after-cleanup",
+        effects="retains the body abort and records rollback failure as a note",
+        expected_result="the body BaseException remains primary",
+        payload=_VacuumScenario(
+            fail_at=("delete", "rollback"),
+            base_exception_at="delete",
+            expected_error="delete aborted",
+            expected_error_type=_VacuumAbort,
+            expected_notes=("rollback failed",),
+            expected_events=(
+                "lease",
+                "lock",
+                "begin",
+                "delete",
+                "rollback",
+                "unlock",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="DISCARD-BASE-PRECEDENCE",
+        start_state="unlock-uncertain",
+        event="body and unlock fail ordinarily, then discard aborts",
+        guard="discard raises outside Exception",
+        next_state="failed-during-discard",
+        effects="still releases the logical lease",
+        expected_result="discard BaseException wins with unlock and body as context",
+        payload=_VacuumScenario(
+            fail_at=("delete", "unlock", "discard"),
+            base_exception_at="discard",
+            expected_error="discard aborted",
+            expected_error_type=_VacuumAbort,
+            expected_contexts=("unlock failed", "delete failed"),
+            expected_events=(
+                "lease",
+                "lock",
+                "begin",
+                "delete",
+                "rollback",
+                "unlock",
+                "discard",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="UNLOCK-BASE-ORDINARY-LATER-CLEANUP",
+        start_state="unlocking",
+        event="unlock aborts and discard and release fail ordinarily",
+        guard="unlock raises outside Exception",
+        next_state="failed-after-cleanup",
+        effects="discards the session and records later ordinary cleanup failures",
+        expected_result="unlock BaseException remains primary",
+        payload=_VacuumScenario(
+            fail_at=("unlock", "discard", "release"),
+            base_exception_at="unlock",
+            expected_error="unlock aborted",
+            expected_error_type=_VacuumAbort,
+            expected_notes=("discard failed", "release failed"),
+            expected_events=(
+                "lease",
+                "lock",
+                "begin",
+                "delete",
+                "rollback",
+                "unlock",
+                "discard",
+                "release",
+            ),
+        ),
+    ),
+    TransitionCase(
+        transition_id="RELEASE-BASE-PRECEDENCE",
+        start_state="release",
+        event="body fails ordinarily and lease release aborts after a definite unlock",
+        guard="release raises outside Exception",
+        next_state="failed-during-release",
+        effects="retains the body failure as context",
+        expected_result="release BaseException wins",
+        payload=_VacuumScenario(
+            fail_at=("delete", "release"),
+            base_exception_at="release",
+            expected_error="release aborted",
+            expected_error_type=_VacuumAbort,
+            expected_contexts=("delete failed",),
             expected_events=(
                 "lease",
                 "lock",
@@ -968,27 +1316,28 @@ def test_pg_vacuum_fires_transition_table(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scenario = transition_case.payload
-    expectation = (
-        pytest.warns(RuntimeWarning, match="advisory lock release failed")
-        if scenario.expected_warning
-        else nullcontext()
+    events, caught = _run_real_vacuum_transition(
+        scenario,
+        pg_runner=pg_runner,
+        pg_core=pg_core,
+        monkeypatch=monkeypatch,
     )
-    with expectation:
-        events, caught = _run_real_vacuum_transition(
-            scenario,
-            pg_runner=pg_runner,
-            pg_core=pg_core,
-            monkeypatch=monkeypatch,
-        )
 
     if scenario.expected_error is not None:
-        assert isinstance(caught, RuntimeError)
+        assert isinstance(caught, scenario.expected_error_type)
         assert scenario.expected_error in str(caught)
         context = caught.__context__
         for expected_context in scenario.expected_contexts:
             assert context is not None
             assert str(context) == expected_context
             context = context.__context__
+        if scenario.expected_cause is not None:
+            assert caught.__cause__ is not None
+            assert str(caught.__cause__) == scenario.expected_cause
+        notes = getattr(caught, "__notes__", ())
+        assert len(notes) == len(scenario.expected_notes)
+        for note, expected_note in zip(notes, scenario.expected_notes, strict=True):
+            assert expected_note in note
     else:
         assert caught is None
     assert tuple(events) == scenario.expected_events

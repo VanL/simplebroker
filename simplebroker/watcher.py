@@ -88,7 +88,7 @@ from ._retry import interruptible_sleep
 from ._retry_policy import _execute_watcher_operational_retry
 from ._targets import BrokerTarget
 from .db import BrokerDB
-from .sbqueue import Queue
+from .sbqueue import Queue, _close_iterator
 
 # Module-owned clock/rng seam: tests patch these aliases instead of the
 # shared stdlib attributes, which background threads, destructors, and
@@ -283,9 +283,29 @@ class _ErrorHandlerFailure(Exception):
         error_handler_exception: Exception,
         handler_exception: Exception,
     ) -> None:
-        super().__init__(str(error_handler_exception))
+        super().__init__(_stable_exception_message(error_handler_exception))
         self.error_handler_exception = error_handler_exception
         self.handler_exception = handler_exception
+
+
+class _IteratorCleanupFailure(Exception):
+    """Private carrier for cleanup failure during an otherwise clean stop."""
+
+    def __init__(
+        self,
+        cleanup_exception: Exception,
+        interrupted_exception: Exception | None,
+    ) -> None:
+        super().__init__(_stable_exception_message(cleanup_exception))
+        self.cleanup_exception = cleanup_exception
+        self.interrupted_exception = interrupted_exception
+
+
+def _stable_exception_message(failure: BaseException) -> str:
+    """Render built-in string arguments without invoking custom formatting."""
+
+    string_args = [argument for argument in failure.args if type(argument) is str]
+    return ": ".join(string_args) if string_args else "<message unavailable>"
 
 
 class BaseWatcher(ABC):
@@ -801,10 +821,9 @@ class BaseWatcher(ABC):
                     continue
                 self._pending_messages_precheck_confirmed = True
 
-            # Always try to drain the queue first; this guarantees
-            # that a stop request does not prevent us from
-            # finishing already-visible work, so connections can
-            # be closed and no messages get lost.
+            # Drain while work remains admitted. Consume-batch mode checks stop
+            # before each stream advance, so a stop observed after a handler
+            # returns does not claim another already-visible row.
             try:
                 self._drain_queue()
             finally:
@@ -888,9 +907,9 @@ class BaseWatcher(ABC):
             except (StopException, StopWatching):
                 # Normal shutdown
                 break
-            except _ErrorHandlerFailure:
-                # Callback failure is terminal for this run, not retryable
-                # watcher infrastructure failure.
+            except (_ErrorHandlerFailure, _IteratorCleanupFailure):
+                # Callback and clean-stop iterator cleanup failures are terminal
+                # for this run, not retryable watcher infrastructure failures.
                 raise
             except KeyboardInterrupt:
                 # Propagate KeyboardInterrupt so callers can handle it specifically
@@ -1026,10 +1045,10 @@ class BaseWatcher(ABC):
 
     def _cleanup_after_run(
         self,
-        terminal_failure: _ErrorHandlerFailure | None,
+        terminal_failure: _ErrorHandlerFailure | _IteratorCleanupFailure | None,
         signal_context: contextlib.ExitStack | None,
     ) -> bool:
-        """Clean one run and retain ordinary cleanup failure when callback failed."""
+        """Clean one run and retain ordinary cleanup failure behind its primary."""
         resources_released = False
         try:
             try:
@@ -1037,9 +1056,14 @@ class BaseWatcher(ABC):
             except Exception as cleanup_error:
                 if terminal_failure is None:
                     raise
-                terminal_failure.error_handler_exception.add_note(
+                if isinstance(terminal_failure, _ErrorHandlerFailure):
+                    public_failure = terminal_failure.error_handler_exception
+                else:
+                    public_failure = terminal_failure.cleanup_exception
+                public_failure.add_note(
                     "Watcher runtime cleanup also failed: "
-                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                    f"{type(cleanup_error).__name__}: "
+                    f"{_stable_exception_message(cleanup_error)}"
                 )
             else:
                 resources_released = True
@@ -1050,11 +1074,17 @@ class BaseWatcher(ABC):
 
     @staticmethod
     def _propagate_terminal_failure(
-        terminal_failure: _ErrorHandlerFailure | None,
+        terminal_failure: _ErrorHandlerFailure | _IteratorCleanupFailure | None,
     ) -> None:
         """Unwrap the private carrier only after lifecycle cleanup settles."""
         if terminal_failure is None:
             return
+        if isinstance(terminal_failure, _IteratorCleanupFailure):
+            if terminal_failure.interrupted_exception is None:
+                raise terminal_failure.cleanup_exception from None
+            raise terminal_failure.cleanup_exception from (
+                terminal_failure.interrupted_exception
+            )
         raise terminal_failure.error_handler_exception from (
             terminal_failure.handler_exception
         )
@@ -1090,7 +1120,7 @@ class BaseWatcher(ABC):
             return
 
         resources_released = False
-        terminal_failure: _ErrorHandlerFailure | None = None
+        terminal_failure: _ErrorHandlerFailure | _IteratorCleanupFailure | None = None
         try:
             if hasattr(self, "_finalizer") and not self._finalizer.alive:
                 self._setup_finalizer()
@@ -1101,7 +1131,7 @@ class BaseWatcher(ABC):
             # Run the main loop with retries
             self._run_with_retries()
 
-        except _ErrorHandlerFailure as failure:
+        except (_ErrorHandlerFailure, _IteratorCleanupFailure) as failure:
             terminal_failure = failure
 
         finally:
@@ -1866,6 +1896,34 @@ class QueueWatcher(BaseWatcher):
             )
         )
 
+    @staticmethod
+    def _close_consume_iterator(
+        iterator: object,
+        active_failure: BaseException | None,
+    ) -> None:
+        """Close an owned consume iterator under watcher failure precedence."""
+
+        try:
+            _close_iterator(iterator)
+        except Exception as close_error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-004] exception
+            if active_failure is None:
+                raise _IteratorCleanupFailure(close_error, None) from None
+
+            note = (
+                "Watcher batch iterator close also failed: "
+                f"{type(close_error).__name__}: "
+                f"{_stable_exception_message(close_error)}"
+            )
+            if isinstance(active_failure, _ErrorHandlerFailure):
+                active_failure.error_handler_exception.add_note(note)
+            elif isinstance(active_failure, (StopException, StopWatching)):
+                raise _IteratorCleanupFailure(
+                    close_error,
+                    active_failure,
+                ) from active_failure
+            else:
+                active_failure.add_note(note)
+
     def _consume_all_messages(self) -> bool:
         """Consume and process all available messages."""
         found_any = False
@@ -1874,15 +1932,30 @@ class QueueWatcher(BaseWatcher):
             self._check_stop()
             found_this_iteration = False
 
-            for body, ts in self._queue_obj.stream_messages(
-                peek=False,
-                all_messages=True,
-                after_timestamp=self._after_timestamp_filter(),
-                commit_interval=1,
-            ):
-                self._try_dispatch_message(body, ts)
-                found_any = True
-                found_this_iteration = True
+            iterator = iter(
+                self._queue_obj.stream_messages(
+                    peek=False,
+                    all_messages=True,
+                    after_timestamp=self._after_timestamp_filter(),
+                    commit_interval=1,
+                )
+            )
+            active_failure: BaseException | None = None
+            try:
+                while True:
+                    self._check_stop()
+                    try:
+                        body, ts = next(iterator)
+                    except StopIteration:
+                        break
+                    self._try_dispatch_message(body, ts)
+                    found_any = True
+                    found_this_iteration = True
+            except BaseException as failure:
+                active_failure = failure
+                raise
+            finally:
+                self._close_consume_iterator(iterator, active_failure)
 
             # No more messages, exit loop
             if not found_this_iteration:

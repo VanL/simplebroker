@@ -20,6 +20,7 @@ from ._constants import (
     LOGICAL_COUNTER_MASK,
     MAX_ITERATIONS,
     MAX_LOGICAL_COUNTER,
+    NS_PER_SECOND,
     SQLITE_MAX_INT64,
     TIMESTAMP_EXACT_NUM_DIGITS,
     UNIX_NATIVE_BOUNDARY,
@@ -42,6 +43,7 @@ _uniform = random.uniform
 _NS_DIGIT_BOUNDARY = 16
 _MS_DIGIT_BOUNDARY = 11
 _ISO_BASIC_DATE_DIGITS = 8
+_MAX_BOUND_INPUT_CODEPOINTS = 128
 
 if TYPE_CHECKING:
     from ._runner import SQLRunner
@@ -404,6 +406,18 @@ class TimestampGenerator:
         if not timestamp_str:
             raise TimestampError("Invalid timestamp: empty string")
 
+        # Exact message IDs have their own fixed 19-digit grammar and do not
+        # need Unicode folding. Bounds admit several grammars, so cap their
+        # work before digit folding, regular expressions, or integer parsing.
+        if exact:
+            return TimestampGenerator._validate_exact_timestamp(timestamp_str)
+        if len(timestamp_str) > _MAX_BOUND_INPUT_CODEPOINTS:
+            raise TimestampError(
+                "Invalid timestamp: input exceeds "
+                f"{_MAX_BOUND_INPUT_CODEPOINTS} Unicode code points; "
+                f"{_BOUND_PARSE_GUIDANCE}"
+            )
+
         # Fold non-ASCII decimal digits to ASCII once, before any parsing.
         # int() already accepts Unicode decimal digits but
         # datetime.fromisoformat() does not, so without this the *meaning* of a
@@ -415,10 +429,6 @@ class TimestampGenerator:
                 str(unicodedata.decimal(char)) if char.isdecimal() else char
                 for char in timestamp_str
             )
-
-        # If exact mode, enforce strict 19-digit validation
-        if exact:
-            return TimestampGenerator._validate_exact_timestamp(timestamp_str)
 
         # Reject numeric scientific notation early for consistency.
         if _SCIENTIFIC_NOTATION_RE.fullmatch(timestamp_str):
@@ -608,8 +618,13 @@ class TimestampGenerator:
         else:
             dt = dt.astimezone(UTC)
 
-        # Convert to nanoseconds after epoch
-        ns_after_epoch = int(dt.timestamp() * 1_000_000_000)
+        # Convert without ``datetime.timestamp()``: its float result loses
+        # nanosecond precision far enough from the epoch and can cross one
+        # logical-counter grain before quantization.
+        epoch_delta = dt - datetime(1970, 1, 1, tzinfo=UTC)
+        ns_after_epoch = (
+            epoch_delta.days * 86_400 + epoch_delta.seconds
+        ) * NS_PER_SECOND + epoch_delta.microseconds * 1_000
         if ns_after_epoch < 0:
             # Pre-epoch dates clamp to the epoch: a bound like
             # "--after 1950-01-01" means "everything", and negative hybrid

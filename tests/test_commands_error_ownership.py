@@ -143,6 +143,47 @@ def test_cmd_delete_message_id_requires_queue_without_mutation(tmp_path: Path) -
         assert queue.peek_one() == "second"
 
 
+def test_cmd_delete_missing_queue_reports_no_match_without_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "broker.db"
+
+    assert commands.cmd_delete(str(path), "missing") == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_cmd_delete_all_empty_reports_no_match_without_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "broker.db"
+
+    assert commands.cmd_delete(str(path)) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("queue_name", ["jobs", None], ids=["named", "all"])
+def test_cmd_delete_nonempty_reports_success(
+    tmp_path: Path,
+    queue_name: str | None,
+) -> None:
+    path = tmp_path / "broker.db"
+    with Queue("jobs", db_path=str(path)) as queue:
+        queue.write("work")
+
+    assert commands.cmd_delete(str(path), queue_name) == 0
+
+    with Queue("jobs", db_path=str(path)) as queue:
+        assert queue.peek_one() is None
+
+
 @pytest.mark.parametrize(
     "invoke",
     [
