@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Public `simplebroker.commands` functions now consistently raise invalid-input
+  and operational failures for direct Python callers while the CLI alone
+  translates them to diagnostics and exit `1`. This also rejects conflicting
+  exact-ID selectors and prevents exact-ID delete without a queue from deleting
+  across queues. Closed-stdout behavior is unchanged.
 - Conninfo target redaction now consumes escaped quoted and unquoted password
   characters, including malformed unterminated values, without leaking a
   password suffix.

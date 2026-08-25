@@ -922,10 +922,11 @@ Normative: `[SB-API-10]` in
 
 `simplebroker.commands` is supported public embedding surface: the programmatic
 equivalent of the CLI. Each `cmd_*` function mirrors one CLI subcommand — it
-prints to stdout and returns an integer exit code (`0` success, `1` error, `2`
-not found / queue empty) rather than raising for
-expected outcomes. Import them directly and drive the broker without shelling
-out:
+prints the same payload and returns an integer code for ordinary outcomes (`0`
+success or `2` not found / queue empty). Invalid input and operational failures
+raise their Python exceptions. The CLI alone turns those failures into a
+diagnostic and process exit `1`. Import the functions directly and drive the
+broker without shelling out:
 
 ```python
 from simplebroker.commands import cmd_write, cmd_read, cmd_list
@@ -936,6 +937,11 @@ cmd_write(db, "jobs", "render invoice")  # -> 0
 rc = cmd_read(db, "jobs")  # prints the message, returns 0 (or 2 if empty)
 cmd_list(db)  # prints queue names, returns 0
 ```
+
+Exact-ID selector conflicts raise before opening the target, and an exact-ID
+delete requires a queue. `cmd_load` raises its original `ValueError`,
+`IntegrityError`, or `TimestampError`; the shell CLI adds the `broker load:`
+context and recovery hint.
 
 The five streaming command functions (`cmd_read`, `cmd_peek`, `cmd_move`,
 `cmd_dump`, and `cmd_watch`) treat a closed stdout consumer as a clean stop and
@@ -949,8 +955,8 @@ commentary. It does not install a blanket `RuntimeWarning` filter. Plain
 message output warns once per invocation for embedded newlines; JSON message
 records do not warn.
 
-Process-signal translation belongs to the CLI wrapper, not ordinary direct
-`cmd_*` calls. The wrapper returns `130` when an unhandled
+Error and process-signal translation belongs to the CLI wrapper, not ordinary
+direct `cmd_*` calls. The wrapper returns `130` when an unhandled
 `KeyboardInterrupt` reaches it; `cmd_watch` retains its own normal-stop
 handling and returns `0`.
 

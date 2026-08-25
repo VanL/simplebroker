@@ -331,10 +331,10 @@ _Verification_:
   validation, action JSON, example, fuzz, and CI reliability slices; owner
   directed targeted closure with hosted Windows/POSIX/Atheris retained as
   post-commit evidence
-- active: 2026-08-24-cli-output-and-error-contract-remediation-plan — reviewed
-  Strategy-A spec promotion at baseline `0901c7cd`; local runtime, contract,
-  static, documentation, downstream Weft, and independent-review evidence
-  recorded; landing and exact-SHA Windows evidence remain pending
+- completed: 2026-08-24-cli-output-and-error-contract-remediation-plan —
+  closed stdout, owned warning, cause-classification, and direct-command error
+  ownership are implemented and verified; owner directed targeted closure with
+  exact-SHA Windows retained as post-commit evidence
 - retired: 2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan
   — source `00fb9f77` (local-only pin); see the ledger in
   `docs/plans/README.md`

@@ -98,6 +98,9 @@ Embedders translate their own settings into those keys to avoid name clashes.
 The public API consists of the names exported from `simplebroker`,
 `simplebroker.ext`, and the `simplebroker.commands.__all__` command layer
 described under [Embedding SimpleBroker in Your Project](#embedding-simplebroker-in-your-project).
+Direct command functions return integer codes for ordinary outcomes and raise
+Python exceptions for invalid input or operational failures; only the CLI
+translates those failures to diagnostics and exit `1`.
 Underscore-prefixed modules are implementation details and may change.
 Specifications: `docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-12]`).
 

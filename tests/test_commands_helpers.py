@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from simplebroker import commands
-from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
+from simplebroker._constants import EXIT_SUCCESS
 from simplebroker._exceptions import MessageError
 from simplebroker.commands import (
     _get_message_content,
@@ -27,39 +27,26 @@ pytestmark = [pytest.mark.shared]
 
 class TestResolveTimestampFilters:
     def test_valid_filters(self, capsys: pytest.CaptureFixture[str]) -> None:
-        error, after_ts, before_ts, exact_ts = _resolve_timestamp_filters(
+        after_ts, before_ts, exact_ts = _resolve_timestamp_filters(
             "1700000000", "1700000001", "1234567890123456789"
         )
 
-        assert error is None
         assert isinstance(after_ts, int) and after_ts > 0
         assert isinstance(before_ts, int) and before_ts > after_ts
         assert exact_ts == 1234567890123456789
         assert capsys.readouterr().err == ""
 
-    def test_invalid_after_returns_exit_error(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        error, after_ts, before_ts, exact_ts = _resolve_timestamp_filters(
-            "invalid", None, None
-        )
+    def test_invalid_after_raises(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(ValueError, match="Invalid timestamp"):
+            _resolve_timestamp_filters("invalid", None, None)
 
-        assert error == EXIT_ERROR
-        assert after_ts is None and before_ts is None and exact_ts is None
-        captured = capsys.readouterr()
-        assert "simplebroker: error" in captured.err
+        assert capsys.readouterr().err == ""
 
-    def test_invalid_before_returns_exit_error(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        error, after_ts, before_ts, exact_ts = _resolve_timestamp_filters(
-            None, "invalid", None
-        )
+    def test_invalid_before_raises(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(ValueError, match="Invalid timestamp"):
+            _resolve_timestamp_filters(None, "invalid", None)
 
-        assert error == EXIT_ERROR
-        assert after_ts is None and before_ts is None and exact_ts is None
-        captured = capsys.readouterr()
-        assert "simplebroker: error" in captured.err
+        assert capsys.readouterr().err == ""
 
 
 class TestGetMessageContent:

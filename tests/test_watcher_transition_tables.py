@@ -13,7 +13,7 @@ import pytest
 import simplebroker.commands as commands_module
 import simplebroker.watcher as watcher_module
 from simplebroker import Queue
-from simplebroker.commands import EXIT_ERROR, cmd_watch
+from simplebroker.commands import cmd_watch
 from simplebroker.watcher import PollingStrategy, QueueWatcher, StopWatching
 from tests.helper_scripts import drive_until
 from tests.helper_scripts.managed_subprocess import managed_subprocess
@@ -611,14 +611,14 @@ def test_cli_watch_fires_transition_table(
 ) -> None:
     path = str(tmp_path / f"{transition_case.payload}.db")
     if transition_case.payload == "REJECT_MOVE_AFTER":
-        result = cmd_watch(path, "jobs", move_to="done", after_str="1")
-        assert result == EXIT_ERROR
-        assert "incompatible with --after" in capsys.readouterr().err
+        with pytest.raises(ValueError, match="incompatible with --after"):
+            cmd_watch(path, "jobs", move_to="done", after_str="1")
+        assert capsys.readouterr().err == ""
     else:
         if transition_case.payload == "REJECT_BAD_TIMESTAMP":
-            result = cmd_watch(path, "jobs", after_str="not-a-timestamp")
-            assert result == EXIT_ERROR
-            assert "Invalid timestamp" in capsys.readouterr().err
+            with pytest.raises(ValueError, match="Invalid timestamp"):
+                cmd_watch(path, "jobs", after_str="not-a-timestamp")
+            assert capsys.readouterr().err == ""
             return
 
         queue = Queue("jobs", db_path=path)

@@ -216,6 +216,14 @@ fixed built-in backend at validation time; opaque extras cannot select a core
 backend. Process sessions include the complete marker in identity, so opaque
 extras can separate resource sessions without becoming canonical core options.
 
+The public command layer keeps only ordinary result codes (`0` and `2`) and
+its own closed-stdout result. Invalid input and operational exceptions cross
+the `cmd_*` boundary unchanged. The single post-parse CLI boundary classifies
+and renders them; `load` retains one CLI-local translator because `[SB-IO-4]`
+owns its `broker load:` recovery dialect. Shared selector validation runs
+before config or target access, which prevents direct-call grammar drift and
+the invalid exact-ID delete-without-queue mutation path.
+
 CLI argument normalization remains a preparse pass because root options and
 the destructive global actions must be recognized before subcommand dispatch.
 One parser-construction helper captures every option action, including explicit

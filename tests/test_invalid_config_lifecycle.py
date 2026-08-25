@@ -367,14 +367,19 @@ def test_cmd_load_consumes_invalid_config_before_interactive_stdin_guard(
 def test_direct_command_early_validation_can_remain_config_independent() -> None:
     code = """
 import simplebroker.commands as commands
-result = commands.cmd_delete('unused.db', 'q', 'not-a-message-id')
-print(result)
+try:
+    commands.cmd_delete('unused.db', 'q', 'not-a-message-id')
+except ValueError as error:
+    print(type(error).__name__, str(error))
+else:
+    raise SystemExit('invalid message ID did not raise')
 """
     result = _run_python_with_invalid_config(code)
 
     assert result.returncode == 0
-    assert result.stdout == "1\n"
-    assert "invalid message ID" in result.stderr
+    assert result.stdout.startswith("ValueError ")
+    assert "invalid message ID" in result.stdout
+    assert result.stderr == ""
 
 
 def test_direct_target_init_does_not_translate_invalid_config_to_exit_code(

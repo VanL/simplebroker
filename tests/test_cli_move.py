@@ -288,7 +288,7 @@ def test_filtered_single_move_closes_bounded_generator(
     monkeypatch.setattr(
         commands,
         "_resolve_timestamp_filters",
-        lambda *args, **kwargs: (None, 0, None, None),
+        lambda *args, **kwargs: (0, None, None),
     )
 
     result = commands.cmd_move(
@@ -972,14 +972,11 @@ class TestMutualExclusivity:
 
         # Try to use both -m and --all
         rc, _out, err = run_cli(
-            "move", "source", "dest", "-m", "1234567890123456789", "--all", cwd=workdir
+            "move", "source", "dest", "--all", "-m", "not-a-message-id", cwd=workdir
         )
-        assert rc in [1, 2]  # Argument error (1) or argparse error (2)
-        assert (
-            "mutually exclusive" in err.lower()
-            or "not allowed with" in err.lower()
-            or "error" in err.lower()
-        )
+        assert rc == 1
+        assert "not allowed with argument --all" in err
+        assert "invalid message ID" not in err
 
     def test_after_works_with_and_without_all(self, workdir):
         """Test that --after can be used with or without --all."""

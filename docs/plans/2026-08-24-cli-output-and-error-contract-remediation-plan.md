@@ -1,6 +1,6 @@
 # CLI Output and Error Contract Remediation Plan
 
-Status: active
+Status: completed
 Class: 5 — the work revises normative `[SB-CLI-1]`, `[SB-CLI-2]`,
 `[SB-CLI-4]`, and `[SB-API-10]` behavior. It also changes a published CLI and
 command-layer compatibility surface, so the `[DOM-5]` risky-change trigger
@@ -480,7 +480,7 @@ agent-facing surface confirms it is reusable.
    | Relative containment rejection | `_validate_path_containment()` raises `_ArgumentValidationError` | `INVALID_ARGUMENT` |
    | Inaccessible/unwritable parent; symlink/path-resolution failure | Keep a non-argument `ValueError`/typed operational cause; do not wrap at the preparation phase | `ERROR` |
    | Corrupt/invalid existing target; malformed internal `BrokerTarget` | Existing `DatabaseError` or generic `ValueError`; no caller wrapper | `ERROR` |
-   | Alias add/remove invariant or current-state conflict | No JSON-capable alias mutation surface exists; keep its ordinary plain exit-1 error outside `[SB-CLI-4]` rather than inventing a JSON classification or domain type | N/A |
+   | Alias add/remove invariant or current-state conflict | No JSON-capable alias mutation surface exists. Direct command calls raise; the CLI retains its ordinary plain exit-1 error outside `[SB-CLI-4]` rather than inventing a JSON classification or domain type. | N/A |
    | `DataError` or another dual `DatabaseError`/`ValueError` | Database-first classifier branch | `ERROR` |
    | Any other generic `ValueError` or unknown exception | Default branch | `ERROR` |
 
@@ -490,7 +490,7 @@ agent-facing surface confirms it is reusable.
    disabled and enabled, missing versus inaccessible database parent,
    containment rejection, corrupt target, dual-inheritance database error, and
    generic `ValueError` are separately pinned. Alias mutation tests confirm the
-   unchanged plain exit-1 boundary.
+   direct exception and unchanged CLI plain exit-1 boundaries.
 
 6. **Reconcile rationale, guidance, and traceability.**
    - Touch the two implementation docs, README, kernel, Python guide,
@@ -513,6 +513,24 @@ agent-facing surface confirms it is reusable.
      waiver.
    - Done: all gates/reviews pass, deviations close, and the landing change
      marks the index row completed.
+
+8. **Reconcile the reopened direct-command error boundary.**
+   - Audit every exported `cmd_*` function against `[SB-API-10]`; retain only
+     ordinary `0`/`2` results and the documented command-owned closed-stdout
+     result. Invalid input and operational failures raise to direct callers.
+   - Move only presentation that must survive into the existing CLI owners:
+     specialized ID/timestamp/argument JSON codes and `[SB-IO-4]` load recovery
+     text. Do not add a public exception hierarchy or command-wrapper framework.
+   - Keep direct selector grammar equal to the CLI. Exact ID is exclusive with
+     all/range filters, and delete-by-ID requires a queue before any target
+     access or mutation.
+   - Cover alias removal, status, read/peek/delete/move filters, move-all,
+     load, watch, and init with direct exception/no-diagnostic tests. Preserve
+     ordinary empty/not-found and closed-stdout tests, plus black-box CLI
+     translation tests.
+   - Align the spec, guide, README, kernel, implementation rationale,
+     changelog, mappings, and this plan; rerun full backend/static/docs gates
+     and independent completed-diff review before targeted landing.
 
 ## Testing Plan
 
@@ -681,6 +699,8 @@ review require scoped re-review. A fresh completed-diff review is also required.
 | 2026-08-24 | Fresh native completed-diff reviewer | Refactored single-boundary ordering, exemptions, prepared-target threading, and control-flow exceptions | BLOCKED | Found parsed flags-only help (for example `broker --quiet`) could raise `_StdoutClosed` inside the widened boundary and be misclassified as an empty generic error. Required an explicit `_StdoutClosed` re-raise before the generic classifier plus a real subprocess firing case. |
 | 2026-08-24 | Same native completed-diff reviewer | Scoped re-review after stdout-control correction | PASS | The explicit `_StdoutClosed` carve-out and parsed flags-only help case pass. Reinspection found no remaining behavior drift or material maintainability issue; original phase order, exemptions, prepared-target threading, config/interrupt control flow, and the single existing broad-catch owner remain intact. |
 | 2026-08-24 | Claude 2.1.207 activation-overlap review | `38525c22ff94` plus the CLI grammar plan's proposed Strategy-A delta | no blocker | Product owner authorized scoped overlap. This plan's runtime/spec work is already landed; only closure bookkeeping and exact-SHA hosted evidence remain active. The grammar plan must preserve this plan's `[SB-CLI-4]` verification rows, Related Plans entry, cause classifier, quiet policy, and closed-stdout behavior. |
+| 2026-08-25 | Fresh native read-only completed-diff reviewer | Reopened 19-export command-error inventory, CLI translations, selector parity, init/load boundaries, docs, and tests | BLOCKED (P3) | Found `cmd_move(all_messages=True, message_id_str=<malformed>)` parsed the ID before rejecting the conflict, unlike argparse's mutually exclusive group. Added the early direct guard and malformed-ID direct/CLI precedence regressions. |
+| 2026-08-25 | Same reviewer, scoped re-review | Early `cmd_move` conflict guard and the two malformed-ID precedence regressions | PASS | The direct boundary now matches CLI `--all`/`--message` precedence; range conflicts retain the CLI's typed selector-validation precedence. No other blocker or actionable finding remains. |
 
 ## Out of Scope
 
@@ -701,6 +721,7 @@ review require scoped re-review. A fresh completed-diff review is also required.
 |----------|------------------|-----------------|-----------|---------------|
 | `[SB-CLI-4]` selected `-d`; `[SB-OPS-7]` cleanup | Initial delta treated every missing explicit directory as `INVALID_ARGUMENT`. | Commands and actions that require a target namespace return `INVALID_ARGUMENT`; cleanup of an absent namespace remains a no-op. | The full suite fired the pre-existing cleanup no-namespace contract. Cleanup may derive its fixed owned candidate names, but it must not create or open the absent namespace merely to validate an ordinary command target. | Reconciled in the promoted CLI text with an explicit `[SB-OPS-7]` exception; scoped completed-diff re-review required. |
 | `[DOM-10.1.1]` / `[RUFF-SUP-003]` | Initial implementation added separate broad catches at target resolution and preparation. | Both phases now raise into the single pre-existing `_main` post-parse boundary; no new Ruff suppression or registry cardinality remains. | Owner challenge correctly required an external refactor/locality review before accepting suppressions. External review found the wrappers duplicated one cause-based boundary and added union/sentinel plumbing. | No product-spec change; implementation plan and review record corrected. |
+| Reopened-slice hosted/downstream gates | The original plan required fresh Weft and exact-SHA Windows evidence before closure. | The owner explicitly excluded fresh Weft work and directed targeted closure. The reopened slice ran full local, real PostgreSQL/Redis, packaging, static, docs, and independent-review gates. Exact-SHA Windows remains post-commit evidence because the targeted commit is local and unpushed. | This slice removes command-local translation and does not alter the already-tested closed-pipe platform classifier. The residual is explicit rather than represented as completed hosted evidence. | Owner-directed gate disposition; no product-spec change. |
 
 ## Execution Log
 
@@ -793,6 +814,31 @@ Execution started 2026-08-24 after owner authorization:
     duplicate `commands.py` edits. This plan is reopened for the exact
     `cmd_*` audit, spec/test reconciliation, and closure receipt while retaining
     its completed closed-stdout, warning, and CLI cause-classification work.
+16. The immutable-HEAD audit found 9 of 19 exported command functions still
+    translating failures, plus a direct-only `cmd_delete(message_id, queue=None)`
+    path that could delete across queues and read/peek/move selector precedence
+    that differed from the CLI. Red tests fired each affected family before
+    production correction.
+17. The smallest existing owners now enforce the corrected boundary. Outside
+    `_stdout_delivery_error`, `commands.py` has no `return EXIT_ERROR`, direct
+    `_emit_error` call, or broad `except Exception`. The CLI prevalidates exact
+    IDs for its specialized code and owns one small `[SB-IO-4]` load translator.
+    Exact-ID delete requires a queue before target access or mutation, and
+    direct selector conflicts match CLI precedence.
+18. Final reopened-slice evidence passes: focused command/CLI/documentation
+    tests; full core twice after corrections (final 3,100 passed, 17 expected
+    skips); real PostgreSQL (1,346 shared plus 207 extension); real Redis/Valkey
+    (1,339 shared plus 270 extension); root wheel/sdist and extension packaging
+    smoke; full Ruff and format; runtime and changed-test mypy; DOM-15, plan
+    context, doc paths, suppression registry, and diff integrity.
+19. Independent completed-diff review found one P3 `cmd_move --all` precedence
+    omission. Its red regression failed with malformed-ID precedence; the
+    one-guard correction and direct/CLI regressions passed, and scoped re-review
+    returned PASS.
+20. The owner directed a targeted closing commit and explicitly excluded fresh
+    Weft work. Exact-SHA Windows cannot predate the local commit and remains
+    named post-commit evidence. The status row closes in the same targeted
+    commit; the commit receipt is verified with `git log` after creation.
 
 ## Completion Gate
 
@@ -807,7 +853,8 @@ Execution started 2026-08-24 after owner authorization:
   fallback.
 - Specs, rationale, README, kernel, Python guide, changelog, mappings, and
   backlinks align.
-- Targeted/full/static/docs/Weft/Windows gates and completed-work review pass.
-- The owner lands with explicit file-list staging; `git log` proves landing;
-  the index row becomes `completed` in that landing. Until then, report
-  verified but uncommitted work without claiming completion.
+- Targeted/full/static/docs/backend gates and completed-work review pass. Fresh
+  Weft is owner-excluded; exact-SHA Windows is an explicit post-commit residual
+  under the owner-directed targeted closure recorded above.
+- The targeted commit uses explicit file-list staging; `git log` proves landing;
+  the index row becomes `completed` in that same commit.

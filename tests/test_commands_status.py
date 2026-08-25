@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
+from simplebroker._constants import EXIT_SUCCESS
 from simplebroker._targets import BrokerTarget
 from simplebroker.commands import cmd_status
 
@@ -80,26 +81,16 @@ class TestCmdStatus:
         else:
             assert payload["db_size"] > 0
 
-    def test_cmd_status_handles_exceptions(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    def test_cmd_status_raises_operational_failure(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """cmd_status surfaces errors from DBConnection and returns EXIT_ERROR."""
+        """Direct command callers receive the typed storage failure."""
+        corrupt = tmp_path / "corrupt.db"
+        corrupt.write_text("not a SQLite database", encoding="utf-8")
 
-        class BrokenConnection:
-            def __init__(self, *_args, **_kwargs) -> None:  # pragma: no cover - trivial
-                pass
-
-            def __enter__(self):
-                raise RuntimeError("boom")
-
-            def __exit__(self, *_args) -> None:  # pragma: no cover - trivial
-                return None
-
-        monkeypatch.setattr("simplebroker.commands.DBConnection", BrokenConnection)
-
-        rc = cmd_status("/tmp/nonexistent.db")
+        with pytest.raises(RuntimeError, match="Failed to get database connection"):
+            cmd_status(str(corrupt))
         captured = capsys.readouterr()
 
-        assert rc == EXIT_ERROR
-        assert "simplebroker: error" in captured.err
+        assert captured.err == ""
         assert captured.out == ""

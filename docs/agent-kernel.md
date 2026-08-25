@@ -49,7 +49,7 @@ Shared semantics does **not** mean identical packaging:
 | Plain `broker write Q "msg"` | Does **not** print the message id unless `-t` / `--timestamps` or `--json` |
 | `Queue.write(...)` | **Returns** the committed message id |
 | Queue aliases (`@name`) | Resolved by the CLI **and** `simplebroker.commands`; managed via `BrokerConnection` alias methods; **not** a `Queue` feature — `Queue` takes literal names |
-| Programmatic CLI-equivalent ops | `simplebroker.commands` (`cmd_write`, `cmd_read`, …) when you need shell parity from Python |
+| Programmatic CLI-equivalent ops | `simplebroker.commands` (`cmd_write`, `cmd_read`, …): ordinary outcomes return `0` / `2`; invalid input and operational failures raise; the CLI alone translates them to diagnostic exit `1` |
 
 Public package surface is intentionally small: see `simplebroker.__all__`
 (`Queue`, watchers, `BrokerTarget` helpers, `open_broker`, `resolve_config`,
@@ -419,7 +419,7 @@ SimpleBroker will comply; your product will not.
 | Machine-readable doc index | root `llms.txt` |
 | Safe job reservation | Move-to-inflight recipe above; README Critical Safety |
 | Standard Python use | `examples/python_api.py` |
-| Programmatic CLI-equivalent ops | `simplebroker.commands` |
+| Programmatic CLI-equivalent ops | `simplebroker.commands`: ordinary result codes, Python exceptions on failures |
 | Repo contribution / agents editing this tree | `AGENTS.md`, `docs/agent-context/` |
 | Embedder reference runtimes | Weft (tasks/orchestration), Taut (multi-reader chat on the same DB) |
 

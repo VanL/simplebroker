@@ -20,11 +20,14 @@ from ._constants import (
 )
 from ._exceptions import (
     DatabaseError,
+    IntegrityError,
     InvalidConfigError,
     MessageError,
     QueueNameError,
+    TimestampError,
     _ArgumentValidationError,
 )
+from ._message_id import INVALID_MESSAGE_ID_MESSAGE
 from ._paths import (
     _find_project_database,
     _resolve_symlinks_safely,
@@ -67,9 +70,10 @@ class CustomArgumentParser(argparse.ArgumentParser):
         raise ArgumentParserError(message)
 
 
-def _validate_timestamp_bounds_before_target(args: argparse.Namespace) -> int | None:
-    """Reject malformed CLI timestamp bounds before target resolution."""
-    if getattr(args, "command", None) not in {"read", "peek", "move", "watch"}:
+def _validate_selection_filters_before_target(args: argparse.Namespace) -> int | None:
+    """Translate malformed CLI timestamp and exact-ID selectors."""
+    command = getattr(args, "command", None)
+    if command not in {"read", "peek", "move", "watch", "delete"}:
         return None
 
     # ``watch`` registers no --before; getattr covers it with None.
@@ -90,6 +94,15 @@ def _validate_timestamp_bounds_before_target(args: argparse.Namespace) -> int | 
                 code="INVALID_TIMESTAMP",
             )
             return EXIT_ERROR
+
+    message_id = getattr(args, "message_id", None)
+    if message_id is not None and commands.parse_exact_message_id(message_id) is None:
+        commands._emit_error(
+            INVALID_MESSAGE_ID_MESSAGE,
+            json_output=bool(getattr(args, "json", False)),
+            code="INVALID_MESSAGE_ID",
+        )
+        return EXIT_ERROR
 
     return None
 
@@ -1721,6 +1734,43 @@ def _dispatch_alias_command(
     parser.error("unknown alias subcommand")
 
 
+def _run_load_command(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    *,
+    config: ResolvedConfig,
+) -> int:
+    """Translate direct load exceptions into the load CLI's diagnostic dialect."""
+    try:
+        return commands.cmd_load(
+            resolved_target,
+            force=getattr(args, "force", False),
+            quiet=getattr(args, "quiet", False),
+            config=config,
+        )
+    except InvalidConfigError:
+        raise
+    except IntegrityError as error:
+        print(
+            f"broker load: {error} (load targets a fresh database; "
+            "duplicate message IDs are never overwritten)",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    except TimestampError as error:
+        recovery = (
+            "durable outcome may be ambiguous; inspect or recreate the "
+            "destination before retrying"
+            if error.outcome_ambiguous
+            else "correct the failure and retry into a clean destination"
+        )
+        print(f"broker load: {error} ({recovery})", file=sys.stderr)
+        return EXIT_ERROR
+    except ValueError as error:
+        print(f"broker load: {error}", file=sys.stderr)
+        return EXIT_ERROR
+
+
 def _dispatch_admin_command(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
@@ -1754,12 +1804,7 @@ def _dispatch_admin_command(
             config=config,
         )
     if args.command == "load":
-        return commands.cmd_load(
-            resolved_target,
-            force=getattr(args, "force", False),
-            quiet=getattr(args, "quiet", False),
-            config=config,
-        )
+        return _run_load_command(args, resolved_target, config=config)
     if args.command == "alias":
         return _dispatch_alias_command(
             args,
@@ -1905,9 +1950,9 @@ def _main(*, config: ResolvedConfig) -> int:
         if pre_target_result is not None:
             return pre_target_result
 
-        timestamp_error = _validate_timestamp_bounds_before_target(args)
-        if timestamp_error is not None:
-            return timestamp_error
+        selection_error = _validate_selection_filters_before_target(args)
+        if selection_error is not None:
+            return selection_error
 
         resolved_target = _resolve_target(args, config=config)
 

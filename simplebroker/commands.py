@@ -2,11 +2,13 @@
 
 Public embedding surface. ``simplebroker.commands`` exposes the CLI-equivalent
 operations as importable functions (import path ``simplebroker.commands``).
-Each ``cmd_*`` function has print-to-stdout, exit-code-returning semantics
-matching the CLI; ``parse_exact_message_id`` parses an exact 19-digit message
-ID. The names in ``__all__`` are stable under the same compatibility policy as
-the package's public exports. See the README "Command layer" subsection for
-usage and the ``DatabaseError`` note.
+Each ``cmd_*`` function prints the same payload as the CLI and returns integer
+codes for ordinary outcomes. Invalid input and operational failures raise to
+the direct caller; the CLI owns their diagnostic and exit-code translation.
+Closed stdout remains command-owned. ``parse_exact_message_id`` parses an exact
+19-digit message ID. The names in ``__all__`` are stable under the same
+compatibility policy as the package's public exports. See the README "Command
+layer" subsection for usage and the ``DatabaseError`` note.
 """
 
 import contextlib
@@ -34,17 +36,16 @@ from ._constants import (
 )
 from ._dump import DumpClockSkewWarning, dump_lines, load_lines
 from ._exceptions import (
-    IntegrityError,
-    InvalidConfigError,
+    DatabaseError,
     MessageError,
     TimestampError,
+    _ArgumentValidationError,
 )
 from ._message_id import (
-    INVALID_MESSAGE_ID_MESSAGE,
     format_message_id,
     normalize_message_id,
 )
-from ._paths import _is_valid_sqlite_db
+from ._paths import _validate_sqlite_database
 from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
 from .db import BrokerDB, DBConnection, _suppress_alias_shadow_warning
@@ -215,12 +216,6 @@ def _stdout_delivery_error(
     return EXIT_ERROR
 
 
-def _reraise_invalid_config(error: BaseException) -> None:
-    """Keep command diagnostics from swallowing configuration initialization."""
-    if isinstance(error, InvalidConfigError):
-        raise error
-
-
 def _resolve_alias_name(
     db_path: DBTarget,
     name: str,
@@ -297,12 +292,7 @@ def cmd_alias_remove(
         db = cast(BrokerDB, conn.get_connection())
 
         if not db.has_alias(alias):
-            _emit_error(
-                f"alias '{alias}' does not exist",
-                code="ERROR",
-                json_output=False,
-            )
-            return EXIT_ERROR
+            raise ValueError(f"alias '{alias}' does not exist")
 
         db.remove_alias(alias)
     return EXIT_SUCCESS
@@ -498,45 +488,35 @@ def _resolve_timestamp_filters(
     after_str: str | None,
     before_str: str | None,
     message_id_str: str | None,
-    *,
-    json_output: bool = False,
-) -> tuple[int | None, int | None, int | None, int | None]:
+) -> tuple[int | None, int | None, int | None]:
     """Parse shared --after / --before / --message-id filters.
 
-    Returns (error_code, after_timestamp, before_timestamp, exact_timestamp).
-    error_code is non-None when the caller should abort and return the provided
-    exit code.
+    Invalid filters raise to direct command callers. The CLI validates its
+    string selectors before dispatch so it can retain specialized wire codes.
     """
 
-    after_timestamp = None
-    if after_str is not None:
-        try:
-            after_timestamp = _validate_timestamp(after_str)
-        except ValueError as e:
-            _emit_error(e, json_output=json_output, code="INVALID_TIMESTAMP")
-            return EXIT_ERROR, None, None, None
+    after_timestamp = None if after_str is None else _validate_timestamp(after_str)
+    before_timestamp = None if before_str is None else _validate_timestamp(before_str)
+    exact_timestamp = (
+        None if message_id_str is None else normalize_message_id(message_id_str)
+    )
+    return after_timestamp, before_timestamp, exact_timestamp
 
-    before_timestamp = None
-    if before_str is not None:
-        try:
-            before_timestamp = _validate_timestamp(before_str)
-        except ValueError as e:
-            _emit_error(e, json_output=json_output, code="INVALID_TIMESTAMP")
-            return EXIT_ERROR, None, None, None
 
-    exact_timestamp = None
-    if message_id_str is not None:
-        try:
-            exact_timestamp = normalize_message_id(message_id_str)
-        except (TypeError, ValueError):
-            _emit_error(
-                INVALID_MESSAGE_ID_MESSAGE,
-                json_output=json_output,
-                code="INVALID_MESSAGE_ID",
-            )
-            return EXIT_ERROR, None, None, None
-
-    return None, after_timestamp, before_timestamp, exact_timestamp
+def _validate_exact_selector_combination(
+    *,
+    all_messages: bool,
+    after_str: str | None,
+    before_str: str | None,
+    message_id_str: str | None,
+) -> None:
+    """Keep direct selector combinations aligned with the CLI grammar."""
+    if message_id_str is not None and (
+        all_messages or after_str is not None or before_str is not None
+    ):
+        raise _ArgumentValidationError(
+            "message ID selection cannot be combined with --all, --after, or --before"
+        )
 
 
 FetchOneFn = Callable[..., str | tuple[str, int] | None]
@@ -723,16 +703,17 @@ def cmd_read(
     Returns:
         Exit code
     """
-    error_code, after_timestamp, before_timestamp, exact_timestamp = (
-        _resolve_timestamp_filters(
-            after_str,
-            before_str,
-            message_id_str,
-            json_output=json_output,
-        )
+    after_timestamp, before_timestamp, exact_timestamp = _resolve_timestamp_filters(
+        after_str,
+        before_str,
+        message_id_str,
     )
-    if error_code is not None:
-        return error_code
+    _validate_exact_selector_combination(
+        all_messages=all_messages,
+        after_str=after_str,
+        before_str=before_str,
+        message_id_str=message_id_str,
+    )
 
     resolved_config = snapshot_config(config)
 
@@ -816,16 +797,17 @@ def cmd_peek(
     Returns:
         Exit code
     """
-    error_code, after_timestamp, before_timestamp, exact_timestamp = (
-        _resolve_timestamp_filters(
-            after_str,
-            before_str,
-            message_id_str,
-            json_output=json_output,
-        )
+    after_timestamp, before_timestamp, exact_timestamp = _resolve_timestamp_filters(
+        after_str,
+        before_str,
+        message_id_str,
     )
-    if error_code is not None:
-        return error_code
+    _validate_exact_selector_combination(
+        all_messages=all_messages,
+        after_str=after_str,
+        before_str=before_str,
+        message_id_str=message_id_str,
+    )
 
     resolved_config = snapshot_config(config)
     canonical_queue, _ = _resolve_alias_name(
@@ -1018,15 +1000,10 @@ def cmd_status(
         db_path: Path to the broker database.
         json_output: When True, emit newline-delimited JSON instead of key/value lines.
     """
-    try:
-        resolved_config = snapshot_config(config)
-        with DBConnection(db_path, config=resolved_config) as conn:
-            db = cast(BrokerDB, conn.get_connection())
-            stats = db.status()
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        _reraise_invalid_config(e)
-        _emit_error(e, code="ERROR", json_output=json_output)
-        return EXIT_ERROR
+    resolved_config = snapshot_config(config)
+    with DBConnection(db_path, config=resolved_config) as conn:
+        db = cast(BrokerDB, conn.get_connection())
+        stats = db.status()
 
     try:
         if json_output:
@@ -1067,16 +1044,15 @@ def cmd_delete(
     """
     # Handle exact physical delete by message ID.
     exact_timestamp: int | None = None
-    if message_id_str is not None and queue_name is not None:
-        error_code, _after, _before, exact_timestamp = _resolve_timestamp_filters(
+    if message_id_str is not None:
+        _after, _before, exact_timestamp = _resolve_timestamp_filters(
             None,
             None,
             message_id_str,
-            json_output=False,
         )
-        if error_code is not None:
-            return error_code
         assert exact_timestamp is not None
+        if queue_name is None:
+            raise _ArgumentValidationError("a queue is required with a message ID")
 
     resolved_config = snapshot_config(config)
     canonical_queue = None
@@ -1211,10 +1187,6 @@ def _move_all_messages(
         return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
     except _StdoutClosed:
         return EXIT_SUCCESS
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        _reraise_invalid_config(error)
-        _emit_error(error, code="ERROR", json_output=json_output)
-        return EXIT_ERROR
 
 
 def _move_next_message(
@@ -1283,16 +1255,25 @@ def cmd_move(
     Returns:
         Exit code
     """
-    error_code, after_timestamp, before_timestamp, exact_timestamp = (
-        _resolve_timestamp_filters(
-            after_str,
-            before_str,
-            message_id_str,
-            json_output=json_output,
-        )
+    # argparse makes --all/--message mutually exclusive before it validates
+    # the message ID. Preserve that precedence for the direct equivalent.
+    _validate_exact_selector_combination(
+        all_messages=all_messages,
+        after_str=None,
+        before_str=None,
+        message_id_str=message_id_str,
     )
-    if error_code is not None:
-        return error_code
+    after_timestamp, before_timestamp, exact_timestamp = _resolve_timestamp_filters(
+        after_str,
+        before_str,
+        message_id_str,
+    )
+    _validate_exact_selector_combination(
+        all_messages=False,
+        after_str=after_str,
+        before_str=before_str,
+        message_id_str=message_id_str,
+    )
 
     resolved_config = snapshot_config(config)
     canonical_source, _ = _resolve_alias_name(
@@ -1308,12 +1289,9 @@ def cmd_move(
 
     # Check for same source and destination after alias resolution
     if canonical_source == canonical_dest:
-        _emit_error(
-            "Source and destination queues cannot be the same",
-            json_output=json_output,
-            code="INVALID_ARGUMENT",
+        raise _ArgumentValidationError(
+            "Source and destination queues cannot be the same"
         )
-        return EXIT_ERROR
 
     # Create source queue instance
     with Queue(
@@ -1433,64 +1411,40 @@ def cmd_load(
     """Apply a simplebroker-dump from stdin to the broker.
 
     Returns:
-        Exit code (0 on success; 1 with a line-numbered stderr message on
-        invalid input or duplicate message IDs at the destination)
+        Exit code 0 on success. Invalid input and storage failures raise.
     """
     resolved_config = snapshot_config(config)
     if sys.stdin.isatty():
-        print(
-            "broker load: reads a dump from stdin into a fresh broker "
-            "(e.g. `broker load < backup.ndjson`)",
-            file=sys.stderr,
+        raise _ArgumentValidationError(
+            "reads a dump from stdin into a fresh broker "
+            "(e.g. `broker load < backup.ndjson`)"
         )
-        return EXIT_ERROR
 
-    try:
-        with DBConnection(db_path, config=resolved_config) as conn:
-            broker = conn.get_connection()
-            with warnings.catch_warnings():
-                default_showwarning = warnings.showwarning
+    with DBConnection(db_path, config=resolved_config) as conn:
+        broker = conn.get_connection()
+        with warnings.catch_warnings():
+            default_showwarning = warnings.showwarning
 
-                def showwarning(
-                    message: Warning | str,
-                    category: type[Warning],
-                    filename: str,
-                    lineno: int,
-                    file: Any = None,
-                    line: str | None = None,
-                ) -> None:
-                    if issubclass(category, DumpClockSkewWarning):
-                        if not quiet:
-                            print(
-                                f"broker load: warning: {message}",
-                                file=sys.stderr,
-                            )
-                        return
-                    default_showwarning(message, category, filename, lineno, file, line)
+            def showwarning(
+                message: Warning | str,
+                category: type[Warning],
+                filename: str,
+                lineno: int,
+                file: Any = None,
+                line: str | None = None,
+            ) -> None:
+                if issubclass(category, DumpClockSkewWarning):
+                    if not quiet:
+                        print(
+                            f"broker load: warning: {message}",
+                            file=sys.stderr,
+                        )
+                    return
+                default_showwarning(message, category, filename, lineno, file, line)
 
-                warnings.showwarning = showwarning
-                warnings.simplefilter("always", DumpClockSkewWarning)
-                load_lines(broker, sys.stdin, force=force, config=resolved_config)
-    except ValueError as exc:
-        _reraise_invalid_config(exc)
-        print(f"broker load: {exc}", file=sys.stderr)
-        return EXIT_ERROR
-    except IntegrityError as exc:
-        print(
-            f"broker load: {exc} (load targets a fresh database; "
-            "duplicate message IDs are never overwritten)",
-            file=sys.stderr,
-        )
-        return EXIT_ERROR
-    except TimestampError as exc:
-        recovery = (
-            "durable outcome may be ambiguous; inspect or recreate the "
-            "destination before retrying"
-            if exc.outcome_ambiguous
-            else "correct the failure and retry into a clean destination"
-        )
-        print(f"broker load: {exc} ({recovery})", file=sys.stderr)
-        return EXIT_ERROR
+            warnings.showwarning = showwarning
+            warnings.simplefilter("always", DumpClockSkewWarning)
+            load_lines(broker, sys.stdin, force=force, config=resolved_config)
     return EXIT_SUCCESS
 
 
@@ -1544,30 +1498,16 @@ def _resolve_watch_inputs(
     *,
     move_to: str | None,
     after_str: str | None,
-    json_output: bool,
     config: Mapping[str, Any] | None,
-) -> tuple[str, str | None, int | None, ResolvedConfig] | None:
+) -> tuple[str, str | None, int | None, ResolvedConfig]:
     """Resolve aliases and timestamp input for one watch command."""
     if move_to and after_str:
-        _emit_error(
+        raise _ArgumentValidationError(
             "--move drains ALL messages from source queue, "
-            "incompatible with --after filtering",
-            json_output=json_output,
-            code="INVALID_ARGUMENT",
+            "incompatible with --after filtering"
         )
-        return None
 
-    after_timestamp = None
-    if after_str is not None:
-        try:
-            after_timestamp = _validate_timestamp(after_str)
-        except ValueError as error:
-            _emit_error(
-                error,
-                json_output=json_output,
-                code="INVALID_TIMESTAMP",
-            )
-            return None
+    after_timestamp = None if after_str is None else _validate_timestamp(after_str)
 
     resolved_config = snapshot_config(config)
     canonical_queue, _ = _resolve_alias_name(
@@ -1650,11 +1590,8 @@ def cmd_watch(
         queue_name,
         move_to=move_to,
         after_str=after_str,
-        json_output=json_output,
         config=config,
     )
-    if watch_inputs is None:
-        return EXIT_ERROR
     canonical_queue, canonical_move_to, after_timestamp, resolved_config = watch_inputs
 
     if not quiet:
@@ -1695,10 +1632,6 @@ def cmd_watch(
         watcher.run_forever()
     except KeyboardInterrupt:
         return EXIT_SUCCESS
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        _reraise_invalid_config(error)
-        _emit_error(error, code="ERROR", json_output=json_output)
-        return EXIT_ERROR
     finally:
         try:
             sys.stdout.flush()
@@ -1722,20 +1655,20 @@ def _reject_invalid_existing_database(
     """Report an existing SQLite target or return None when it is absent."""
     if not path.exists():
         return None
-    if _is_valid_sqlite_db(path):
+    try:
+        _validate_sqlite_database(path)
+    except DatabaseError as error:
+        raise DatabaseError(
+            "file exists but is not a SimpleBroker database: "
+            f"{display_target}. Please remove the file manually and run "
+            "'broker init' again."
+        ) from error
+    else:
         _status(
             f"SimpleBroker database already exists: {display_target}",
             quiet=quiet,
         )
         return EXIT_SUCCESS
-    _emit_error(
-        "file exists but is not a SimpleBroker database: "
-        f"{display_target}. Please remove the file manually and run "
-        "'broker init' again.",
-        code="ERROR",
-        json_output=False,
-    )
-    return EXIT_ERROR
 
 
 def _init_broker_target(
@@ -1755,38 +1688,37 @@ def _init_broker_target(
         if existing_result is not None:
             return existing_result
     else:
-        target_exists = False
-        with contextlib.suppress(Exception):
+        try:
             db_target.plugin.validate_target(
                 db_target.target,
                 backend_options=db_target.backend_options,
                 verify_initialized=True,
             )
-            target_exists = True
-        if target_exists:
+        except DatabaseError:
+            # Plugins use DatabaseError for the ordinary "not initialized"
+            # probe. initialize_target is the authoritative idempotent check:
+            # it creates absent state, rejects foreign state, and re-raises
+            # persistent operational failures.
+            pass
+        else:
             _status(
                 f"SimpleBroker target already exists: {db_target.display_target}",
                 quiet=quiet,
             )
             return EXIT_SUCCESS
 
-    try:
-        resolved_config = snapshot_config(config)
-        db_target.plugin.initialize_target(
-            db_target.target,
-            backend_options=db_target.backend_options,
-            config=resolved_config,
-        )
-        target_kind = "database" if db_target.backend_name == "sqlite" else "target"
-        _status(
-            f"Initialized SimpleBroker {target_kind}: {db_target.display_target}",
-            quiet=quiet,
-        )
-        return EXIT_SUCCESS
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        _reraise_invalid_config(error)
-        _emit_error(error, code="ERROR", json_output=False)
-        return EXIT_ERROR
+    resolved_config = snapshot_config(config)
+    db_target.plugin.initialize_target(
+        db_target.target,
+        backend_options=db_target.backend_options,
+        config=resolved_config,
+    )
+    target_kind = "database" if db_target.backend_name == "sqlite" else "target"
+    _status(
+        f"Initialized SimpleBroker {target_kind}: {db_target.display_target}",
+        quiet=quiet,
+    )
+    return EXIT_SUCCESS
 
 
 def _init_sqlite_path(
@@ -1805,17 +1737,12 @@ def _init_sqlite_path(
     if existing_result is not None:
         return existing_result
 
-    try:
-        resolved_config = snapshot_config(config)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with DBConnection(db_path, config=resolved_config) as connection:
-            connection.get_connection()
-        _status(f"Initialized SimpleBroker database: {db_path}", quiet=quiet)
-        return EXIT_SUCCESS
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        _reraise_invalid_config(error)
-        _emit_error(error, code="ERROR", json_output=False)
-        return EXIT_ERROR
+    resolved_config = snapshot_config(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with DBConnection(db_path, config=resolved_config) as connection:
+        connection.get_connection()
+    _status(f"Initialized SimpleBroker database: {db_path}", quiet=quiet)
+    return EXIT_SUCCESS
 
 
 def cmd_init(

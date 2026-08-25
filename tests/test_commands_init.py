@@ -20,11 +20,14 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from simplebroker import Queue
 from simplebroker._constants import EXIT_SUCCESS, SIMPLEBROKER_MAGIC
 from simplebroker._paths import _is_valid_sqlite_db
 from simplebroker.commands import cmd_init
 from simplebroker.db import DBConnection
+from simplebroker.ext import DatabaseError
 
 from .conftest import run_cli
 
@@ -86,7 +89,7 @@ class TestInitCommand:
         with Queue("test_queue", db_path=db_path) as queue:
             assert queue.peek_one(with_timestamps=True) == ("test message", message_id)
 
-    def test_init_existing_invalid_file(self, tmp_path):
+    def test_init_existing_invalid_file(self, tmp_path, capsys):
         """Test init with existing non-SimpleBroker file."""
         db_path = tmp_path / ".broker.db"
 
@@ -94,13 +97,11 @@ class TestInitCommand:
         db_path.write_text("This is not a database file")
         assert db_path.exists()
 
-        # Run init without force
-        result = cmd_init(str(db_path), quiet=True)
+        with pytest.raises(DatabaseError, match="not a SimpleBroker database"):
+            cmd_init(str(db_path), quiet=True)
+        assert capsys.readouterr().err == ""
 
-        # Should fail with error code 1
-        assert result == 1
-
-    def test_init_existing_invalid_file_with_sqlite(self, tmp_path):
+    def test_init_existing_invalid_file_with_sqlite(self, tmp_path, capsys):
         """Test init with existing SQLite file that's not SimpleBroker database."""
         db_path = tmp_path / ".broker.db"
 
@@ -115,11 +116,9 @@ class TestInitCommand:
         assert db_path.exists()
         assert _is_valid_sqlite_db(db_path) is False
 
-        # Run init without force
-        result = cmd_init(str(db_path), quiet=True)
-
-        # Should fail
-        assert result == 1
+        with pytest.raises(DatabaseError, match="not a SimpleBroker database"):
+            cmd_init(str(db_path), quiet=True)
+        assert capsys.readouterr().err == ""
 
     def test_init_creates_parent_directories(self, tmp_path):
         """Test that init creates parent directories."""
@@ -149,45 +148,41 @@ class TestInitCommand:
         db_path = tmp_path / "restricted" / ".broker.db"
 
         # Mock mkdir to raise PermissionError
-        with patch.object(Path, "mkdir", side_effect=PermissionError("Access denied")):
-            result = cmd_init(str(db_path), quiet=True)
-
-            # Should fail
-            assert result == 1
+        with (
+            patch.object(Path, "mkdir", side_effect=PermissionError("Access denied")),
+            pytest.raises(PermissionError, match="Access denied"),
+        ):
+            cmd_init(str(db_path), quiet=True)
 
     def test_init_permission_error_database_creation(self, tmp_path, capsys):
         """Test init handles permission errors during database creation."""
         db_path = tmp_path / ".broker.db"
 
         # Mock DBConnection to raise PermissionError
-        with patch(
-            "simplebroker.commands.DBConnection",
-            side_effect=PermissionError("Cannot create database"),
+        with (
+            patch(
+                "simplebroker.commands.DBConnection",
+                side_effect=PermissionError("Cannot create database"),
+            ),
+            pytest.raises(PermissionError, match="Cannot create database"),
         ):
-            result = cmd_init(str(db_path), quiet=True)
-
-            # Should fail
-            assert result == 1
-        error = capsys.readouterr().err
-        assert error.startswith("simplebroker: error:")
-        assert "Cannot create database" in error
+            cmd_init(str(db_path), quiet=True)
+        assert capsys.readouterr().err == ""
 
     def test_init_other_exception_handling(self, tmp_path, capsys):
         """Test init handles unexpected exceptions gracefully."""
         db_path = tmp_path / ".broker.db"
 
         # Mock DBConnection to raise unexpected error
-        with patch(
-            "simplebroker.commands.DBConnection",
-            side_effect=RuntimeError("Unexpected error"),
+        with (
+            patch(
+                "simplebroker.commands.DBConnection",
+                side_effect=RuntimeError("Unexpected error"),
+            ),
+            pytest.raises(RuntimeError, match="Unexpected error"),
         ):
-            result = cmd_init(str(db_path), quiet=True)
-
-            # Should fail
-            assert result == 1
-        error = capsys.readouterr().err
-        assert error.startswith("simplebroker: error:")
-        assert "Unexpected error" in error
+            cmd_init(str(db_path), quiet=True)
+        assert capsys.readouterr().err == ""
 
     def test_init_quiet_mode_suppresses_output(self, tmp_path, capsys):
         """Test that quiet mode suppresses informational output."""
@@ -226,18 +221,25 @@ class TestInitCommand:
         # Create a non-SimpleBroker file
         db_path.write_text("Not a database")
 
-        # Run init without force
-        result = cmd_init(str(db_path), quiet=True)
+        with pytest.raises(DatabaseError) as raised:
+            cmd_init(str(db_path), quiet=True)
 
-        # Should fail
-        assert result == 1
+        assert "file exists but is not a SimpleBroker database" in str(raised.value)
+        assert "Please remove the file manually" in str(raised.value)
+        assert str(db_path) in str(raised.value)
+        assert capsys.readouterr().err == ""
 
-        # Error should go to stderr (captured by capsys)
-        captured = capsys.readouterr()
-        assert captured.err.startswith("simplebroker: error:")
-        assert "file exists but is not a SimpleBroker database" in captured.err
-        assert "Please remove the file manually" in captured.err
-        assert str(db_path) in captured.err
+    def test_cli_init_translates_invalid_existing_file(self, workdir):
+        db_path = workdir / ".broker.db"
+        db_path.write_text("Not a database")
+
+        code, stdout, stderr = run_cli("init", cwd=workdir)
+
+        assert code == 1
+        assert stdout == ""
+        assert stderr.startswith("simplebroker: error:")
+        assert "file exists but is not a SimpleBroker database" in stderr
+        assert "Please remove the file manually" in stderr
 
     def test_init_with_absolute_vs_relative_paths(self, tmp_path):
         """Test init command works with both absolute and relative paths."""

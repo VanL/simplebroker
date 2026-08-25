@@ -18,7 +18,7 @@ import pytest
 
 from simplebroker import commands
 from simplebroker._constants import LOGICAL_COUNTER_MASK, NS_PER_SECOND
-from simplebroker.ext import TimestampError
+from simplebroker.ext import IntegrityError, TimestampError
 
 from .conftest import run_cli
 
@@ -252,8 +252,46 @@ def test_cmd_load_ambiguous_timestamp_failure_gives_recovery_guidance(
     )
     monkeypatch.setattr(commands, "load_lines", fail)
 
-    assert commands.cmd_load("ignored") == 1
-    assert "durable outcome may be ambiguous" in capsys.readouterr().err
+    with pytest.raises(TimestampError) as raised:
+        commands.cmd_load("ignored")
+
+    assert raised.value.outcome_ambiguous
+    assert str(raised.value) == "connection reset"
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [ValueError("bad dump"), IntegrityError("duplicate ID")],
+)
+def test_cmd_load_input_failures_escape_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: Exception,
+) -> None:
+    class Connection:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get_connection(self) -> object:
+            return object()
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(
+        commands, "DBConnection", lambda _target, **_kwargs: Connection()
+    )
+    monkeypatch.setattr(commands, "load_lines", fail)
+
+    with pytest.raises(type(failure)) as raised:
+        commands.cmd_load("ignored")
+
+    assert raised.value is failure
+    assert capsys.readouterr().err == ""
 
 
 def test_cmd_load_reemits_unrelated_warnings(
