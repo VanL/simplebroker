@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,7 +15,23 @@ from simplebroker import Queue
 from simplebroker._runner import SQLiteRunner
 from simplebroker.db import BrokerCore, DBConnection
 
+from .conftest import _test_backend_name
+from .helper_scripts.timing import scale_timeout_for_ci
+
 pytestmark = [pytest.mark.shared]
+
+
+def _skip_sqlite_ephemeral_variant(*, persistent: bool) -> None:
+    """SQLite ephemeral early-close runs in the subprocess probe instead.
+
+    The ephemeral (persistent=False) early-close path crashed xdist
+    workers on CI; a worker-killing test poisons unrelated tests, so on
+    the SQLite lane that variant runs isolated in
+    ``test_sqlite_ephemeral_early_close_subprocess_probe`` where a hard
+    death fails one test. Non-SQLite lanes keep the in-process variant.
+    """
+    if not persistent and _test_backend_name() == "sqlite":
+        pytest.skip("sqlite ephemeral variant runs in the subprocess probe")
 
 
 class _PostYieldFailureIterator:
@@ -128,6 +147,7 @@ def test_early_peek_close_releases_before_return_and_queue_reuse(
     *,
     persistent: bool,
 ) -> None:
+    _skip_sqlite_ephemeral_variant(persistent=persistent)
     queue = queue_factory("early_close_peek", persistent=persistent)
     queue.write("first")
     queue.write("second")
@@ -199,6 +219,7 @@ def test_first_peek_advancement_failure_releases_before_error(
     *,
     persistent: bool,
 ) -> None:
+    _skip_sqlite_ephemeral_variant(persistent=persistent)
     queue = queue_factory("failed_peek", persistent=persistent)
     queue.write("payload")
     completed_closes = _observe_real_connection_closes(monkeypatch)
@@ -398,3 +419,89 @@ def test_injected_runner_peek_close_retains_runner_until_caller_cleanup(
     finally:
         queue.close()
         SQLiteRunner.close(runner)
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize("scenario", ["early_close", "advancement_failure"])
+def test_sqlite_ephemeral_early_close_subprocess_probe(
+    tmp_path: Path, scenario: str
+) -> None:
+    """Isolated probes for the SQLite ephemeral early-close variants.
+
+    Runs the ``persistent=False`` scenarios skipped in-process on the
+    SQLite lane inside a child interpreter with faulthandler armed, so
+    an interpreter-level death produces a traceback and fails this one
+    test instead of crashing an xdist worker.
+    """
+    script = textwrap.dedent(
+        """
+        from __future__ import annotations
+
+        import faulthandler
+        import sys
+
+        import simplebroker.sbqueue as sbqueue_module
+        from simplebroker import Queue
+        from simplebroker.db import DBConnection
+
+        faulthandler.enable()
+        faulthandler.dump_traceback_later(60.0)
+
+        db_path, scenario = sys.argv[1], sys.argv[2]
+        completed = []
+
+        class _ObservedDBConnection(DBConnection):
+            def close(self) -> None:
+                super().close()
+                completed.append(self)
+
+        if scenario == "early_close":
+            queue = Queue("early_close_peek", db_path=db_path, persistent=False)
+            queue.write("first")
+            queue.write("second")
+            sbqueue_module.DBConnection = _ObservedDBConnection
+            completed.clear()
+            iterator = queue.peek_generator()
+            assert next(iterator) == "first"
+            assert completed == []
+            iterator.close()
+            assert len(completed) == 1, f"closes={len(completed)}"
+            assert queue.peek_one() == "first"
+            queue.close()
+        elif scenario == "advancement_failure":
+            queue = Queue("failed_peek", db_path=db_path, persistent=False)
+            queue.write("payload")
+            sbqueue_module.DBConnection = _ObservedDBConnection
+            completed.clear()
+            iterator = queue.peek_generator(exact_timestamp="not-an-id")
+            try:
+                next(iterator)
+            except ValueError as exc:
+                assert "invalid message ID" in str(exc)
+            else:
+                raise AssertionError("expected ValueError for invalid message ID")
+            closes_after_failure = len(completed)
+            assert closes_after_failure == 1, f"closes={closes_after_failure}"
+            iterator.close()
+            iterator.close()
+            assert len(completed) == closes_after_failure
+            assert queue.peek_one() == "payload"
+            queue.close()
+        else:  # pragma: no cover - parametrization owns the values
+            raise AssertionError(f"unknown scenario {scenario!r}")
+
+        print("PROBE-OK", flush=True)
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path / "probe.db"), scenario],
+        capture_output=True,
+        text=True,
+        timeout=scale_timeout_for_ci(120.0),
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"probe child failed (rc={result.returncode})\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "PROBE-OK" in result.stdout

@@ -14,6 +14,7 @@ import pytest
 from simplebroker.ext import OperationalError
 
 from .conftest import run_cli
+from .helper_scripts.timing import scale_timeout_for_ci
 
 
 def _queue_for_workdir(queue_name, workdir):
@@ -63,9 +64,13 @@ def test_execute_with_retry_survives_real_sqlite_lock(tmp_path):
     from simplebroker import Queue
 
     db_path = tmp_path / ".broker.db"
+    liveness = scale_timeout_for_ci(30.0)
     lock_ready = threading.Event()
+    release_lock = threading.Event()
     holder_done = threading.Event()
+    write_done = threading.Event()
     holder_errors = []
+    write_errors = []
 
     def hold_write_lock():
         try:
@@ -73,7 +78,7 @@ def test_execute_with_retry_survives_real_sqlite_lock(tmp_path):
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 lock_ready.set()
-                time.sleep(0.5)
+                assert release_lock.wait(timeout=liveness)
                 conn.commit()
             finally:
                 conn.close()
@@ -85,7 +90,7 @@ def test_execute_with_retry_survives_real_sqlite_lock(tmp_path):
 
     holder = threading.Thread(target=hold_write_lock)
     holder.start()
-    assert lock_ready.wait(timeout=2.0)
+    assert lock_ready.wait(timeout=liveness)
     assert holder_errors == []
 
     queue = Queue(
@@ -93,16 +98,36 @@ def test_execute_with_retry_survives_real_sqlite_lock(tmp_path):
         db_path=str(db_path),
         config={"BROKER_BUSY_TIMEOUT": 0},
     )
+
+    def write_payload():
+        try:
+            queue.write("payload")
+        except Exception as exc:  # pragma: no cover - surfaced below  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            write_errors.append(exc)
+        finally:
+            write_done.set()
+
+    writer = threading.Thread(target=write_payload)
     try:
-        queue.write("payload")
+        writer.start()
+        # The lock is held until release_lock fires, so this wait can only
+        # return True early if the write bypassed the lock or errored —
+        # both failures. It is a failure detector, not a scheduling race.
+        assert not write_done.wait(timeout=0.2)
+        release_lock.set()
+        assert write_done.wait(timeout=liveness)
+        assert write_errors == []
         assert queue.read() == "payload"
     finally:
+        release_lock.set()
+        writer.join(timeout=liveness)
         queue.close()
-        assert holder_done.wait(timeout=2.0)
-        holder.join(timeout=0.1)
+        assert holder_done.wait(timeout=liveness)
+        holder.join(timeout=liveness)
 
     assert holder_errors == []
     assert not holder.is_alive()
+    assert not writer.is_alive()
 
 
 @pytest.mark.xdist_group(name="concurrency_serial")
@@ -180,7 +205,6 @@ def test_parallel_writes(workdir):
 @pytest.mark.xdist_group(name="concurrency_serial")
 def test_concurrent_read_write(workdir):
     """Readers and writers can work concurrently."""
-    import time
 
     # Initialize the database by writing and reading one message
     rc, _, _ = run_cli("write", "mixed", "init", cwd=workdir)

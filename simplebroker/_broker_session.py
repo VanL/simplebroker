@@ -18,6 +18,10 @@ from ._targets import BrokerTarget
 
 _CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
 
+# Module-owned pid seam: tests patch this alias instead of the shared
+# ``os.getpid``, which other threads and finalizers may observe.
+_getpid = os.getpid
+
 
 @dataclass(frozen=True)
 class _SessionKey:
@@ -99,7 +103,7 @@ def _session_spec(
 ) -> _SessionSpec:
     backend_name, target, backend_options, backend_plugin = _target_parts(db_path)
     key = _SessionKey(
-        pid=os.getpid(),
+        pid=_getpid(),
         backend_name=backend_name,
         target=target,
         backend_options=freeze_key_material(backend_options),

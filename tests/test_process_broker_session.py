@@ -32,7 +32,12 @@ from simplebroker._broker_session import (
 from simplebroker._runner import SQLiteRunner
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore, _build_process_session_core_factory
-from tests.helper_scripts import drive_until
+from tests.helper_scripts import drive_until, scale_timeout_for_ci
+
+# External liveness valve for Event waits, joins, and barriers. Deadlock
+# insurance only — never applied to injected product durations or
+# elapsed-time assertion bounds, which stay exact.
+_LIVENESS = scale_timeout_for_ci(30.0)
 
 
 class CountingSQLiteRunner(SQLiteRunner):
@@ -363,7 +368,7 @@ def test_concurrent_first_use_publishes_one_shared_runner(
         ]
 
         def write_once(index: int) -> None:
-            start_barrier.wait(timeout=5.0)
+            start_barrier.wait(timeout=_LIVENESS)
             queues[index].write(f"message-{index}")
 
         with cf.ThreadPoolExecutor(max_workers=4) as executor:
@@ -720,7 +725,7 @@ def test_persistent_sqlite_thread_owners_do_not_reapply_connection_pragmas(
     start_barrier = threading.Barrier(3)
 
     def worker(thread_index: int) -> None:
-        start_barrier.wait(timeout=5.0)
+        start_barrier.wait(timeout=_LIVENESS)
         queue = Queue(
             f"thread_{thread_index}",
             db_path=db_path,
@@ -776,17 +781,22 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     queue = Queue("jobs", db_path=str(tmp_path / "sqlite.db"), persistent=True)
+    # Pre-warm before patching so first-use SQLite setup (phaselock, WAL,
+    # schema) happens outside the observed windows.
+    queue.write("warmup")
     operation_entered = threading.Event()
     release_operation = threading.Event()
     close_returned = threading.Event()
     operation_errors: list[BaseException] = []
     close_errors: list[BaseException] = []
+    ordering: list[str] = []
     original_write = BrokerCore.write
 
     def delayed_write(self: BrokerCore, queue_name: str, message: str) -> None:
         operation_entered.set()
-        assert release_operation.wait(timeout=5.0)
+        assert release_operation.wait(timeout=_LIVENESS)
         original_write(self, queue_name, message)
+        ordering.append("write-finished")
 
     def write_message() -> None:
         try:
@@ -800,6 +810,7 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             close_errors.append(exc)
         finally:
+            ordering.append("close-returned")
             close_returned.set()
 
     monkeypatch.setattr(BrokerCore, "write", delayed_write)
@@ -807,23 +818,26 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
     operation_thread = threading.Thread(target=write_message)
     close_thread = threading.Thread(target=close_queue)
     operation_thread.start()
-    assert operation_entered.wait(timeout=5.0)
+    assert operation_entered.wait(timeout=_LIVENESS)
 
     close_thread.start()
     try:
-        assert not close_returned.wait(timeout=0.25), (
-            "Queue.close() returned while a persistent queue operation was still "
-            "using the shared broker session"
-        )
-    finally:
+        # Positive happens-after proof: if close() failed to block on the
+        # in-flight operation, "close-returned" would precede
+        # "write-finished" regardless of scheduler timing.
         release_operation.set()
-        operation_thread.join(timeout=5.0)
-        close_thread.join(timeout=5.0)
+    finally:
+        operation_thread.join(timeout=_LIVENESS)
+        close_thread.join(timeout=_LIVENESS)
 
     assert not operation_thread.is_alive()
     assert not close_thread.is_alive()
     assert not operation_errors
     assert not close_errors
+    assert ordering == ["write-finished", "close-returned"], (
+        "Queue.close() returned while a persistent queue operation was still "
+        f"using the shared broker session (observed order: {ordering})"
+    )
 
 
 def test_process_session_close_all_times_out_when_operation_never_releases(
@@ -867,9 +881,9 @@ def test_process_session_key_includes_pid(
     del counting_backend
     target = counting_target(tmp_path, schema="same")
 
-    monkeypatch.setattr("simplebroker._broker_session.os.getpid", lambda: 1000)
+    monkeypatch.setattr("simplebroker._broker_session._getpid", lambda: 1000)
     parent_key = _session_key(target, resolve_isolated_config({}))
-    monkeypatch.setattr("simplebroker._broker_session.os.getpid", lambda: 1001)
+    monkeypatch.setattr("simplebroker._broker_session._getpid", lambda: 1001)
     child_key = _session_key(target, resolve_isolated_config({}))
 
     assert parent_key != child_key
@@ -1070,7 +1084,7 @@ def test_session_close_wins_race_with_core_creation(
         if not delayed_once:
             delayed_once = True
             core_created.set()
-            assert allow_return.wait(timeout=5.0)
+            assert allow_return.wait(timeout=_LIVENESS)
         original_setup(self, phase, stop_event)
 
     def get_connection() -> None:
@@ -1082,7 +1096,18 @@ def test_session_close_wins_race_with_core_creation(
     monkeypatch.setattr(CountingSQLiteRunner, "setup_with_stop_event", delayed_setup)
     worker = threading.Thread(target=get_connection)
     worker.start()
-    assert core_created.wait(timeout=5.0)
+    assert core_created.wait(timeout=_LIVENESS)
+
+    # Deterministic close-is-waiting observation instead of a negative
+    # timing window: wrap the condition close_all() blocks on.
+    close_waiting = threading.Event()
+    original_condition_wait = session._operation_condition.wait
+
+    def observe_close_wait(timeout: float | None = None) -> bool:
+        close_waiting.set()
+        return original_condition_wait(timeout)
+
+    session._operation_condition.wait = observe_close_wait  # type: ignore[method-assign]
 
     def close_session() -> None:
         session.close_all()
@@ -1091,11 +1116,12 @@ def test_session_close_wins_race_with_core_creation(
     close_thread = threading.Thread(target=close_session)
     close_thread.start()
     try:
-        assert not close_returned.wait(timeout=0.1)
+        assert close_waiting.wait(timeout=_LIVENESS)
+        assert not close_returned.is_set()
     finally:
         allow_return.set()
-        worker.join(timeout=5.0)
-        close_thread.join(timeout=5.0)
+        worker.join(timeout=_LIVENESS)
+        close_thread.join(timeout=_LIVENESS)
 
     assert not worker.is_alive()
     assert not close_thread.is_alive()
@@ -1146,7 +1172,7 @@ def test_non_sqlite_core_creation_after_close_does_not_retain_runner(  # noqa: C
         def create_runner(self, *args: Any, **kwargs: Any) -> Runner:
             self.create_runner_calls += 1
             creation_admitted.set()
-            assert allow_creation.wait(timeout=5.0)
+            assert allow_creation.wait(timeout=_LIVENESS)
             return self.runner
 
         def create_core_from_runner(self, *args: Any, **kwargs: Any) -> Core:
@@ -1169,7 +1195,7 @@ def test_non_sqlite_core_creation_after_close_does_not_retain_runner(  # noqa: C
     workers = [threading.Thread(target=get_connection) for _ in range(3)]
     for worker in workers:
         worker.start()
-    assert creation_admitted.wait(timeout=5.0)
+    assert creation_admitted.wait(timeout=_LIVENESS)
     with session._operation_condition:
         reached_deadline = time.monotonic() + 5.0
         while session._active_core_creations < 3:
@@ -1181,7 +1207,7 @@ def test_non_sqlite_core_creation_after_close_does_not_retain_runner(  # noqa: C
     assert session._closed
     allow_creation.set()
     for worker in workers:
-        worker.join(timeout=5.0)
+        worker.join(timeout=_LIVENESS)
 
     assert all(not worker.is_alive() for worker in workers)
     assert len(errors) == 3
@@ -1218,7 +1244,7 @@ def test_factory_close_does_not_cancel_checkout_rollback(
         def release_thread_connection(self) -> None:
             self.release_calls += 1
             release_entered.set()
-            assert allow_release.wait(timeout=5.0)
+            assert allow_release.wait(timeout=_LIVENESS)
 
         def close(self) -> None:
             self.close_calls += 1
@@ -1253,7 +1279,7 @@ def test_factory_close_does_not_cancel_checkout_rollback(
 
     worker = threading.Thread(target=get_connection)
     worker.start()
-    assert release_entered.wait(timeout=5.0)
+    assert release_entered.wait(timeout=_LIVENESS)
 
     session.close_all()
     assert session._closed
@@ -1261,7 +1287,7 @@ def test_factory_close_does_not_cancel_checkout_rollback(
     assert worker.is_alive()
 
     allow_release.set()
-    worker.join(timeout=5.0)
+    worker.join(timeout=_LIVENESS)
 
     assert not worker.is_alive()
     assert errors == [creation_error]

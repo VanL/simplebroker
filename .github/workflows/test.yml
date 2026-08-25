@@ -46,6 +46,9 @@ jobs:
     timeout-minutes: 45
     env:
       UV_PYTHON: ${{ matrix.python-version }}
+      # Fatal-signal Python-frame tracebacks instead of bare "worker
+      # crashed" when an interpreter dies mid-test.
+      PYTHONFAULTHANDLER: "1"
     strategy:
       fail-fast: false
       matrix:

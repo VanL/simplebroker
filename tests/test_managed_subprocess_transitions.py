@@ -13,10 +13,15 @@ from typing import Literal
 import pytest
 
 from tests.helper_scripts.managed_subprocess import managed_subprocess
+from tests.helper_scripts.timing import scale_timeout_for_ci
 from tests.helpers.state_machine_contracts import (
     TransitionCase,
     fires_transition_table,
 )
+
+# Liveness valve: child startup under loaded CI can exceed small fixed
+# waits; this bounds hangs without asserting timing.
+_LIVENESS = scale_timeout_for_ci(30.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,8 +172,8 @@ def _python(script: str) -> list[str]:
 
 def _fire_normal_exit() -> None:
     with managed_subprocess(_python("print('complete', flush=True)")) as process:
-        assert process.proc.wait(timeout=2.0) == 0
-        assert process.wait_for_output("complete", timeout=2.0)
+        assert process.proc.wait(timeout=_LIVENESS) == 0
+        assert process.wait_for_output("complete", timeout=_LIVENESS)
     assert process.proc.returncode == 0
 
 
@@ -179,7 +184,7 @@ def _fire_body_error() -> None:
             _python("import time; print('ready', flush=True); time.sleep(60)")
         ) as process,
     ):
-        assert process.wait_for_output("ready", timeout=2.0)
+        assert process.wait_for_output("ready", timeout=_LIVENESS)
         raise RuntimeError("body failed")
     assert process.proc.poll() is not None
 
@@ -192,7 +197,7 @@ def _fire_context_terminate() -> None:
         "time.sleep(60)"
     )
     with managed_subprocess(_python(script)) as process:
-        assert process.wait_for_output("ready", timeout=2.0)
+        assert process.wait_for_output("ready", timeout=_LIVENESS)
     assert process.proc.returncode is not None
     if sys.platform != "win32":
         assert process.proc.returncode == 0
@@ -213,7 +218,7 @@ def _fire_context_sigint_escalation() -> None:
         terminate_timeout=0.05,
         kill_timeout=5.0,
     ) as process:
-        assert process.wait_for_output("ready", timeout=2.0)
+        assert process.wait_for_output("ready", timeout=_LIVENESS)
     assert process.proc.returncode == 9
 
 
@@ -227,7 +232,7 @@ def _fire_interrupt() -> None:
         "time.sleep(60)"
     )
     with managed_subprocess(_python(script)) as process:
-        assert process.wait_for_output("ready", timeout=2.0)
+        assert process.wait_for_output("ready", timeout=_LIVENESS)
         assert process.wait_after_interrupt(timeout=1.0) == 7
 
 
@@ -242,7 +247,7 @@ def _fire_terminate_escalation() -> None:
         "time.sleep(60)"
     )
     with managed_subprocess(_python(script)) as process:
-        assert process.wait_for_output("ready", timeout=2.0)
+        assert process.wait_for_output("ready", timeout=_LIVENESS)
         assert (
             process.wait_after_interrupt(
                 timeout=0.05,
@@ -263,7 +268,7 @@ def _fire_kill_escalation() -> None:
         "time.sleep(60)"
     )
     with managed_subprocess(_python(script)) as process:
-        assert process.wait_for_output("ready", timeout=2.0)
+        assert process.wait_for_output("ready", timeout=_LIVENESS)
         returncode = process.wait_after_interrupt(
             timeout=0.05,
             terminate_timeout=0.05,
@@ -275,8 +280,8 @@ def _fire_kill_escalation() -> None:
 def _fire_stdin() -> None:
     script = "import sys; print(sys.stdin.read(), end='', flush=True)"
     with managed_subprocess(_python(script), stdin="payload") as process:
-        assert process.proc.wait(timeout=2.0) == 0
-        assert process.wait_for_output("payload", timeout=2.0)
+        assert process.proc.wait(timeout=_LIVENESS) == 0
+        assert process.wait_for_output("payload", timeout=_LIVENESS)
 
 
 def _fire_early_stdin_close() -> None:
@@ -284,7 +289,7 @@ def _fire_early_stdin_close() -> None:
         _python("raise SystemExit(0)"),
         stdin="payload" * 100_000,
     ) as process:
-        assert process.proc.wait(timeout=2.0) == 0
+        assert process.proc.wait(timeout=_LIVENESS) == 0
         assert process.proc.stdin is not None
         assert process.proc.stdin.closed
     assert process.proc.returncode == 0
@@ -292,7 +297,7 @@ def _fire_early_stdin_close() -> None:
 
 def _fire_already_exited() -> None:
     with managed_subprocess(_python("raise SystemExit(3)")) as process:
-        assert process.proc.wait(timeout=2.0) == 3
+        assert process.proc.wait(timeout=_LIVENESS) == 3
         process.terminate()
         process.interrupt()
         process.cleanup_readers()
@@ -306,7 +311,7 @@ def _fire_already_exited() -> None:
 def _fire_reader_cleanup() -> None:
     script = "import time; print('ready', flush=True); time.sleep(60)"
     with managed_subprocess(_python(script)) as process:
-        assert process.wait_for_output("ready", timeout=2.0)
+        assert process.wait_for_output("ready", timeout=_LIVENESS)
         stdout_reader = process._stdout_reader
         stderr_reader = process._stderr_reader
         assert stdout_reader is not None
