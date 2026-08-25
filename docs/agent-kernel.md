@@ -121,8 +121,8 @@ Normative: `docs/specs/11-delivery.md`
 | Default `read` / consume `watch` | Claim commits **before** handoff to your code. Claim is atomic (once). If the process does not die between claim and handoff, delivery to the caller/handler is once. Crash in that window can leave the message claimed and not handed off. Not exactly-once application processing. |
 | **Move reservation** | **Atomic move** relocates the message; it still exists at the destination after success (including after a crash). Common pattern: move to inflight/private queue, process, delete by id. |
 | Peek | Observes without claiming. Mutating actions (delete/move/claim) are atomic (one winner). App concurrency model is the app’s responsibility. |
-| Transactional generators | Default `exactly_once`: one-by-one, commit before yield. `at_least_once`: strongest public **batch** promise (commit after full batch yield; early stop may redeliver). Same thread only; cross-thread is undefined behavior (implementations may fail loud). |
-| Peek iterators | `Queue.peek_generator()` and `Queue.peek(all_messages=True)` return the package-root `CloseableIterator`. Construction is lazy. Exhaust it or call `close()` on the same thread before closing the Queue/client. |
+| Transactional generators | `Queue.read_generator()`, `Queue.move_generator()`, and `Queue.stream_messages()` return the package-root `CloseableIterator`, as do high-level `read`/`move` all-message views. Default `exactly_once`: one-by-one, commit before yield. `at_least_once`: strongest public **batch** promise (commit after full batch yield; early stop may redeliver). Construction is lazy. Create, advance, exhaust, and close on one thread. |
+| Peek iterators | `Queue.peek_generator()` and `Queue.peek(all_messages=True)` return the same `CloseableIterator`. Construction is lazy. Exhaust it or call `close()` on the same thread before closing the Queue/client. |
 
 `include_claimed` / claimed rows: inspection only; vacuum may remove them.
 

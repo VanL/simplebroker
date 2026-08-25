@@ -125,8 +125,8 @@ def test_api_closeable_peek_iterator_contract() -> None:
     assert "send()" in public and "throw()" in public
     assert "all_messages=True" in shape
     assert "CloseableIterator" in shape
-    assert "BrokerConnection.peek_generator()" in generators
-    assert "ordinary iterator seam" in generators
+    assert "Backend-facing `BrokerConnection` generator methods" in generators
+    assert "`Iterator[...]` seams" in generators
     assert "`tests/test_dev_scripts.py` (isolated root wheel/sdist import" in spec
     assert "published-artifact verification" in spec
 
@@ -137,7 +137,15 @@ def test_api_closeable_peek_iterator_contract() -> None:
     assert "send" not in protocol_members
     assert "throw" not in protocol_members
 
-    for method in (Queue.peek, Queue.peek_generator):
+    for method in (
+        Queue.read,
+        Queue.peek,
+        Queue.move,
+        Queue.read_generator,
+        Queue.peek_generator,
+        Queue.move_generator,
+        Queue.stream_messages,
+    ):
         doc = " ".join((method.__doc__ or "").split()).lower()
         assert "lazy" in doc
         assert "same thread" in doc

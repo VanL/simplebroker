@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import CloseableIterator, Queue
 from simplebroker._constants import PEEK_BATCH_SIZE
 from simplebroker._delivery import ACCEPTED_DELIVERY_GUARANTEES
 
@@ -344,6 +344,84 @@ def test_early_close_replays_unfinished_at_least_once_batch(queue_factory) -> No
         "two",
         "three",
     ]
+
+
+def _active_operations(queue: Queue) -> int:
+    assert queue.conn is not None
+    session = queue.conn._shared_session
+    assert session is not None
+    return session._active_operations
+
+
+def _delivery_iterator(
+    source: Queue,
+    destination: Queue,
+    operation: str,
+) -> CloseableIterator[object]:
+    if operation == "read_exactly_once":
+        return source.read_generator()
+    if operation == "read_at_least_once":
+        return source.read_generator(delivery_guarantee="at_least_once")
+    if operation == "move_exactly_once":
+        return source.move_generator(destination)
+    if operation == "move_at_least_once":
+        return source.move_generator(
+            destination,
+            delivery_guarantee="at_least_once",
+        )
+    if operation == "stream_peek":
+        return source.stream_messages(peek=True)
+    if operation == "stream_one":
+        return source.stream_messages(all_messages=False)
+    if operation == "stream_exactly_once":
+        return source.stream_messages()
+    if operation == "stream_at_least_once":
+        return source.stream_messages(batch_processing=True, commit_interval=2)
+    if operation == "read_all":
+        return source.read(all_messages=True)
+    assert operation == "move_all"
+    return source.move(destination, all_messages=True)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "read_exactly_once",
+        "read_at_least_once",
+        "move_exactly_once",
+        "move_at_least_once",
+        "stream_peek",
+        "stream_one",
+        "stream_exactly_once",
+        "stream_at_least_once",
+        "read_all",
+        "move_all",
+    ],
+)
+def test_closeable_queue_iterator_releases_operation_on_same_thread(
+    queue_factory,
+    operation: str,
+) -> None:
+    """[SB-DELIVERY-6] Public close synchronously releases Queue ownership."""
+    source = queue_factory(f"closeable_{operation}")
+    destination = queue_factory(f"closeable_{operation}_destination")
+    for body in ("one", "two", "three"):
+        source.write(body)
+    baseline = _active_operations(source)
+
+    iterator = _delivery_iterator(source, destination, operation)
+    assert _active_operations(source) == baseline
+
+    next(iterator)
+    assert _active_operations(source) == baseline + 1
+
+    iterator.close()
+    assert _active_operations(source) == baseline
+    iterator.close()
+    assert _active_operations(source) == baseline
+
+    source.write("reused")
+    assert "reused" in source.peek_many(limit=10)
 
 
 def test_foreign_thread_contract_binds_sql_and_redis_process_probes() -> None:

@@ -59,13 +59,16 @@ when the scopes coincide. `close_owned_runner()` prefers callable `shutdown()`
 and falls back to `close()`, but only at a SimpleBroker-owned runner boundary.
 An explicitly injected runner remains caller-owned.
 
-### Suspended observational Queue operations
+### Suspended closeable Queue operations
 
-`Queue.peek_generator()` is an outer Python generator whose
-`Queue.get_connection()` context stays open while the delegated backend
-iterator is suspended. That outer Queue seam owns public iterator cleanup;
-backend `BrokerConnection.peek_generator()` implementations remain ordinary
-iterators and do not acquire a second public lifecycle interface.
+`Queue.read_generator()`, `Queue.peek_generator()`,
+`Queue.move_generator()`, and `Queue.stream_messages()` are outer Python
+generators whose `Queue.get_connection()` contexts stay open while their
+delegated backend iterators are suspended. The high-level
+`all_messages=True` read, peek, and move views return those generators or a
+close-forwarding result-shaping generator. That outer Queue seam owns public
+iterator cleanup; backend `BrokerConnection` generator implementations remain
+ordinary iterators and do not acquire a second public lifecycle interface.
 
 The first advancement enters the context on the caller's thread. Exhaustion,
 an advancement failure, or explicit close unwinds it on that same thread. For
@@ -80,8 +83,10 @@ This split is why the public promise is synchronous Queue-operation exit and
 owned cleanup invocation, not unconditional physical connection destruction.
 It also makes close thread-affine: the process-session operation stack is
 thread-local, so this design does not transfer a suspended operation to a
-foreign cleanup thread. The public contract is `[SB-DELIVERY-4]`; this section
-records the implementation reason for that shape.
+foreign cleanup thread. Peek traversal is `[SB-DELIVERY-4]`; ownership for
+read, move, and stream iterators is `[SB-DELIVERY-6]`; the common public shape
+is `[SB-API-5]`. This section records the implementation reason for those
+contracts.
 
 An `ActivityWaiter` sits below that boundary. It owns a backend activity
 registration or composite registration, not the runner, pool, listener
@@ -273,6 +278,8 @@ When changing this area:
 ## Verification
 
 The core lifecycle proof is in `tests/test_process_broker_session.py`.
+Public closeable Queue-operation release is proved in
+`tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`.
 Owned-runner verb selection is proved in `tests/test_runner_lifecycle.py`.
 Activity-waiter terminal transitions and cleanup order are proved in
 `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py` and
@@ -287,6 +294,8 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
+- active: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
+  — public closeable Queue iterator ownership
 - completed: 2026-08-24-comprehensive-review-findings-remediation-plan — target
   snapshots, pre-lock fork recovery, Redis listener ownership, and PostgreSQL
   sidecar adaptation

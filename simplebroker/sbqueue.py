@@ -468,7 +468,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
-    ) -> Iterator[str]: ...
+    ) -> CloseableIterator[str]: ...
 
     @overload
     def read(
@@ -479,7 +479,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
-    ) -> Iterator[tuple[str, int]]: ...
+    ) -> CloseableIterator[tuple[str, int]]: ...
 
     @overload
     def read(
@@ -490,7 +490,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
-    ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None: ...
+    ) -> str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None: ...
 
     def read(
         self,
@@ -500,14 +500,19 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
-    ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None:
+    ) -> str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None:
         """Read and remove message(s) from the queue (CLI-mirroring method).
 
         This is the high-level method that mirrors CLI behavior. For more precise
         control, use the granular methods: read_one(), read_many(), read_generator().
 
+        With ``all_messages=True``, the returned closeable iterator is lazy:
+        creating it starts no Queue operation. Create, advance, exhaust, and
+        close it on the same thread. A caller that may stop early must close it
+        before closing this Queue or a higher-level client.
+
         Args:
-            all_messages: If True, read all messages as a generator
+            all_messages: If True, read all messages as a closeable iterator
             with_timestamps: If True, include timestamps in results
             after_timestamp: Only read messages newer than this timestamp
             before_timestamp: Only read messages older than this timestamp
@@ -517,7 +522,7 @@ class Queue:
         Returns:
             Depends on parameters:
             - Single message (str or tuple) if all_messages=False
-            - Generator if all_messages=True
+            - Closeable iterator if all_messages=True
             - None if no messages match criteria
 
         Raises:
@@ -696,7 +701,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-    ) -> Iterator[str]: ...
+    ) -> CloseableIterator[str]: ...
 
     @overload
     def read_generator(
@@ -707,7 +712,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-    ) -> Iterator[tuple[str, int]]: ...
+    ) -> CloseableIterator[tuple[str, int]]: ...
 
     @overload
     def read_generator(
@@ -718,7 +723,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-    ) -> Iterator[str | tuple[str, int]]: ...
+    ) -> CloseableIterator[str | tuple[str, int]]: ...
 
     def read_generator(
         self,
@@ -728,14 +733,19 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-    ) -> Iterator[str | tuple[str, int]]:
+    ) -> CloseableIterator[str | tuple[str, int]]:
         """Generator that reads and removes messages from the queue.
 
-        Transactional generators are thread-affine: create, iterate, exhaust,
-        and close them on the same thread. For SQL-backed broker instances,
-        finalization from another thread permanently poisons the instance;
-        restart the process. Redis/Valkey does not share the SQL poison
-        mechanism, but its behavior does not make cross-thread use portable.
+        The returned closeable iterator is lazy: creating it starts no Queue
+        operation. Create, advance, exhaust, and close it on the same thread.
+        Even exactly-once iteration retains the suspended outer Queue operation
+        after each committed yield. A caller that may stop early must close the
+        iterator before closing this Queue or a higher-level client.
+
+        For SQL-backed at-least-once iteration, finalization from another
+        thread permanently poisons the instance; restart the process.
+        Redis/Valkey does not share the SQL poison mechanism, but its behavior
+        does not make cross-thread use portable.
 
         This is memory-efficient for processing large queues.
 
@@ -1146,7 +1156,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: Literal[True],
-    ) -> Iterator[MovedMessage]: ...
+    ) -> CloseableIterator[MovedMessage]: ...
 
     @overload
     def move(
@@ -1157,7 +1167,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: bool,
-    ) -> MovedMessage | None | Iterator[MovedMessage]: ...
+    ) -> MovedMessage | None | CloseableIterator[MovedMessage]: ...
 
     def move(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-016] exception
         self,
@@ -1167,11 +1177,16 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: bool = False,
-    ) -> MovedMessage | None | Iterator[MovedMessage]:
+    ) -> MovedMessage | None | CloseableIterator[MovedMessage]:
         """Move messages from this queue to another (CLI-mirroring method).
 
         This is the high-level method that mirrors CLI behavior. For more precise
         control, use the granular methods: move_one(), move_many(), move_generator().
+
+        With ``all_messages=True``, the returned closeable iterator is lazy:
+        creating it starts no Queue operation. Create, advance, exhaust, and
+        close it on the same thread. A caller that may stop early must close it
+        before closing this Queue or a higher-level client.
 
         Args:
             destination: Target queue (name or Queue instance).
@@ -1184,7 +1199,7 @@ class Queue:
         Returns:
             Depends on parameters:
             - Single dict with 'message' and 'timestamp' if moving one message
-            - Generator of dicts if all_messages=True
+            - Closeable iterator of dicts if all_messages=True
             - None if no messages to move
 
         Raises:
@@ -1220,15 +1235,19 @@ class Queue:
             return None
         elif all_messages:
             # Return generator for all messages
-            def dict_generator() -> Iterator[MovedMessage]:
-                for result in self.move_generator(
+            def dict_generator() -> CloseableIterator[MovedMessage]:
+                generator = self.move_generator(
                     dest_name,
                     with_timestamps=True,
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
-                ):
-                    msg, ts = result
-                    yield _moved_message(msg, ts)
+                )
+                try:
+                    for result in generator:
+                        msg, ts = result
+                        yield _moved_message(msg, ts)
+                finally:
+                    generator.close()
 
             return dict_generator()
         else:
@@ -1427,7 +1446,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-    ) -> Iterator[str]: ...
+    ) -> CloseableIterator[str]: ...
 
     @overload
     def move_generator(
@@ -1439,7 +1458,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-    ) -> Iterator[tuple[str, int]]: ...
+    ) -> CloseableIterator[tuple[str, int]]: ...
 
     @overload
     def move_generator(
@@ -1451,7 +1470,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-    ) -> Iterator[str | tuple[str, int]]: ...
+    ) -> CloseableIterator[str | tuple[str, int]]: ...
 
     def move_generator(
         self,
@@ -1462,14 +1481,19 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-    ) -> Iterator[str | tuple[str, int]]:
+    ) -> CloseableIterator[str | tuple[str, int]]:
         """Generator that moves messages from this queue to another.
 
-        Transactional generators are thread-affine: create, iterate, exhaust,
-        and close them on the same thread. For SQL-backed broker instances,
-        finalization from another thread permanently poisons the instance;
-        restart the process. Redis/Valkey does not share the SQL poison
-        mechanism, but its behavior does not make cross-thread use portable.
+        The returned closeable iterator is lazy: creating it starts no Queue
+        operation. Create, advance, exhaust, and close it on the same thread.
+        Even exactly-once iteration retains the suspended outer Queue operation
+        after each committed yield. A caller that may stop early must close the
+        iterator before closing this Queue or a higher-level client.
+
+        For SQL-backed at-least-once iteration, finalization from another
+        thread permanently poisons the instance; restart the process.
+        Redis/Valkey does not share the SQL poison mechanism, but its behavior
+        does not make cross-thread use portable.
 
         Args:
             destination: Target queue (name or Queue instance)
@@ -1795,15 +1819,18 @@ class Queue:
         before_timestamp: int | None = None,
         batch_processing: bool = False,
         commit_interval: int = 1,
-    ) -> Iterator[tuple[str, int]]:
+    ) -> CloseableIterator[tuple[str, int]]:
         """Stream messages with timestamps from the queue.
 
-        The transactional batch mode (``batch_processing=True`` with
-        ``commit_interval > 1``) is thread-affine: create, iterate, exhaust,
-        and close it on the same thread. For SQL-backed broker instances,
-        finalization from another thread permanently poisons the instance;
-        restart the process. Redis/Valkey does not share the SQL poison
-        mechanism, but its behavior does not make cross-thread use portable.
+        The returned closeable iterator is lazy: creating it starts no Queue
+        operation. Create, advance, exhaust, and close it on the same thread in
+        every mode. A caller that may stop early must close it before closing
+        this Queue or a higher-level client.
+
+        For SQL-backed at-least-once batch iteration, finalization from another
+        thread permanently poisons the instance; restart the process.
+        Redis/Valkey does not share the SQL poison mechanism, but its behavior
+        does not make cross-thread use portable.
 
         This is an iterator that yields messages as they are retrieved from the database.
         It's more memory-efficient than read_all for large queues.

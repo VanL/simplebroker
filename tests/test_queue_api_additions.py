@@ -1,4 +1,5 @@
 """Test the new Queue API additions (delete and move methods)."""
+# mypy: disable-error-code=no-untyped-def
 
 import tempfile
 from collections.abc import Iterator
@@ -45,6 +46,43 @@ def test_queue_filtered_move_closes_bounded_generator(
         "message": "message",
         "timestamp": 123,
     }
+    assert retained_iterators
+    assert closed == [True]
+
+
+def test_queue_move_all_closes_transformation_delegate(
+    queue_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing the public dictionary iterator must close its retained delegate."""
+
+    closed: list[bool] = []
+    retained_iterators: list[Iterator[tuple[str, int]]] = []
+
+    def tracked_results() -> Iterator[tuple[str, int]]:
+        try:
+            yield "message", 123
+            yield "second", 456
+        finally:
+            closed.append(True)
+
+    def move_generator(
+        self: Queue,
+        destination: str,
+        **kwargs: Any,
+    ) -> Iterator[tuple[str, int]]:
+        del self, destination, kwargs
+        iterator = tracked_results()
+        retained_iterators.append(iterator)
+        return iterator
+
+    monkeypatch.setattr(Queue, "move_generator", move_generator)
+    queue = queue_factory("source")
+    moved = queue.move("destination", all_messages=True)
+
+    assert next(moved) == {"message": "message", "timestamp": 123}
+    moved.close()
+
     assert retained_iterators
     assert closed == [True]
 

@@ -10,6 +10,12 @@ wrappers are `Queue.read_generator()`, `Queue.move_generator()`, and
 `Queue.stream_messages(batch_processing=True, commit_interval=N)` when
 `N > 1`.
 
+Those Queue methods expose the public `CloseableIterator` capability in every
+mode so supported owner-thread early exit can unwind the already-existing
+outer Queue operation synchronously. The type does not add recovery or make
+foreign-thread close valid. Exactly-once and non-SQL paths need not publish
+poison; poison remains the SQL at-least-once safety net described here.
+
 The mechanism makes an already-fatal ownership violation visible and bounds
 later operations on that instance. It does not heal the abandoned lock or
 transaction in process:
@@ -35,6 +41,8 @@ the mechanism.
   [SB-DELIVERY-6] own the public same-thread contract, diagnostic behavior,
   and restart instruction. `README.md`, **Delivery guarantees**, is the
   user-facing restatement.
+- active: `2026-08-25-closeable-queue-iterator-contract-plan` makes the
+  existing owner-thread cleanup capability public without widening poison.
 - retired: 2026-07-27-cross-thread-generator-orphan-healing-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`
   records the design evidence, rejected recovery approaches, and verification
@@ -175,7 +183,7 @@ process does not claim to recover them itself.
 | Path | Responsibility |
 |------|----------------|
 | `simplebroker/db.py` | Poison latch, lock adapter, mutation guard, transactional generator and sidecar finalization |
-| `simplebroker/sbqueue.py` | Public read, move, batch-stream, and sidecar wrappers plus thread-affinity documentation |
+| `simplebroker/sbqueue.py` | Public closeable read, move, stream, and peek wrappers plus thread-affinity documentation |
 | `simplebroker/_sidecar.py` | Local `SidecarSession` capability invalidation |
 | `simplebroker/_broker_session.py` | Existing shared-session lease and five-second close-drain boundary |
 | `tests/test_cross_thread_finalization_poisoning.py` | Core lifecycle, sidecar finalization, public close outcomes, shared-lease residual, diagnostics, and nesting |

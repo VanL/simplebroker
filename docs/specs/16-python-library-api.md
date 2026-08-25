@@ -195,10 +195,9 @@ Public typing uses overloads to narrow calls made with literal flag values and
 retains a full union for an unknown runtime `bool`; overloads do not create a
 second implementation path.
 
-The `all_messages=True` view of `Queue.peek()` returns
-`CloseableIterator[...]`; an unknown runtime `bool` includes that closeable
-iterator in its existing scalar/tuple/iterator union. The read and move
-families retain their existing return types.
+The `all_messages=True` views of `Queue.read()`, `Queue.peek()`, and
+`Queue.move()` return `CloseableIterator[...]`; an unknown runtime `bool`
+includes that closeable iterator in the existing scalar/tuple/iterator union.
 
 Read and peek preserve their existing string or `(message, timestamp)` tuple
 records. High-level move preserves its existing `MovedMessage` dictionary or
@@ -231,12 +230,19 @@ Generator APIs (for example `read_generator`, `peek_generator`,
 `read_many`, `move_many`) follow the **delivery claim and handoff rules** of
 the corresponding consume, peek, or move mode in `[SB-DELIVERY-*]`.
 
-`Queue.peek_generator()` and the high-level `Queue.peek(all_messages=True)`
-view return `CloseableIterator[...]`. Their thread ownership, terminal
-outcomes, synchronous Queue-operation exit, and early-close duty are
-[SB-DELIVERY-4]. The backend-facing `BrokerConnection.peek_generator()`
-remains an ordinary iterator seam; the public close contract is owned by the
-outer Queue operation.
+`Queue.read_generator()`, `Queue.peek_generator()`,
+`Queue.move_generator()`, and `Queue.stream_messages()` return
+`CloseableIterator[...]`. The high-level `all_messages=True` read, peek, and
+move views return the corresponding closeable iterator shapes. Peek lifecycle
+and live traversal remain governed by [SB-DELIVERY-4]; delivery settlement
+remains governed by [SB-DELIVERY-5]; read, move, and stream iterator ownership
+is [SB-DELIVERY-6].
+
+Backend-facing `BrokerConnection` generator methods remain ordinary
+`Iterator[...]` seams. The public close contract belongs to the outer Queue
+generator that owns `Queue.get_connection()`; it does not require backend
+API changes, a runtime wrapper, or generator-only `send()` and `throw()`
+operations.
 
 Where delivery requires it, materializing batch APIs **commit selected claims
 before returning** their result lists. Generator modes that document
@@ -611,8 +617,8 @@ boundary rather than in the storage layer:
 | [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`, `::test_api_moved_message_is_package_root_public`, `::test_api_closeable_peek_iterator_contract`; `tests/test_queue_typing_contract.py`; `tests/test_dev_scripts.py` (isolated root wheel/sdist import and published-artifact verification); `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
 | [SB-API-2] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_target_discovery_samples_environment_for_each_call`; `tests/test_project_config.py::test_project_config_warns_for_inline_url_password`, `tests/test_project_config.py::test_project_config_warns_for_inline_conninfo_password`, `tests/test_project_config.py::test_project_config_does_not_judge_group_or_other_mode_bits`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
 | [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_connection_config.py::test_ephemeral_queue_keeps_constructor_snapshot_after_invalid_env_change`, `tests/test_connection_config.py::test_new_queue_observes_later_environment_while_existing_queue_stays_fixed`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
-| [SB-API-4] | `tests/test_queue_typing_contract.py`; `tests/test_peek_generator_lifecycle.py` (high-level `all_messages=True` path); `tests/test_queue_api_additions.py::test_queue_delete_explicit_none_is_rejected_without_mutation`; `tests/test_queue_api_additions.py::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py` (library-shape language + matrix); delivery/id/select/bcast suites for meaning |
-| [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_peek_generator_lifecycle.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_closeable_peek_iterator_contract`; `tests/test_delivery_contract_sb_delivery.py`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_reads_ordinary_override_on_first_iteration`; Queue generator / `*_many` suites |
+| [SB-API-4] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py` (high-level `all_messages=True` path); `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`, `::test_queue_delete_explicit_none_is_rejected_without_mutation`, `::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py` (library-shape language + matrix); delivery/id/select/bcast suites for meaning |
+| [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_closeable_peek_iterator_contract`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_reads_ordinary_override_on_first_iteration`; Queue generator / `*_many` suites |
 | [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_watcher_start_stop_cleanup_ownership_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_polling_strategy_defaults_match_canonical_config`; `tests/test_watcher_error_handler_contract.py`; `tests/test_watcher_stop_contract.py::test_stop_racing_start_has_one_cleanup_owner`, `tests/test_watcher_stop_contract.py::test_join_timeout_does_not_transfer_cleanup_from_live_run`, `tests/test_watcher_stop_contract.py::test_cleanup_failure_keeps_lifecycle_retryable`, `tests/test_watcher_stop_contract.py::test_context_exit_suppresses_stop_failure_without_replacing_body_exception`, `tests/test_watcher_stop_contract.py::test_context_exit_cleanup_failure_remains_retryable`, `tests/test_watcher_stop_contract.py::test_context_exit_propagates_base_exception_from_stop`; `tests/test_watcher_transition_tables.py::test_watcher_lifecycle_fires_transition_table`; `tests/test_watcher.py::TestPollingStrategy::test_defaults_use_ambient_free_canonical_config_snapshot`, `tests/test_watcher.py::TestPollingStrategy::test_all_defaults_derive_from_one_isolated_canonical_snapshot`; `tests/test_connection_config.py::test_watcher_instance_config_controls_live_polling`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites |
 | [SB-API-7] | `tests/test_python_library_api_contract_sb_api.py`; sidecar suites under tests / examples |
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`, including `test_load_samples_environment_for_each_invocation` |
@@ -623,6 +629,8 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
+- active: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
+  — public closeable read, move, and stream iterator contract
 - completed: [2026-08-24-peek-generator-close-contract-plan](../plans/2026-08-24-peek-generator-close-contract-plan.md)
   — closeable peek iterator and same-thread synchronous Queue-operation cleanup
 - completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)

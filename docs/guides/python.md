@@ -26,12 +26,15 @@ and `Queue.stream_messages(batch_processing=True, commit_interval=N)` with
 batch only after the full batch has been yielded; stopping mid-batch rolls that
 batch back for retry.
 
-Transactional generators are thread-affine: create, iterate, exhaust, and close
-them on the same thread — and never abandon one. An abandoned generator may be
-finalized by the garbage collector on an arbitrary thread, which counts as
-foreign-thread finalization even though you never wrote any cross-thread code.
-The same applies to `sidecar()` sessions. When a loop may exit early, close the
-generator explicitly:
+Queue-owned read, move, and stream iterators are thread-affine: create,
+iterate, exhaust, and close them on the same thread — and never abandon one.
+Peek iterators establish their owner thread on first advancement; later
+advancement, exhaustion, and close stay on that thread. Exactly-once modes
+still retain the suspended outer Queue operation after each committed yield.
+An abandoned generator may be finalized by the garbage collector on an
+arbitrary thread, which counts as foreign-thread finalization even though you
+never wrote any cross-thread code. The same applies to `sidecar()` sessions.
+When a loop may exit early, close the generator explicitly:
 
 ```python
 from contextlib import closing
@@ -43,37 +46,41 @@ with closing(q.read_generator(delivery_guarantee="at_least_once")) as messages:
             break
 ```
 
-If an `at_least_once` generator or a `sidecar()` session is nevertheless
-finalized from another thread, SimpleBroker records the violation and emits a
-`RuntimeWarning` instead of corrupting cleanup state. That broker instance is
-then permanently poisoned: core operations on it that reach a poison check
-promptly raise `OperationalError` (message prefix "cross-thread finalization",
-`retryable=False`) rather than blocking indefinitely. Poisoning never adds a
-hang to `Queue.close()`: depending on how the handle shares its session, close
-returns normally (possibly suppressing the internal error) or raises the same
-diagnostic. When foreign finalization happens through a persistent shared
-`Queue` wrapper, final close may first wait the existing five-second
-session-drain bound because the operation lease belongs to the original
-thread. Recovery is restarting the process: the interrupted batch's
-transaction is discarded when the process exits, and its messages remain
-available for delivery afterward — they are not lost and not silently
-committed. The poison state is per broker instance; other processes or
-instances sharing the same SQLite database do not see it, but their writes are
-already bounded by the database busy timeout and retry budgets in the default
-configuration. This is a safety net, not a supported pattern — the contract
-remains same-thread use. See also
+If a SQL-backed `at_least_once` generator or SQL `sidecar()` session is
+nevertheless finalized from another thread, SimpleBroker records the
+violation and emits a `RuntimeWarning` instead of corrupting cleanup state.
+That broker instance is then permanently poisoned: core operations on it that
+reach a poison check promptly raise `OperationalError` (message prefix
+"cross-thread finalization", `retryable=False`) rather than blocking
+indefinitely. Redis and Valkey do not use this poison mechanism; foreign-thread
+use remains unsupported there. Poisoning never adds a hang to `Queue.close()`:
+depending on how the handle shares its session, close returns normally
+(possibly suppressing the internal error) or raises the same diagnostic. When
+foreign finalization happens through a persistent shared `Queue` wrapper,
+final close may first wait the existing five-second session-drain bound because
+the operation lease belongs to the original thread. Recovery is restarting the
+process: the interrupted batch's transaction is discarded when the process
+exits, and its messages remain available for delivery afterward — they are not
+lost and not silently committed. The poison state is per broker instance;
+other processes or instances sharing the same SQLite database do not see it,
+but their writes are already bounded by the database busy timeout and retry
+budgets in the default configuration. This is a safety net, not a supported
+pattern — the contract remains same-thread use. See also
 [`docs/implementation/04-cross-thread-finalization-poisoning.md`](../implementation/04-cross-thread-finalization-poisoning.md).
 
 Only `"exactly_once"` and `"at_least_once"` are valid selector values. Unknown
 values raise `ValueError` before a connection or message-state mutation; lazy
 generators raise on first iteration.
 
-### Closeable observational peek iterators
+### Closeable Queue iterators
 
-`Queue.peek_generator()` and `Queue.peek(all_messages=True)` return the
-package-root `CloseableIterator`. Creating one is lazy and starts no Queue
-operation. The first advancement starts its operation and establishes the
-thread that must perform later advancement, exhaustion, or explicit close.
+`Queue.read_generator()`, `Queue.peek_generator()`,
+`Queue.move_generator()`, and `Queue.stream_messages()` return the
+package-root `CloseableIterator`. So do the high-level `all_messages=True`
+read, peek, and move views. Creating one is lazy and starts no Queue operation.
+Read, move, and stream iterators must be created, advanced, exhausted, and
+closed on one thread. A peek iterator establishes its owner thread on first
+advancement; later advancement, exhaustion, and explicit close stay there.
 
 Use `contextlib.closing()` when the loop may stop early:
 
@@ -89,10 +96,11 @@ with closing(q.peek_generator(with_timestamps=True)) as messages:
 
 Exhaustion means advancing until `StopIteration`; merely receiving the last
 row leaves the iterator suspended. Close it before closing its Queue or
-higher-level client. Peek cleanup ends the iterator-owned Queue operation. It
-does not roll back or acknowledge messages, turn live offset paging into a
-snapshot, destroy a persistent Queue's cached resources, or take ownership of
-a caller-injected runner.
+higher-level client. Cleanup ends the iterator-owned Queue operation. It does
+not destroy a persistent Queue's cached resources or take ownership of a
+caller-injected runner. Message settlement still follows the selected delivery
+mode. For peek, cleanup does not acknowledge messages or turn live offset
+paging into a snapshot.
 
 Peeks can also inspect claimed (consumed but not yet vacuumed) messages:
 

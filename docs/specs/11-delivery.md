@@ -169,20 +169,49 @@ _Implementation mapping_:
 - `simplebroker/sbqueue.py`
 - `extensions/simplebroker_redis/simplebroker_redis/core.py`
 
-## Transactional generator ownership [SB-DELIVERY-6]
+## Queue iterator ownership [SB-DELIVERY-6]
 
-Create, iterate, exhaust, and close an `"at_least_once"` transactional
-generator on the **same thread**. Do not abandon a live generator to garbage
-collection; close explicitly when a loop may exit early.
+`Queue.read_generator()`, `Queue.move_generator()`,
+`Queue.stream_messages()`, and the high-level
+`Queue.read(all_messages=True)` and `Queue.move(all_messages=True)` views
+return single-use closeable iterators. Create, advance, exhaust, and close an
+affected iterator on the same thread. Creating a returned generator starts no
+Queue operation. Its first advancement performs any lazy validation and, if
+operation entry succeeds, retains that Queue operation until a terminal
+advance or explicit close.
 
-Crossing threads is **undefined behavior**. Implementations may fail loudly
-(warning, poison, error) rather than silently corrupt state. That is a safety
-net, not a supported multi-thread API; backends may differ in how they react.
+An active iterator must be advanced, exhausted, and explicitly closed on its
+creation thread in every delivery mode. Advancing through `StopIteration`, an
+advancement failure after operation entry, or explicit same-thread `close()`
+synchronously exits the iterator-owned Queue operation before that action
+returns or raises. An exception in the caller's loop body does not terminate
+the iterator; a caller that may stop early must close it in `finally` or with
+`contextlib.closing()`. Closing on the creation thread before first
+advancement acquires no Queue operation and leaves the single-use iterator
+terminal; repeated close after a terminal outcome is safe.
+
+The same-thread rule applies to `"exactly_once"` even though its item is
+committed before yield: the suspended outer Queue iterator still owns its
+Queue operation context. A persistent shared Queue additionally retains a
+thread-local process-session operation lease; an ephemeral Queue owns its
+operation-scoped connection/core handle; and a Queue with a caller-supplied
+runner retains its Queue-owned borrowed core without a shared-session lease.
+In `"at_least_once"` mode, graceful same-thread close of an unfinished batch
+additionally rolls back the open batch as specified by [SB-DELIVERY-5].
+Operation exit does not transfer or destroy resources owned by another
+lifecycle.
+
+Crossing threads remains undefined behavior. SQL-backed `"at_least_once"`
+generators may publish permanent poison and require process restart rather
+than touching owner-thread lock or transaction state from a foreign thread.
+Exactly-once and non-SQL modes need not share that diagnostic mechanism.
+Poison is a safety net, not recovery and not a supported multi-thread API.
 
 _Implementation mapping_:
 - `simplebroker/db.py`
 - `simplebroker/sbqueue.py`
 - `docs/implementation/04-cross-thread-finalization-poisoning.md`
+- `docs/implementation/06-process-session-core-ownership.md`
 - `extensions/simplebroker_redis/simplebroker_redis/core.py`
 
 ## Closed-pipe delivery effects [SB-DELIVERY-7]
@@ -241,12 +270,14 @@ _Implementation mapping_:
 | [SB-DELIVERY-3] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_move.py`; `tests/test_move_by_id.py`; `tests/test_move_claim_patterns.py`; first-party PostgreSQL and Redis exact-ID move tests |
 | [SB-DELIVERY-4] | `tests/test_peek_generator_lifecycle.py`; `tests/test_delivery_contract_sb_delivery.py::test_live_peek_stream_rejects_naive_cursor_completeness`, `::test_closeable_peek_lifecycle_contract_is_bound_to_real_backends`; `tests/test_agent_kernel_contract.py` |
 | [SB-DELIVERY-5] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_generator_methods.py`; `extensions/simplebroker_redis/tests/test_redis_batches.py` |
-| [SB-DELIVERY-6] | `tests/test_delivery_contract_sb_delivery.py` (structural binding); `tests/test_cross_thread_finalization_poisoning.py`; `tests/test_cross_thread_generator_probe.py`; `extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`; `extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py` |
+| [SB-DELIVERY-6] | `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`, `::test_foreign_thread_contract_binds_sql_and_redis_process_probes`; `tests/test_queue_typing_contract.py`; `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`; `tests/test_cross_thread_finalization_poisoning.py`; `tests/test_cross_thread_generator_probe.py`; `extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`; `extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py` |
 | [SB-DELIVERY-7] | `tests/test_cli_broken_pipe.py`; `tests/test_delivery_contract_sb_delivery.py` |
 | [SB-DELIVERY-8] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_property_queue_names.py`; `tests/test_message_size_contract.py::test_non_string_bodies_raise_message_error_before_any_mutation`; `tests/test_property_message_roundtrip.py::test_lone_surrogate_bodies_raise_message_error`, `::test_nul_byte_bodies_pinned_per_backend` (shared, per-backend NUL stance) |
 
 ## Related Plans
 
+- active: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
+  — public closeable read, move, and stream iterator contract
 - completed: [2026-08-24-peek-generator-close-contract-plan](../plans/2026-08-24-peek-generator-close-contract-plan.md)
   — closeable peek iterator and same-thread synchronous Queue-operation cleanup
 - completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)

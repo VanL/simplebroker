@@ -1,15 +1,16 @@
 """Behavior tests for watcher queue isolation and idle-drain avoidance."""
+# mypy: disable-error-code=no-untyped-def
 
 from __future__ import annotations
 
 import contextlib
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import CloseableIterator, Queue
 from simplebroker._constants import load_config
 from simplebroker.watcher import QueueWatcher
 
@@ -33,7 +34,7 @@ class RecordingQueue(Queue):
             self.delivery_calls += 1
         return super().read_many(*args, **kwargs)
 
-    def stream_messages(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
+    def stream_messages(self, *args: Any, **kwargs: Any) -> CloseableIterator[Any]:
         with self._delivery_calls_lock:
             self.delivery_calls += 1
         return super().stream_messages(*args, **kwargs)

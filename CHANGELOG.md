@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Queue.read_generator()`, `Queue.move_generator()`,
+  `Queue.stream_messages()`, and the high-level read/move all-message views now
+  expose their existing `close()` capability as `CloseableIterator` return
+  types. High-level move now forwards early close to its delegated iterator.
 - Exact-ID moves now preserve each message's pending or claimed delivery state
   across SQLite, PostgreSQL, and Redis. Moving a claimed row no longer makes it
   pending at the destination.

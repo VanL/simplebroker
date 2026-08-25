@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 from typing import assert_type
 
@@ -16,15 +17,20 @@ ROOT = Path(__file__).resolve().parents[1]
 def assert_high_level_queue_types(queue: Queue, runtime_bool: bool) -> None:
     assert_type(queue.read(), str | None)
     assert_type(queue.read(with_timestamps=True), tuple[str, int] | None)
-    assert_type(queue.read(all_messages=True), Iterator[str])
+    assert_type(queue.read(all_messages=True), CloseableIterator[str])
     assert_type(
         queue.read(all_messages=True, with_timestamps=True),
-        Iterator[tuple[str, int]],
+        CloseableIterator[tuple[str, int]],
     )
     assert_type(
         queue.read(all_messages=runtime_bool),
-        str | tuple[str, int] | Iterator[str | tuple[str, int]] | None,
+        str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None,
     )
+    queue.read(all_messages=True).close()
+    with closing(queue.read(all_messages=True)) as read_messages:
+        assert_type(read_messages, CloseableIterator[str])
+    ordinary_read_iterator: Iterator[str] = queue.read(all_messages=True)
+    assert_type(ordinary_read_iterator, Iterator[str])
 
     assert_type(queue.peek(), str | None)
     assert_type(queue.peek(with_timestamps=True), tuple[str, int] | None)
@@ -40,11 +46,21 @@ def assert_high_level_queue_types(queue: Queue, runtime_bool: bool) -> None:
     queue.peek(all_messages=True).close()
 
     assert_type(queue.move("destination"), MovedMessage | None)
-    assert_type(queue.move("destination", all_messages=True), Iterator[MovedMessage])
+    assert_type(
+        queue.move("destination", all_messages=True),
+        CloseableIterator[MovedMessage],
+    )
     assert_type(
         queue.move("destination", all_messages=runtime_bool),
-        MovedMessage | Iterator[MovedMessage] | None,
+        MovedMessage | CloseableIterator[MovedMessage] | None,
     )
+    queue.move("destination", all_messages=True).close()
+    with closing(queue.move("destination", all_messages=True)) as moved_messages:
+        assert_type(moved_messages, CloseableIterator[MovedMessage])
+    ordinary_move_iterator: Iterator[MovedMessage] = queue.move(
+        "destination", all_messages=True
+    )
+    assert_type(ordinary_move_iterator, Iterator[MovedMessage])
 
 
 def assert_granular_queue_types(queue: Queue, runtime_bool: bool) -> None:
@@ -59,12 +75,20 @@ def assert_granular_queue_types(queue: Queue, runtime_bool: bool) -> None:
         queue.read_many(5, with_timestamps=runtime_bool),
         list[str] | list[tuple[str, int]],
     )
-    assert_type(queue.read_generator(), Iterator[str])
-    assert_type(queue.read_generator(with_timestamps=True), Iterator[tuple[str, int]])
+    assert_type(queue.read_generator(), CloseableIterator[str])
+    assert_type(
+        queue.read_generator(with_timestamps=True),
+        CloseableIterator[tuple[str, int]],
+    )
     assert_type(
         queue.read_generator(with_timestamps=runtime_bool),
-        Iterator[str | tuple[str, int]],
+        CloseableIterator[str | tuple[str, int]],
     )
+    queue.read_generator().close()
+    with closing(queue.read_generator()) as read_messages:
+        assert_type(read_messages, CloseableIterator[str])
+    ordinary_read_iterator: Iterator[str] = queue.read_generator()
+    assert_type(ordinary_read_iterator, Iterator[str])
 
     assert_type(queue.peek_one(), str | None)
     assert_type(queue.peek_one(with_timestamps=True), tuple[str, int] | None)
@@ -108,15 +132,30 @@ def assert_granular_queue_types(queue: Queue, runtime_bool: bool) -> None:
         queue.move_many("destination", 5, with_timestamps=runtime_bool),
         list[str] | list[tuple[str, int]],
     )
-    assert_type(queue.move_generator("destination"), Iterator[str])
+    assert_type(queue.move_generator("destination"), CloseableIterator[str])
     assert_type(
         queue.move_generator("destination", with_timestamps=True),
-        Iterator[tuple[str, int]],
+        CloseableIterator[tuple[str, int]],
     )
     assert_type(
         queue.move_generator("destination", with_timestamps=runtime_bool),
-        Iterator[str | tuple[str, int]],
+        CloseableIterator[str | tuple[str, int]],
     )
+    queue.move_generator("destination").close()
+    with closing(queue.move_generator("destination")) as moved_messages:
+        assert_type(moved_messages, CloseableIterator[str])
+    ordinary_move_iterator: Iterator[str] = queue.move_generator("destination")
+    assert_type(ordinary_move_iterator, Iterator[str])
+
+    assert_type(
+        queue.stream_messages(),
+        CloseableIterator[tuple[str, int]],
+    )
+    queue.stream_messages().close()
+    with closing(queue.stream_messages()) as streamed_messages:
+        assert_type(streamed_messages, CloseableIterator[tuple[str, int]])
+    ordinary_stream_iterator: Iterator[tuple[str, int]] = queue.stream_messages()
+    assert_type(ordinary_stream_iterator, Iterator[tuple[str, int]])
 
 
 def assert_delete_types(queue: Queue, message_id: int) -> None:
