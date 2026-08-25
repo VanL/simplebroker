@@ -58,6 +58,8 @@ def _assert_preparse_grammar_matches_parser(bundle: _CliParserBundle) -> None:
     root_options = {
         option for action in root_actions for option in action.option_strings
     }
+    assert grammar.action_json_option in root_options
+    root_options.remove(grammar.action_json_option)
     value_options = {
         option
         for action in root_actions

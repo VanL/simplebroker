@@ -884,6 +884,21 @@ class SQLiteRunner:
             strict_marker_locking=True,
         )
 
+    def _cached_database_magic(self) -> str | None:
+        """Return the database-owned magic xattr when available."""
+
+        value = self._phase_lock_service().get_xattr_value("magic")
+        if value is None:
+            return None
+        with contextlib.suppress(UnicodeDecodeError):
+            return value.decode("utf-8")
+        return None
+
+    def _cache_database_magic(self, magic: str) -> None:
+        """Best-effort cache verified ownership on the database inode."""
+
+        self._phase_lock_service().mark_phase("magic", value=magic.encode("utf-8"))
+
     def _phase_marker_name(self, phase: SetupPhase) -> str:
         if phase == SetupPhase.SCHEMA:
             return f"schema-v{SCHEMA_VERSION}"

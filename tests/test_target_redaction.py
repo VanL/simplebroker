@@ -49,6 +49,38 @@ def test_redact_backend_target_redacts_conninfo_password() -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw_target", "safe_target"),
+    [
+        (
+            r"host=db.example.com password='sec\'ret value' application_name=worker",
+            "host=db.example.com password=*** application_name=worker",
+        ),
+        (
+            r"host=db.example.com password=sec\ ret application_name=worker",
+            "host=db.example.com password=*** application_name=worker",
+        ),
+        (
+            "host=db.example.com password='unterminated secret value",
+            "host=db.example.com password=***",
+        ),
+        (
+            "host=db.example.com password=trailing-secret\\",
+            "host=db.example.com password=***",
+        ),
+    ],
+)
+def test_broker_target_redacts_complete_escaped_or_malformed_conninfo_password(
+    raw_target: str,
+    safe_target: str,
+) -> None:
+    target = BrokerTarget("postgres", raw_target)
+
+    assert target.display_target == safe_target
+    assert f"target={safe_target!r}" in repr(target)
+    assert raw_target not in repr(target)
+
+
+@pytest.mark.parametrize(
     "target",
     [
         "\npostgresql://user:secret@db.example.com/app",

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import signal
 import threading
+import time
 from typing import Any, ClassVar, Self, cast
 
 import pytest
@@ -101,12 +103,15 @@ def _runner_with_thread_connection() -> tuple[PostgresRunner, FakePool]:
     runner._thread_local = threading.local()
     runner._thread_local.conn = pool.conn
     runner._pid = os.getpid()
+    runner._setup_lock = threading.RLock()
+    runner._completed_phases = set()
     runner._lease_lock = threading.RLock()
     runner._leased_operation_lock = threading.RLock()
     runner._leased_conn = None
     runner._lease_depth = 0
     runner._meta_cache_lock = threading.Lock()
     runner._meta_cache = None
+    runner._schema_bootstrapped = False
     return cast(PostgresRunner, runner), pool
 
 
@@ -116,12 +121,15 @@ def _runner_with_fake_pool() -> tuple[PostgresRunner, FakePool]:
     runner._pool = pool
     runner._thread_local = threading.local()
     runner._pid = os.getpid()
+    runner._setup_lock = threading.RLock()
+    runner._completed_phases = set()
     runner._lease_lock = threading.RLock()
     runner._leased_operation_lock = threading.RLock()
     runner._leased_conn = None
     runner._lease_depth = 0
     runner._meta_cache_lock = threading.Lock()
     runner._meta_cache = None
+    runner._schema_bootstrapped = False
     return cast(PostgresRunner, runner), pool
 
 
@@ -255,6 +263,111 @@ def test_fork_check_rebuilds_all_process_owned_runner_state(
     assert runner._schema_bootstrapped is False
 
 
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_postgres_setup_recovers_before_inherited_runner_locks() -> None:
+    """Child setup must replace both process-owned state locks before use."""
+
+    runner, _ = _runner_with_fake_pool()
+    runner._setup_lock = threading.RLock()
+    runner._completed_phases = {SetupPhase.CONNECTION}
+    runner._schema_bootstrapped = True
+    cast(Any, runner)._create_pool = lambda: FakePool()
+    locks_held = threading.Event()
+    release_locks = threading.Event()
+
+    def hold_runner_locks() -> None:
+        with runner._setup_lock, runner._meta_cache_lock:
+            locks_held.set()
+            release_locks.wait(10.0)
+
+    holder = threading.Thread(target=hold_runner_locks)
+    holder.start()
+    assert locks_held.wait(2.0)
+
+    pid = os.fork()
+    if pid == 0:
+        try:
+            runner.setup(SetupPhase.SCHEMA)
+            recovered = runner.is_setup_complete(SetupPhase.SCHEMA)
+            os._exit(0 if recovered else 2)
+        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            os._exit(1)
+
+    try:
+        deadline = time.monotonic() + 2.0
+        status: int | None = None
+        while time.monotonic() < deadline:
+            waited_pid, child_status = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                status = child_status
+                break
+            time.sleep(0.01)
+        if status is None:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail("PostgreSQL setup blocked on inherited runner locks")
+        assert os.WIFEXITED(status)
+        assert os.WEXITSTATUS(status) == 0
+    finally:
+        release_locks.set()
+        holder.join(timeout=2.0)
+
+    runner.setup(SetupPhase.SCHEMA)
+    assert runner.is_setup_complete(SetupPhase.SCHEMA)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize("operation", ["run", "shutdown"])
+def test_postgres_lease_paths_recover_before_inherited_locks(operation: str) -> None:
+    runner, _ = _runner_with_fake_pool()
+    cast(Any, runner)._create_pool = lambda: FakePool()
+    locks_held = threading.Event()
+    release_locks = threading.Event()
+
+    def hold_runner_locks() -> None:
+        with runner._leased_operation_lock, runner._lease_lock:
+            locks_held.set()
+            release_locks.wait(10.0)
+
+    holder = threading.Thread(target=hold_runner_locks)
+    holder.start()
+    assert locks_held.wait(2.0)
+
+    pid = os.fork()
+    if pid == 0:
+        try:
+            if operation == "run":
+                runner.run("SELECT 1")
+            else:
+                runner.shutdown()
+            os._exit(0)
+        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            os._exit(1)
+
+    try:
+        deadline = time.monotonic() + 2.0
+        status: int | None = None
+        while time.monotonic() < deadline:
+            waited_pid, child_status = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                status = child_status
+                break
+            time.sleep(0.01)
+        if status is None:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail(f"PostgreSQL {operation} blocked on inherited lease locks")
+        assert os.WIFEXITED(status)
+        assert os.WEXITSTATUS(status) == 0
+    finally:
+        release_locks.set()
+        holder.join(timeout=2.0)
+
+    runner.run("SELECT 1")
+
+
 def test_lease_adopts_thread_checkout_and_clears_transaction_markers() -> None:
     runner, pool = _runner_with_thread_connection()
     runner._thread_local.in_transaction = True
@@ -352,6 +465,7 @@ def test_shutdown_swallows_pool_failures_after_releasing_local_state() -> None:
 
 def test_update_meta_cache_is_noop_before_metadata_is_loaded() -> None:
     runner = object.__new__(PostgresRunner)
+    runner._pid = os.getpid()
     runner._meta_cache_lock = threading.Lock()
     runner._meta_cache = None
 
@@ -512,6 +626,7 @@ def test_release_empty_lease_and_mark_bootstrap_are_idempotent() -> None:
 
 def test_run_exclusive_setup_runs_operation_once_per_phase() -> None:
     runner = object.__new__(PostgresRunner)
+    runner._pid = os.getpid()
     runner._setup_lock = threading.RLock()
     runner._completed_phases = set()
     calls = 0
@@ -527,6 +642,7 @@ def test_run_exclusive_setup_runs_operation_once_per_phase() -> None:
 
 def test_invalidate_bootstrap_state_clears_schema_setup_phase() -> None:
     runner = object.__new__(PostgresRunner)
+    runner._pid = os.getpid()
     runner._setup_lock = threading.RLock()
     runner._completed_phases = {SetupPhase.CONNECTION, SetupPhase.SCHEMA}
     runner._meta_cache_lock = threading.Lock()
@@ -562,6 +678,54 @@ def test_close_closes_real_pool(pg_runner: PostgresRunner) -> None:
 
     with pytest.raises(PoolClosed):
         list(pg_runner.run("SELECT 1", fetch=True))
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_postgres_finalizer_does_not_close_an_inherited_locked_pool(
+    pg_runner: PostgresRunner,
+) -> None:
+    pool_lock = cast(Any, pg_runner._pool)._lock
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_pool_lock() -> None:
+        with pool_lock:
+            lock_held.set()
+            release_lock.wait(10.0)
+
+    holder = threading.Thread(target=hold_pool_lock)
+    holder.start()
+    assert lock_held.wait(2.0)
+
+    pid = os.fork()
+    if pid == 0:
+        try:
+            pg_runner.__del__()
+            os._exit(0)
+        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            os._exit(1)
+
+    try:
+        deadline = time.monotonic() + 2.0
+        status: int | None = None
+        while time.monotonic() < deadline:
+            waited_pid, child_status = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                status = child_status
+                break
+            time.sleep(0.01)
+        if status is None:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail("PostgreSQL child finalizer entered the inherited pool lock")
+        assert os.WIFEXITED(status)
+        assert os.WEXITSTATUS(status) == 0
+    finally:
+        release_lock.set()
+        holder.join(timeout=2.0)
+
+    assert list(pg_runner.run("SELECT 1", fetch=True)) == [(1,)]
 
 
 def test_same_runner_rebootstraps_after_schema_drop_error(
@@ -626,8 +790,75 @@ def test_shared_activity_registry_is_pid_scoped(
     current_pid = 1001
     registry.release("dsn", schema="schema")
     assert parent_first.close_calls == 0
+    replacement = cast(FakeListener, registry.acquire("dsn", schema="schema"))
+    assert replacement is not parent_first
     registry.release("dsn", schema="schema")
-    assert parent_first.close_calls == 1
+    assert replacement.close_calls == 1
+    assert parent_first.close_calls == 0
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_postgres_activity_registry_recovers_before_inherited_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeListener:
+        def __init__(self, dsn: str, *, schema: str) -> None:
+            self.dsn = dsn
+            self.schema = schema
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    monkeypatch.setattr(pg_runner_module, "_SharedActivityListener", FakeListener)
+    registry = pg_runner_module._SharedActivityRegistry()
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_registry_lock() -> None:
+        with registry._lock:
+            lock_held.set()
+            release_lock.wait(10.0)
+
+    holder = threading.Thread(target=hold_registry_lock)
+    holder.start()
+    assert lock_held.wait(2.0)
+
+    pid = os.fork()
+    if pid == 0:
+        try:
+            child_listener = cast(
+                FakeListener,
+                registry.acquire("dsn", schema="schema"),
+            )
+            registry.release("dsn", schema="schema")
+            os._exit(0 if child_listener.close_calls == 1 else 2)
+        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            os._exit(1)
+
+    try:
+        deadline = time.monotonic() + 2.0
+        status: int | None = None
+        while time.monotonic() < deadline:
+            waited_pid, child_status = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                status = child_status
+                break
+            time.sleep(0.01)
+        if status is None:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail("PostgreSQL activity registry blocked on inherited lock")
+        assert os.WIFEXITED(status)
+        assert os.WEXITSTATUS(status) == 0
+    finally:
+        release_lock.set()
+        holder.join(timeout=2.0)
+
+    parent_listener = cast(FakeListener, registry.acquire("dsn", schema="schema"))
+    registry.release("dsn", schema="schema")
+    assert parent_listener.close_calls == 1
 
 
 def test_activity_listener_startup_error_raises_immediately(

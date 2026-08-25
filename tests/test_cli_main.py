@@ -260,6 +260,59 @@ def test_main_prints_help_when_no_args(monkeypatch, capsys):
     assert "Simple message broker" in captured.out
 
 
+def test_root_help_advertises_action_only_json(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "argv", ["broker", "--help"])
+
+    assert cli.main() == cli.EXIT_SUCCESS
+    captured = capsys.readouterr()
+    help_text = " ".join(captured.out.split())
+
+    assert "--json" in help_text
+    assert "--status, --cleanup, and --vacuum" in help_text
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["broker", "--json"],
+        ["broker", "--json", "delete", "jobs"],
+        ["broker", "delete", "jobs", "--json"],
+    ],
+)
+def test_action_only_json_remains_invalid_without_compatible_root_action(
+    monkeypatch,
+    capsys,
+    argv,
+):
+    monkeypatch.setattr(cli.sys, "argv", argv)
+
+    assert cli.main() == cli.EXIT_ERROR
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert "--json" in captured.err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["broker", "--json", "--help"],
+        ["broker", "--help", "--json"],
+    ],
+)
+def test_help_remains_terminal_with_action_only_json_in_either_order(
+    monkeypatch,
+    capsys,
+    argv,
+):
+    monkeypatch.setattr(cli.sys, "argv", argv)
+
+    assert cli.main() == cli.EXIT_SUCCESS
+    captured = capsys.readouterr()
+    assert "Simple message broker" in captured.out
+    assert captured.err == ""
+
+
 def test_main_status_json_flag_before_status(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
 

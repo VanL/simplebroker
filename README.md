@@ -95,9 +95,11 @@ The same configuration and tuning capabilities are resolved from the environment
 or configuration files (`BROKER_*` keys) and passed into functions and classes.
 Embedders translate their own settings into those keys to avoid name clashes.
 
-The public API consists of the names exported from `simplebroker` and 
-`simplebroker.ext`. Underscore-prefixed modules are implementation details and
-may change. Specifications: `docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-12]`).
+The public API consists of the names exported from `simplebroker`,
+`simplebroker.ext`, and the `simplebroker.commands.__all__` command layer
+described under [Embedding SimpleBroker in Your Project](#embedding-simplebroker-in-your-project).
+Underscore-prefixed modules are implementation details and may change.
+Specifications: `docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-12]`).
 
 ## Project Specifications and Agent Instructions
 

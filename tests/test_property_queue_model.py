@@ -152,7 +152,7 @@ class QueueModelMachine(RuleBasedStateMachine):
 
     @precondition(lambda self: self._claimed_triples())
     @rule(data=st.data())
-    def move_claimed_by_id_redelivers(self, data: st.DataObject) -> None:
+    def move_claimed_by_id_preserves_claim(self, data: st.DataObject) -> None:
         src, ts, body = data.draw(
             st.sampled_from(self._claimed_triples()), label="claimed message"
         )
@@ -167,9 +167,7 @@ class QueueModelMachine(RuleBasedStateMachine):
         )
         assert got == (body, ts)
         self.claimed[src].remove((ts, body))
-        # Moving resets the claim (SQL: SET queue = ?, claimed = 0), i.e. a
-        # consumed message becomes deliverable again at the destination.
-        insort(self.pending[dst], (ts, body))
+        insort(self.claimed[dst], (ts, body))
 
     @rule(key=st.sampled_from(QUEUE_KEYS))
     def purge(self, key: str) -> None:

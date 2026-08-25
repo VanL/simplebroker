@@ -447,11 +447,11 @@ class TestErrorCases:
         assert rc == 2
 
     def test_already_claimed_message_can_be_moved_by_id(self, workdir):
-        """Test that moving already claimed message by ID is allowed."""
+        """Moving a claimed message by ID preserves its claimed state."""
         # Write a message
         run_cli("write", "source", "msg1", cwd=workdir)
 
-        # FIXED: Use peek to get timestamp, then read to claim
+        # Use peek to get the ID, then read to claim the row.
         rc, out, _ = run_cli("peek", "source", "--json", cwd=workdir)
         assert rc == 0
         msg_data = json.loads(out)
@@ -462,9 +462,17 @@ class TestErrorCases:
         assert rc == 0
         assert out == "msg1"
 
-        # Try to move the claimed message by ID - this is now allowed
+        # Exact-ID selection includes claimed rows without releasing the claim.
         rc, out, _ = run_cli("move", "source", "dest", "-m", str(msg_ts), cwd=workdir)
-        assert rc == 0  # Moving by ID allows claimed messages
+        assert rc == 0
+        assert out == "msg1"
+
+        rc, out, _ = run_cli("peek", "dest", cwd=workdir)
+        assert rc == 2
+        assert out == ""
+
+        rc, out, _ = run_cli("peek", "dest", "--include-claimed", cwd=workdir)
+        assert rc == 0
         assert out == "msg1"
 
     def test_invalid_timestamp_format_returns_exit_code_1(self, workdir):

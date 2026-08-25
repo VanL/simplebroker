@@ -54,9 +54,11 @@ that SQL-only proof.
 
 ## Same-generator timestamp serialization
 
-One `TimestampGenerator` lock owns PID recovery and lazy initialization,
-candidate calculation, durable compare-and-advance, conflict refresh, and
-local cache publication as one transition. The backend compare-and-advance
+One `TimestampGenerator` PID guard runs before its lock is acquired. A child
+therefore replaces the inherited lock and clears its inherited cache before
+lazy initialization, cached reads, refresh, candidate calculation, durable
+compare-and-advance, conflict repair, or cache publication. After that guard,
+one lock owns each complete transition. The backend compare-and-advance
 protects durable monotonicity across generator instances and processes. It
 does not serialize the process-local `_last_ts` cache shared by threads using
 one generator.

@@ -253,16 +253,29 @@ def deserialize_broker_target(
 
     project_root_raw = raw.get("project_root")
     config_path_raw = raw.get("config_path")
+    if project_root_raw is not None and not isinstance(project_root_raw, str):
+        raise TypeError("Broker target payload project_root must be a string or null")
+    if config_path_raw is not None and not isinstance(config_path_raw, str):
+        raise TypeError("Broker target payload config_path must be a string or null")
     project_root = (
         Path(project_root_raw).expanduser().resolve(strict=False)
-        if isinstance(project_root_raw, str) and project_root_raw
+        if project_root_raw
         else None
     )
     config_path = (
         Path(config_path_raw).expanduser().resolve(strict=False)
-        if isinstance(config_path_raw, str) and config_path_raw
+        if config_path_raw
         else None
     )
+
+    used_project_scope = raw.get("used_project_scope", False)
+    legacy_sqlite_path_mode = raw.get("legacy_sqlite_path_mode", False)
+    if not isinstance(used_project_scope, bool):
+        raise TypeError("Broker target payload used_project_scope must be a boolean")
+    if not isinstance(legacy_sqlite_path_mode, bool):
+        raise TypeError(
+            "Broker target payload legacy_sqlite_path_mode must be a boolean"
+        )
 
     return BrokerTarget(
         backend_name=backend_name,
@@ -270,8 +283,8 @@ def deserialize_broker_target(
         backend_options=dict(cast(dict[str, Any], backend_options)),
         project_root=project_root,
         config_path=config_path,
-        used_project_scope=bool(raw.get("used_project_scope", False)),
-        legacy_sqlite_path_mode=bool(raw.get("legacy_sqlite_path_mode", False)),
+        used_project_scope=used_project_scope,
+        legacy_sqlite_path_mode=legacy_sqlite_path_mode,
     )
 
 

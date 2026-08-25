@@ -233,6 +233,25 @@ def _merge_config(config: Mapping[str, Any] | None) -> ResolvedConfig:
     return snapshot_config(config)
 
 
+def _read_explicit_sqlite_magic_before_setup(runner: SQLiteRunner) -> str | None:
+    """Read ownership through the runner connection before broker setup writes."""
+    try:
+        cursor = runner.get_connection().execute(
+            "SELECT value FROM meta WHERE key = 'magic'"
+        )
+        try:
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+    except sqlite3.Error:
+        # Existing validation and bootstrap retain ownership of absent metadata,
+        # malformed SQLite, and ordinary filesystem diagnostics. Opening the
+        # normal connection may perform SQLite's own recovery or coordination;
+        # SimpleBroker setup still has not written to the database.
+        return None
+    return None if row is None or row[0] is None else str(row[0])
+
+
 class _ProcessSessionCoreFactory:
     """Own concrete core construction and runners for one process session."""
 
@@ -1017,12 +1036,26 @@ class BrokerCore:
             int(config["BROKER_AUTO_VACUUM_INTERVAL"])
         )
 
+        if (
+            isinstance(self._runner, SQLiteRunner)
+            and self._runner._cached_database_magic() != SIMPLEBROKER_MAGIC
+        ):
+            existing_magic = _read_explicit_sqlite_magic_before_setup(self._runner)
+            if existing_magic is not None and existing_magic != SIMPLEBROKER_MAGIC:
+                raise RuntimeError(
+                    f"Database magic string mismatch. Expected '{SIMPLEBROKER_MAGIC}', "
+                    f"found '{existing_magic}'. This database may not be a "
+                    "SimpleBroker database."
+                )
+
         # Ensure backend-wide connection setup (for example SQLite WAL mode)
         # runs for all core paths, not only BrokerDB.
         self._setup_runner_phase(SetupPhase.CONNECTION)
 
         # Setup database (must be done before creating TimestampGenerator)
         self._setup_schema()
+        if isinstance(self._runner, SQLiteRunner):
+            self._runner._cache_database_magic(SIMPLEBROKER_MAGIC)
         self._setup_runner_phase(SetupPhase.OPTIMIZATION)
 
         # Timestamp generator (created after database setup so meta table exists)

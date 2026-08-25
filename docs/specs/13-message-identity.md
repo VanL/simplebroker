@@ -160,8 +160,9 @@ such as admin time jumps).
 
 ## Move preserves identity [SB-ID-5]
 
-A successful move changes the message’s queue without allocating a replacement
-message id. It is the same message identity with the queue binding updated.
+A successful move changes the message's queue without allocating a replacement
+message id or changing its pending/claimed delivery state. It is the same
+message identity and delivery state with only the queue binding updated.
 
 ## Implementation Mapping
 
@@ -189,6 +190,9 @@ message id. It is the same message identity with the queue binding updated.
 | [SB-ID-5] | `tests/test_message_identity_contract_sb_id.py`; `tests/test_move_by_id.py::test_move_by_id_preserves_timestamp`, `test_move_many_preserves_original_message_ids`, `test_move_generator_preserves_original_message_ids_in_each_delivery_mode`; `tests/test_cli_move.py::TestEdgeCases::test_move_preserves_timestamps` |
 
 ## Related Plans
+
+- completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)
+  — preserves delivery state as well as identity during move
 
 - completed: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
   direct [SB-ID-3] lazy-failure versus empty-origin proof; implemented and

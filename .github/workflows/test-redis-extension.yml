@@ -48,7 +48,7 @@ jobs:
 
     - name: Verify matrix Python
       run: |
-        uv run --frozen --no-sync python -c "import sys; expected = tuple(map(int, '${{ matrix.python-version }}'.split('.'))); assert sys.version_info[:2] == expected, (sys.version, expected)"
+        uv run --frozen --no-sync python -c "import sys; expected = tuple(map(int, '${{ matrix.python-version }}'.split('.'))); actual = sys.version_info[:2]; sys.exit(f'expected Python {expected[0]}.{expected[1]}, got {actual[0]}.{actual[1]}') if actual != expected else None"
 
     - name: Run Redis-backed test suites
       run: |

@@ -231,10 +231,6 @@ class _SharedRedisActivityListener:
             else:
                 self._refcounts[queue_name] = refcount - 1
 
-    def has_registrations(self) -> bool:
-        with self._lock:
-            return bool(self._refcounts)
-
     def wait(
         self,
         registration: _QueueWaiterRegistration,
@@ -328,26 +324,50 @@ class RedisMultiQueueActivityWaiter:
 
 class _RedisActivityRegistry:
     def __init__(self) -> None:
+        self._pid = os.getpid()
         self._lock = threading.RLock()
-        self._listeners: dict[tuple[int, str, str], _SharedRedisActivityListener] = {}
+        self._listeners: dict[
+            tuple[int, str, str], tuple[_SharedRedisActivityListener, int]
+        ] = {}
+
+    def _reset_after_fork_if_needed(self) -> None:
+        current_pid = os.getpid()
+        if current_pid == self._pid:
+            return
+        self._pid = current_pid
+        self._lock = threading.RLock()
+        self._listeners = {}
 
     def listener(self, target: str, namespace: str) -> _SharedRedisActivityListener:
-        key = (os.getpid(), target, namespace)
+        self._reset_after_fork_if_needed()
+        key = (self._pid, target, namespace)
         with self._lock:
-            listener = self._listeners.get(key)
-            if listener is None:
-                listener = _SharedRedisActivityListener(target, namespace)
-                self._listeners[key] = listener
+            entry = self._listeners.get(key)
+            if entry is not None:
+                listener, refcount = entry
+                self._listeners[key] = (listener, refcount + 1)
+                return listener
+            listener = _SharedRedisActivityListener(target, namespace)
+            self._listeners[key] = (listener, 1)
             return listener
 
     def release(self, listener: _SharedRedisActivityListener) -> None:
+        self._reset_after_fork_if_needed()
+        listener_to_close: _SharedRedisActivityListener | None = None
+        key = (self._pid, listener._target, listener._namespace)
         with self._lock:
-            if listener.has_registrations():
+            entry = self._listeners.get(key)
+            if entry is None:
                 return
-            key = (os.getpid(), listener._target, listener._namespace)
-            if self._listeners.get(key) is listener:
-                self._listeners.pop(key, None)
-                listener.close()
+            current_listener, refcount = entry
+            if current_listener is not listener:
+                return
+            if refcount > 1:
+                self._listeners[key] = (current_listener, refcount - 1)
+                return
+            del self._listeners[key]
+            listener_to_close = current_listener
+        listener_to_close.close()
 
 
 _activity_registry = _RedisActivityRegistry()

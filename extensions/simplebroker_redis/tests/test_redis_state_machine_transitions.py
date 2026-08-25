@@ -572,8 +572,16 @@ def _runner_fork_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     runner._pid = -1
     second_client = runner.client
     assert second_client is not first_client
-    assert first_client.close_calls == 1
-    assert first_pool.disconnect_calls == 1
+    assert first_client.close_calls == 0
+    assert first_pool.disconnect_calls == 0
+    assert any(
+        first_client is resource
+        for resource in redis_runner_module._ABANDONED_FORK_REDIS_RESOURCES
+    )
+    assert any(
+        first_pool is resource
+        for resource in redis_runner_module._ABANDONED_FORK_REDIS_RESOURCES
+    )
     assert runner._pid == os.getpid()
     assert len(resources.pools) == len(resources.clients) == 2
 
@@ -665,7 +673,7 @@ REDIS_RUNNER_TRANSITIONS = (
         event="child process first requests the client",
         guard="stored process ID differs",
         next_state="open in child process",
-        effects="closes inherited handles, updates PID, and creates new owned handles",
+        effects="abandons inherited handles, updates PID, and creates new owned handles",
         expected_result="child receives a distinct client and pool",
         payload=_runner_fork_reset,
     ),

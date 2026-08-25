@@ -221,13 +221,6 @@ def _reraise_invalid_config(error: BaseException) -> None:
         raise error
 
 
-def _target_string(db_target: DBTarget) -> str:
-    """Return a human-readable target string."""
-    if isinstance(db_target, BrokerTarget):
-        return db_target.target
-    return db_target
-
-
 def _resolve_alias_name(
     db_path: DBTarget,
     name: str,

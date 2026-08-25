@@ -23,13 +23,14 @@ RetrieveOperation, ensure_backend_sql_namespace),
 connection leasing), ``simplebroker._message_insert`` /
 ``simplebroker._message_search``, and private validators in
 ``simplebroker.db``. Those private modules may change in any release.
-The first-party extensions absorb this through lockstep version pins
-maintained by the release tooling and a code-level ``backend_api_version``
-handshake that is checked during backend resolution. The handshake is not stored
-in broker databases or backend metadata. Third-party backend extensions are
-welcome as proposed PRs or maintained packages, but authors must pin an exact
-simplebroker version and re-verify on every upgrade until there is a stable
-standalone backend SDK.
+First-party extension packages declare a minimum supported SimpleBroker
+version, and a code-level ``backend_api_version`` handshake is checked during
+backend resolution. A breaking change to a private seam used by a first-party
+extension therefore requires a backend API version bump. The handshake is not
+stored in broker databases or backend metadata. Third-party backend extensions
+are welcome as proposed PRs or maintained packages, but authors must pin an
+exact simplebroker version and re-verify on every upgrade until there is a
+stable standalone backend SDK.
 
 Backend API v2 adds the shared delivery-guarantee and automatic-maintenance
 contracts to this public facade. Backend packages must import those names from

@@ -10,6 +10,7 @@ Tests verify:
 """
 
 import multiprocessing
+import sqlite3
 import time
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
@@ -423,7 +424,9 @@ def test_sqlite_version_check(workdir, monkeypatch):
                 return MockCursor()
             elif "PRAGMA" in query:
                 # Allow all PRAGMA statements to succeed
-                return None
+                return MockCursor()
+            elif "FROM meta" in query:
+                raise sqlite3.OperationalError("no such table: meta")
             # For other queries, raise to trigger error
             raise RuntimeError("Mock connection")
 

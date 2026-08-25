@@ -16,6 +16,10 @@ from ._constants import DEFAULT_STALE_BATCH_SECONDS
 from .pool import RedisPoolOptions, pool_options_from_config
 from .validation import require_namespace
 
+# Forked children must not finalize inherited redis-py resources: cleanup can
+# enter locks held forever by a vanished parent thread.
+_ABANDONED_FORK_REDIS_RESOURCES: list[Any] = []
+
 
 class RedisRunner:
     """Resource handle for one Valkey/Redis target and namespace."""
@@ -82,7 +86,21 @@ class RedisRunner:
         current_pid = os.getpid()
         if current_pid == self._pid:
             return
-        self.close()
+
+        client = self._client
+        pool = self._pool
+        for resource in (client, pool):
+            if resource is not None and not any(
+                resource is existing for existing in _ABANDONED_FORK_REDIS_RESOURCES
+            ):
+                _ABANDONED_FORK_REDIS_RESOURCES.append(resource)
+        self._client_lock = threading.Lock()
+        self._init_lock = threading.Lock()
+        self._recovery_lock = threading.Lock()
+        self._client = None
+        self._pool = None
+        self._target_initialized = False
+        self._last_recovery_check_ns = 0
         self._pid = current_pid
 
     def ping(self) -> bool:
@@ -92,6 +110,7 @@ class RedisRunner:
         return None
 
     def close(self) -> None:
+        self._check_fork()
         client = self._client
         pool = self._pool
         self._client = None

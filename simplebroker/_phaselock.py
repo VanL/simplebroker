@@ -611,6 +611,16 @@ class PhaseLockService:
         key = self.attr_key(phase_name, attr_name)
         return self._set_xattr(key, value)
 
+    def get_xattr_value(
+        self,
+        phase_name: str,
+        *,
+        attr_name: str | None = None,
+    ) -> bytes | None:
+        """Return one xattr value, or ``None`` when it is absent/unavailable."""
+
+        return self._get_xattr(self.attr_key(phase_name, attr_name))
+
     @contextlib.contextmanager
     def locked(self) -> Iterator[None]:
         """Hold the advisory setup lock."""

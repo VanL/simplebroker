@@ -373,8 +373,7 @@ def build_retrieve_query(
             ),
             updated AS (
                 UPDATE messages AS m
-                SET queue = (SELECT queue_name FROM target_queue),
-                    claimed = FALSE
+                SET queue = (SELECT queue_name FROM target_queue)
                 FROM selected
                 WHERE m.order_id = selected.order_id
                 RETURNING m.order_id, m.body, m.ts

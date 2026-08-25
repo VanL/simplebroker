@@ -6,7 +6,7 @@ import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import simplebroker_redis.plugin as redis_plugin_module
@@ -208,38 +208,100 @@ def test_closed_activity_waiter_does_not_touch_listener() -> None:
     assert waiter.wait(1.0) is False
 
 
-def test_activity_registry_releases_only_owned_inactive_listener() -> None:
+def test_activity_registry_releases_only_owned_reference() -> None:
     class FakeListener(redis_plugin_module._SharedRedisActivityListener):
         _target = "redis://example/0"
         _namespace = "tenant"
 
-        def __init__(self, *, active: bool) -> None:
-            self.active = active
+        def __init__(self) -> None:
             self.close_calls = 0
-
-        def has_registrations(self) -> bool:
-            return self.active
 
         def close(self) -> None:
             self.close_calls += 1
 
     registry = redis_plugin_module._RedisActivityRegistry()
-    owned = FakeListener(active=True)
+    owned = FakeListener()
     key = (os.getpid(), owned._target, owned._namespace)
-    registry._listeners[key] = owned
+    registry._listeners[key] = (owned, 2)
 
     registry.release(owned)
-    assert registry._listeners[key] is owned
+    assert registry._listeners[key] == (owned, 1)
+    assert owned.close_calls == 0
 
-    unowned = FakeListener(active=False)
+    unowned = FakeListener()
     registry.release(unowned)
-    assert registry._listeners[key] is owned
+    assert registry._listeners[key] == (owned, 1)
     assert unowned.close_calls == 0
 
-    owned.active = False
     registry.release(owned)
     assert key not in registry._listeners
     assert owned.close_calls == 1
+
+
+def test_activity_registry_holds_listener_across_lookup_register_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered_gap = threading.Barrier(2)
+    leave_gap = threading.Barrier(2)
+
+    class FakeListener(redis_plugin_module._SharedRedisActivityListener):
+        def __init__(self, target: str, namespace: str) -> None:
+            self._target = target
+            self._namespace = namespace
+            self.registrations = 0
+            self.register_calls = 0
+            self.close_calls = 0
+
+        def register(self, queue_name: str) -> Any:
+            self.register_calls += 1
+            if self.register_calls == 2:
+                entered_gap.wait(timeout=2.0)
+                leave_gap.wait(timeout=2.0)
+            self.registrations += 1
+            return queue_name
+
+        def unregister(self, queue_name: str) -> None:
+            del queue_name
+            self.registrations -= 1
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    monkeypatch.setattr(
+        redis_plugin_module,
+        "_SharedRedisActivityListener",
+        FakeListener,
+    )
+    registry = redis_plugin_module._RedisActivityRegistry()
+    first = cast(FakeListener, registry.listener("redis://example/0", "tenant"))
+    first.register("jobs")
+    acquired: list[FakeListener] = []
+
+    def acquire_and_register() -> None:
+        second = cast(
+            FakeListener,
+            registry.listener("redis://example/0", "tenant"),
+        )
+        second.register("jobs")
+        acquired.append(second)
+
+    thread = threading.Thread(target=acquire_and_register)
+    thread.start()
+    entered_gap.wait(timeout=2.0)
+
+    first.unregister("jobs")
+    registry.release(first)
+    close_calls_in_gap = first.close_calls
+
+    leave_gap.wait(timeout=2.0)
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert close_calls_in_gap == 0
+    assert acquired == [first]
+
+    first.unregister("jobs")
+    registry.release(first)
+    assert first.close_calls == 1
 
 
 def test_listener_run_reports_failure_and_wakes_registered_queues(

@@ -1,4 +1,6 @@
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -266,7 +268,83 @@ def test_test_matrices_run_on_the_declared_python_version() -> None:
             in matrix_section
         ), workflow_path
         assert "name: Verify matrix Python" in matrix_section, workflow_path
-        assert "sys.version_info[:2] == expected" in matrix_section, workflow_path
+        assert "actual = sys.version_info[:2]" in matrix_section, workflow_path
+        assert "actual != expected" in matrix_section, workflow_path
+        assert "sys.exit" in matrix_section, workflow_path
+        assert "assert " not in matrix_section, workflow_path
+
+
+def _inline_python_script(workflow_text: str, step_name: str) -> str:
+    step = workflow_text.split(f"    - name: {step_name}", 1)[1].split(
+        "    - name:", 1
+    )[0]
+    return step.split(' python -c "', 1)[1].split('"', 1)[0]
+
+
+def _run_inline_python(
+    script: str,
+    *,
+    optimized: bool,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable]
+    if optimized:
+        command.append("-O")
+    command.extend(("-c", script))
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
+def test_required_inline_python_gates_survive_optimization(tmp_path: Path) -> None:
+    runtime_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    matrix_workflows = (
+        "test.yml",
+        "test-pg-extension.yml",
+        "test-redis-extension.yml",
+    )
+
+    for workflow_name in matrix_workflows:
+        script = _inline_python_script(
+            _workflow_text(workflow_name), "Verify matrix Python"
+        )
+        assert "assert " not in script
+        matching = script.replace("${{ matrix.python-version }}", runtime_version)
+        mismatching = script.replace("${{ matrix.python-version }}", "0.0")
+        for optimized in (False, True):
+            assert _run_inline_python(matching, optimized=optimized).returncode == 0
+            result = _run_inline_python(mismatching, optimized=optimized)
+            assert result.returncode != 0
+            assert "expected Python 0.0" in result.stderr
+
+    coverage_script = _inline_python_script(
+        _workflow_text("test.yml"), "Combine and enforce coverage"
+    )
+    assert "assert " not in coverage_script
+    for optimized in (False, True):
+        result = _run_inline_python(
+            coverage_script,
+            optimized=optimized,
+            cwd=tmp_path,
+        )
+        assert result.returncode != 0
+        assert "missing coverage data" in result.stderr
+
+    for suffix in ("linux", "postgres", "redis", "windows"):
+        (tmp_path / f".coverage.{suffix}").touch()
+    for optimized in (False, True):
+        assert (
+            _run_inline_python(
+                coverage_script,
+                optimized=optimized,
+                cwd=tmp_path,
+            ).returncode
+            == 0
+        )
 
 
 def test_every_workflow_sync_uses_the_setup_python_executable() -> None:

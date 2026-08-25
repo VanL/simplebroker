@@ -94,6 +94,22 @@ both are attempted after an ordinary unregister failure when safe. The exact
 public failure order is owned by `[SB-API-6]`; backend API v6 makes that
 obligation enforceable at plugin resolution.
 
+The PostgreSQL and Redis listener registries acquire a counted reference under
+their registry lock before waiter registration can begin. Release removes the
+entry only when the last reference is surrendered, then closes the detached
+listener outside the registry lock. This closes the lookup/register gap: a new
+waiter cannot receive a listener concurrently selected for final close.
+
+### Fork recovery before process-owned locks
+
+Every process-owned state holder checks its PID before acquiring an inherited
+lock that protects that state. On change, the owner replaces all of its locks
+and process-bound resources first, then continues in the child. This ordering
+applies to runner setup, timestamp cache reads and refresh, Redis core
+initialization and maintenance, and the backend activity registries. Checking
+after lock acquisition is not recovery: the child may already be waiting on a
+lock held by a vanished parent thread.
+
 Transaction-owner progress belongs to the runner, not the process session.
 When several thread-local cores share one runner, their separate core locks do
 not serialize a transaction. The runner must keep a successful transaction
@@ -127,15 +143,17 @@ new core or runner publication; adding a permanent `_closed` latch to the
 runner would assign that ownership to the wrong layer and break intentional
 close-then-reuse behavior.
 
-Fork recovery deliberately retains inherited SQLite connection references in
-the child. Dropping a reference can run an inherited connection finalizer and
-close SQLite state from the wrong process, recreating the hazard recovery is
-meant to avoid. Sibling forks cannot grow the parent's copy-on-write retained
-list; only a nested-fork lineage can accumulate references. A cap or cleanup
-policy would therefore trade a hypothetical nested-lineage memory cost for an
-unsafe finalization path; either requires measured harmful growth and a proven
-close-free disposal mechanism. A warning is also unjustified until that growth
-is observed.
+Fork recovery deliberately retains inherited SQLite connections, PostgreSQL
+pools, and Redis client/pool references in the child. Dropping a reference can
+run inherited cleanup and enter a process-owned lock held by a vanished parent
+thread, recreating the hazard recovery is meant to avoid. Redis `close()` and
+the PostgreSQL finalizer therefore check PID first and abandon inherited
+resources without closing them. Sibling forks cannot grow the parent's
+copy-on-write retained lists; only a nested-fork lineage can accumulate
+references. A cap or cleanup policy would therefore trade a hypothetical
+nested-lineage memory cost for an unsafe finalization path; either requires
+measured harmful growth and a proven close-free disposal mechanism. A warning
+is also unjustified until that growth is observed.
 
 ## Acquisition
 
@@ -148,6 +166,42 @@ The registry resolves one `_SessionSpec` per acquisition. Its `_SessionKey`
 selects an existing entry. The registry invokes the builder only when the key
 is new, so a repeated acquisition cannot allocate and discard an unused
 factory.
+
+`BrokerTarget` snapshots the top level of `backend_options` into an ordinary
+dict when the descriptor is constructed. That prevents later mutation of the
+caller's source mapping from changing a session target while preserving the
+existing shallow nested values, pickling, `dataclasses.replace()`, and direct
+mapping mutation compatibility. The JSON transport decoder validates boolean
+and optional-path field types exactly; it does not reinterpret truthy payloads.
+
+### SQLite ownership admission
+
+SQLite ownership is checked before SimpleBroker connection setup, schema
+bootstrap, or phase-lock sidecars are allowed to write. A
+`user.simplebroker.magic` xattr whose value exactly matches the database magic
+is authoritative positive evidence and skips the SQL check. SimpleBroker writes
+that xattr only after schema setup and magic verification succeed.
+
+When the xattr is absent, unavailable, malformed, or different, admission uses
+the runner's ordinary read-write connection to read `meta.magic`. An explicit
+foreign value fails construction before SimpleBroker setup. Missing metadata
+keeps the established empty/legacy bootstrap behavior. Opening the connection
+can perform SQLite's own normal recovery or WAL coordination; that is outside
+the invariant. The invariant is specifically that SimpleBroker does not run
+its setup or schema writes before checking the stored magic.
+
+The xattr is deliberately only a positive cache. SimpleBroker does not add an
+inode fingerprint, generation ledger, or second read-only connection to defend
+against an external in-place overwrite that preserves xattrs. That case is an
+external ownership violation. On ordinary cache misses, reusing the runner
+connection avoids an extra open on a construction path that can be hot.
+
+PostgreSQL sidecar SQL is adapted only when parameters are present. Its qmark
+scanner treats quoted tokens, comments, and dollar-quoted bodies as opaque and
+maps `??` to a literal question mark. It doubles original percent signs for
+psycopg's parameter-template parser; psycopg restores them before PostgreSQL
+sees the statement. Parameter-free SQL reaches psycopg byte for byte, while
+psycopg remains the owner of bind-count validation.
 
 ## Runner Publication
 
@@ -232,6 +286,10 @@ The core suite also includes an AST gate for the one-way import rule and
 subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
+
+- completed: 2026-08-24-comprehensive-review-findings-remediation-plan — target
+  snapshots, pre-lock fork recovery, Redis listener ownership, and PostgreSQL
+  sidecar adaptation
 
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
   source `23d6c9d1` (local-only pin); see the ledger in

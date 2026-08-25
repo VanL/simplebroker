@@ -900,7 +900,7 @@ def test_repository_backend_api_v7_handshake_and_floors_match() -> None:
         ).read_text(encoding="utf-8")
         normalized_readme = " ".join(readme.split())
         assert "## Core Compatibility" in readme
-        assert "declares its backend API version independently" in normalized_readme
+        assert "backend API version independently" in normalized_readme
         assert (
             "fails at backend resolution with upgrade-or-pin guidance"
             in normalized_readme
@@ -909,8 +909,27 @@ def test_repository_backend_api_v7_handshake_and_floors_match() -> None:
         assert "first coordinated backend API v7 set" in normalized_readme
         assert "Package dependency floors are minimums" in normalized_readme
         assert "exact runtime handshake remains authoritative" in normalized_readme
+        assert "breaking private-seam change requires a backend API version bump" in (
+            normalized_readme
+        )
+        assert "moves in lockstep" not in normalized_readme
         assert "SimpleBroker 7.3.0" in normalized_readme
         assert version_text in normalized_readme
+
+    api_spec = (release.PROJECT_ROOT / "docs/specs/16-python-library-api.md").read_text(
+        encoding="utf-8"
+    )
+    agent_kernel = (release.PROJECT_ROOT / "docs/agent-kernel.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_api_spec = " ".join(api_spec.split())
+    normalized_agent_kernel = " ".join(agent_kernel.split())
+    assert "under an exact pin" not in normalized_api_spec
+    assert "first-party packages lockstep with core" not in normalized_agent_kernel
+    assert "minimum supported core" in normalized_api_spec
+    assert "exact `backend_api_version` match" in normalized_api_spec
+    assert "minimum compatible core version" in normalized_agent_kernel
+    assert "exact `backend_api_version` handshake" in normalized_agent_kernel
 
 
 def test_extension_core_floor_guard_rejects_too_low_floor(tmp_path: Path) -> None:

@@ -299,7 +299,10 @@ queue.refresh_last_ts()
 print(queue.last_ts)
 ```
 
-Watchers automatically refresh their queue's `last_ts` whenever `PRAGMA data_version` reports changes, so you always have a current view of the most recent timestamp while the watcher is running.
+`Queue.last_ts` may be stale relative to other writers, including while a
+watcher is running. Call `queue.refresh_last_ts()` when freshness matters.
+SQLite watchers also refresh the cache when `PRAGMA data_version` reports a
+change, but that does not strengthen the portable cache contract.
 
 ## Watchers in depth
 

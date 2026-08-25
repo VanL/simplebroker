@@ -251,7 +251,10 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert "whitespace is stripped" in normalized_spec
     assert "New exact-id insertion rejects reserved zero" in normalized_spec
     assert "consume remaining logical-counter values" in normalized_spec
-    assert "same message identity with the queue binding updated" in normalized_spec
+    assert (
+        "same message identity and delivery state with only the queue binding updated"
+        in normalized_spec
+    )
     assert "Broker-generated message IDs are positive" in normalized_readme
     assert re.search(r"Exact selectors (?:still )?accept zero", normalized_readme)
     assert re.search(

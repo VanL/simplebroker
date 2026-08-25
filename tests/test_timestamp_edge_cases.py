@@ -1,6 +1,8 @@
 """Test edge cases in _timestamp.py to increase coverage."""
 
 import concurrent.futures
+import os
+import signal
 import threading
 import time
 from typing import Any
@@ -70,6 +72,60 @@ class TimeAdvancer:
             amount = self.increment
         self.current_time += amount
         self.call_count = 0
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize("method_name", ["get_cached_last_ts", "refresh_last_ts"])
+def test_timestamp_cache_paths_recover_before_inherited_lock(
+    method_name: str,
+) -> None:
+    """A forked child must replace the generator lock before cache access."""
+
+    generator = TimestampGenerator(
+        object(),  # type: ignore[arg-type]
+        backend_plugin=AtomicLastTimestampPlugin(),
+    )
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_generator_lock() -> None:
+        with generator._lock:
+            lock_held.set()
+            release_lock.wait(10.0)
+
+    holder = threading.Thread(target=hold_generator_lock)
+    holder.start()
+    assert lock_held.wait(2.0)
+
+    pid = os.fork()
+    if pid == 0:
+        try:
+            value = getattr(generator, method_name)()
+            os._exit(0 if value == 0 else 2)
+        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            os._exit(1)
+
+    try:
+        deadline = time.monotonic() + 2.0
+        status: int | None = None
+        while time.monotonic() < deadline:
+            waited_pid, child_status = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                status = child_status
+                break
+            time.sleep(0.01)
+        if status is None:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail(f"{method_name} blocked on the inherited generator lock")
+        assert os.WIFEXITED(status)
+        assert os.WEXITSTATUS(status) == 0
+    finally:
+        release_lock.set()
+        holder.join(timeout=2.0)
+
+    assert getattr(generator, method_name)() == 0
 
 
 class TestTimestampEdgeCases:

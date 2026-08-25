@@ -164,6 +164,7 @@ class RedisBrokerCore:
         self._backend_plugin = runner.backend_plugin
         self._alias_cache: dict[str, str] = {}
         self._alias_cache_version = -1
+        runner._check_fork()
         with runner._init_lock:
             if not runner._target_initialized:
                 self._backend_plugin.initialize_target(
@@ -207,8 +208,10 @@ class RedisBrokerCore:
             self._client.publish(self._activity_channel(None), queue)
 
     def _check_fork_safety(self) -> None:
+        self._runner._check_fork()
         current_pid = os.getpid()
         if current_pid != self._pid:
+            self._lock = threading.RLock()
             self._pid = current_pid
             self._write_lock = _write_lock_registry.get(
                 self._runner.target,
@@ -615,11 +618,12 @@ class RedisBrokerCore:
                 flat = response_list(
                     self._client.eval(
                         scripts.MOVE_MESSAGES,
-                        6,
+                        7,
                         self._qkey(source_queue, "pending"),
                         self._qkey(source_queue, "claimed"),
                         self._qkey(source_queue, "reserved"),
                         self._qkey(target_queue, "pending"),
+                        self._qkey(target_queue, "claimed"),
                         self._key("bodies"),
                         self._key("queues"),
                         source_queue,
@@ -1192,6 +1196,7 @@ class RedisBrokerCore:
 
     def _record_maintenance_activity(self, completed: int) -> None:
         """Run one best-effort maintenance check after committed activity."""
+        self._check_fork_safety()
         if self._config["BROKER_AUTO_VACUUM"] != 1 or completed <= 0:
             return
 
@@ -1750,6 +1755,7 @@ class RedisBrokerCore:
 
     def vacuum(self, compact: bool = False) -> None:
         del compact
+        self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("vacuum")
         try:
             with self._lock:
@@ -1806,6 +1812,7 @@ class RedisBrokerCore:
         return recovered
 
     def _maybe_recover_stale_batches(self) -> None:
+        self._runner._check_fork()
         max_age_seconds = self._runner.stale_batch_seconds
         if max_age_seconds < 0:
             return

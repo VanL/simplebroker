@@ -86,7 +86,7 @@ jobs:
 
     - name: Verify matrix Python
       run: |
-        uv run --frozen --no-sync python -c "import sys; expected = tuple(map(int, '${{ matrix.python-version }}'.split('.'))); assert sys.version_info[:2] == expected, (sys.version, expected)"
+        uv run --frozen --no-sync python -c "import sys; expected = tuple(map(int, '${{ matrix.python-version }}'.split('.'))); actual = sys.version_info[:2]; sys.exit(f'expected Python {expected[0]}.{expected[1]}, got {actual[0]}.{actual[1]}') if actual != expected else None"
 
     - name: Run tests with pytest
       if: matrix.os != 'windows-latest'
@@ -443,7 +443,7 @@ jobs:
       env:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
-        uv run --frozen --no-sync python -c "from pathlib import Path; expected = (Path('.coverage.linux'), Path('.coverage.postgres'), Path('.coverage.redis'), Path('.coverage.windows')); missing = [str(path) for path in expected if not path.is_file()]; assert not missing, f'missing coverage data: {missing}'"
+        uv run --frozen --no-sync python -c "import sys; from pathlib import Path; expected = (Path('.coverage.linux'), Path('.coverage.postgres'), Path('.coverage.redis'), Path('.coverage.windows')); missing = [str(path) for path in expected if not path.is_file()]; sys.exit(f'missing coverage data: {missing}') if missing else None"
         uv run --frozen --no-sync python .github/scripts/combine_coverage.py
         uv run --frozen --no-sync coverage report --show-missing
         uv run --frozen --no-sync coverage xml

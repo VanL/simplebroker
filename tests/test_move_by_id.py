@@ -90,7 +90,7 @@ def test_move_claimed_message_with_require_unclaimed(broker):
 
 
 def test_move_claimed_message_without_require_unclaimed(broker):
-    """Test that claimed messages CAN be moved when require_unclaimed=False."""
+    """Moving a claimed row changes its queue without releasing the claim."""
     broker.write("source", "msg1")
     broker.write("source", "msg2")
 
@@ -112,8 +112,13 @@ def test_move_claimed_message_without_require_unclaimed(broker):
     )
     assert result == "msg1"
 
-    dest_messages = broker.peek_many("dest", with_timestamps=False)
-    assert dest_messages == ["msg1"]
+    assert broker.peek_many("dest", with_timestamps=False) == []
+    assert broker.peek_many("dest", with_timestamps=True, include_claimed=True) == [
+        ("msg1", msg1_ts)
+    ]
+    assert {
+        queue: (pending, total) for queue, pending, total in broker.get_queue_stats()
+    } == {"dest": (0, 1), "source": (1, 1)}
 
     source_messages = broker.peek_many("source", with_timestamps=False)
     assert source_messages == ["msg2"]

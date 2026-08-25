@@ -29,6 +29,17 @@ CREATE TABLE messages (
 - Claim-based deletion separates the consume commit from later physical cleanup,
   avoiding deletion work on the read handoff path
 
+## Ownership admission before setup
+
+An existing non-empty SQLite file is inspected through a read-only connection
+before runner setup can enable WAL or create schema. An explicit `meta.magic`
+value belonging to another product is rejected at that boundary. A missing
+table, missing value, absent file, or empty file is not treated as foreign:
+those states continue through the existing legacy/bootstrap path, which owns
+the final schema and validity diagnostics. This narrow three-state check avoids
+mutating a file that has positively identified another owner without inventing
+a second schema classifier.
+
 ## Schema migration serialization and publication
 
 SQLite v2 and v3 upgrades use `BEGIN IMMEDIATE` before the schema state that
@@ -72,6 +83,12 @@ result or ordinary exception rolls back. There is no deferred
 commit-after-return mode. Keeping that order in one path makes the public
 handoff boundary auditable and avoids a private flag that implied an unused
 second delivery policy.
+
+A move changes queue binding, not delivery state. SQL therefore updates only
+the queue column. Redis removes the ID from its source pending or claimed set
+and inserts it into the matching destination set. `require_unclaimed=False`
+only permits a claimed row to be selected by exact ID; it does not release the
+claim or make that row pending again.
 
 **Physical-delete transaction boundary:** SQL queue-specific and all-queue
 delete explicitly begin before the backend plugin mutation, commit once on
@@ -205,6 +222,9 @@ evaluation; it does not adopt the index.
 Promoted to: none
 
 ## Related Plans
+
+- completed: 2026-08-24-comprehensive-review-findings-remediation-plan —
+  read-only SQLite ownership admission and claim-preserving cross-backend move
 
 - completed: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
   source for [ALT-IMPL09-001], commit-before-handoff cleanup, and explicit SQL

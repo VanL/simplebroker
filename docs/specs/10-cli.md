@@ -44,6 +44,10 @@ established, the stderr diagnostic follows `[SB-CLI-4]` with code `ERROR`.
 
 Invalid global-option placement is an error and exits `1`.
 
+Root help advertises action-only `--json` for `--status`, `--cleanup`, and
+`--vacuum`. The option remains invalid without one of those compatible root
+actions and remains invalid when attached to a subcommand.
+
 _Implementation mapping_:
 - `simplebroker/_constants.py`
 - `simplebroker/cli.py`
@@ -311,6 +315,10 @@ _Verification_:
 - `tests/test_cli_contract_sb_cli.py::test_sb_cli_5_exact_evidence_manifest`
 
 ## Related Plans
+
+- completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)
+  — exposes the existing root-action JSON grammar in help without changing its
+  preprocessing or compatibility boundary
 
 - completed: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
   historical Strategy-D [SB-CLI-3] clarification and write-token matrix from

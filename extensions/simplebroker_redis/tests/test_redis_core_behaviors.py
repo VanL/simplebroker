@@ -155,9 +155,33 @@ def test_redis_move_methods_cover_exact_bounds_and_claimed_rows(
         assert core.peek_many("source", limit=10, with_timestamps=False) == []
         assert core.peek_many("dest", limit=10, with_timestamps=False) == [
             "old",
-            "middle",
             "new",
         ]
+        assert core.peek_many(
+            "dest", limit=10, with_timestamps=True, include_claimed=True
+        ) == [("old", 10), ("middle", 20), ("new", 30)]
+        assert core.get_queue_stats() == [("dest", 2, 3)]
+    finally:
+        core.close()
+
+
+def test_redis_move_pending_by_id_preserves_pending_state(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.insert_messages([("source", "pending", 10)])
+
+        assert core.move_one(
+            "source",
+            "dest",
+            exact_timestamp=10,
+            require_unclaimed=False,
+            with_timestamps=True,
+        ) == ("pending", 10)
+
+        assert core.peek_many("dest", limit=10, with_timestamps=False) == ["pending"]
+        assert core.get_queue_stats() == [("dest", 1, 1)]
     finally:
         core.close()
 

@@ -383,8 +383,10 @@ SimpleBroker will comply; your product will not.
 - SQLite remains the default boring path.
 - Postgres/Redis extensions keep **use** verbs; prove lifecycle and edge
   cases **per backend** (NUL bodies, durability config, etc.).
-- Full custom backends: first-party packages lockstep with core; there is no
-  stable standalone third-party backend SDK yet. Embedder/extension face:
+- Full custom backends: first-party packages declare a minimum compatible core
+  version and require an exact `backend_api_version` handshake; package version
+  numbers need not match. There is no stable standalone third-party backend SDK
+  yet. Embedder/extension face:
   `import simplebroker.ext` (`SQLRunner`, `BackendPlugin`, `SidecarSession`,
   `validate_delivery_guarantee`, … — see `simplebroker.ext.__all__`).
 

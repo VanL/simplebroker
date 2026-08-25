@@ -35,3 +35,30 @@ def test_include_claimed_superset_and_exact_id(pg_core: BrokerCore) -> None:
         )
         == "m0"
     )
+
+
+def test_move_claimed_by_id_preserves_claim_state(pg_core: BrokerCore) -> None:
+    message_id = pg_core.write("source", "claimed")
+    pending_id = pg_core.write("source", "pending")
+    assert pg_core.claim_one("source", with_timestamps=False) == "claimed"
+
+    assert pg_core.move_one(
+        "source",
+        "dest",
+        exact_timestamp=message_id,
+        require_unclaimed=False,
+        with_timestamps=True,
+    ) == ("claimed", message_id)
+    assert pg_core.move_one(
+        "source",
+        "dest",
+        exact_timestamp=pending_id,
+        require_unclaimed=False,
+        with_timestamps=True,
+    ) == ("pending", pending_id)
+
+    assert pg_core.peek_many("dest", 10, with_timestamps=False) == ["pending"]
+    assert pg_core.peek_many(
+        "dest", 10, with_timestamps=True, include_claimed=True
+    ) == [("claimed", message_id), ("pending", pending_id)]
+    assert pg_core.get_queue_stats() == [("dest", 1, 2)]

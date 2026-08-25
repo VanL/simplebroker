@@ -265,8 +265,9 @@ local source_pending = KEYS[1]
 local source_claimed = KEYS[2]
 local source_reserved = KEYS[3]
 local target_pending = KEYS[4]
-local bodies = KEYS[5]
-local queues = KEYS[6]
+local target_claimed = KEYS[5]
+local bodies = KEYS[6]
+local queues = KEYS[7]
 local source_queue = ARGV[1]
 local target_queue = ARGV[2]
 local limit = tonumber(ARGV[3])
@@ -302,7 +303,11 @@ for window = 1, 16 do
       if body ~= false then
         redis.call('ZREM', source_pending, id)
         redis.call('ZREM', source_claimed, id)
-        redis.call('ZADD', target_pending, 0, id)
+        if from_claimed then
+          redis.call('ZADD', target_claimed, 0, id)
+        else
+          redis.call('ZADD', target_pending, 0, id)
+        end
         redis.call('SADD', queues, target_queue)
         table.insert(out, body)
         table.insert(out, id)

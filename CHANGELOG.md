@@ -5,6 +5,41 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Exact-ID moves now preserve each message's pending or claimed delivery state
+  across SQLite, PostgreSQL, and Redis. Moving a claimed row no longer makes it
+  pending at the destination.
+- PostgreSQL sidecar SQL now adapts parameter qmarks only outside quoted,
+  commented, and dollar-quoted text. Parameter-free SQL is unchanged and `??`
+  represents a literal question mark in parameterized SQL. Existing percent
+  signs remain literal when parameters are present.
+- `BrokerTarget` now takes a shallow snapshot of caller-supplied backend
+  options while retaining its ordinary picklable dict representation. Target
+  JSON decoding now rejects truthy non-booleans and invalid optional-path
+  types instead of coercing them.
+- Root help now advertises action-only `--json` for `--status`, `--cleanup`,
+  and `--vacuum`; unsupported bare or subcommand use remains an error.
+
+### Fixed
+
+- Conninfo target redaction now consumes escaped quoted and unquoted password
+  characters, including malformed unterminated values, without leaking a
+  password suffix.
+- SQLite now records verified database magic in an xattr as a positive
+  admission cache. On a cache miss it checks magic through the normal runner
+  connection and rejects an explicit foreign value before any SimpleBroker WAL
+  or schema setup write.
+- Process-owned PostgreSQL, Redis, timestamp, and activity-listener locks are
+  replaced after fork before a child can acquire inherited state. Child-side
+  Redis close and PostgreSQL finalization abandon inherited pools without
+  touching parent-owned locks. Redis listener registry references are counted
+  through waiter registration and final close.
+- Required workflow checks now fail explicitly under both normal and optimized
+  Python instead of relying on removable `assert` statements.
+
 ## [7.4.2] - 2026-08-24
 
 ### Added

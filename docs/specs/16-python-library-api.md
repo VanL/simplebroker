@@ -38,8 +38,9 @@ imports; existing `project` imports remain valid.
 
 Private modules (`simplebroker._…`) and other unlisted submodules are **not**
 public product surface. They may change in any release. First-party backends
-may import private modules under an exact pin and `backend_api_version`
-handshake; that does not make those modules public for ordinary embedders.
+may import private modules while declaring a minimum supported core version and
+requiring an exact `backend_api_version` match; that does not make those
+modules public for ordinary embedders.
 
 The canonical public import for message-ID formatting is
 `simplebroker.format_message_id(value: int | str) -> str`. This clause owns
@@ -65,7 +66,11 @@ _Implementation mapping_:
 Public ways to bind a broker for library use:
 
 - **`BrokerTarget`** — opaque resolved target (backend name, target string,
-  options, optional project root / config path metadata).
+  options, optional project root / config path metadata). `backend_options` is
+  shallow-copied at target construction and remains an ordinary picklable
+  `dict`. Later mutation of the caller's source mapping cannot change the
+  target; direct mutation of the target's exposed dict remains possible for
+  compatibility.
 - **`open_broker`** — context manager yielding a connection for connection-scoped
   work (including dump/load).
 - **`resolve_broker_target`**, **`target_for_directory`**, **`broker_root`** —
@@ -360,6 +365,13 @@ application tables:
 Sidecar schema and application tables are the embedder’s product, not
 SimpleBroker queue semantics.
 
+Sidecar SQL without parameters is passed through unchanged. PostgreSQL
+parameterized sidecar SQL adapts qmark placeholders only outside quoted,
+commented, and dollar-quoted text; `??` denotes one literal question mark.
+Original percent signs are escaped for psycopg's parameter template without
+changing the SQL PostgreSQL executes. The PostgreSQL driver retains bind-count
+validation.
+
 _Implementation mapping_:
 - `simplebroker/_sidecar.py`
 - `simplebroker/ext.py`
@@ -419,14 +431,16 @@ _Implementation mapping_:
 **`simplebroker.commands`** is a supported public module whose `__all__` names
 are stable under the same compatibility policy as other public exports.
 
-- Each **`cmd_*`** function is the programmatic equivalent of a CLI subcommand:
-  it prints to **stdout** (and uses stderr for diagnostics) and returns an
-  **integer exit code** with CLI meanings (`[SB-CLI-1]`), rather than using
-  return values as the primary success channel.
+- Each **`cmd_*`** function is the programmatic equivalent of a CLI subcommand.
+  Ordinary outcomes return integer codes with `[SB-CLI-1]` meanings. Invalid
+  input and operational failures raise their typed exceptions to direct Python
+  callers; `simplebroker.cli` is the sole owner that translates those
+  exceptions to diagnostics and process exit codes.
 - Direct `cmd_*` stdout behavior matches the corresponding CLI action when the
   consumer closes: `cmd_read`, `cmd_peek`, `cmd_move`, `cmd_dump`, and
   `cmd_watch` return clean-stop `0`; every other stdout-producing command
-  function returns `1` after its ordinary plain or JSON error diagnostic. The
+  function returns `1` after its ordinary plain or JSON output-delivery
+  diagnostic. The
   internal closed-stdout control signal never escapes the public command
   function. Durable effects completed before output failure remain completed.
   Where a command function accepts `quiet`, it suppresses the same owned
@@ -518,6 +532,13 @@ The true case is the typed outcome-ambiguous failure classification.
 Core rejects older or newer backend API versions through the existing
 exact-version handshake.
 
+First-party extension package dependency declarations are minimum supported
+core versions. Runtime compatibility additionally requires an exact
+`backend_api_version` match. A breaking change to a private seam used by a
+first-party extension requires a backend API version bump. Fork recovery
+replaces inherited process-owned locks and resources before any affected lock
+acquisition in the child.
+
 Persistence helpers are public from the package root. The exact load interface
 is `load_lines(broker, lines, *, force=False, config=None)`; its policy and
 failure order are `[SB-IO-4]`. `DumpClockSkewWarning` is a public `UserWarning`
@@ -597,8 +618,11 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
-- active: [2026-08-24-peek-generator-close-contract-plan](../plans/2026-08-24-peek-generator-close-contract-plan.md)
+- completed: [2026-08-24-peek-generator-close-contract-plan](../plans/2026-08-24-peek-generator-close-contract-plan.md)
   — closeable peek iterator and same-thread synchronous Queue-operation cleanup
+- completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)
+  — target snapshots, sidecar qmark adaptation, fork recovery, compatibility,
+  command-error ownership, and interface corrections
 - completed: [2026-08-24-failure-path-and-contract-findings-resolution-plan](../plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md)
   — watcher callback-failure and context-exit contract promotion at baseline
   `1b8ecfa0`

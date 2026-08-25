@@ -246,6 +246,7 @@ class _PreparseGrammarBuilder:
         self.broadcast_selector_options: set[str] = set()
         self.broadcast_attached_options: set[str] = set()
         self.action_options: set[str] = set()
+        self.action_json_options: set[str] = set()
 
     def add_root_action(
         self,
@@ -270,6 +271,10 @@ class _PreparseGrammarBuilder:
     def add_subcommand(self, name: str) -> None:
         self.subcommands.add(name)
 
+    def add_action_json(self, action: argparse.Action) -> None:
+        """Record the action-only JSON spelling advertised by root help."""
+        self.action_json_options.update(action.option_strings)
+
     def add_write_output_action(self, action: argparse.Action) -> None:
         self.write_output_options.update(action.option_strings)
 
@@ -283,6 +288,8 @@ class _PreparseGrammarBuilder:
             )
 
     def build(self) -> _PreparseGrammar:
+        if len(self.action_json_options) != 1:
+            raise RuntimeError("CLI grammar must register one action-only JSON option")
         broadcast_options = frozenset(self.broadcast_selector_options)
         return _PreparseGrammar(
             root_options=frozenset(self.root_options),
@@ -294,7 +301,7 @@ class _PreparseGrammarBuilder:
             broadcast_selector_options=broadcast_options,
             broadcast_attached_options=frozenset(self.broadcast_attached_options),
             action_options=frozenset(self.action_options),
-            action_json_option="--json",
+            action_json_option=next(iter(self.action_json_options)),
         )
 
 
@@ -423,6 +430,15 @@ def _build_cli_parser(
         action_mode=True,
         help="show database status and exit",
     )
+    action_json = add_argument(
+        parser,
+        "--json",
+        action="store_true",
+        dest="_unconsumed_action_json",
+        default=False,
+        help="structured output/errors for --status, --cleanup, and --vacuum",
+    )
+    grammar_builder.add_action_json(action_json)
 
     # Create subparsers for commands
     subparsers = parser.add_subparsers(title="commands", dest="command", help=None)
@@ -1267,6 +1283,14 @@ def _validate_global_flags(
     json_output: bool,
 ) -> int | None:
     """Reject invalid combinations of global actions and commands."""
+    if getattr(args, "_unconsumed_action_json", False):
+        commands._emit_error(
+            "--json requires --status, --cleanup, or --vacuum",
+            code="INVALID_ARGUMENT",
+            json_output=False,
+        )
+        return EXIT_ERROR
+
     if args.command == "init":
         for attribute, flag in (
             ("_dir_explicitly_provided", "--dir"),

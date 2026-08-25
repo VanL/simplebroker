@@ -9,7 +9,11 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 _CONNINFO_PASSWORD_RE = re.compile(
-    r"(?i)(\bpassword\s*=\s*)(?:'[^']*'|\"[^\"]*\"|[^\s]+)"
+    r"(?i)(\bpassword\s*=\s*)(?:"
+    r"'(?:\\(?:.|$)|[^'\\])*(?:'|$)"
+    r'|"(?:\\(?:.|$)|[^"\\])*(?:"|$)'
+    r"|(?:\\(?:.|$)|[^\s\\])+"
+    r")"
 )
 _WHITESPACE_RE = re.compile(r"\s")
 _ASCII_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -82,6 +86,10 @@ class BrokerTarget:
     config_path: Path | None = None
     used_project_scope: bool = False
     legacy_sqlite_path_mode: bool = False
+
+    def __post_init__(self) -> None:
+        """Detach the stored option dict from the caller's top-level mapping."""
+        object.__setattr__(self, "backend_options", dict(self.backend_options))
 
     @property
     def target_path(self) -> Path | None:

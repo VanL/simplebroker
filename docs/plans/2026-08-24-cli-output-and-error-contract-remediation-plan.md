@@ -26,6 +26,7 @@ all `ValueError` instances into caller errors.
 | Finite stdout paths can escape as interpreter exit `120` | Accept. Route every stdout write and flush through the closed-pipe seam. Keep `read`, `peek`, `move`, `dump`, and `watch` at clean stop `0`; every other stdout-producing action reports output-delivery failure and returns `1`. | A mutation completed before output failure stays completed. Its diagnostic must say so and tell the caller to inspect state before retrying. |
 | `--quiet` does not suppress the newline warning | Accept. Give that warning a dedicated private `RuntimeWarning` subclass, suppress only that category with invocation-local context at its producer, and make warning coverage independent of single, exact, bounded, all, timestamped, move, or watch output topology. | Do not install a blanket or process-global `RuntimeWarning` filter. JSON output never warns. Loud non-JSON output warns once per invocation when at least one emitted body contains an embedded newline. |
 | JSON error code depends on pipeline phase | Accept, with a narrower taxonomy than “all validation-shaped `ValueError`”. Add one cause classifier with database-error precedence. Typed queue/message and CLI-target validation failures become `INVALID_ARGUMENT`; generic `ValueError`, backend/storage/access failures, corrupt targets, and unknown failures remain `ERROR`. | Keep `INVALID_MESSAGE_ID` and `INVALID_TIMESTAMP` as the more specific codes at their existing owners. Keep the four-code vocabulary and three-key object unchanged. |
+| Direct Python command failure ownership | Owner correction, 2026-08-25: ordinary command outcomes retain integer `0`/`2` results, but invalid input and operational failures raise typed exceptions to direct `cmd_*` callers. The CLI alone translates them to diagnostics and process exit `1`. | This supersedes any earlier plan text implying direct command functions translate ordinary invalid-input or operational failures. Closed-stdout handling remains command-owned because it occurs while delivering the direct command's own output. |
 
 The target-path decision deliberately corrects one adjacent compatibility bug:
 `_validate_legacy_sqlite_target()` currently passes `db_path.parent` to a
@@ -786,6 +787,12 @@ Execution started 2026-08-24 after owner authorization:
     `pytest-pg --fast` and `pytest-redis --fast` now pass both shared and
     extension stages without deselection; no CLI behavior or normative spec
     text changed.
+15. Product-owner correction on 2026-08-25 clarified that direct command-layer
+    invalid-input and operational failures raise typed exceptions; the CLI is
+    the sole diagnostic/exit translator. The comprehensive-review plan owns no
+    duplicate `commands.py` edits. This plan is reopened for the exact
+    `cmd_*` audit, spec/test reconciliation, and closure receipt while retaining
+    its completed closed-stdout, warning, and CLI cause-classification work.
 
 ## Completion Gate
 

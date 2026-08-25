@@ -135,9 +135,8 @@ class TimestampGenerator:
         durable monotonicity; it cannot by itself prevent an earlier caller from
         publishing stale process-local state after a later caller.
         """
+        self._ensure_pid()
         with self._lock:
-            self._ensure_pid()
-
             # Keep this bounded allocation/CAS loop inside the shared-instance
             # lock. Narrowing the critical section can regress ``_last_ts`` even
             # when every durable compare-and-advance remains monotonic.
@@ -181,8 +180,8 @@ class TimestampGenerator:
         if count == 0:
             return []
 
+        self._ensure_pid()
         with self._lock:
-            self._ensure_pid()
             candidates: list[int] = []
             for _ in range(count):
                 physical_ns, logical = self._next_components()
@@ -198,6 +197,7 @@ class TimestampGenerator:
     def get_cached_last_ts(self) -> int:
         """Return the most recently observed timestamp without hitting the database."""
 
+        self._ensure_pid()
         with self._lock:
             if not self._initialized:
                 self._initialize()
@@ -206,6 +206,7 @@ class TimestampGenerator:
     def refresh_last_ts(self) -> int:
         """Refresh cached timestamp from the database with a lightweight read."""
 
+        self._ensure_pid()
         with self._lock:
             latest = self._peek_last_ts()
             if latest is None:
@@ -221,8 +222,8 @@ class TimestampGenerator:
         normalized = validate_timestamp_bound("timestamp", timestamp)
         if normalized is None:
             raise TypeError("timestamp must be an int")
+        self._ensure_pid()
         with self._lock:
-            self._ensure_pid()
             # The process-local cache may be ahead of durable state after a
             # direct-backend candidate reservation or a rolled-back write.
             # Always issue the backend's monotone compare-and-advance; the
@@ -251,6 +252,7 @@ class TimestampGenerator:
         """
         pid = os.getpid()
         if pid != self._pid:
+            self._lock = threading.RLock()
             self._pid = pid
             self._initialized = False  # force lazy init
             self._last_ts = 0

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import pickle
 import sqlite3
 import uuid
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
 
@@ -746,6 +748,32 @@ def test_public_broker_target_roundtrip_serialization(tmp_path: Path) -> None:
     assert decoded == original
 
 
+def test_broker_target_shallow_copies_backend_options_without_freezing() -> None:
+    """Targets own their option dict while retaining data-object compatibility."""
+    nested_options = {"size": 2}
+    source_options: dict[str, Any] = {
+        "schema": "original",
+        "pool": nested_options,
+    }
+
+    target = BrokerTarget("postgres", "postgresql://db/app", source_options)
+    source_options["schema"] = "changed-after-construction"
+
+    assert target.backend_options["schema"] == "original"
+    assert target.backend_options["pool"] is nested_options
+    assert isinstance(target.backend_options, dict)
+    target.backend_options["mutable"] = True
+
+    replaced = replace(target, target="postgresql://db/other")
+    assert replaced.backend_options == target.backend_options
+    assert replaced.backend_options is not target.backend_options
+    assert pickle.loads(pickle.dumps(target)) == target
+
+
+def test_broker_target_retains_mutable_backend_options_annotation() -> None:
+    assert get_type_hints(BrokerTarget)["backend_options"] == dict[str, Any]
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
@@ -770,6 +798,49 @@ def test_deserialize_broker_target_rejects_malformed_transport_payloads(
 
     with pytest.raises(ValueError, match=message):
         deserialize_broker_target(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("used_project_scope", "false", "used_project_scope must be a boolean"),
+        ("legacy_sqlite_path_mode", 0, "legacy_sqlite_path_mode must be a boolean"),
+        ("project_root", 42, "project_root must be a string or null"),
+        ("config_path", [], "config_path must be a string or null"),
+    ],
+)
+def test_deserialize_broker_target_rejects_invalid_typed_transport_fields(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    payload: dict[str, object] = {
+        "backend_name": "sqlite",
+        "target": "queue.db",
+        field: value,
+    }
+
+    with pytest.raises(TypeError, match=message):
+        deserialize_broker_target(payload)
+
+
+def test_deserialize_broker_target_accepts_explicit_null_paths_and_booleans() -> None:
+    target = deserialize_broker_target(
+        {
+            "backend_name": "sqlite",
+            "target": "queue.db",
+            "project_root": None,
+            "config_path": "",
+            "used_project_scope": False,
+            "legacy_sqlite_path_mode": True,
+            "future_transport_field": {"ignored": True},
+        }
+    )
+
+    assert target.project_root is None
+    assert target.config_path is None
+    assert target.used_project_scope is False
+    assert target.legacy_sqlite_path_mode is True
 
 
 def test_resolve_target_defaults_to_sqlite_without_toml(

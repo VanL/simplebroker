@@ -26,6 +26,14 @@ from .validation import quote_ident
 _DEFAULT_MIN_SIZE = 0
 _DEFAULT_MAX_SIZE = 16
 
+# A forked child must not finalize a pool whose locks belong to parent threads.
+_ABANDONED_FORK_POSTGRES_POOLS: list[Any] = []
+
+
+def _abandon_inherited_pool(pool: Any) -> None:
+    if not any(pool is existing for existing in _ABANDONED_FORK_POSTGRES_POOLS):
+        _ABANDONED_FORK_POSTGRES_POOLS.append(pool)
+
 
 def _run_activity_waiter_cleanup(actions: Iterable[Callable[[], None]]) -> None:
     first_error: Exception | None = None
@@ -69,9 +77,98 @@ class _FanInWaiterEntry:
     queue_set: set[str]
 
 
+def _quoted_sql_end(sql: str, start: int) -> int:
+    """Return the end of one quoted PostgreSQL token."""
+    quote = sql[start]
+    escape_prefixed = (
+        quote == "'"
+        and start > 0
+        and sql[start - 1] in {"e", "E"}
+        and (start < 2 or not (sql[start - 2].isalnum() or sql[start - 2] in "_$"))
+    ) or (
+        start > 1
+        and sql[start - 2 : start].lower() == "u&"
+        and (start < 3 or not (sql[start - 3].isalnum() or sql[start - 3] in "_$"))
+    )
+    index = start + 1
+    while index < len(sql):
+        if escape_prefixed and sql[index] == "\\" and index + 1 < len(sql):
+            index += 2
+        elif sql[index] != quote:
+            index += 1
+        elif index + 1 < len(sql) and sql[index + 1] == quote:
+            index += 2
+        else:
+            return index + 1
+    return index
+
+
+def _block_comment_end(sql: str, start: int) -> int:
+    """Return the end of one possibly nested PostgreSQL block comment."""
+    index = start + 2
+    depth = 1
+    while index < len(sql) and depth:
+        if sql.startswith("/*", index):
+            depth += 1
+            index += 2
+        elif sql.startswith("*/", index):
+            depth -= 1
+            index += 2
+        else:
+            index += 1
+    return index
+
+
+def _dollar_quoted_sql_end(sql: str, start: int) -> int | None:
+    """Return the end of a dollar-quoted token, or None for an ordinary dollar."""
+    if start > 0 and (sql[start - 1].isalnum() or sql[start - 1] in "_$"):
+        return None
+    delimiter_end = sql.find("$", start + 1)
+    if delimiter_end == -1:
+        return None
+    tag = sql[start + 1 : delimiter_end]
+    if tag and (
+        not (tag[0].isalpha() or tag[0] == "_")
+        or any(not (part.isalnum() or part == "_") for part in tag[1:])
+    ):
+        return None
+    delimiter = sql[start : delimiter_end + 1]
+    body_end = sql.find(delimiter, delimiter_end + 1)
+    return len(sql) if body_end == -1 else body_end + len(delimiter)
+
+
 def _adapt_sql(sql: str) -> str:
-    """Adapt SimpleBroker's qmark placeholders for psycopg."""
-    return sql.replace("?", "%s")
+    """Adapt qmark placeholders outside PostgreSQL lexical literals."""
+    adapted: list[str] = []
+    index = 0
+    while index < len(sql):
+        end: int | None = None
+        if sql[index] in {"'", '"'}:
+            end = _quoted_sql_end(sql, index)
+        elif sql.startswith("--", index):
+            newline = sql.find("\n", index + 2)
+            end = len(sql) if newline == -1 else newline + 1
+        elif sql.startswith("/*", index):
+            end = _block_comment_end(sql, index)
+        elif sql[index] == "$":
+            end = _dollar_quoted_sql_end(sql, index)
+
+        if end is not None:
+            adapted.append(sql[index:end].replace("%", "%%"))
+            index = end
+        elif sql.startswith("??", index):
+            adapted.append("?")
+            index += 2
+        elif sql[index] == "?":
+            adapted.append("%s")
+            index += 1
+        elif sql[index] == "%":
+            adapted.append("%%")
+            index += 1
+        else:
+            adapted.append(sql[index])
+            index += 1
+    return "".join(adapted)
 
 
 def _should_prepare(sql: str) -> bool:
@@ -371,13 +468,23 @@ class _SharedActivityRegistry:
     """Reference-counted process-local listener registry."""
 
     def __init__(self) -> None:
+        self._pid = os.getpid()
         self._lock = threading.Lock()
         self._listeners: dict[
             tuple[int, str, str], tuple[_SharedActivityListener, int]
         ] = {}
 
+    def _reset_after_fork_if_needed(self) -> None:
+        current_pid = os.getpid()
+        if current_pid == self._pid:
+            return
+        self._pid = current_pid
+        self._lock = threading.Lock()
+        self._listeners = {}
+
     def acquire(self, dsn: str, *, schema: str) -> _SharedActivityListener:
-        key = (os.getpid(), dsn, schema)
+        self._reset_after_fork_if_needed()
+        key = (self._pid, dsn, schema)
         with self._lock:
             entry = self._listeners.get(key)
             if entry is not None:
@@ -390,7 +497,8 @@ class _SharedActivityRegistry:
             return listener
 
     def release(self, dsn: str, *, schema: str) -> None:
-        key = (os.getpid(), dsn, schema)
+        self._reset_after_fork_if_needed()
+        key = (self._pid, dsn, schema)
         listener: _SharedActivityListener | None = None
         with self._lock:
             entry = self._listeners.get(key)
@@ -636,17 +744,18 @@ class PostgresRunner:
             return
 
         # Fork detected — the parent's pool, connections, and locks are unusable.
+        _abandon_inherited_pool(self._pool)
         self._thread_local = threading.local()
+        self._setup_lock = threading.RLock()
         self._lease_lock = threading.RLock()
         self._leased_operation_lock = threading.RLock()
+        self._meta_cache_lock = threading.Lock()
         self._leased_conn = None
         self._lease_depth = 0
         self._pool = self._create_pool()
-        with self._setup_lock:
-            self._completed_phases.clear()
-        with self._meta_cache_lock:
-            self._meta_cache = None
-            self._schema_bootstrapped = False
+        self._completed_phases.clear()
+        self._meta_cache = None
+        self._schema_bootstrapped = False
         self._pid = current_pid
 
     def lease_thread_connection(self) -> None:
@@ -736,6 +845,7 @@ class PostgresRunner:
         *,
         fetch: bool = False,
     ) -> Iterable[tuple[Any, ...]]:
+        self._check_fork()
         if self._has_leased_connection():
             with self._leased_operation_lock:
                 return self._run(sql, params, fetch=fetch)
@@ -752,7 +862,7 @@ class PostgresRunner:
         leased = self._uses_leased_connection(conn)
         try:
             with conn.cursor() as cur:
-                adapted_sql = _adapt_sql(sql)
+                adapted_sql = _adapt_sql(sql) if params else sql
                 cur.execute(adapted_sql, params, prepare=_should_prepare(adapted_sql))
                 if fetch:
                     return cur.fetchall()
@@ -766,6 +876,7 @@ class PostgresRunner:
                 self._return_thread_conn_after_operation()
 
     def begin_immediate(self) -> None:
+        self._check_fork()
         shared_lock_acquired = False
         if self._has_leased_connection():
             self._leased_operation_lock.acquire()
@@ -800,6 +911,7 @@ class PostgresRunner:
             raise
 
     def commit(self) -> None:
+        self._check_fork()
         failed = False
         leased = self._transaction_uses_leased_connection()
         conn = self._get_thread_conn()
@@ -819,6 +931,7 @@ class PostgresRunner:
                 self._finish_transaction(leased=leased)
 
     def rollback(self) -> None:
+        self._check_fork()
         failed = False
         leased = self._transaction_uses_leased_connection()
         conn = self._get_thread_conn()
@@ -841,6 +954,7 @@ class PostgresRunner:
     def release_thread_connection(self) -> None:
         """Release this handle's lease, returning the shared checkout on last close."""
 
+        self._check_fork()
         conn_to_return: psycopg.Connection[Any] | None = None
         with self._lease_lock:
             if self._lease_depth == 0:
@@ -875,6 +989,7 @@ class PostgresRunner:
 
     def shutdown(self) -> None:
         """Permanently close the connection pool and all connections."""
+        self._check_fork()
         with self._leased_operation_lock:
             with self._lease_lock:
                 leased_conn = self._leased_conn
@@ -888,10 +1003,16 @@ class PostgresRunner:
             self._pool.close()
 
     def __del__(self) -> None:
+        if os.getpid() != getattr(self, "_pid", os.getpid()):
+            pool = getattr(self, "_pool", None)
+            if pool is not None:
+                _abandon_inherited_pool(pool)
+            return
         with contextlib.suppress(Exception):
             self._pool.close()
 
     def setup(self, phase: SetupPhase) -> None:
+        self._check_fork()
         with self._setup_lock:
             self._completed_phases.add(phase)
 
@@ -901,6 +1022,7 @@ class PostgresRunner:
         operation: Callable[[], None],
     ) -> bool:
         """Run a setup operation once for this runner instance."""
+        self._check_fork()
         with self._setup_lock:
             if phase in self._completed_phases:
                 return False
@@ -909,36 +1031,43 @@ class PostgresRunner:
             return True
 
     def is_setup_complete(self, phase: SetupPhase) -> bool:
+        self._check_fork()
         return phase in self._completed_phases
 
     def is_schema_bootstrapped(self) -> bool:
         """Return whether schema DDL has already completed for this runner."""
+        self._check_fork()
         with self._meta_cache_lock:
             return self._schema_bootstrapped
 
     def mark_schema_bootstrapped(self) -> None:
         """Mark schema bootstrap as complete without mutating cached meta."""
+        self._check_fork()
         with self._meta_cache_lock:
             self._schema_bootstrapped = True
 
     def get_meta_cache(self) -> RunnerMetaState | None:
         """Return cached meta state, if available."""
+        self._check_fork()
         with self._meta_cache_lock:
             return self._meta_cache
 
     def prime_meta_cache(self, state: RunnerMetaState) -> None:
         """Store fresh metadata discovered from the database."""
+        self._check_fork()
         with self._meta_cache_lock:
             self._meta_cache = state
             self._schema_bootstrapped = True
 
     def invalidate_meta_cache(self) -> None:
         """Discard cached metadata while keeping bootstrap state."""
+        self._check_fork()
         with self._meta_cache_lock:
             self._meta_cache = None
 
     def invalidate_bootstrap_state(self) -> None:
         """Discard all cached bootstrap state after missing-object errors."""
+        self._check_fork()
         with self._setup_lock:
             self._completed_phases.discard(SetupPhase.SCHEMA)
         with self._meta_cache_lock:
@@ -954,6 +1083,7 @@ class PostgresRunner:
         alias_version: int | None = None,
     ) -> None:
         """Update cached metadata after successful writes."""
+        self._check_fork()
         with self._meta_cache_lock:
             if self._meta_cache is None:
                 return
