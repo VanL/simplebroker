@@ -103,3 +103,20 @@ def test_normalize_message_id_rejects_out_of_range_ints(value: int) -> None:
 def test_normalize_message_id_rejects_non_id_types(value: object) -> None:
     with pytest.raises(TypeError):
         normalize_message_id(value)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["", "123", "1705329000", "2024-01-15", "9223372036854775808", "1.23456789012345e19"],
+)
+def test_parse_exact_message_id_returns_none_instead_of_raising(invalid: str) -> None:
+    """The commands-layer wrapper converts grammar rejection to None.
+
+    Folded from the retired test_parse_exact_message_id.py (audit Task
+    7.3); the exhaustive grammar itself is owned by this file's
+    normalize_message_id suites.
+    """
+    from simplebroker.commands import parse_exact_message_id
+
+    assert parse_exact_message_id(invalid) is None
+    assert parse_exact_message_id("0000000000000000001") == 1

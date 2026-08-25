@@ -144,3 +144,33 @@ def test_move_with_existing_dest_messages(queue_factory):
     assert "existing1" in messages
     assert "existing2" in messages
     assert "new1" in messages
+
+
+def test_move_interleaves_by_original_timestamp_in_destination(queue_factory):
+    """Moved messages interleave with destination natives in ID order.
+
+    Folded from the retired test_move_integration.py (audit Task 7.3).
+    """
+    queue1 = queue_factory("queue1")
+    queue2 = queue_factory("queue2")
+
+    for i in range(5):
+        queue1.write(f"q1-msg{i}")
+    for i in range(3):
+        queue2.write(f"q2-msg{i}")
+
+    assert queue1.move_one("queue2", with_timestamps=False) == "q1-msg0"
+    assert queue1.move_one("queue2", with_timestamps=False) == "q1-msg1"
+
+    assert queue1.peek_many(limit=10, with_timestamps=False) == [
+        "q1-msg2",
+        "q1-msg3",
+        "q1-msg4",
+    ]
+    assert queue2.peek_many(limit=10, with_timestamps=False) == [
+        "q1-msg0",
+        "q1-msg1",
+        "q2-msg0",
+        "q2-msg1",
+        "q2-msg2",
+    ]

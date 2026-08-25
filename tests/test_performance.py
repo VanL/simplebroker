@@ -86,6 +86,10 @@ BASELINE_TIMES = {
     "claim_1k_messages": 0.056,  # Claiming 1000 messages
     "batch_delete_5k_messages": 3.0,  # Physical batch delete of 5000 IDs
     "vacuum_10k_messages": 3.0,  # Estimated based on batch operations
+    "move_large_batch_1k": 1.0,  # Moving 1000 messages in a large batch
+    "claimed_read_1k": 0.75,  # Reading 1000 messages via claims
+    "vacuum_batch_limit": 2.5,  # Vacuum with batch-size limits
+    "large_volume_write_1k": 1.0,  # Writing 1000 messages in bulk
     "write_1k_messages": 0.719,  # Writing 1000 messages
     "move_watcher_100": 2.0,  # Estimated for watcher operations
 }
@@ -613,9 +617,9 @@ def test_move_performance_with_large_batches(workdir: Path) -> None:
 
     assert moved_count == message_count
 
-    # Performance assertion - moves should be fast
-    # Windows filesystem operations are slower, so we allow more time
-    timeout = 6.0 if sys.platform == "win32" else 2.0
+    # Performance assertion through the calibrated never-tighten path
+    # (audit Task 7.8 — ad-hoc absolute budgets bypassed get_timeout).
+    timeout = get_timeout("move_large_batch_1k")
     assert move_time < timeout, f"Moving {message_count} messages took {move_time:.2f}s"
 
     # Verify all messages are in destination
@@ -668,10 +672,8 @@ def test_performance_improvement_with_claims(workdir: Path) -> None:
         ).fetchone()[0]
     assert claimed_count == message_count
 
-    # Performance assertion - reading should be fast
-    # Claimed approach should handle 1000 messages quickly
-    # Windows filesystem operations are slower, so we allow more time
-    timeout = 6.0 if sys.platform == "win32" else 1.5
+    # Calibrated budget (audit Task 7.8).
+    timeout = get_timeout("claimed_read_1k")
     assert read_time < timeout, (
         f"Reading {message_count} messages took {read_time:.2f}s"
     )
@@ -749,8 +751,8 @@ def test_vacuum_batch_size_limits(workdir: Path) -> None:
         cursor.execute("SELECT COUNT(*) FROM messages")
         assert cursor.fetchone()[0] == 0
 
-    # Vacuum should complete reasonably quickly even with many messages
-    assert vacuum_time < 5.0, (
+    # Calibrated budget (audit Task 7.8).
+    assert vacuum_time < get_timeout("vacuum_batch_limit"), (
         f"Vacuum of {message_count} messages took {vacuum_time:.2f}s"
     )
 
@@ -770,9 +772,8 @@ def test_write_performance_not_regressed(workdir: Path) -> None:
 
     write_time = time.monotonic() - start_time
 
-    # Writing should still be fast
-    # Windows needs more time due to filesystem differences
-    timeout = 6.0 if sys.platform == "win32" else 2.0
+    # Calibrated budget (audit Task 7.8).
+    timeout = get_timeout("large_volume_write_1k")
     assert write_time < timeout, (
         f"Writing {message_count} messages took {write_time:.2f}s"
     )

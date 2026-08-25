@@ -8,6 +8,7 @@ import os
 import types
 import warnings
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -664,3 +665,81 @@ def test_default_db_location_owns_target_without_explicit_dir(
     capsys.readouterr()
 
     assert not (location_dir / cli.DEFAULT_DB_NAME).exists()
+
+# ---------------------------------------------------------------------------
+# Folded from the retired test_cli_edge_cases.py (audit Task 7.3). The
+# bare-MagicMock invalid-message-id test was NOT ported: ID grammar is
+# owned by test_message_id_validation and the per-command dispatch
+# representative in test_message_by_timestamp.
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_general_error(tmp_path, capsys):
+    """Cleanup surfaces an unexpected backend error as exit 1."""
+    with (
+        patch("sys.argv", ["simplebroker", "-d", str(tmp_path), "--cleanup"]),
+        patch(
+            "simplebroker._backends.sqlite.plugin.SQLiteBackendPlugin.cleanup_target",
+            side_effect=Exception("Unexpected error"),
+        ),
+    ):
+        result = cli.main()
+
+    assert result == 1
+    assert "Unexpected error" in capsys.readouterr().err
+
+
+def test_dir_is_file_error(tmp_path, capsys):
+    """-d pointing at a file is an invocation error."""
+    file_path = tmp_path / "somefile.txt"
+    file_path.write_text("test")
+
+    with patch("sys.argv", ["simplebroker", "-d", str(file_path), "list"]):
+        assert cli.main() == 1
+    capsys.readouterr()
+
+
+def test_dir_not_directory_not_file(capsys):
+    """-d pointing at nothing is an invocation error."""
+    with patch("sys.argv", ["simplebroker", "-d", "/dev/null/nonexistent", "list"]):
+        assert cli.main() == 1
+    capsys.readouterr()
+
+
+def test_general_exception_quiet_mode_keeps_error_visible(tmp_path, capsys):
+    """Quiet mode suppresses commentary, never error diagnostics."""
+    with (
+        patch("sys.argv", ["simplebroker", "-d", str(tmp_path), "-q", "list"]),
+        patch(
+            "simplebroker.commands.cmd_list",
+            side_effect=Exception("Database error"),
+        ),
+    ):
+        assert cli.main() == 1
+    assert "Database error" in capsys.readouterr().err
+
+
+def test_keyboard_interrupt_handling(tmp_path, capsys):
+    """An interrupt escaping command dispatch is a clean 130."""
+    with (
+        patch("sys.argv", ["simplebroker", "-d", str(tmp_path), "list"]),
+        patch("simplebroker.commands.cmd_list", side_effect=KeyboardInterrupt()),
+    ):
+        result = cli.main()
+
+    captured = capsys.readouterr().err
+    assert result == cli.EXIT_INTERRUPTED
+    assert "interrupted" in captured.lower()
+    assert "Traceback" not in captured
+
+
+def test_pre_dispatch_keyboard_interrupt_handling(capsys):
+    """The outer process wrapper also owns interrupts before parsing."""
+    with patch("simplebroker.cli._build_cli_parser", side_effect=KeyboardInterrupt()):
+        result = cli.main()
+
+    captured = capsys.readouterr().err
+    assert result == cli.EXIT_INTERRUPTED
+    assert "interrupted" in captured.lower()
+    assert "Traceback" not in captured
+

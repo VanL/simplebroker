@@ -236,4 +236,31 @@ def test_resolve_symlinks_safely_rejects_inner_read_error() -> None:
     with pytest.raises(RuntimeError, match="Failed to resolve symlinks"):
         _resolve_symlinks_safely(link)  # type: ignore[arg-type]
 
+# Folded from the retired test_compound_db_names.py (audit Task 7.3);
+# end-to-end compound behavior lives in test_queue_config_defaults.
+@pytest.mark.parametrize(
+    ("name", "expected_compound", "expected_parts"),
+    [
+        ("broker.db", False, []),
+        ("some/name.db", True, ["some", "name.db"]),
+        (".hidden/db.sqlite", True, [".hidden", "db.sqlite"]),
+        ("some\\name.db", True, ["some", "name.db"]),
+    ],
+)
+def test_is_compound_db_name_classification(
+    name: str, expected_compound: bool, expected_parts: list[str]
+) -> None:
+    is_compound, parts = _is_compound_db_name(name)
+    assert is_compound is expected_compound
+    assert parts == expected_parts
+
+
+@pytest.mark.parametrize(
+    "name", [".weft/project/broker.db", ".config/app/queues/main.db"]
+)
+def test_is_compound_db_name_rejects_nested_directories(name: str) -> None:
+    with pytest.raises(
+        ValueError, match="Database name must not contain nested directories"
+    ):
+        _is_compound_db_name(name)
 

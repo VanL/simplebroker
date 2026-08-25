@@ -15,6 +15,7 @@ from simplebroker import Queue, commands, target_for_directory
 from simplebroker._constants import LOGICAL_COUNTER_MASK, load_config
 
 from .conftest import _reset_pg_tables, run_cli
+from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 
 # Test data for timestamp validation
 VALID_TIMESTAMPS = [
@@ -46,53 +47,6 @@ def _write_messages_direct(queue_name: str, messages) -> None:
     with Queue(queue_name, persistent=True) as queue:
         for message in messages:
             queue.write(message)
-
-
-# Additional test data for human-readable formats
-# Get current time for relative tests
-def get_human_readable_test_data():
-    """Generate test data with current timestamps."""
-    now = datetime.datetime.now(datetime.UTC)
-    yesterday = now - datetime.timedelta(days=1)
-    tomorrow = now + datetime.timedelta(days=1)
-
-    return [
-        # (input, description, should_have_messages)
-        # ISO date formats
-        (yesterday.strftime("%Y-%m-%d"), "ISO date yesterday", True),
-        (now.strftime("%Y-%m-%d"), "ISO date today", True),
-        (tomorrow.strftime("%Y-%m-%d"), "ISO date tomorrow", False),
-        # ISO datetime formats
-        (
-            (now - datetime.timedelta(hours=1)).replace(microsecond=0).isoformat(),
-            "ISO datetime 1h ago",
-            True,
-        ),
-        (
-            (now + datetime.timedelta(hours=1)).replace(microsecond=0).isoformat(),
-            "ISO datetime 1h future",
-            False,
-        ),
-        (
-            (now - datetime.timedelta(hours=1))
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z"),
-            "ISO datetime with Z",
-            True,
-        ),
-        # Unix timestamps
-        (str(int(time.time() - 3600)), "Unix timestamp 1h ago", True),
-        (str(int(time.time() + 3600)), "Unix timestamp 1h future", False),
-        (str(int((time.time() - 3600) * 1000)), "Unix milliseconds 1h ago", True),
-        (
-            str(int((time.time() - 3600) * 1_000_000_000)),
-            "Unix nanoseconds 1h ago",
-            True,
-        ),
-    ]
-
-
 INVALID_TIMESTAMPS = [
     ("", "Invalid timestamp: empty string"),  # Empty string validation
     ("abc", "Invalid timestamp: abc"),
@@ -107,72 +61,6 @@ INVALID_TIMESTAMPS = [
 # ============================================================================
 # Basic Functionality Tests
 # ============================================================================
-
-
-def test_after_basic_filtering(workdir):
-    """Test that --after correctly filters messages based on timestamp."""
-    # Write messages and get their timestamps
-    run_cli("write", "test_queue", "msg1", cwd=workdir)
-    rc, out, _ = run_cli("peek", "test_queue", "--timestamps", cwd=workdir)
-    assert rc == 0
-    ts1 = int(out.split("\t")[0])
-
-    # Small delay to ensure different timestamp
-    time.sleep(0.001)
-
-    run_cli("write", "test_queue", "msg2", cwd=workdir)
-    rc, out, _ = run_cli("peek", "test_queue", "--all", "--timestamps", cwd=workdir)
-    assert rc == 0
-    lines = out.strip().split("\n")
-    ts2 = int(lines[1].split("\t")[0])
-
-    # Test filtering with --after
-    # Should get both messages when after=0
-    rc, out, _ = run_cli("peek", "test_queue", "--all", "--after", "0", cwd=workdir)
-    assert rc == 0
-    assert out == "msg1\nmsg2"
-
-    # Should get only msg2 when after=ts1
-    rc, out, _ = run_cli(
-        "peek", "test_queue", "--all", "--after", str(ts1), cwd=workdir
-    )
-    assert rc == 0
-    assert out == "msg2"
-
-    # Should get nothing when after=ts2
-    rc, out, _ = run_cli(
-        "peek", "test_queue", "--all", "--after", str(ts2), cwd=workdir
-    )
-    assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
-    assert out == ""
-
-
-def test_after_exact_boundary(workdir):
-    """Test strict > comparison (not >=)."""
-    # Write a message and get its timestamp
-    run_cli("write", "boundary_queue", "test_message", cwd=workdir)
-    rc, out, _ = run_cli("peek", "boundary_queue", "--timestamps", cwd=workdir)
-    assert rc == 0
-    ts = int(out.split("\t")[0])
-
-    # Read with --after equal to the message timestamp -> expect empty
-    rc, out, _ = run_cli("read", "boundary_queue", "--after", str(ts), cwd=workdir)
-    assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
-    assert out == ""
-
-    # Read with --after one less than timestamp -> expect message
-    rc, out, _ = run_cli("read", "boundary_queue", "--after", str(ts - 1), cwd=workdir)
-    assert rc == 0
-    assert out == "test_message"
-
-
-def test_after_empty_queue(workdir):
-    """Test --after on empty queue returns exit code 2."""
-    rc, _out, _ = run_cli("read", "empty_queue", "--after", "0", cwd=workdir)
-    assert rc == 2  # EXIT_QUEUE_EMPTY
-
-    rc, _out, _ = run_cli("peek", "empty_queue", "--after", "1000", cwd=workdir)
-    assert rc == 2  # EXIT_QUEUE_EMPTY
 
 
 def test_after_empty_queue_after_postgres_schema_reset(
@@ -195,106 +83,9 @@ def test_after_empty_queue_after_postgres_schema_reset(
     assert out == ""
 
 
-def test_after_no_matches(workdir):
-    """Test --after with future timestamp returns exit code 0 (success with no messages)."""
-    # Write a message
-    run_cli("write", "future_queue", "message", cwd=workdir)
-
-    # Use a very large timestamp that's unlikely to be reached
-    future_ts = str(2**63 - 1)
-    rc, out, _ = run_cli("read", "future_queue", "--after", future_ts, cwd=workdir)
-    assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
-    assert out == ""  # No messages returned
-
-    # Verify message is still there
-    rc, out, _ = run_cli("read", "future_queue", cwd=workdir)
-    assert rc == 0
-    assert out == "message"
-
-
 # ============================================================================
 # Flag Combination Tests
 # ============================================================================
-
-
-def test_after_with_all(workdir):
-    """Test --after and --all work together without warning."""
-    # Write multiple messages
-    for i in range(5):
-        run_cli("write", "all_queue", f"msg{i}", cwd=workdir)
-        time.sleep(0.001)  # Ensure different timestamps
-
-    # Get timestamp of third message
-    rc, out, _ = run_cli("peek", "all_queue", "--all", "--timestamps", cwd=workdir)
-    assert rc == 0
-    lines = out.strip().split("\n")
-    ts3 = int(lines[2].split("\t")[0])
-
-    # Read all messages after third one
-    rc, out, err = run_cli(
-        "read", "all_queue", "--all", "--after", str(ts3), cwd=workdir
-    )
-    assert rc == 0
-    assert out == "msg3\nmsg4"
-    assert "warning" not in err.lower()  # No warning about combining flags
-
-
-def test_after_with_json(workdir):
-    """Test JSON output format with --after filtering."""
-    # Write messages
-    run_cli("write", "json_queue", "first", cwd=workdir)
-    time.sleep(0.001)
-    run_cli("write", "json_queue", "second", cwd=workdir)
-
-    # Get first message timestamp
-    rc, out, _ = run_cli("peek", "json_queue", "--timestamps", cwd=workdir)
-    assert rc == 0
-    ts1 = int(out.split("\t")[0])
-
-    # Read with JSON output and --after
-    rc, out, _ = run_cli(
-        "peek", "json_queue", "--all", "--json", "--after", str(ts1), cwd=workdir
-    )
-    assert rc == 0
-
-    # Parse JSON output
-    lines = out.strip().split("\n")
-    assert len(lines) == 1
-    data = json.loads(lines[0])
-    assert data["message"] == "second"
-
-
-def test_after_with_timestamps(workdir):
-    """Test timestamp display with --after filtering."""
-    # Write messages
-    run_cli("write", "ts_queue", "early", cwd=workdir)
-    time.sleep(0.001)
-    run_cli("write", "ts_queue", "late", cwd=workdir)
-
-    # Get early message timestamp
-    rc, out, _ = run_cli("peek", "ts_queue", "--timestamps", cwd=workdir)
-    assert rc == 0
-    early_ts = int(out.split("\t")[0])
-
-    # Read with timestamps and --after
-    rc, out, _ = run_cli(
-        "peek",
-        "ts_queue",
-        "--all",
-        "--timestamps",
-        "--after",
-        str(early_ts),
-        cwd=workdir,
-    )
-    assert rc == 0
-
-    # Verify output format
-    lines = out.strip().split("\n")
-    assert len(lines) == 1
-    parts = lines[0].split("\t")
-    assert len(parts) == 2
-    assert int(parts[0]) > early_ts
-    assert parts[1] == "late"
 
 
 def test_after_with_commit_interval(workdir):
@@ -397,49 +188,6 @@ def test_after_with_peek(workdir):
 # ============================================================================
 
 
-@pytest.mark.parametrize("ts_str,ts_val", VALID_TIMESTAMPS)
-def test_after_valid_timestamps(workdir, ts_str, ts_val):
-    """Test various valid timestamp formats."""
-    # Write a message with a known timestamp
-    run_cli("write", "valid_ts_queue", "test", cwd=workdir)
-
-    # Try to read with valid timestamp
-    rc, _out, err = run_cli("read", "valid_ts_queue", "--after", ts_str, cwd=workdir)
-    # Should succeed (either with message or empty)
-    assert rc in [0, 2]
-    assert "error" not in err.lower()
-
-
-def test_after_human_readable_formats(workdir):
-    """Test human-readable timestamp formats."""
-    queue_name = "human_ts_queue"
-
-    # Write some test messages
-    for i in range(5):
-        run_cli("write", queue_name, f"msg{i}", cwd=workdir)
-        time.sleep(0.001)
-
-    # Test each human-readable format
-    for ts_str, desc, should_have_messages in get_human_readable_test_data():
-        # Peek to avoid consuming messages
-        rc, out, err = run_cli(
-            "peek", queue_name, "--all", "--after", ts_str, cwd=workdir
-        )
-
-        if should_have_messages:
-            # Should find some messages (timestamp is in the past)
-            assert rc == 0, f"Failed for {desc}: {err}"
-            messages = out.strip().split("\n")
-            assert len(messages) >= 1, f"No messages found for {desc}"
-        else:
-            # Should find no messages (timestamp is in the future)
-            assert rc == 2, f"Expected EXIT_QUEUE_EMPTY for {desc} but got rc={rc}"
-            assert out == "", f"Expected no messages for {desc} but got: {out}"
-
-    # Clean up
-    run_cli("delete", queue_name, cwd=workdir)
-
-
 def test_after_iso_date_precise_boundary(workdir):
     """Test that date-only strings are interpreted as midnight UTC precisely."""
     queue_name = "iso_boundary_queue"
@@ -464,152 +212,6 @@ def test_after_iso_date_precise_boundary(workdir):
     assert out.splitlines() == ["after"]
 
 
-def test_after_iso_date_formats(workdir):
-    """Test various ISO 8601 date formats."""
-    queue_name = "iso_date_queue"
-
-    # Write a message
-    run_cli("write", queue_name, "test message", cwd=workdir)
-
-    # Test date-only formats
-    today = datetime.datetime.now(datetime.UTC)
-    yesterday = today - datetime.timedelta(days=1)
-    tomorrow = today + datetime.timedelta(days=1)
-
-    # Yesterday should return the message
-    rc, out, _ = run_cli(
-        "read", queue_name, "--after", yesterday.strftime("%Y-%m-%d"), cwd=workdir
-    )
-    assert rc == 0
-    assert out == "test message"
-
-    # Write another message
-    run_cli("write", queue_name, "another message", cwd=workdir)
-
-    # Tomorrow should return nothing
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--after", tomorrow.strftime("%Y-%m-%d"), cwd=workdir
-    )
-    assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
-    assert out == ""
-
-
-def test_after_iso_datetime_formats(workdir):
-    """Test various ISO 8601 datetime formats."""
-    queue_name = "iso_datetime_queue"
-
-    # Write messages with known timing
-    run_cli("write", queue_name, "msg1", cwd=workdir)
-    time.sleep(0.2)  # 200ms gap to ensure clear separation
-
-    # Get timestamp between messages
-    checkpoint = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
-
-    time.sleep(0.2)  # 200ms gap
-    run_cli("write", queue_name, "msg2", cwd=workdir)
-
-    # Test various ISO formats
-    formats_to_test = [
-        checkpoint.isoformat(),  # Full ISO with timezone
-        checkpoint.replace(tzinfo=None).isoformat(),  # Naive datetime
-        checkpoint.isoformat().replace("+00:00", "Z"),  # Z suffix
-        checkpoint.strftime("%Y-%m-%dT%H:%M:%S"),  # No microseconds
-    ]
-
-    for fmt in formats_to_test:
-        rc, out, err = run_cli("peek", queue_name, "--all", "--after", fmt, cwd=workdir)
-        assert rc == 0, f"Failed for format {fmt}: {err}"
-        # Due to potential timing issues and precision loss when converting to seconds,
-        # we just check that msg2 is included
-        assert "msg2" in out, f"msg2 not found for format {fmt}: {out}"
-        # For formats without microseconds, msg1 might also be included if it's in the same second
-        messages = out.strip().split("\n")
-        assert len(messages) <= 2, f"Too many messages for format {fmt}: {out}"
-
-
-def test_after_unix_timestamp_formats(workdir):
-    """Test Unix timestamp formats (seconds and milliseconds)."""
-    queue_name = "unix_ts_queue"
-
-    # Write initial message
-    run_cli("write", queue_name, "old message", cwd=workdir)
-
-    # Wait until we're in a new second
-    start_second = int(time.time())
-    while int(time.time()) == start_second:
-        time.sleep(0.01)
-
-    # Get current Unix timestamps
-    unix_seconds = int(time.time())
-    unix_millis = int(time.time() * 1000)
-
-    # Wait a bit then write new message
-    time.sleep(0.1)
-    run_cli("write", queue_name, "new message", cwd=workdir)
-
-    # Test with Unix seconds
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--all", "--after", str(unix_seconds), cwd=workdir
-    )
-    assert rc == 0
-    assert out == "new message"
-
-    # Test with Unix milliseconds
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--all", "--after", str(unix_millis), cwd=workdir
-    )
-    assert rc == 0
-    assert out == "new message"
-
-
-def test_after_mixed_timestamp_formats(workdir):
-    """Test mixing different timestamp formats in the same session."""
-    queue_name = "mixed_ts_queue"
-
-    # Write messages over time
-    for i in range(10):
-        run_cli("write", queue_name, f"msg{i}", cwd=workdir)
-        time.sleep(0.05)  # 50ms between messages
-
-    # Get message 5 timestamp in different formats
-    rc, out, _ = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
-    lines = out.strip().split("\n")
-    native_ts = int(lines[5].split("\t")[0])
-
-    # Convert to different formats
-    # Native timestamp is microseconds after epoch << 12
-    us_after_epoch = native_ts >> 12
-    unix_seconds = us_after_epoch // 1_000_000
-    dt = datetime.datetime.fromtimestamp(unix_seconds, datetime.UTC)
-
-    # Test each format
-    # Note: Native format has full precision, but Unix seconds and ISO format
-    # lose millisecond precision, so they may return more messages
-    formats = [
-        (str(native_ts), "native"),  # Native format (exact)
-        (dt.isoformat(), "iso"),  # ISO format (second precision)
-        (str(unix_seconds), "unix"),  # Unix seconds (second precision)
-    ]
-
-    for fmt, name in formats:
-        rc, out, _ = run_cli("peek", queue_name, "--all", "--after", fmt, cwd=workdir)
-        assert rc == 0
-        messages = out.strip().split("\n")
-
-        if name == "native":
-            # Native format should return exactly messages after msg5 (msg6-msg9)
-            assert len(messages) == 4, (
-                f"Native format returned {len(messages)} messages"
-            )
-            assert messages[0] == "msg6"
-            assert messages[-1] == "msg9"
-        else:
-            # Formats with second precision may include more messages due to rounding
-            # They should at least include msg6-msg9, but may include earlier messages
-            assert len(messages) >= 4, (
-                f"{name} format returned {len(messages)} messages"
-            )
-            assert "msg9" in messages  # Should include the last message
             # Due to precision loss, might include messages from the same second as msg5
 
 
@@ -644,7 +246,7 @@ def test_after_during_concurrent_writes(workdir):
         run_cli("write", queue_name, f"initial_{i}", cwd=workdir)
 
     # Get timestamp after initial messages
-    rc, out, _ = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
+    _rc, out, _ = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
     lines = out.strip().split("\n")
     checkpoint_ts = int(lines[-1].split("\t")[0])
 
@@ -657,33 +259,55 @@ def test_after_during_concurrent_writes(workdir):
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(writer)
 
-        # Wait for at least some concurrent messages to be written
-        messages_found = False
-        for _retry in range(20):  # Up to 200ms wait
-            time.sleep(0.01)
-            rc, out, _ = run_cli(
-                "peek", queue_name, "--all", "--after", str(checkpoint_ts), cwd=workdir
-            )
-            if rc == 0:
-                messages_found = True
-                break
+        # --after must see concurrent messages while the writer is live.
+        assert wait_for_condition(
+            lambda: run_cli(
+                "peek",
+                queue_name,
+                "--all",
+                "--after",
+                str(checkpoint_ts),
+                cwd=workdir,
+            )[0]
+            == 0,
+            timeout=scale_timeout_for_ci(10.0),
+        ), "No concurrent messages found after waiting"
 
-        assert messages_found, "No concurrent messages found after waiting"
+        # Two concurrent filtered readers drain competitively; their
+        # union must conserve every concurrent message exactly once
+        # (folded from the deleted test_after_multiple_readers, whose
+        # dead expected-zero branch contradicted the rc==2 contract).
+        collected: list[str] = []
 
-        # Now do the actual read
-        rc, out, _ = run_cli(
-            "read", queue_name, "--all", "--after", str(checkpoint_ts), cwd=workdir
-        )
-        assert rc == 0
+        def drain_reader() -> list[str]:
+            drained: list[str] = []
+            empty_reads = 0
+            while empty_reads < 3:
+                rc, out, _ = run_cli(
+                    "read",
+                    queue_name,
+                    "--all",
+                    "--after",
+                    str(checkpoint_ts),
+                    cwd=workdir,
+                )
+                if rc == 0:
+                    drained.extend(m for m in out.splitlines() if m)
+                    empty_reads = 0
+                else:
+                    assert rc == 2
+                    empty_reads += 1
+            return drained
 
-        # Verify we only got messages after checkpoint
-        messages = out.strip().split("\n")
-        # Filter out empty strings from split
-        messages = [msg for msg in messages if msg]
-        for msg in messages:
+        future.result()  # Writer finished: all 10 messages durable.
+        with ThreadPoolExecutor(max_workers=2) as readers:
+            reader_futures = [readers.submit(drain_reader) for _ in range(2)]
+            for reader_future in reader_futures:
+                collected.extend(reader_future.result())
+
+        assert sorted(collected) == sorted(f"concurrent_{i}" for i in range(10))
+        for msg in collected:
             assert msg.startswith("concurrent_")
-
-        future.result()  # Wait for writer to finish
 
 
 def test_after_checkpoint_pattern(workdir):
@@ -734,144 +358,9 @@ def test_after_checkpoint_pattern(workdir):
         assert msg == expected
 
 
-def test_after_multiple_readers(workdir):
-    """Test multiple concurrent readers with different --after values."""
-    queue_name = "multi_reader_queue"
-
-    # Write messages with known timestamps
-    timestamps = []
-    for i in range(10):
-        run_cli("write", queue_name, f"msg{i}", cwd=workdir)
-        rc, out, err = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
-        assert rc == 0, err
-        lines = out.strip().split("\n")
-        timestamps.append(int(lines[-1].split("\t")[0]))
-        time.sleep(0.001)
-
-    # Multiple readers with different --after values
-    def reader(after_ts, expected_count):
-        rc, out, _ = run_cli(
-            "peek", queue_name, "--all", "--after", str(after_ts), cwd=workdir
-        )
-        if expected_count > 0:
-            assert rc == 0
-            messages = out.strip().split("\n")
-            assert len(messages) == expected_count
-        else:
-            assert rc == 0  # Should succeed with --after
-            assert out == ""  # But return no messages
-
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [
-            executor.submit(reader, 0, 10),  # All messages
-            executor.submit(reader, timestamps[4], 5),  # Last 5 messages
-            executor.submit(reader, timestamps[8], 1),  # Last message only
-        ]
-
-        for future in futures:
-            future.result()
-
-
 # ============================================================================
 # Edge Cases and Boundary Tests
 # ============================================================================
-
-
-def test_after_zero(workdir):
-    """Test --after 0 returns all messages."""
-    queue_name = "zero_queue"
-
-    # Write messages
-    messages = ["first", "second", "third"]
-    for msg in messages:
-        run_cli("write", queue_name, msg, cwd=workdir)
-
-    # Read with --after 0
-    rc, out, _ = run_cli("read", queue_name, "--all", "--after", "0", cwd=workdir)
-    assert rc == 0
-    assert out == "\n".join(messages)
-
-
-def test_after_max_timestamp(workdir):
-    """Test --after with maximum 64-bit value."""
-    queue_name = "max_ts_queue"
-
-    # Write a message
-    run_cli("write", queue_name, "test", cwd=workdir)
-
-    # Read with maximum timestamp
-    max_ts = str(2**63 - 1)
-    rc, out, _ = run_cli("read", queue_name, "--after", max_ts, cwd=workdir)
-    assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
-    assert out == ""  # No messages should have timestamp > max
-
-    # Verify message still exists
-    rc, out, _ = run_cli("read", queue_name, cwd=workdir)
-    assert rc == 0
-    assert out == "test"
-
-
-def test_after_queue_not_found(workdir):
-    """Test --after with non-existent queue."""
-    rc, _out, _ = run_cli("read", "nonexistent", "--after", "1000", cwd=workdir)
-    assert rc == 2  # EXIT_QUEUE_EMPTY
-
-
-def test_after_timestamp_heuristic_edge_cases(workdir):
-    """Test edge cases that expose fragility in the digit-count heuristic."""
-    queue_name = "heuristic_edge_queue"
-
-    # Write a test message
-    run_cli("write", queue_name, "test", cwd=workdir)
-
-    # Test 1: 12-digit number (ambiguous - could be ms from year ~2286)
-    twelve_digits = 100000000000  # 12 digits
-    rc, out, _ = run_cli("peek", queue_name, "--after", str(twelve_digits), cwd=workdir)
-    assert rc == 0  # Treated as seconds (100 billion seconds = year 5138)
-
-    # Test 2: 14-digit nanosecond timestamp from 1970
-    # 10000000000000 ns = 10 seconds after epoch
-    # With 14 digits, our heuristic treats it as milliseconds
-    # 10 trillion ms = ~317 years after epoch, which causes overflow
-    fourteen_digit_ns = 10000000000000  # 10 trillion nanoseconds = 10 seconds
-    rc, out, err = run_cli(
-        "peek", queue_name, "--after", str(fourteen_digit_ns), cwd=workdir
-    )
-    # This will be treated as milliseconds and cause overflow error
-    assert rc == 1, f"Expected error but got rc={rc}, out={out}, err={err}"
-    assert "Invalid timestamp" in err
-
-    # Test 3: Historical timestamps with unusual digit counts
-    # 10-digit timestamp (1 billion seconds = ~31.7 years after epoch = year 2001)
-    historical_seconds = 1000000000  # 10 digits, Sept 2001
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--after", str(historical_seconds), cwd=workdir
-    )
-    assert rc == 0  # Should be treated as seconds and return message
-
-    # Test 4: Demonstrate the heuristic breaking
-    # A valid 17-digit nanosecond timestamp that will be misinterpreted
-    # 10000000000000000 ns = 10 seconds after epoch
-    seventeen_digit_ns = 10000000000000000
-    rc, out, err = run_cli(
-        "peek", queue_name, "--after", str(seventeen_digit_ns), cwd=workdir
-    )
-    # Will be treated as nanoseconds correctly, so should return message
-    assert rc == 0
-
-    # Test 5: Suffix disambiguates correctly
-    # Same 14-digit value with explicit suffix
-    rc1, _, _ = run_cli(
-        "peek", queue_name, "--after", f"{fourteen_digit_ns}ns", cwd=workdir
-    )
-    assert rc1 == 0  # Correctly treated as 10 seconds after epoch
-
-    # Show that without suffix it causes an error
-    rc2, _, err2 = run_cli(
-        "peek", queue_name, "--after", str(fourteen_digit_ns), cwd=workdir
-    )
-    assert rc2 == 1  # Misinterpreted as milliseconds, causes overflow
-    assert "Invalid timestamp" in err2
 
 
 def test_after_timestamp_heuristic(workdir):
@@ -931,59 +420,6 @@ def test_after_hybrid_timestamp_ordering(workdir):
     result_messages = out.strip().split("\n")
     expected_messages = messages[mid_point + 1 :]
     assert result_messages == expected_messages
-
-
-def test_after_unit_suffixes(workdir):
-    """Test explicit unit suffixes for timestamp disambiguation."""
-    queue_name = "suffix_queue"
-
-    # Write some messages
-    for i in range(3):
-        run_cli("write", queue_name, f"msg{i}", cwd=workdir)
-        time.sleep(0.001)
-
-    # Test valid suffixes
-    for ts_str, desc, should_work in UNIT_SUFFIX_TESTS:
-        if should_work:
-            # Test with peek to avoid consuming messages
-            rc, out, err = run_cli(
-                "peek", queue_name, "--all", "--after", ts_str, cwd=workdir
-            )
-            # Should either return messages or be empty (depending on timestamp value)
-            assert rc in [0, 2], f"Failed for {desc}: {err}"
-            assert "error" not in err.lower(), f"Unexpected error for {desc}: {err}"
-        else:
-            # Should fail with error
-            rc, out, err = run_cli("peek", queue_name, "--after", ts_str, cwd=workdir)
-            assert rc == 1, f"Expected error for {desc} but got rc={rc}"
-            assert "Invalid timestamp" in err, f"Wrong error for {desc}: {err}"
-
-    # Test that suffixes work correctly with actual timestamps
-    # Note: `test_after_unit_suffixes` relies on
-    # int(time.time()) which truncates the fractional part.
-    # If the last message is written at 12 :00 :00.900 and the call to
-    # `time.time()` happens 120 ms later (12 :00 :01.020) the integer seconds
-    # value is still **12 :00 :01 → 1 020 ms earlier than the real clock
-    # value** used by the message.
-    # Because `--after` uses a strict “greater than” comparison, the truncated
-    # value can be **earlier than the message timestamps**, so the queue still
-    # matches and the assertion `out == ""` fails.
-    # This can be a particular problem with different CI/CD environments
-    # where the time resolution can vary. So we make this deterministic by
-    # setting a future timestamp that is guaranteed to be after the last message.
-    future = time.time() + 2  # At least 2 seconds after the last message
-    now_s = int(future)
-    now_ms = int(future * 1000)
-    now_ns = int(future * 1_000_000_000)
-
-    # All of these should filter out our old messages
-    for suffix_ts in [f"{now_s}s", f"{now_ms}ms", f"{now_ns}ns"]:
-        rc, out, err = run_cli(
-            "peek", queue_name, "--all", "--after", suffix_ts, cwd=workdir
-        )
-        assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
-        assert out == ""  # Verify no messages are returned
-        assert err == "", f"Unexpected error for {suffix_ts}: {err}"
 
 
 def test_after_negative_timestamps(workdir):
@@ -1061,55 +497,6 @@ def test_after_uses_persisted_cross_process_timestamp_order(workdir):
     assert out == "msg1\nmsg2"
 
 
-def test_after_naive_datetime_utc_assumption(workdir):
-    """Test that naive datetime strings are assumed to be UTC."""
-    queue_name = "naive_utc_queue"
-
-    # Write a message and get its timestamp
-    run_cli("write", queue_name, "test_message", cwd=workdir)
-    rc, out, _ = run_cli("peek", queue_name, "--timestamps", cwd=workdir)
-    native_ts = int(out.split("\t")[0])
-
-    # Convert native timestamp to datetime
-    # Native timestamp is microseconds after epoch << 12
-    us_after_epoch = native_ts >> 12
-    dt_utc = datetime.datetime.fromtimestamp(
-        us_after_epoch / 1_000_000, datetime.UTC
-    ).replace(microsecond=0)
-
-    # Create naive datetime (no timezone info)
-    dt_naive = dt_utc.replace(tzinfo=None)
-    naive_iso_str = dt_naive.isoformat()
-
-    # The naive datetime should be interpreted as UTC
-    # So using it as --after with a slight offset should work correctly
-
-    # Test 1: Check behavior with naive datetime
-    # Due to precision loss during conversion, the timestamp might be before the message
-    rc, out, _ = run_cli("peek", queue_name, "--after", naive_iso_str, cwd=workdir)
-    # Could return message (rc=0) due to precision loss, or filter it out (rc=2)
-    assert rc in [0, 2], f"Expected 0 or 2 but got {rc}"
-    if rc == 0:
-        assert out == "test_message"
-    else:
-        assert out == ""
-
-    # Test 2: Using naive datetime 1 second earlier should return the message
-    dt_earlier = dt_naive - datetime.timedelta(seconds=1)
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--after", dt_earlier.isoformat(), cwd=workdir
-    )
-    assert rc == 0
-    assert out == "test_message"
-
-    # Test 3: Compare with explicit UTC datetime to verify assumption
-    dt_utc_explicit = dt_utc.isoformat()
-    rc1, _, _ = run_cli("peek", queue_name, "--after", naive_iso_str, cwd=workdir)
-    rc2, _, _ = run_cli("peek", queue_name, "--after", dt_utc_explicit, cwd=workdir)
-    # Both should behave identically due to UTC assumption
-    assert rc1 == rc2, f"Naive ISO gave {rc1}, UTC explicit gave {rc2}"
-
-
 def test_after_error_messages_are_helpful(workdir):
     """Test that error messages provide helpful information for common mistakes."""
     queue_name = "error_test_queue"
@@ -1147,62 +534,128 @@ def test_after_error_messages_are_helpful(workdir):
 # ============================================================================
 
 
-def test_after_with_json_and_timestamps(workdir):
-    """Test combining --after with both --json and --timestamps."""
-    queue_name = "json_ts_queue"
 
-    # Write messages
-    run_cli("write", queue_name, "old_message", cwd=workdir)
-    time.sleep(0.002)
-    run_cli("write", queue_name, "new_message", cwd=workdir)
 
-    # Get old message timestamp
-    rc, out, _ = run_cli("peek", queue_name, "--timestamps", cwd=workdir)
-    old_ts = int(out.split("\t")[0])
+# ---------------------------------------------------------------------------
+# Parametrized owners rebuilt on the deterministic insert_messages pattern
+# (audit plan Task 7.1; test_after_iso_date_precise_boundary is the model,
+# test_before_flag.py the target shape). These absorb the deleted
+# boundary/emptiness, flag-combination, and format families.
+# ---------------------------------------------------------------------------
 
-    # Read with all flags combined
-    rc, out, _ = run_cli(
-        "peek",
-        queue_name,
-        "--all",
-        "--json",
-        "--timestamps",
-        "--after",
-        str(old_ts),
-        cwd=workdir,
+_ANCHOR_DATE = datetime.date(2024, 1, 15)
+_ANCHOR_DAYS = (_ANCHOR_DATE - datetime.date(1970, 1, 1)).days
+_ANCHOR_SECONDS = _ANCHOR_DAYS * 86_400
+_ANCHOR_NS = _ANCHOR_SECONDS * 1_000_000_000
+_ANCHOR_ID = _ANCHOR_NS & ~LOGICAL_COUNTER_MASK
+
+
+def _seed_around_anchor(workdir, queue_name):
+    """Three messages with exact IDs strictly before/at/after the anchor."""
+    target = target_for_directory(workdir)
+    with Queue(queue_name, db_path=target) as queue:
+        queue.insert_messages(
+            [
+                ("before", _ANCHOR_ID - 4096),
+                ("at", _ANCHOR_ID),
+                ("after", _ANCHOR_ID + 4096),
+            ]
+        )
+
+
+@pytest.mark.parametrize("command", ["read", "peek"])
+@pytest.mark.parametrize(
+    ("after_value", "expected", "expected_rc"),
+    [
+        ("0", ["before", "at", "after"], 0),
+        (str(_ANCHOR_ID - 4096), ["at", "after"], 0),  # strictly greater
+        (str(_ANCHOR_ID), ["after"], 0),
+        (str(_ANCHOR_ID + 4096), [], 2),
+        (str(2**63 - 1), [], 2),
+    ],
+)
+def test_after_boundary_is_strictly_greater(
+    workdir, command, after_value, expected, expected_rc
+):
+    """Strict-> boundary semantics at exact seeded IDs, both commands."""
+    queue_name = f"boundary_{command}_{after_value}"
+    _seed_around_anchor(workdir, queue_name)
+
+    rc, out, err = run_cli(
+        command, queue_name, "--all", "--after", after_value, cwd=workdir
     )
-    assert rc == 0
-
-    # Parse and verify JSON output
-    lines = out.strip().split("\n")
-    assert len(lines) == 1
-
-    data = json.loads(lines[0])
-    assert data["message"] == "new_message"
-    assert "timestamp" in data
-    assert int(data["timestamp"]) > old_ts
+    assert rc == expected_rc, err
+    assert [line for line in out.splitlines() if line] == expected
 
 
-def test_after_single_message_mode(workdir):
-    """Test --after without --all (single message mode)."""
-    queue_name = "single_mode_queue"
+@pytest.mark.parametrize("command", ["read", "peek"])
+def test_after_empty_and_missing_queues_exit_two(workdir, command):
+    rc, out, _ = run_cli(command, "missing_queue", "--after", "0", cwd=workdir)
+    assert rc == 2
+    assert out == ""
 
-    # Write multiple messages
-    for i in range(5):
-        run_cli("write", queue_name, f"msg{i}", cwd=workdir)
-        time.sleep(0.001)
 
-    # Get timestamp of second message
-    rc, out, _ = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
-    lines = out.strip().split("\n")
-    ts2 = int(lines[1].split("\t")[0])
+@pytest.mark.parametrize(
+    "mode", ["all", "json", "timestamps", "json_timestamps", "single"]
+)
+def test_after_flag_combinations(workdir, mode):
+    """--after composes with --all/--json/--timestamps and single mode."""
+    queue_name = f"combo_{mode}"
+    _seed_around_anchor(workdir, queue_name)
+    args = ["read", queue_name, "--after", str(_ANCHOR_ID - 4096)]
+    if mode != "single":
+        args.append("--all")
+    if "json" in mode:
+        args.append("--json")
+    if "timestamps" in mode:
+        args.append("--timestamps")
 
-    # Read single message with --after
-    rc, out, _ = run_cli("read", queue_name, "--after", str(ts2), cwd=workdir)
-    assert rc == 0
-    assert out == "msg2"  # Should get the first message after ts2
+    rc, out, err = run_cli(*args, cwd=workdir)
+    assert rc == 0, err
+    lines = [line for line in out.splitlines() if line]
 
-    # Verify remaining messages
-    rc, out, _ = run_cli("read", queue_name, "--all", cwd=workdir)
-    assert rc == 0
-    assert out == "msg0\nmsg1\nmsg3\nmsg4"
+    if mode == "single":
+        assert lines == ["at"]
+        return
+    if mode == "all":
+        assert lines == ["at", "after"]
+    elif mode == "timestamps":
+        rows = [line.split("\t") for line in lines]
+        assert [body for _ts, body in rows] == ["at", "after"]
+        assert [int(ts) for ts, _body in rows] == [_ANCHOR_ID, _ANCHOR_ID + 4096]
+    else:
+        payloads = [json.loads(line) for line in lines]
+        assert [payload["message"] for payload in payloads] == ["at", "after"]
+        assert [payload["timestamp"] for payload in payloads] == [
+            str(_ANCHOR_ID),
+            str(_ANCHOR_ID + 4096),
+        ]
+
+
+@pytest.mark.parametrize(
+    "after_form",
+    [
+        "2024-01-15",  # ISO date (midnight UTC)
+        "2024-01-15T00:00:00",  # naive ISO datetime, assumed UTC
+        "2024-01-15T00:00:00Z",  # explicit UTC
+        str(_ANCHOR_SECONDS),  # bare unix seconds
+        f"{_ANCHOR_SECONDS}s",  # explicit seconds suffix
+        f"{_ANCHOR_SECONDS * 1000}ms",  # milliseconds
+        f"{_ANCHOR_NS}ns",  # nanoseconds
+        str(_ANCHOR_ID),  # native hybrid ID
+    ],
+)
+def test_after_documented_formats_select_the_same_boundary(workdir, after_form):
+    """Every documented --after form resolves to the same anchor instant.
+
+    Exact seeded IDs, no wall-clock coupling (the deleted format family
+    span-waited on real second boundaries — the file's flake source).
+    """
+    queue_name = f"format_{abs(hash(after_form)) % 10_000}"
+    _seed_around_anchor(workdir, queue_name)
+
+    rc, out, err = run_cli(
+        "peek", queue_name, "--all", "--after", after_form, cwd=workdir
+    )
+    assert rc == 0, err
+    assert [line for line in out.splitlines() if line] == ["after"]

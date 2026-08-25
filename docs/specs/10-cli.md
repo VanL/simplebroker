@@ -370,8 +370,8 @@ _Verification_:
 - `tests/test_documented_exit_codes.py` — [SB-CLI-1] + README link
 - `tests/test_agent_kernel_contract.py` — [SB-CLI-1] + kernel link
 - `[SB-CLI-1]` interrupt split:
-  `tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_keyboard_interrupt_handling`,
-  `tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_pre_dispatch_keyboard_interrupt_handling`,
+  `tests/test_cli_main.py::test_keyboard_interrupt_handling`,
+  `tests/test_cli_main.py::test_pre_dispatch_keyboard_interrupt_handling`,
   `tests/test_cli_watch.py::TestWatchCommand::test_watch_sigint_remains_success`
 - `[SB-CLI-1]` closed-stdout split:
   `tests/test_cli_broken_pipe.py` (default-buffered finite process output and

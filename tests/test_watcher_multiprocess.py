@@ -387,152 +387,6 @@ def test_queue_state_diagnostics_are_best_effort(tmp_path: Path) -> None:
     assert unavailable.startswith("unavailable (OperationalError:")
 
 
-def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
-    """Test multiple processes watching the same queue."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = str(Path(tmpdir) / "test.db")
-        broker = BrokerDB(db_path)
-
-        # Create multiprocessing queues for communication
-        result_queue: multiprocessing.queues.Queue[Any] = multiprocessing.Queue()
-        control_queues = []
-        processes: list[multiprocessing.Process] = []
-
-        try:
-
-            def process_diagnostics() -> list[tuple[int, int | None, int | None, bool]]:
-                return [
-                    (i, p.pid, p.exitcode, p.is_alive())
-                    for i, p in enumerate(processes)
-                ]
-
-            errors: list[tuple[int, str]] = []
-            processed_messages: list[tuple[int, str]] = []
-            seen_messages: set[str] = set()
-
-            def collect_until_seen(
-                expected_messages: set[str], *, timeout: float
-            ) -> None:
-                deadline = _deadline_after(timeout)
-                while time.monotonic() < deadline:
-                    if expected_messages <= seen_messages:
-                        return
-
-                    try:
-                        msg_type, proc_id, data = _get_before_deadline(
-                            result_queue,
-                            deadline=deadline,
-                        )
-                    except queue.Empty:
-                        continue
-
-                    if msg_type == "message":
-                        processed_messages.append((proc_id, data))
-                        seen_messages.add(data)
-                    elif msg_type == "error":
-                        errors.append((proc_id, data))
-                        break
-
-                missing = sorted(expected_messages - seen_messages)
-                queue_state = _queue_state_for_diagnostics(db_path, "shared_queue")
-                raise AssertionError(
-                    "Timed out waiting for shared-queue watcher messages: "
-                    f"received={len(processed_messages)}, "
-                    f"missing_count={len(missing)}, missing_sample={missing[:10]}, "
-                    f"queue_state={queue_state}, errors={errors}, "
-                    f"processes={process_diagnostics()}"
-                )
-
-            # Start multiple watcher processes
-            num_processes = 4
-
-            for i in range(num_processes):
-                control_queue: multiprocessing.queues.Queue[Any] = (
-                    multiprocessing.Queue()
-                )
-                control_queues.append(control_queue)
-
-                p = multiprocessing.Process(
-                    target=watcher_process,
-                    args=(db_path, "shared_queue", result_queue, control_queue, i),
-                )
-                p.start()
-                processes.append(p)
-
-            # Wait for all processes to be ready
-            ready_processes: set[int] = set()
-            ready_deadline = _deadline_after(10.0)
-            while (
-                len(ready_processes) < num_processes
-                and time.monotonic() < ready_deadline
-            ):
-                try:
-                    msg_type, proc_id, data = _get_before_deadline(
-                        result_queue,
-                        deadline=ready_deadline,
-                    )
-                except queue.Empty:
-                    continue
-
-                if msg_type == "ready":
-                    ready_processes.add(proc_id)
-                elif msg_type == "error":
-                    errors.append((proc_id, data))
-                    break
-
-            if errors or len(ready_processes) != num_processes:
-                raise AssertionError(
-                    "Timed out waiting for watcher processes to start: "
-                    f"ready={sorted(ready_processes)}, errors={errors}, "
-                    f"processes={process_diagnostics()}"
-                )
-
-            num_messages = 100
-            expected_messages = {f"message_{i}" for i in range(num_messages)}
-
-            # Prove at least one shared-queue watcher can consume before bulk writes.
-            broker.write("shared_queue", "message_0")
-            collect_until_seen({"message_0"}, timeout=10.0)
-
-            # Write remaining messages
-            for i in range(1, num_messages):
-                broker.write("shared_queue", f"message_{i}")
-
-            # Collect processed messages
-            collect_until_seen(
-                expected_messages,
-                timeout=_SHARED_QUEUE_BULK_TIMEOUT,
-            )
-
-            # Verify all messages were processed
-            message_bodies = [msg for _, msg in processed_messages]
-            assert len(message_bodies) == num_messages
-            # Order is not guaranteed with multiple consumers, just verify all messages present
-            assert set(message_bodies) == expected_messages
-
-            # Check distribution across processes
-            process_counts: dict[int, int] = {}
-            for proc_id, _ in processed_messages:
-                process_counts[proc_id] = process_counts.get(proc_id, 0) + 1
-
-            # At least one process should have processed messages
-            # Note: With competitive consumption, there's no guarantee all processes get work
-            assert len(process_counts) >= 1
-            assert sum(process_counts.values()) == num_messages
-        finally:
-            # Stop all processes
-            for control_queue in control_queues:
-                # Queue may be closed already
-                with contextlib.suppress(Exception):
-                    control_queue.put("stop")
-
-            # Wait for processes to finish and ensure cleanup
-            for p in processes:
-                _cleanup_process(p)
-
-            broker.close()
-
-
 def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
     """Test multiple processes each watching their own queue."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -922,12 +776,35 @@ def test_multiprocess_contention_preserves_exact_delivery() -> None:  # noqa: C9
             assert ready == set(range(process_count))
 
             expected: dict[int, str] = {}
+            # Phased-delivery probe (ported from the deleted
+            # test_multiprocess_single_queue per the plan's equivalence
+            # invariant): prove at least one child consumes before the
+            # bulk writes land.
             with BrokerDB(db_path) as broker:
-                for index in range(100):
+                expected[broker.write("shared_queue", "message_0")] = "message_0"
+            first_delivery_deadline = _deadline_after(15.0)
+            first_delivered: list[tuple[str, int]] = []
+            while not first_delivered and time.monotonic() < first_delivery_deadline:
+                try:
+                    kind, process_id, data = _get_before_deadline(
+                        result_queue, deadline=first_delivery_deadline
+                    )
+                except queue.Empty:
+                    continue
+                if kind == "message":
+                    first_delivered.append(data)
+                elif kind == "error":
+                    errors.append((process_id, data))
+                    break
+            assert errors == []
+            assert first_delivered and first_delivered[0][0] == "message_0"
+
+            with BrokerDB(db_path) as broker:
+                for index in range(1, 100):
                     message = f"message_{index}"
                     expected[broker.write("shared_queue", message)] = message
 
-            delivered: list[tuple[str, int]] = []
+            delivered: list[tuple[str, int]] = list(first_delivered)
             deadline = _deadline_after(_SHARED_QUEUE_BULK_TIMEOUT)
             while len(delivered) < len(expected) and time.monotonic() < deadline:
                 try:
@@ -971,6 +848,27 @@ def test_multiprocess_contention_preserves_exact_delivery() -> None:  # noqa: C9
                     errors.append((process_id, data))
             assert errors == []
             assert stopped == set(range(process_count))
+
+            # No processing after stop (ported evidence): a message
+            # written after every child reported its final stats must
+            # stay pending.
+            with BrokerDB(db_path) as broker:
+                broker.write("shared_queue", "post_stop_message")
+            time_budget = _deadline_after(1.0)
+            while time.monotonic() < time_budget:
+                try:
+                    kind, process_id, data = _get_before_deadline(
+                        result_queue, deadline=time_budget
+                    )
+                except queue.Empty:
+                    break
+                assert kind != "message", (
+                    f"stopped child {process_id} processed {data!r}"
+                )
+            with BrokerDB(db_path) as observer:
+                assert observer.peek_many(
+                    "shared_queue", limit=1, with_timestamps=False
+                ) == ["post_stop_message"]
         finally:
             for control_queue in control_queues:
                 with contextlib.suppress(Exception):

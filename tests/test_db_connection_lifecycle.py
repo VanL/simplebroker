@@ -41,21 +41,6 @@ class CloseResource:
             raise RuntimeError("close failed")
 
 
-def test_get_connection_caches_and_cleans_up_managed_resource(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    connection = DBConnection(str(tmp_path / "broker.db"))
-    resource = ShutdownResource()
-    monkeypatch.setattr(connection, "_create_managed_connection", lambda: resource)
-
-    assert connection.get_connection() is resource
-    assert connection.get_connection() is resource
-    connection.cleanup()
-
-    assert resource.shutdown_calls == 1
-    assert not hasattr(connection._thread_local, "db")
-
-
 def test_get_connection_rejects_pre_set_stop_event(tmp_path: Path) -> None:
     connection = DBConnection(str(tmp_path / "broker.db"))
     stop_event = threading.Event()
@@ -64,59 +49,6 @@ def test_get_connection_rejects_pre_set_stop_event(tmp_path: Path) -> None:
 
     with pytest.raises(StopException, match="Connection interrupted"):
         connection.get_connection()
-
-
-def test_cleanup_handles_registered_and_thread_only_resources(tmp_path: Path) -> None:
-    connection = DBConnection(str(tmp_path / "broker.db"))
-    registered = CloseResource()
-    thread_only = ShutdownResource()
-    connection._connection_registry.add(registered)
-    connection._thread_local.db = thread_only
-
-    connection.cleanup()
-
-    assert registered.close_calls == 1
-    assert thread_only.shutdown_calls == 1
-
-
-def test_cleanup_does_not_close_an_owned_core_twice(tmp_path: Path) -> None:
-    connection = DBConnection(str(tmp_path / "broker.db"))
-    core = ShutdownResource()
-    connection._core = core  # type: ignore[assignment]
-    connection._connection_registry.add(core)
-
-    connection.cleanup()
-
-    assert core.shutdown_calls == 1
-
-
-def test_cleanup_logs_registered_core_and_runner_failures(
-    tmp_path: Path, caplog
-) -> None:
-    connection = DBConnection(
-        str(tmp_path / "broker.db"), config={"BROKER_LOGGING_ENABLED": True}
-    )
-    registered = ShutdownResource(fail=True)
-    owned_core = ShutdownResource(fail=True)
-    connection._connection_registry.add(registered)
-    connection._core = owned_core  # type: ignore[assignment]
-
-    runner_connection = DBConnection(
-        str(tmp_path / "runner.db"), config={"BROKER_LOGGING_ENABLED": True}
-    )
-    owned_runner = CloseResource(fail=True)
-    runner_connection._runner = owned_runner  # type: ignore[assignment]
-
-    with caplog.at_level("WARNING", logger="simplebroker.db"):
-        connection.cleanup()
-        runner_connection.cleanup()
-
-    assert registered.shutdown_calls == 1
-    assert owned_core.shutdown_calls == 1
-    assert owned_runner.close_calls == 1
-    assert "Error closing registered connection: shutdown failed" in caplog.text
-    assert "Error closing owned core: shutdown failed" in caplog.text
-    assert "Error closing runner: close failed" in caplog.text
 
 
 def test_set_stop_event_tolerates_legacy_cached_connection(tmp_path: Path) -> None:

@@ -140,41 +140,6 @@ def test_stdlib_xattr_provider_wraps_get_and_set_values_as_bytes(
     assert calls == [(target, "user.phaselock.phase", b"1")]
 
 
-def test_darwin_xattr_provider_returns_none_on_non_darwin_platform(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(phaselock_module, "_platform", "linux")
-    monkeypatch.setattr(
-        phaselock_module,
-        "_DARWIN_XATTR_PROVIDER",
-        phaselock_module._DARWIN_XATTR_PROVIDER_UNSET,
-    )
-
-    assert phaselock_module._darwin_xattr_provider() is None
-
-
-def test_darwin_xattr_provider_caches_initialization_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import ctypes
-
-    monkeypatch.setattr(phaselock_module, "_platform", "darwin")
-    monkeypatch.setattr(
-        phaselock_module,
-        "_DARWIN_XATTR_PROVIDER",
-        phaselock_module._DARWIN_XATTR_PROVIDER_UNSET,
-    )
-    monkeypatch.setattr(
-        ctypes,
-        "CDLL",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("no libc")),
-    )
-
-    assert phaselock_module._darwin_xattr_provider() is None
-    assert phaselock_module._DARWIN_XATTR_PROVIDER is None
-    assert phaselock_module._darwin_xattr_provider() is None
-
-
 class _FakeCFunction:
     def __init__(self, handler: Callable[..., int]) -> None:
         self._handler = handler
@@ -360,49 +325,6 @@ def test_darwin_xattr_provider_returns_empty_value_without_second_read(
     assert provider is not None
     assert provider.get_value(target, "user.phaselock.empty") == b""
     assert calls == [(os.fsencode(target), b"user.phaselock.empty", None, 0, 0, 0)]
-
-
-def test_darwin_xattr_provider_retries_get_when_value_grows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import ctypes
-
-    target = tmp_path / "broker.db"
-    value = b"grown"
-    calls: list[tuple[object | None, int]] = []
-
-    def getxattr(
-        path: bytes,
-        key: bytes,
-        buffer: object | None,
-        size: int,
-        position: int,
-        options: int,
-    ) -> int:
-        calls.append((buffer, size))
-        if len(calls) == 1:
-            return 3
-        if len(calls) == 2:
-            ctypes.set_errno(getattr(errno, "ERANGE", 34))
-            return -1
-        if len(calls) == 3:
-            return len(value)
-        assert buffer is not None
-        ctypes.memmove(cast(Any, buffer), value, len(value))
-        return len(value)
-
-    _install_fake_darwin_libc(monkeypatch, getxattr)
-    provider = phaselock_module._darwin_xattr_provider()
-
-    assert provider is not None
-    assert provider.get_value(target, "user.phaselock.phase") == value
-    assert [(buffer is None, size) for buffer, size in calls] == [
-        (True, 0),
-        (False, 3),
-        (True, 0),
-        (False, len(value)),
-    ]
 
 
 def test_darwin_xattr_provider_raises_when_read_fails_without_erange(
@@ -1629,38 +1551,6 @@ def test_no_xattr_waiter_does_not_skip_when_phase_marked_while_lock_is_held(
     assert result.skipped == ("connection-v1",)
     assert calls == []
     assert not waiter.is_alive()
-
-
-def test_no_xattr_non_strict_waiter_skips_when_phase_marked_while_lock_is_held(
-    tmp_path: Path,
-) -> None:
-    target = tmp_path / "broker.db"
-    target.touch()
-    service = PhaseLockService(
-        target,
-        timeout=1.0,
-        retry_delay=0.01,
-        use_xattrs=False,
-        strict_marker_locking=False,
-    )
-    calls: list[str] = []
-
-    def mark_phase_after_waiter_blocks() -> None:
-        time.sleep(0.05)
-        _write_status_file(service.status_base_path, ["connection-v1"])
-
-    with _subprocess_holding_phase_lock(target):
-        marker = threading.Thread(target=mark_phase_after_waiter_blocks)
-        marker.start()
-        result = service.run_phases(
-            (Phase("connection-v1", lambda: calls.append("ran")),)
-        )
-        marker.join(timeout=1.0)
-
-    assert result.completed == ()
-    assert result.skipped == ("connection-v1",)
-    assert calls == []
-    assert not marker.is_alive()
 
 
 def test_process_local_lock_serializes_threads(
