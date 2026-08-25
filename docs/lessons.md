@@ -557,3 +557,43 @@ Dated moment-tier entries (foldable after age floor and distillation).
   docs and move the assertion in the same change. Documentation-only gates do
   not replace the affected contract module or full suite. (Corrected during
   the 2026-08-23 coalescing sweep.)
+- 2026-08-25: Fault injection belongs at module-owned seams, not shared
+  stdlib attributes. Patching `time.*`, `random.*`, `threading.Event`,
+  `os.*`, or `sys.platform` is observable by background threads,
+  destructors, and concurrent tests in the same worker — the measured
+  CI-flake mechanism. Production modules own one-line aliases
+  (`_monotonic`, `_time_ns`, `_uniform`, `_getpid`, `_platform`) bound
+  to the real callable at import; tests patch the alias. Synchronous
+  single-threaded fault patches remain permitted unless shown to leak.
+  (Test-suite audit remediation plan, Tasks 2/5.)
+- 2026-08-25: Never assert a negative timing window
+  (`assert not event.wait(t)`) to prove blocking — a slow-starting
+  thread false-passes it and a loaded runner false-fails it. Prove
+  ordering positively: observe the waiter entering its wait (wrap the
+  condition's only `.wait` caller), or record a happens-after ordering
+  list; scale only external liveness valves with `scale_timeout_for_ci`
+  and never injected product durations or elapsed-time bounds.
+  (Test-suite audit remediation plan, Task 1.)
+- 2026-08-25: A gate should fail when the contract breaks, not when
+  wording changes. Prose-fragment asserts over specs/docs rot on
+  reorganization while behavioral owners already exist; keep identifier
+  tokens, verification-row bindings, and derived cross-file equalities,
+  and replace value/config mirrors with the property they gesture at
+  (exactly-once option pairing, retired-ID non-reuse, glob-derived
+  module lists). (Test-suite audit remediation plan, Task 6.)
+- 2026-08-25: The no-magic-constants policy is enforced by tier, not by
+  restating values in tests: PLR2004 mechanically gates new comparison
+  literals in the shipped package; every `_constants.py` declaration
+  needs meaning-or-units (comment or house docstring, gated); call
+  arguments and defaults need a named constant or local explanation,
+  review-enforced; locally named module constants are compliant and
+  `_constants.py` is reserved for shared/config/persistence/contract
+  values. A value-restating test only makes an intentional edit a
+  two-file chore. (Test-suite audit remediation plan, Task 6.6.)
+- 2026-08-25: Test deletion needs an equivalence owner, not a name
+  match: same contract at the same process topology, lifecycle stage,
+  and public boundary, with unique evidence ported in the same slice.
+  Local branch-coverage floors mislead where deleted in-process tests
+  were shadowed by subprocess coverage invisible to in-process
+  measurement — compare per-file missing branches before concluding
+  loss. (Test-suite audit remediation plan, Tasks 4/7.)

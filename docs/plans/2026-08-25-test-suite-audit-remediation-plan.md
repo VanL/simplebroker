@@ -855,6 +855,37 @@ wording/internals freeze.
   every affected node with the kept/deleted split). Round 7 verified
   both RESOLVED with no new contradictions — verdict READY FOR
   EXECUTION.
+- 2026-08-25 — execution checkpoint review after Tasks 1–3 (same
+  Codex session): 1 P1 (suppression-registry index drift after the
+  C901 deletions) and 2 P2 (counting-clock contention test proved
+  nothing about contention; close-waiting observation raced the
+  waiter's entry). All three fixed and committed (0ffc1c7): registry
+  regenerated with `--write`/`--check`; contention proof rebuilt on a
+  `retry_module._monotonic` counting delegate that asserts multiple
+  polls; the close-waiting test wraps the condition's only `.wait`
+  caller so the close is issued strictly after the waiter enters.
+- 2026-08-25 — execution checkpoint review after Task 7 (same
+  session): 1 P1 (repository formatter gate failing on slice-edited
+  files) and 1 P2 (jitter stub ignored its received bounds, so a
+  wrong requested band could not fail). Both fixed: `ruff format`
+  run and verified with the CI invocation; the stub now asserts the
+  requested `(low, high)` band and derives its return from it
+  (704b716).
+- 2026-08-25 — execution evidence: slices landed as 1fab40f (Task 1),
+  1889fd7 (Task 2 + 5.2), 88ef557 (Task 3), f232d48 (Task 4),
+  1869fdb (Task 5), 146066e (Task 6), 1c49a60 (Task 7), 704b716
+  (Task 8 + post-Task-7 review fixes), 0ffc1c7 (checkpoint fixes).
+  Branch-coverage floor investigated after the deletion slices:
+  cli.py's apparent −9 branches traced to deleted in-process tests
+  whose behavior is subprocess-owned (invisible to in-process
+  measurement); two cheap in-process twins restored measured
+  coverage. Completion-gate runs: full SQLite suite green
+  (`-m "not benchmark" --timeout=180`), `bin/pytest-pg` and
+  `bin/pytest-redis` green after one fold fix (the init-dispatch
+  fold asserted the on-disk `.broker.db` artifact and is now
+  `sqlite_only` with rationale); doc gates, suppression index
+  `--check`, `check-dom15-fixtures`, and `check-plan-context` green.
+  Durable lessons recorded in `docs/lessons.md` (five entries).
 
 ## Deviation Log
 
@@ -867,6 +898,14 @@ wording/internals freeze.
   synchronous fault patch under the narrowed anti-mocking rule).
   Attempted and falsified: header+garbage, post-page-1 corruption,
   spilled sqlite_master corruption.
+- 2026-08-25, Task 7 follow-on: `simplebroker/cli.py`'s `create_parser`
+  deleted (product code, beyond the plan's test-only scope) by owner
+  direction — its last caller was a deleted near-tautology and no
+  reference exists in weft, examples, extensions, or docs (704b716).
+- 2026-08-25, Task 3 fold: the init-dispatch behavioral fold gained
+  `pytest.mark.sqlite_only` after failing on the pg and redis
+  completion-gate lanes — it asserts the on-disk `.broker.db`
+  artifact, which a remote-backend `init` legitimately never creates.
 
 ## Out of Scope
 
