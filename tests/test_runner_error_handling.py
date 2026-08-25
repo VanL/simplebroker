@@ -845,8 +845,7 @@ class TestSQLiteRunnerErrorHandling:
 
         core = _setup_budget_core(first_operation, second_operation)
 
-        monkeypatch.setattr(_retry_policy.time, "monotonic", fake_monotonic)
-        monkeypatch.setattr(_retry_policy.time, "time", lambda: 0.0)
+        monkeypatch.setattr(_retry_policy, "_monotonic", fake_monotonic)
         monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
         monkeypatch.setattr(_retry_policy, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
@@ -879,8 +878,7 @@ class TestSQLiteRunnerErrorHandling:
         core = _setup_budget_core(first_operation)
         core._stop_event = threading.Event()
 
-        monkeypatch.setattr(_retry_policy.time, "monotonic", fake_monotonic)
-        monkeypatch.setattr(_retry_policy.time, "time", lambda: 0.0)
+        monkeypatch.setattr(_retry_policy, "_monotonic", fake_monotonic)
         monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
         monkeypatch.setattr(_retry_policy, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
@@ -937,7 +935,7 @@ class TestSQLiteRunnerErrorHandling:
         core._lock = threading.RLock()  # type: ignore[assignment]
         core._stop_event = threading.Event()
 
-        monkeypatch.setattr(_retry_policy.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(_retry_policy, "_monotonic", fake_monotonic)
         monkeypatch.setattr(_retry_policy, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
         core._setup_schema()

@@ -119,9 +119,17 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_reset_darwin_xattr_lock_after_fork)
 
 
+# Module-owned selection seams: tests patch these aliases instead of the
+# shared os/sys module attributes, which concurrent threads and other
+# tests can observe. Defaults bind the real values at import.
+_os_getxattr = getattr(os, "getxattr", None)
+_os_setxattr = getattr(os, "setxattr", None)
+_platform = sys.platform
+
+
 def _xattr_provider() -> _XattrProvider | None:
-    getter = getattr(os, "getxattr", None)
-    setter = getattr(os, "setxattr", None)
+    getter = _os_getxattr
+    setter = _os_setxattr
     if callable(getter) and callable(setter):
 
         def get_value(path: Path, key: str) -> bytes:
@@ -148,7 +156,7 @@ def _xattr_env_mode() -> bool | None:
 
 def _darwin_xattr_provider() -> _XattrProvider | None:
     """Return the process-cached Darwin provider after single-flight discovery."""
-    if sys.platform != "darwin":
+    if _platform != "darwin":
         return None
     if _DARWIN_XATTR_PROVIDER is not _DARWIN_XATTR_PROVIDER_UNSET:
         return cast("_XattrProvider | None", _DARWIN_XATTR_PROVIDER)

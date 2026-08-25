@@ -90,7 +90,7 @@ def test_apply_jitter_spans_up_to_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "random.uniform",
+        "simplebroker._retry._uniform",
         lambda low, high: (low + high) / 2,
     )
     assert apply_jitter(0.05) == pytest.approx(0.0275, rel=1e-9)
@@ -251,7 +251,7 @@ def test_execute_retry_clamps_sleep_to_max_delay_remaining(
     def fail() -> None:
         raise OSError("locked")
 
-    monkeypatch.setattr("simplebroker._retry.time.monotonic", lambda: 0.0)
+    monkeypatch.setattr("simplebroker._retry._monotonic", lambda: 0.0)
 
     with pytest.raises(OSError):
         execute_retry(
@@ -281,7 +281,7 @@ def test_execute_retry_honors_delay_budget_via_stop(
         monotonic_time += 0.03
         raise OSError("locked")
 
-    monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("simplebroker._retry._monotonic", fake_monotonic)
 
     with remove_backoff(), pytest.raises(OSError):
         execute_retry(
@@ -442,7 +442,7 @@ def test_hot_loop_warning_logs_after_rapid_retries(
     def fail() -> None:
         raise ValueError("again")
 
-    monkeypatch.setattr("simplebroker._retry.time.monotonic", lambda: 1.0)
+    monkeypatch.setattr("simplebroker._retry._monotonic", lambda: 1.0)
 
     with pytest.raises(ValueError):
         execute_retry(

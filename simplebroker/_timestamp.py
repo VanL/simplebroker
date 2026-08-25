@@ -28,6 +28,14 @@ from ._constants import (
 from ._exceptions import IntegrityError, OperationalError, TimestampError
 from ._retry_policy import _execute_with_retry, _is_locked_operational_error
 
+# Module-owned clock/rng seam: tests patch these aliases instead of the
+# shared stdlib attributes, which background threads, destructors, and
+# concurrent tests can observe. Default binding is the real stdlib
+# function; production behavior is identical.
+_time_ns = time.time_ns
+_sleep = time.sleep
+_uniform = random.uniform
+
 if TYPE_CHECKING:
     from ._runner import SQLRunner
 
@@ -269,7 +277,7 @@ class TimestampGenerator:
             if not self._initialized:
                 self._initialize()  # cheap SELECT, autocommit
 
-            now_ns = time.time_ns()
+            now_ns = _time_ns()
             # Decode the last timestamp to get its base time
             last_phys_ns, last_counter = self._decode_hybrid_timestamp(self._last_ts)
 
@@ -292,11 +300,11 @@ class TimestampGenerator:
                     while (
                         now_ns_base <= last_phys_ns and num_iterations < MAX_ITERATIONS
                     ):
-                        jitter = random.uniform(
+                        jitter = _uniform(
                             WAIT_FOR_NEXT_INCREMENT / 2, WAIT_FOR_NEXT_INCREMENT
                         )
-                        time.sleep(jitter)
-                        now_ns = time.time_ns()
+                        _sleep(jitter)
+                        now_ns = _time_ns()
                         now_ns_base = now_ns & time_mask
                         num_iterations += 1
                     if now_ns_base <= last_phys_ns:

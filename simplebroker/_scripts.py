@@ -29,6 +29,13 @@ from urllib import request as urllib_request
 
 from ._targets import redact_backend_target
 
+# Module-owned clock/rng seam: tests patch these aliases instead of the
+# shared stdlib attributes, which background threads, destructors, and
+# concurrent tests can observe. Default binding is the real stdlib
+# function; production behavior is identical.
+_monotonic = time.monotonic
+_sleep = time.sleep
+
 ROOT = Path(__file__).resolve().parents[1]
 POSTGRES_IMAGE = os.environ.get("SIMPLEBROKER_PG_TEST_IMAGE", "postgres:18")
 POSTGRES_DB = os.environ.get("SIMPLEBROKER_PG_TEST_DB", "simplebroker_test")
@@ -179,14 +186,14 @@ def _host_port_accepts_connections(
 def _wait_for_postgres(container_name: str, *, timeout_seconds: float = 60.0) -> str:
     """Wait for the Postgres container to accept connections and return its host port."""
 
-    deadline = time.monotonic() + timeout_seconds
+    deadline = _monotonic() + timeout_seconds
     last_error = "container did not start"
 
-    while time.monotonic() < deadline:
+    while _monotonic() < deadline:
         port = _docker_port(container_name)
         if port is None:
             last_error = "waiting for published port"
-            time.sleep(1.0)
+            _sleep(1.0)
             continue
 
         result = subprocess.run(
@@ -214,13 +221,13 @@ def _wait_for_postgres(container_name: str, *, timeout_seconds: float = 60.0) ->
             last_error = (
                 f"waiting for host connection to 127.0.0.1:{port}: {host_error}"
             )
-            time.sleep(1.0)
+            _sleep(1.0)
             continue
 
         last_error = (
             result.stderr.strip() or result.stdout.strip() or "pg_isready failed"
         )
-        time.sleep(1.0)
+        _sleep(1.0)
 
     raise RuntimeError(f"Postgres did not become ready: {last_error}")
 
@@ -294,20 +301,20 @@ def _valkey_docker_port(container_name: str) -> str | None:
 def _wait_for_valkey(container_name: str, *, timeout_seconds: float = 30.0) -> str:
     """Wait for the Valkey container to accept connections and return its host port."""
 
-    deadline = time.monotonic() + timeout_seconds
+    deadline = _monotonic() + timeout_seconds
     last_error = "container did not start"
-    while time.monotonic() < deadline:
+    while _monotonic() < deadline:
         port = _valkey_docker_port(container_name)
         if port is None:
             last_error = "waiting for published port"
-            time.sleep(0.5)
+            _sleep(0.5)
             continue
         try:
             with socket.create_connection(("127.0.0.1", int(port)), timeout=1.0):
                 return port
         except OSError as exc:
             last_error = str(exc)
-            time.sleep(0.5)
+            _sleep(0.5)
     raise RuntimeError(f"Valkey did not become ready: {last_error}")
 
 
@@ -391,7 +398,7 @@ def _verify_postgres_test_dsn_from_env() -> None:
     psycopg = cast(Any, importlib.import_module("psycopg"))
 
     dsn = os.environ["SIMPLEBROKER_PG_TEST_DSN"]
-    deadline = time.monotonic() + float(
+    deadline = _monotonic() + float(
         os.environ.get("SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT", "60")
     )
     retry_interval = float(
@@ -414,13 +421,13 @@ def _verify_postgres_test_dsn_from_env() -> None:
             return
         except psycopg.OperationalError as exc:
             last_error = f"{type(exc).__name__}: {exc}"
-            if time.monotonic() >= deadline:
+            if _monotonic() >= deadline:
                 print(
                     f"Postgres test DSN was not ready: {last_error}",
                     file=sys.stderr,
                 )
                 raise
-            time.sleep(retry_interval)
+            _sleep(retry_interval)
 
 
 def _verify_postgres_test_dsn(dsn: str, *, timeout_seconds: float = 60.0) -> None:

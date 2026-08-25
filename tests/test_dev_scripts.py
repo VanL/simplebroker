@@ -1993,7 +1993,7 @@ def test_wait_for_postgres_waits_for_host_port(
     monkeypatch.setattr(_scripts.subprocess, "run", fake_run)
     monkeypatch.setattr(_scripts, "_host_port_accepts_connections", fake_host_check)
     monkeypatch.setattr(
-        _scripts.time, "sleep", lambda seconds: sleep_calls.append(seconds)
+        _scripts, "_sleep", lambda seconds: sleep_calls.append(seconds)
     )
 
     assert _scripts._wait_for_postgres("pg", timeout_seconds=60) == "32786"
@@ -2018,7 +2018,7 @@ def test_wait_for_postgres_waits_for_published_port(
         "_host_port_accepts_connections",
         lambda port: (True, ""),
     )
-    monkeypatch.setattr(_scripts.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(_scripts, "_sleep", lambda seconds: None)
 
     assert _scripts._wait_for_postgres("pg", timeout_seconds=60) == "32786"
     assert len(pg_isready_calls) == 1
@@ -2028,8 +2028,8 @@ def test_wait_for_postgres_reports_last_readiness_error_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     times = iter([0.0, 0.0, 1.0])
-    monkeypatch.setattr(_scripts.time, "monotonic", lambda: next(times))
-    monkeypatch.setattr(_scripts.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(_scripts, "_monotonic", lambda: next(times))
+    monkeypatch.setattr(_scripts, "_sleep", lambda seconds: None)
     monkeypatch.setattr(_scripts, "_docker_port", lambda container_name: "32786")
     monkeypatch.setattr(
         _scripts.subprocess,
@@ -2178,8 +2178,8 @@ def test_wait_for_valkey_retries_port_and_socket_then_connects(
             raise ConnectionRefusedError("starting")
         return nullcontext()
 
-    monkeypatch.setattr(_scripts.time, "monotonic", lambda: 0.0)
-    monkeypatch.setattr(_scripts.time, "sleep", sleeps.append)
+    monkeypatch.setattr(_scripts, "_monotonic", lambda: 0.0)
+    monkeypatch.setattr(_scripts, "_sleep", sleeps.append)
     monkeypatch.setattr(
         _scripts, "_valkey_docker_port", lambda container_name: next(ports)
     )
@@ -2194,8 +2194,8 @@ def test_wait_for_valkey_reports_timeout_while_port_is_unpublished(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     times = iter([0.0, 0.0, 1.0])
-    monkeypatch.setattr(_scripts.time, "monotonic", lambda: next(times))
-    monkeypatch.setattr(_scripts.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(_scripts, "_monotonic", lambda: next(times))
+    monkeypatch.setattr(_scripts, "_sleep", lambda seconds: None)
     monkeypatch.setattr(_scripts, "_valkey_docker_port", lambda container_name: None)
 
     with pytest.raises(

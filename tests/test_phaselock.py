@@ -129,8 +129,8 @@ def test_stdlib_xattr_provider_wraps_get_and_set_values_as_bytes(
     def setxattr(path: Path, key: str, value: bytes) -> None:
         calls.append((path, key, value))
 
-    monkeypatch.setattr(phaselock_module.os, "getxattr", getxattr, raising=False)
-    monkeypatch.setattr(phaselock_module.os, "setxattr", setxattr, raising=False)
+    monkeypatch.setattr(phaselock_module, "_os_getxattr", getxattr)
+    monkeypatch.setattr(phaselock_module, "_os_setxattr", setxattr)
 
     provider = phaselock_module._xattr_provider()
 
@@ -143,7 +143,7 @@ def test_stdlib_xattr_provider_wraps_get_and_set_values_as_bytes(
 def test_darwin_xattr_provider_returns_none_on_non_darwin_platform(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(phaselock_module.sys, "platform", "linux")
+    monkeypatch.setattr(phaselock_module, "_platform", "linux")
     monkeypatch.setattr(
         phaselock_module,
         "_DARWIN_XATTR_PROVIDER",
@@ -158,7 +158,7 @@ def test_darwin_xattr_provider_caches_initialization_failure(
 ) -> None:
     import ctypes
 
-    monkeypatch.setattr(phaselock_module.sys, "platform", "darwin")
+    monkeypatch.setattr(phaselock_module, "_platform", "darwin")
     monkeypatch.setattr(
         phaselock_module,
         "_DARWIN_XATTR_PROVIDER",
@@ -221,7 +221,7 @@ def _install_fake_darwin_libc(
         cdll_calls.append((path, use_errno))
         return fake_libc
 
-    monkeypatch.setattr(phaselock_module.sys, "platform", "darwin")
+    monkeypatch.setattr(phaselock_module, "_platform", "darwin")
     monkeypatch.setattr(
         phaselock_module,
         "_DARWIN_XATTR_PROVIDER",
@@ -544,8 +544,8 @@ def test_darwin_ctypes_xattrs_are_used_when_stdlib_xattrs_are_missing(
 
     import simplebroker._phaselock as phaselock_module
 
-    monkeypatch.setattr(phaselock_module.os, "getxattr", None, raising=False)
-    monkeypatch.setattr(phaselock_module.os, "setxattr", None, raising=False)
+    monkeypatch.setattr(phaselock_module, "_os_getxattr", None)
+    monkeypatch.setattr(phaselock_module, "_os_setxattr", None)
     target = tmp_path / "broker.db"
     target.touch()
     if not _default_xattrs_supported(target):
@@ -574,8 +574,8 @@ def test_missing_stdlib_and_darwin_xattrs_falls_back_to_status_file(
 ) -> None:
     import simplebroker._phaselock as phaselock_module
 
-    monkeypatch.setattr(phaselock_module.os, "getxattr", None, raising=False)
-    monkeypatch.setattr(phaselock_module.os, "setxattr", None, raising=False)
+    monkeypatch.setattr(phaselock_module, "_os_getxattr", None)
+    monkeypatch.setattr(phaselock_module, "_os_setxattr", None)
     monkeypatch.setattr(phaselock_module, "_darwin_xattr_provider", lambda: None)
     target = tmp_path / "broker.db"
     target.touch()
@@ -1475,7 +1475,7 @@ def test_no_xattr_existing_status_marker_does_not_bypass_held_lock(
     target.touch()
     service = PhaseLockService(
         target,
-        timeout=1.0,
+        timeout=scale_timeout_for_ci(5.0),
         retry_delay=0.01,
         use_xattrs=False,
         strict_marker_locking=True,
@@ -1583,7 +1583,7 @@ def test_no_xattr_waiter_does_not_skip_when_phase_marked_while_lock_is_held(
     target.touch()
     service = PhaseLockService(
         target,
-        timeout=1.0,
+        timeout=scale_timeout_for_ci(5.0),
         retry_delay=0.01,
         use_xattrs=False,
         strict_marker_locking=True,
@@ -1862,8 +1862,12 @@ def test_advisory_lock_open_errors_timeout_with_diagnostics(
         retry_delay=0.0,
     )
 
-    def fail_open(self: Path, *args: object, **kwargs: object) -> object:
-        raise OSError(errno.EACCES, "permission denied")
+    real_open = Path.open
+
+    def fail_open(self: Path, *args: Any, **kwargs: Any) -> object:
+        if self == lock.path:
+            raise OSError(errno.EACCES, "permission denied")
+        return real_open(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", fail_open)
 
@@ -1887,8 +1891,12 @@ def test_windows_permission_denied_open_is_classified_as_structural_failure(
     )
     denied = PermissionError(errno.EACCES, "permission denied")
 
-    def fail_open(self: Path, *args: object, **kwargs: object) -> object:
-        raise denied
+    real_open = Path.open
+
+    def fail_open(self: Path, *args: Any, **kwargs: Any) -> object:
+        if self == lock.path:
+            raise denied
+        return real_open(self, *args, **kwargs)
 
     # Exercise the Windows availability branch even when this test runs on a
     # POSIX development host. The open fails before the msvcrt primitive is

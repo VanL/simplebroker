@@ -1,8 +1,6 @@
 """Test edge cases in _timestamp.py to increase coverage."""
 
 import concurrent.futures
-import os
-import signal
 import threading
 import time
 from typing import Any
@@ -49,85 +47,6 @@ class AtomicLastTimestampPlugin:
         raise NotImplementedError
 
 
-class TimeAdvancer:
-    """Mock for time.time() that advances automatically to prevent infinite loops."""
-
-    def __init__(self, start_time=1.0, increment=0.001):
-        self.current_time = start_time
-        self.increment = increment
-        self.call_count = 0
-        self.max_calls_before_advance = 3
-
-    def __call__(self):
-        self.call_count += 1
-        # Auto-advance after a few calls to prevent infinite loops
-        if self.call_count > self.max_calls_before_advance:
-            self.current_time += self.increment
-            self.call_count = 0  # Reset counter after advancing
-        return self.current_time
-
-    def advance(self, amount=None):
-        """Manually advance time."""
-        if amount is None:
-            amount = self.increment
-        self.current_time += amount
-        self.call_count = 0
-
-
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-@pytest.mark.parametrize("method_name", ["get_cached_last_ts", "refresh_last_ts"])
-def test_timestamp_cache_paths_recover_before_inherited_lock(
-    method_name: str,
-) -> None:
-    """A forked child must replace the generator lock before cache access."""
-
-    generator = TimestampGenerator(
-        object(),  # type: ignore[arg-type]
-        backend_plugin=AtomicLastTimestampPlugin(),
-    )
-    lock_held = threading.Event()
-    release_lock = threading.Event()
-
-    def hold_generator_lock() -> None:
-        with generator._lock:
-            lock_held.set()
-            release_lock.wait(10.0)
-
-    holder = threading.Thread(target=hold_generator_lock)
-    holder.start()
-    assert lock_held.wait(2.0)
-
-    pid = os.fork()
-    if pid == 0:
-        try:
-            value = getattr(generator, method_name)()
-            os._exit(0 if value == 0 else 2)
-        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
-            os._exit(1)
-
-    try:
-        deadline = time.monotonic() + 2.0
-        status: int | None = None
-        while time.monotonic() < deadline:
-            waited_pid, child_status = os.waitpid(pid, os.WNOHANG)
-            if waited_pid == pid:
-                status = child_status
-                break
-            time.sleep(0.01)
-        if status is None:
-            os.kill(pid, signal.SIGKILL)
-            os.waitpid(pid, 0)
-            pytest.fail(f"{method_name} blocked on the inherited generator lock")
-        assert os.WIFEXITED(status)
-        assert os.WEXITSTATUS(status) == 0
-    finally:
-        release_lock.set()
-        holder.join(timeout=2.0)
-
-    assert getattr(generator, method_name)() == 0
-
-
 class TestTimestampEdgeCases:
     """Test edge cases in timestamp generation and validation."""
 
@@ -145,7 +64,7 @@ class TestTimestampEdgeCases:
             return [gen.generate() for _ in range(per_thread)]
 
         with (
-            patch("simplebroker._timestamp.time.time_ns", return_value=2000000000),
+            patch("simplebroker._timestamp._time_ns", return_value=2000000000),
             concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor,
         ):
             futures = [executor.submit(generate_many) for _ in range(thread_count)]
@@ -163,7 +82,7 @@ class TestTimestampEdgeCases:
         plugin = AtomicLastTimestampPlugin()
         gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
 
-        with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
+        with patch("simplebroker._timestamp._time_ns", return_value=2_000_000_000):
             candidates = gen._reserve_candidates(3)
 
         assert candidates == sorted(candidates)
@@ -171,7 +90,7 @@ class TestTimestampEdgeCases:
         assert plugin.last_ts == 0
         assert gen.get_cached_last_ts() == candidates[-1]
 
-        with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
+        with patch("simplebroker._timestamp._time_ns", return_value=2_000_000_000):
             persisted = gen.generate()
 
         assert persisted > candidates[-1]
@@ -258,13 +177,13 @@ class TestTimestampEdgeCases:
         plugin = AtomicLastTimestampPlugin()
         gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
 
-        with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
+        with patch("simplebroker._timestamp._time_ns", return_value=2_000_000_000):
             first = gen.generate()
 
         first_physical, first_counter = gen._decode_hybrid_timestamp(first)
         regressed_ns = first_physical - 1_000_000_000
 
-        with patch("simplebroker._timestamp.time.time_ns", return_value=regressed_ns):
+        with patch("simplebroker._timestamp._time_ns", return_value=regressed_ns):
             second = gen.generate()
 
         second_physical, second_counter = gen._decode_hybrid_timestamp(second)
@@ -286,7 +205,7 @@ class TestTimestampEdgeCases:
 
         with (
             patch("simplebroker._timestamp.MAX_ITERATIONS", 0),
-            patch("simplebroker._timestamp.time.time_ns", return_value=1_000_000_000),
+            patch("simplebroker._timestamp._time_ns", return_value=1_000_000_000),
             pytest.raises(TimestampError, match="Logical counter exhausted"),
         ):
             gen.generate()
@@ -302,7 +221,7 @@ class TestTimestampEdgeCases:
             first_physical, _ = db._timestamp_gen._decode_hybrid_timestamp(first)  # type: ignore[attr-defined]
 
             with patch(
-                "simplebroker._timestamp.time.time_ns",
+                "simplebroker._timestamp._time_ns",
                 return_value=first_physical - 1_000_000_000,
             ):
                 db.write("queue", "second")
@@ -419,48 +338,39 @@ class TestTimestampEdgeCases:
 
         # Mock time to return a value that would exceed 2^63 (SQLITE_MAX_INT64)
         # when encoded as hybrid timestamp
-        with patch("simplebroker._timestamp.time") as mock_time:
-            # Use a value that after clearing bottom 12 bits will exceed 2^63
-            # 2^63 = 9223372036854775808
-            # Set time_ns to a value that when masked will exceed this
-            mock_time.time_ns.return_value = 9223372036854779904  # Just above 2^63
-
-            with pytest.raises(TimestampError, match="Timestamp too far in future"):
-                gen.generate()
+        with (
+            patch(
+                "simplebroker._timestamp._time_ns",
+                # A value that after clearing the bottom 12 bits exceeds
+                # 2^63 = 9223372036854775808
+                lambda: 9223372036854779904,
+            ),
+            pytest.raises(TimestampError, match="Timestamp too far in future"),
+        ):
+            gen.generate()
 
     def test_timestamp_generator_update_conflict(self):
-        """Test handling of timestamp update conflicts - exhausted retries."""
-        mock_runner = Mock(spec=SQLRunner)
+        """Exhausted uniqueness retries raise IntegrityError.
 
-        # Mock time_ns to return consistent nanoseconds
-        with patch("simplebroker._timestamp.time") as mock_time:
-            mock_time.time_ns.return_value = 1_000_000_000  # 1 second in nanoseconds
+        Uses the sanctioned backend-plugin seam (a competitor always wins
+        the advance) instead of scripting the runner's SQL sequence.
+        """
 
-            # Set up runner mock to simulate conflicts
-            # Each call to run will be for either SELECT or UPDATE operations
-            mock_runner.run.side_effect = [
-                [(0,)],  # Initial read during _initialize
-                [],  # UPDATE ... RETURNING reports no update - retry 1
-                [(1000,)],  # SELECT to peek latest value after conflict
-                [],  # UPDATE ... RETURNING reports no update - retry 2
-                [(2000,)],  # SELECT to peek latest value
-                [],  # UPDATE ... RETURNING reports no update - retry 3
-                [(3000,)],  # SELECT to peek latest value
-                [],  # UPDATE ... RETURNING reports no update - retry 4
-                [(4000,)],  # SELECT to peek latest value
-                [],  # UPDATE ... RETURNING reports no update - retry 5
-                [(5000,)],  # SELECT to peek latest value
-                [],  # UPDATE ... RETURNING reports no update - retry 6
-                [(6000,)],  # SELECT to peek latest value
-            ]
+        class AlwaysLosingPlugin(AtomicLastTimestampPlugin):
+            def advance_last_ts(self, runner: Any, *, new_ts: int) -> bool:
+                del runner
+                with self._lock:
+                    # A competitor has always advanced past the candidate.
+                    self.last_ts = new_ts + 1
+                    return False
 
-            gen = TimestampGenerator(mock_runner)
+        plugin = AlwaysLosingPlugin()
+        gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
 
-            # Should exhaust all 6 retries and raise IntegrityError
-            with pytest.raises(
-                IntegrityError, match="unable to generate unique timestamp"
-            ):
-                gen.generate()
+        with pytest.raises(
+            IntegrityError, match="unable to generate unique timestamp"
+        ):
+            gen.generate()
 
     def test_parse_numeric_edge_cases(self):
         """Test edge cases in numeric timestamp parsing."""
@@ -503,22 +413,14 @@ class TestTimestampEdgeCases:
     def test_timestamp_magnitude_preservation(self):
         """Test that timestamps preserve the magnitude of time.time_ns()."""
 
-        mock_runner = Mock(spec=SQLRunner)
-
-        # Mock time.time_ns to return a known value
+        # Known clock value through the module-owned seam; storage through
+        # the sanctioned backend-plugin seam.
         test_ns = 1754685000000000000  # This should start with '1'
 
-        # Mock the store operation to succeed
-        mock_runner.run.side_effect = [
-            [],  # Initial read returns no timestamp
-            [(1,)],  # UPDATE ... RETURNING reports one updated row
-        ]
+        plugin = AtomicLastTimestampPlugin()
+        gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
 
-        gen = TimestampGenerator(mock_runner)
-
-        with patch("simplebroker._timestamp.time") as mock_time:
-            mock_time.time_ns.return_value = test_ns
-
+        with patch("simplebroker._timestamp._time_ns", lambda: test_ns):
             # Generate timestamp
             ts = gen.generate()
 

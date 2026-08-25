@@ -572,12 +572,12 @@ def _assert_darwin_discovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if payload == "NON_DARWIN":
-        monkeypatch.setattr(phaselock.sys, "platform", "linux")
+        monkeypatch.setattr(phaselock, "_platform", "linux")
         assert phaselock._darwin_xattr_provider() is None
         assert calls == []
         return
 
-    monkeypatch.setattr(phaselock.sys, "platform", "darwin")
+    monkeypatch.setattr(phaselock, "_platform", "darwin")
     if payload == "FORK_RESETS_DISCOVERY_LOCK":
         _assert_darwin_fork_probe()
         return

@@ -444,7 +444,7 @@ class TestSQLiteRunnerValidation:
             monotonic_time += wait
             return True
 
-        monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+        monkeypatch.setattr("simplebroker._retry._monotonic", fake_monotonic)
         monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
         monkeypatch.setattr(_retry_policy, "bounded_jitter", lambda wait: wait)
         runner = _TransientWriteLockRunner(str(tmp_path / "broker.db"))
@@ -478,7 +478,7 @@ class TestSQLiteRunnerValidation:
             monotonic_time += wait
             return True
 
-        monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+        monkeypatch.setattr("simplebroker._retry._monotonic", fake_monotonic)
         monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
         monkeypatch.setattr(_retry_policy, "bounded_jitter", lambda wait: wait)
         monkeypatch.setattr("simplebroker.db.OPERATION_RETRY_MAX_ELAPSED", 0.15)

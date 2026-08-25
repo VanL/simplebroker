@@ -90,6 +90,13 @@ from ._targets import BrokerTarget
 from .db import BrokerDB
 from .sbqueue import Queue
 
+# Module-owned clock/rng seam: tests patch these aliases instead of the
+# shared stdlib attributes, which background threads, destructors, and
+# concurrent tests can observe. Default binding is the real stdlib
+# function; production behavior is identical.
+_monotonic = time.monotonic
+_uniform = random.uniform
+
 if TYPE_CHECKING:
     from ._backend_plugins import ActivityWaiter
 
@@ -756,7 +763,7 @@ class BaseWatcher(ABC):
         Raises:
             TimeoutError: If maximum retry time exceeded
         """
-        elapsed = time.monotonic() - start_time
+        elapsed = _monotonic() - start_time
         if elapsed > MAX_TOTAL_RETRY_TIME:
             msg = (
                 f"Watcher retry timeout exceeded ({MAX_TOTAL_RETRY_TIME}s). "
@@ -848,7 +855,7 @@ class BaseWatcher(ABC):
             max_retries: Maximum number of retry attempts
         """
         retry_count = 0
-        start_time = time.monotonic()
+        start_time = _monotonic()
 
         while retry_count < max_retries:
             # Check absolute timeout
@@ -1310,7 +1317,7 @@ class PollingStrategy:
         self._local_activity_empty_check = False
         self._activity_burst_remaining = 0
         self._native_idle_poll_interval = max(1.0, self._max_interval * 10)
-        self._next_native_idle_poll_at = time.monotonic()
+        self._next_native_idle_poll_at = _monotonic()
         self._schedule_next_native_idle_poll(initial=True)
 
     def wait_for_activity(self) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-017] exception
@@ -1341,7 +1348,7 @@ class PollingStrategy:
                     self._native_activity_pending = True
                     return
                 self._check_count += 1
-                if time.monotonic() >= self._next_native_idle_poll_at:
+                if _monotonic() >= self._next_native_idle_poll_at:
                     self._schedule_next_native_idle_poll()
                     return
                 continue
@@ -1490,7 +1497,7 @@ class PollingStrategy:
             # Add +/-15% jitter to prevent synchronized polling
             jitter_factor = self._jitter_factor
             jittered_delay = (
-                random.uniform(-jitter_factor, jitter_factor) + 1
+                _uniform(-jitter_factor, jitter_factor) + 1
             ) * base_delay
             return max(0, jittered_delay)
 
@@ -1524,11 +1531,11 @@ class PollingStrategy:
         interval = self._native_idle_poll_interval
         if initial:
             interval = max(1.0, interval)
-        jittered_interval = random.uniform(
+        jittered_interval = _uniform(
             interval,
             interval * 2,
         )
-        return time.monotonic() + jittered_interval
+        return _monotonic() + jittered_interval
 
     def _schedule_next_native_idle_poll(self, *, initial: bool = False) -> None:
         """Stagger slow fallback polls for notification-backed waiters."""

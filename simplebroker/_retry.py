@@ -20,6 +20,13 @@ from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
+# Module-owned clock/rng seam: tests patch these aliases instead of the
+# shared stdlib attributes, which background threads, destructors, and
+# concurrent tests can observe. Default binding is the real stdlib
+# function; production behavior is identical.
+_monotonic = time.monotonic
+_uniform = random.uniform
+
 T = TypeVar("T")
 
 __version__ = "1.0"
@@ -66,7 +73,7 @@ def apply_jitter(
     floor: float = DEFAULT_MIN_RETRY_SLEEP_S,
 ) -> float:
     upper = max(floor, base_wait)
-    return floor if upper <= floor else random.uniform(floor, upper)
+    return floor if upper <= floor else _uniform(floor, upper)
 
 
 def bounded_jitter(
@@ -242,7 +249,7 @@ _hot_loop_lock = threading.Lock()
 
 
 def _check_hot_loop() -> None:
-    now = time.monotonic()
+    now = _monotonic()
     with _hot_loop_lock:
         prev = float(_hot_loop_data["last_retry"])
         if prev > 0 and now - prev < 0.1:
@@ -276,7 +283,7 @@ def execute_retry(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-011] exception
         stop = stop_never()
     sleep_fn = interruptible_sleep if sleep is None else sleep
     wait = _init_wait_gen(wait_gen, wait_gen_kwargs)
-    start = time.monotonic()
+    start = _monotonic()
     state = RetryState(start_time=start)
 
     while True:
@@ -287,7 +294,7 @@ def execute_retry(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-011] exception
             except Exception as exc:
                 if not retry_on(exc):
                     raise
-                state.elapsed = time.monotonic() - start
+                state.elapsed = _monotonic() - start
                 if stop(state):
                     raise
                 base_wait = wait.send(None)

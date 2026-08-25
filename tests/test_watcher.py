@@ -1668,7 +1668,7 @@ assert strategy._jitter_factor == injected["BROKER_JITTER_FACTOR"]
             del args, kwargs
             raise AssertionError("same-object replacement must not schedule")
 
-        monkeypatch.setattr(watcher_module.random, "uniform", fail_if_scheduled)
+        monkeypatch.setattr(watcher_module, "_uniform", fail_if_scheduled)
 
         assert strategy.replace_activity_waiter(waiter) is None
         assert _polling_strategy_state(strategy) == state_before
@@ -1756,10 +1756,10 @@ assert strategy._jitter_factor == injected["BROKER_JITTER_FACTOR"]
         strategy._check_count = 13
         strategy._next_native_idle_poll_at = -1.0
 
-        monkeypatch.setattr(watcher_module.time, "monotonic", lambda: 10.0)
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: 10.0)
         monkeypatch.setattr(
-            watcher_module.random,
-            "uniform",
+            watcher_module,
+            "_uniform",
             lambda lower, upper: lower + (upper - lower) / 4,
         )
 
@@ -1786,7 +1786,7 @@ assert strategy._jitter_factor == injected["BROKER_JITTER_FACTOR"]
             del args, kwargs
             raise RuntimeError("deadline failed")
 
-        monkeypatch.setattr(watcher_module.random, "uniform", raise_deadline_error)
+        monkeypatch.setattr(watcher_module, "_uniform", raise_deadline_error)
 
         with pytest.raises(RuntimeError, match="deadline failed"):
             strategy.replace_activity_waiter(waiter_b)

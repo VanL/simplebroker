@@ -269,6 +269,20 @@ resets that token on exit. Token restoration preserves nesting and overlapping
 contexts; a module global or environment-variable override would let one
 concurrent or out-of-order exit overwrite another caller's live setting.
 
+Clock, jitter, pid, and platform-selection reads go through module-owned
+aliases (`_monotonic`, `_time_ns`, `_sleep`, `_uniform` in `_retry`,
+`_retry_policy`, `_timestamp`, `_dump`, `watcher`, and `_scripts`;
+`_getpid` in `_broker_session`; `_os_getxattr`/`_os_setxattr`/`_platform`
+in `_phaselock`). Each alias binds the real stdlib callable at import and
+is never rebound by production code; its sole purpose is to give tests a
+patch point whose blast radius is one module, because rebinding the shared
+stdlib attribute is observable by background threads, destructors, and
+concurrent tests in the same process. The supported fault surface is
+value substitution only — an alias is read at call time, so a patch is
+visible to all threads executing that module, which is exactly the
+determinism fake clocks need. Reverting an alias requires reverting the
+tests that patch it in the same change (coupled revert group).
+
 Redis broadcast also improved from 36 to 28 through named selector, patterned
 broadcast, reservation, and result-code seams. Its atomic Lua retry loop
 remains registered because moving target selection or retry state out of that

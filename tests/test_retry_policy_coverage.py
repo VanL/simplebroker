@@ -270,7 +270,7 @@ def test_setup_progress_budget_fires_transition_table(
     """Fire every declared setup-budget transition against the real owner."""
 
     clock = DeterministicClock()
-    monkeypatch.setattr(_retry_policy.time, "monotonic", clock)
+    monkeypatch.setattr(_retry_policy, "_monotonic", clock)
     payload = transition_case.payload
 
     budget = SetupProgressBudget(idle_timeout=5.0)
@@ -324,10 +324,12 @@ def test_interruptible_sleep_short_sleep_uses_single_wait(
             self.timeouts.append(timeout)
             return False
 
+    # Pass the recording event as the real stop_event argument instead of
+    # replacing the shared threading.Event globally, which any concurrent
+    # thread creating an Event in the window would observe.
     event = Event()
-    monkeypatch.setattr(_retry_policy.threading, "Event", lambda: event)
 
-    assert interruptible_sleep(0.05, chunk_size=0.1) is True
+    assert interruptible_sleep(0.05, event, chunk_size=0.1) is True  # type: ignore[arg-type]
     assert event.timeouts == [0.05]
 
 
@@ -417,7 +419,7 @@ def test_execute_with_retry_uses_elapsed_budget(
         monotonic_time += wait
         return True
 
-    monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("simplebroker._retry._monotonic", fake_monotonic)
     monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
 
     with pytest.raises(OperationalError, match="database is locked"):
@@ -472,7 +474,7 @@ def test_execute_with_retry_refreshes_idle_budget_on_external_progress(
             raise OperationalError("database is locked")
         return "ok"
 
-    monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("simplebroker._retry._monotonic", fake_monotonic)
     monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
     monkeypatch.setattr(_retry_policy, "bounded_jitter", lambda wait: wait)
 
@@ -528,7 +530,7 @@ def test_execute_with_retry_progress_budget_still_stops_when_idle(
         monotonic_time += wait
         return True
 
-    monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("simplebroker._retry._monotonic", fake_monotonic)
     monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
     monkeypatch.setattr(_retry_policy, "bounded_jitter", lambda wait: wait)
 
@@ -600,8 +602,7 @@ def test_execute_setup_with_retry_refreshes_progress_budget_after_success(
         monotonic_time += wait
         return True
 
-    monkeypatch.setattr(_retry_policy.time, "monotonic", fake_monotonic)
-    monkeypatch.setattr(_retry_policy.time, "time", lambda: 0.0)
+    monkeypatch.setattr(_retry_policy, "_monotonic", fake_monotonic)
     monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
     monkeypatch.setattr(_retry_policy, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
@@ -654,8 +655,7 @@ def test_execute_setup_with_retry_fails_when_no_operation_makes_progress(
         monotonic_time += wait
         return True
 
-    monkeypatch.setattr(_retry_policy.time, "monotonic", fake_monotonic)
-    monkeypatch.setattr(_retry_policy.time, "time", lambda: 0.0)
+    monkeypatch.setattr(_retry_policy, "_monotonic", fake_monotonic)
     monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
     monkeypatch.setattr(_retry_policy, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
@@ -693,8 +693,7 @@ def test_execute_setup_with_retry_does_not_refresh_budget_on_failed_attempts(
         second_ran = True
         return "second"
 
-    monkeypatch.setattr(_retry_policy.time, "monotonic", fake_monotonic)
-    monkeypatch.setattr(_retry_policy.time, "time", lambda: 0.0)
+    monkeypatch.setattr(_retry_policy, "_monotonic", fake_monotonic)
     monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
     monkeypatch.setattr(_retry_policy, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
@@ -758,7 +757,7 @@ def test_execute_with_retry_uses_bounded_jitter(
         assert low <= value <= high
         return value
 
-    monkeypatch.setattr("random.uniform", fake_uniform)
+    monkeypatch.setattr("simplebroker._retry._uniform", fake_uniform)
 
     def always_locked() -> None:
         raise OperationalError("database is locked")

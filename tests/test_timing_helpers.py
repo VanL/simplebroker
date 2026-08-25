@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from tests.helper_scripts import drive_until, wait_for_condition
-from tests.helper_scripts import timing as timing_helpers
 
 
 class _FakeClock:
@@ -37,14 +36,15 @@ def test_drive_until_returns_without_side_effects_when_initially_satisfied() -> 
 def test_drive_until_observes_success_before_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    del monkeypatch
     clock = _FakeClock()
-    monkeypatch.setattr(timing_helpers.time, "monotonic", clock.monotonic)
 
     drive_until(
         lambda: clock.now >= 0.02,
         wait=clock.wait,
         timeout=0.1,
         interval=0.01,
+        monotonic=clock.monotonic,
     )
 
     assert clock.waits == [0.01, 0.01]
@@ -53,8 +53,8 @@ def test_drive_until_observes_success_before_deadline(
 def test_drive_until_steps_until_driven_predicate_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    del monkeypatch
     clock = _FakeClock()
-    monkeypatch.setattr(timing_helpers.time, "monotonic", clock.monotonic)
     state = {"steps": 0}
 
     def step() -> None:
@@ -66,6 +66,7 @@ def test_drive_until_steps_until_driven_predicate_succeeds(
         wait=clock.wait,
         timeout=0.1,
         interval=0.01,
+        monotonic=clock.monotonic,
     )
 
     assert state == {"steps": 2}
@@ -266,23 +267,24 @@ def test_wait_for_condition_does_not_swallow_predicate_assertions() -> None:
 def test_wait_for_condition_preserves_default_and_explicit_intervals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    del monkeypatch
     default_clock = _FakeClock()
-    monkeypatch.setattr(timing_helpers.time, "monotonic", default_clock.monotonic)
-    monkeypatch.setattr(timing_helpers.time, "sleep", default_clock.wait)
 
     assert wait_for_condition(
         lambda: default_clock.now >= 0.1,
         timeout=0.2,
+        wait=default_clock.wait,
+        monotonic=default_clock.monotonic,
     )
     assert default_clock.waits == [0.1]
 
     explicit_clock = _FakeClock()
-    monkeypatch.setattr(timing_helpers.time, "monotonic", explicit_clock.monotonic)
-    monkeypatch.setattr(timing_helpers.time, "sleep", explicit_clock.wait)
 
     assert wait_for_condition(
         lambda: explicit_clock.now >= 0.06,
         timeout=0.2,
         interval=0.03,
+        wait=explicit_clock.wait,
+        monotonic=explicit_clock.monotonic,
     )
     assert explicit_clock.waits == [0.03, 0.03]

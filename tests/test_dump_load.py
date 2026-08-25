@@ -197,7 +197,7 @@ def test_load_warns_and_proceeds_at_future_skew_limit(
 ) -> None:
     header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
     now_ns = header - 300 * NS_PER_SECOND
-    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+    monkeypatch.setattr("simplebroker._dump._time_ns", lambda: now_ns)
 
     with (
         open_broker(_db(tmp_path)) as broker,
@@ -215,7 +215,7 @@ def test_load_clock_skew_uses_physical_grain_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     now_ns = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
-    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+    monkeypatch.setattr("simplebroker._dump._time_ns", lambda: now_ns)
 
     with open_broker(_db(tmp_path, "current.db")) as broker:
         with warnings.catch_warnings(record=True) as caught:
@@ -241,7 +241,7 @@ def test_load_rejects_excessive_future_skew_before_mutation(
 ) -> None:
     header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
     now_ns = header - 301 * NS_PER_SECOND
-    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+    monkeypatch.setattr("simplebroker._dump._time_ns", lambda: now_ns)
     lines = [
         _load_header(header),
         json.dumps({"type": "alias", "alias": "work", "target": "jobs"}),
@@ -262,7 +262,7 @@ def test_load_force_warns_and_accepts_excessive_future_skew(
 ) -> None:
     header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
     now_ns = header - 301 * NS_PER_SECOND
-    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+    monkeypatch.setattr("simplebroker._dump._time_ns", lambda: now_ns)
 
     with (
         open_broker(_db(tmp_path)) as broker,
@@ -280,7 +280,7 @@ def test_load_typed_config_override_changes_skew_limit(
 ) -> None:
     header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
     now_ns = header - NS_PER_SECOND
-    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+    monkeypatch.setattr("simplebroker._dump._time_ns", lambda: now_ns)
 
     with (
         open_broker(_db(tmp_path)) as broker,
@@ -300,7 +300,7 @@ def test_load_samples_environment_for_each_invocation(
 ) -> None:
     header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
     now_ns = header - NS_PER_SECOND
-    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+    monkeypatch.setattr("simplebroker._dump._time_ns", lambda: now_ns)
 
     with open_broker(_db(tmp_path)) as broker:
         monkeypatch.setenv("BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS", "0")

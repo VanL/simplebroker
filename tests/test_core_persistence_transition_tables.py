@@ -708,7 +708,7 @@ def _fire_timestamp_local_transition(
         physical, _ = generator._decode_hybrid_timestamp(first)
         generator._last_ts = physical | (MAX_LOGICAL_COUNTER - 1)
         monkeypatch.setattr("simplebroker._timestamp.MAX_ITERATIONS", 0)
-        monkeypatch.setattr("simplebroker._timestamp.time.time_ns", lambda: physical)
+        monkeypatch.setattr("simplebroker._timestamp._time_ns", lambda: physical)
         with pytest.raises(TimestampError, match="Logical counter exhausted"):
             generator.generate()
 
@@ -723,7 +723,7 @@ def _fire_timestamp_clock_transition(
     physical, logical = generator._decode_hybrid_timestamp(first)
     if payload == "PHYSICAL_ADVANCE":
         monkeypatch.setattr(
-            "simplebroker._timestamp.time.time_ns",
+            "simplebroker._timestamp._time_ns",
             lambda: physical + MAX_LOGICAL_COUNTER,
         )
         generated = generator.generate()
@@ -732,7 +732,7 @@ def _fire_timestamp_clock_transition(
         assert next_logical == 0
     elif payload in {"CLOCK_REGRESSION", "LOGICAL_INCREMENT"}:
         now = physical - 1 if payload == "CLOCK_REGRESSION" else physical
-        monkeypatch.setattr("simplebroker._timestamp.time.time_ns", lambda: now)
+        monkeypatch.setattr("simplebroker._timestamp._time_ns", lambda: now)
         generated = generator.generate()
         next_physical, next_logical = generator._decode_hybrid_timestamp(generated)
         assert next_physical == physical
@@ -741,11 +741,11 @@ def _fire_timestamp_clock_transition(
         generator._last_ts = physical | (MAX_LOGICAL_COUNTER - 1)
         clock_values = iter((physical, physical + MAX_LOGICAL_COUNTER))
         monkeypatch.setattr(
-            "simplebroker._timestamp.time.time_ns",
+            "simplebroker._timestamp._time_ns",
             lambda: next(clock_values),
         )
-        monkeypatch.setattr("simplebroker._timestamp.random.uniform", lambda *_: 0)
-        monkeypatch.setattr("simplebroker._timestamp.time.sleep", lambda _: None)
+        monkeypatch.setattr("simplebroker._timestamp._uniform", lambda *_: 0)
+        monkeypatch.setattr("simplebroker._timestamp._sleep", lambda _: None)
         generated = generator.generate()
         next_physical, next_logical = generator._decode_hybrid_timestamp(generated)
         assert next_physical > physical

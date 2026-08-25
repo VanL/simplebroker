@@ -27,6 +27,12 @@ from ._retry import (
     stop_never,
 )
 
+# Module-owned clock/rng seam: tests patch these aliases instead of the
+# shared stdlib attributes, which background threads, destructors, and
+# concurrent tests can observe. Default binding is the real stdlib
+# function; production behavior is identical.
+_monotonic = time.monotonic
+
 T = TypeVar("T")
 
 SETUP_RETRY_MAX_ELAPSED = 10.0
@@ -248,17 +254,17 @@ class SetupProgressBudget:
         self.idle_timeout = (
             SETUP_RETRY_MAX_ELAPSED if idle_timeout is None else idle_timeout
         )
-        self._last_progress = time.monotonic()
+        self._last_progress = _monotonic()
 
     def remaining(self) -> float:
         """Return seconds left before setup is considered idle."""
 
-        return self.idle_timeout - (time.monotonic() - self._last_progress)
+        return self.idle_timeout - (_monotonic() - self._last_progress)
 
     def record_progress(self) -> None:
         """Refresh the idle budget after a setup operation succeeds."""
 
-        self._last_progress = time.monotonic()
+        self._last_progress = _monotonic()
 
 
 def _setup_phase_context(phase: str, target: str) -> str:

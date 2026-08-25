@@ -2,6 +2,7 @@
 
 import contextlib
 import inspect
+import signal
 import tempfile
 import threading
 import time
@@ -582,42 +583,37 @@ class TestWatcherEdgeCases(WatcherTestBase):
             watcher.stop()
 
     def test_signal_handler_not_main_thread(self, broker_target) -> None:
-        """Test that signal handler is not installed in non-main threads."""
-        watcher = QueueWatcher("queue", lambda m, t: None, db=broker_target)
+        """A non-main-thread run must leave the SIGINT handler untouched.
 
-        # Run in a thread (not main)
-        threading.Event()
+        Runs in a genuinely non-main thread and asserts the installed
+        handler is unchanged afterward — no process-global Mock of
+        ``threading.current_thread``, which every other live watcher
+        thread in the worker would observe.
+        """
+        watcher = QueueWatcher("queue", lambda m, t: None, db=broker_target)
+        handler_before = signal.getsignal(signal.SIGINT)
 
         def run_watcher() -> None:
-            # Patch to make it think it's not the main thread
-            with patch("threading.current_thread") as mock_thread:
-                mock_thread.return_value = Mock()
-                mock_thread.return_value.is_main_thread = False
-
-                # Should not install signal handler
-                with patch("signal.signal") as mock_signal:
-                    # Stop immediately
-                    watcher.stop()
-                    watcher.run_forever()
-
-                    # Signal handler should not have been installed
-                    mock_signal.assert_not_called()
+            # Genuinely not the main thread: run_forever must skip signal
+            # handler installation entirely.
+            watcher.stop()
+            watcher.run_forever()
 
         thread = threading.Thread(target=run_watcher)
         thread.start()
         try:
             thread.join(timeout=5)
             if thread.is_alive():
-                # Force cleanup if thread didn't finish
                 with contextlib.suppress(Exception):
                     watcher.stop()
                     thread.join(timeout=1.0)
                 pytest.fail("Thread did not complete within timeout")
         finally:
-            # Ensure thread cleanup
             if thread.is_alive():
                 with contextlib.suppress(Exception):
                     watcher.stop()
+
+        assert signal.getsignal(signal.SIGINT) is handler_before
 
     def test_absolute_timeout_exceeded(self, broker_target) -> None:
         """Test that watcher fails after MAX_TOTAL_RETRY_TIME."""
@@ -645,7 +641,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             watcher._drain_queue = failing_drain  # type: ignore[method-assign]  # intentional private retry seam
 
             # Patch time.monotonic to make timeout trigger quickly
-            with patch("simplebroker.watcher.time.monotonic", mock_time):
+            with patch("simplebroker.watcher._monotonic", mock_time):
                 # Should raise TimeoutError after simulated 300s (3s real time)
                 with pytest.raises(TimeoutError) as exc_info:
                     watcher.run_forever()

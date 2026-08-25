@@ -14,6 +14,11 @@ import urllib.request
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+# Module-owned sleep seam: tests patch this alias instead of the shared
+# stdlib time.sleep.
+_sleep = time.sleep
+
+
 GITHUB_API_BASE: Final[str] = "https://api.github.com"
 GITHUB_API_VERSION: Final[str] = "2026-03-10"
 PYPI_API_BASE: Final[str] = "https://pypi.org/pypi"
@@ -311,7 +316,7 @@ def wait_for_pypi(package: str, version: str) -> None:
         exists, last_state = pypi_release_state(package, version)
         if exists:
             return
-        time.sleep(delay)
+        _sleep(delay)
 
     exists, last_state = pypi_release_state(package, version)
     if exists:

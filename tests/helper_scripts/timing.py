@@ -47,16 +47,17 @@ def _drive_before_deadline(
     wait: Callable[[float], None],
     deadline: float,
     interval: float,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> bool:
     while True:
-        remaining = deadline - time.monotonic()
+        remaining = deadline - monotonic()
         if remaining <= 0:
             return False
         if state.step is not None:
             state.call_step()
             if state.condition_met():
                 return True
-            remaining = deadline - time.monotonic()
+            remaining = deadline - monotonic()
             if remaining <= 0:
                 return False
         wait(min(interval, remaining))
@@ -86,6 +87,7 @@ def drive_until(
     interval: float = 0.01,
     message: str = "condition did not become true",
     diagnostics: Callable[[], object] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Drive or observe until a test-owned evidence predicate is true.
 
@@ -97,7 +99,7 @@ def drive_until(
     if drains and step is None:
         raise ValueError("drains require step")
 
-    started_at = time.monotonic()
+    started_at = monotonic()
     state = _DriveState(predicate=predicate, step=step)
     if state.condition_met():
         return
@@ -108,12 +110,13 @@ def drive_until(
         wait=wait,
         deadline=deadline,
         interval=interval,
+        monotonic=monotonic,
     ):
         return
     if _drive_at_deadline(state, drains):
         return
 
-    elapsed = time.monotonic() - started_at
+    elapsed = monotonic() - started_at
     raise _DriveUntilTimeout(
         f"{message}; elapsed={elapsed:.6f}s; "
         f"predicate_checks={state.predicate_checks}; "
@@ -127,6 +130,9 @@ def wait_for_condition(
     timeout: float = 5.0,
     interval: float = 0.1,
     message: str | None = None,
+    *,
+    wait: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> bool:
     """Wait for a condition to become true.
 
@@ -143,9 +149,10 @@ def wait_for_condition(
     try:
         drive_until(
             condition_fn,
-            wait=time.sleep,
+            wait=wait,
             timeout=timeout,
             interval=interval,
+            monotonic=monotonic,
             message=(
                 message if message is not None else "condition did not become true"
             ),

@@ -396,7 +396,7 @@ def test_pypi_poll_is_bounded_to_five_attempts_over_a_few_minutes(
         "pypi_release_state",
         lambda package, version: next(states),
     )
-    monkeypatch.setattr(publication.time, "sleep", sleeps.append)
+    monkeypatch.setattr(publication, "_sleep", sleeps.append)
 
     publication.wait_for_pypi("simplebroker", "1.2.3")
 
@@ -414,7 +414,7 @@ def test_pypi_poll_failure_reports_last_observed_state(
         "pypi_release_state",
         lambda package, version: next(states),
     )
-    monkeypatch.setattr(publication.time, "sleep", lambda delay: None)
+    monkeypatch.setattr(publication, "_sleep", lambda delay: None)
 
     with pytest.raises(RuntimeError, match="attempt 5"):
         publication.wait_for_pypi("simplebroker", "1.2.3")

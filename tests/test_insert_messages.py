@@ -172,7 +172,7 @@ def test_far_future_exact_insert_can_stall_later_writes_until_clock_catches_up(
     assert broker.refresh_last_timestamp() == message_id + 1
 
     monkeypatch.setattr(timestamp_module, "MAX_ITERATIONS", 0)
-    monkeypatch.setattr(timestamp_module.time, "time_ns", lambda: future_base - 1)
+    monkeypatch.setattr(timestamp_module, "_time_ns", lambda: future_base - 1)
 
     with pytest.raises(TimestampError, match="Logical counter exhausted"):
         broker.write("jobs", "later allocation")

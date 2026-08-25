@@ -36,6 +36,12 @@ from ._message_id import (
 )
 from ._message_insert import RESERVED_MESSAGE_ID_MESSAGE
 
+# Module-owned clock/rng seam: tests patch these aliases instead of the
+# shared stdlib attributes, which background threads, destructors, and
+# concurrent tests can observe. Default binding is the real stdlib
+# function; production behavior is identical.
+_time_ns = time.time_ns
+
 if TYPE_CHECKING:
     from ._backend_plugins import BrokerConnection
 
@@ -314,7 +320,7 @@ def load_lines(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
                 raise _error(line_number, "invalid header last_ts") from exc
             _check_future_skew(
                 header_last_ts,
-                now_ns=time.time_ns(),
+                now_ns=_time_ns(),
                 max_future_skew_ns=max_future_skew_ns,
                 force=force,
                 line_number=line_number,
