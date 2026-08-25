@@ -468,9 +468,13 @@ class TestAncestorValidation:
 class TestCLIIntegration:
     """Test CLI integration with project scoping."""
 
+    @pytest.mark.sqlite_only
     def test_init_command_dispatch(self, temp_db_cleanup: TempDBCleanup) -> None:
         """init dispatches through the real CLI process (folds the old
-        parser-accepts-init near-tautology into a behavioral check)."""
+        parser-accepts-init near-tautology into a behavioral check).
+
+        sqlite_only: asserts the on-disk ``.broker.db`` artifact, which a
+        remote-backend ``init`` legitimately never creates."""
         tmp_path, cleanup_func = temp_db_cleanup
         try:
             rc, _out, err = run_cli("--quiet", "init", cwd=tmp_path)
