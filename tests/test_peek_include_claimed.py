@@ -1,19 +1,19 @@
 """Behavior tests for include_claimed on the public peek surface.
 
 Claimed rows are consumed-but-not-vacuumed messages. These tests create them
-the real way (write + read) against real SQLite databases under tmp_path.
-No mocks: assert returned rows, ordering, and state — never internal calls.
+the real way (write + read) against each released backend. No mocks: assert
+returned rows, ordering, and state — never internal calls.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
+
+import pytest
 
 from simplebroker import Queue
 
-
-def _db(tmp_path: Path) -> str:
-    return str(tmp_path / "broker.db")
+pytestmark = pytest.mark.shared
 
 
 def _seed(q: Queue, n: int) -> list[int]:
@@ -27,8 +27,8 @@ def _seed(q: Queue, n: int) -> list[int]:
     return ids
 
 
-def test_default_peek_excludes_claimed(tmp_path: Path) -> None:
-    q = Queue("jobs", db_path=_db(tmp_path))
+def test_default_peek_excludes_claimed(queue_factory: Any) -> None:
+    q = queue_factory("jobs")
     _seed(q, 3)
     assert q.read() == "m0"  # claims m0; the row lingers until vacuum
 
@@ -36,8 +36,8 @@ def test_default_peek_excludes_claimed(tmp_path: Path) -> None:
     assert bodies == ["m1", "m2"]  # byte-identical to pre-flag behavior
 
 
-def test_include_claimed_returns_superset_in_id_order(tmp_path: Path) -> None:
-    q = Queue("jobs", db_path=_db(tmp_path))
+def test_include_claimed_returns_superset_in_id_order(queue_factory: Any) -> None:
+    q = queue_factory("jobs")
     ids = _seed(q, 4)
     assert q.read() == "m0"
     assert q.read() == "m1"  # two claimed, two pending
@@ -47,8 +47,8 @@ def test_include_claimed_returns_superset_in_id_order(tmp_path: Path) -> None:
     assert [ts for _, ts in rows] == ids  # strict message-ID order
 
 
-def test_limit_and_bounds_apply_to_merged_stream(tmp_path: Path) -> None:
-    q = Queue("jobs", db_path=_db(tmp_path))
+def test_limit_and_bounds_apply_to_merged_stream(queue_factory: Any) -> None:
+    q = queue_factory("jobs")
     ids = _seed(q, 4)
     assert q.read() == "m0"
 
@@ -63,8 +63,8 @@ def test_limit_and_bounds_apply_to_merged_stream(tmp_path: Path) -> None:
     assert [body for body, _ in rows] == ["m1", "m2", "m3"]
 
 
-def test_exact_id_peek_finds_claimed_row_only_with_flag(tmp_path: Path) -> None:
-    q = Queue("jobs", db_path=_db(tmp_path))
+def test_exact_id_peek_finds_claimed_row_only_with_flag(queue_factory: Any) -> None:
+    q = queue_factory("jobs")
     ids = _seed(q, 2)
     assert q.read() == "m0"
 
@@ -72,8 +72,8 @@ def test_exact_id_peek_finds_claimed_row_only_with_flag(tmp_path: Path) -> None:
     assert q.peek_one(exact_timestamp=ids[0], include_claimed=True) == "m0"
 
 
-def test_generator_paginates_across_claimed_boundary(tmp_path: Path) -> None:
-    q = Queue("jobs", db_path=_db(tmp_path))
+def test_generator_paginates_across_claimed_boundary(queue_factory: Any) -> None:
+    q = queue_factory("jobs")
     _seed(q, 5)
     assert q.read() == "m0"
     assert q.read() == "m1"
@@ -92,8 +92,8 @@ def test_generator_paginates_across_claimed_boundary(tmp_path: Path) -> None:
     assert list(q.peek_generator()) == ["m2", "m3", "m4"]
 
 
-def test_peeking_claimed_rows_mutates_nothing(tmp_path: Path) -> None:
-    q = Queue("jobs", db_path=_db(tmp_path))
+def test_peeking_claimed_rows_mutates_nothing(queue_factory: Any) -> None:
+    q = queue_factory("jobs")
     _seed(q, 3)
     assert q.read() == "m0"
 
@@ -105,9 +105,9 @@ def test_peeking_claimed_rows_mutates_nothing(tmp_path: Path) -> None:
     assert q.read() == "m1"  # delivery order untouched
 
 
-def test_vacuum_removes_claimed_rows_from_flagged_peeks(tmp_path: Path) -> None:
+def test_vacuum_removes_claimed_rows_from_flagged_peeks(queue_factory: Any) -> None:
     """Pins the documented race: claimed rows are deletion-pending."""
-    q = Queue("jobs", db_path=_db(tmp_path))
+    q = queue_factory("jobs")
     _seed(q, 2)
     assert q.read() == "m0"
 
@@ -117,8 +117,8 @@ def test_vacuum_removes_claimed_rows_from_flagged_peeks(tmp_path: Path) -> None:
     assert q.peek_many(10, include_claimed=True) == ["m1"]
 
 
-def test_queue_peek_high_level_mirrors_flag(tmp_path: Path) -> None:
-    q = Queue("jobs", db_path=_db(tmp_path))
+def test_queue_peek_high_level_mirrors_flag(queue_factory: Any) -> None:
+    q = queue_factory("jobs")
     _seed(q, 2)
     assert q.read() == "m0"
 

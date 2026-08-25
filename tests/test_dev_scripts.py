@@ -53,6 +53,40 @@ COMBINE_COVERAGE_SCRIPT = (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("mutation", ["literal", "augmented", "appended"])
+def test_module_backend_scope_gate_rejects_all_evaluated_collisions(
+    mutation: str,
+) -> None:
+    marks = [pytest.mark.shared]
+    if mutation == "literal":
+        marks = [pytest.mark.shared, pytest.mark.sqlite_only]
+    elif mutation == "augmented":
+        marks += [pytest.mark.sqlite_only]
+    else:
+        marks.append(pytest.mark.sqlite_only)
+    module = SimpleNamespace(pytestmark=marks)
+
+    assert suite_conftest._module_backend_mark_names(module) == {
+        "shared",
+        "sqlite_only",
+    }
+    with pytest.raises(pytest.UsageError, match="cannot combine"):
+        suite_conftest._validate_module_backend_scope(
+            module,
+            REPO_ROOT / "tests" / "test_collision.py",
+        )
+
+
+def test_module_backend_scope_gate_allows_test_local_sqlite_opt_outs() -> None:
+    module = SimpleNamespace(pytestmark=pytest.mark.shared)
+
+    assert suite_conftest._module_backend_mark_names(module) == {"shared"}
+    suite_conftest._validate_module_backend_scope(
+        module,
+        REPO_ROOT / "tests" / "test_shared_with_local_opt_out.py",
+    )
+
+
 def _is_commands_coverage_path(path: str) -> bool:
     return path.replace("\\", "/").endswith("simplebroker/commands.py")
 

@@ -10,6 +10,7 @@ from typing import Any, Literal
 import pytest
 
 from simplebroker import Queue, commands
+from simplebroker._targets import BrokerTarget
 
 
 class _ClosedStdout:
@@ -29,40 +30,42 @@ class _ClosedStdout:
         raise OSError("controlled stdout has no descriptor")
 
 
-def _seed(path: Path, queue_name: str = "source", body: str = "payload") -> int:
-    with Queue(queue_name, db_path=str(path), persistent=True) as queue:
+def _seed(
+    target: BrokerTarget,
+    queue_name: str = "source",
+    body: str = "payload",
+) -> int:
+    with Queue(queue_name, db_path=target, persistent=True) as queue:
         return queue.write(body)
 
 
-def _finite_invocation(case: str, path: Path) -> tuple[Any, bool]:
+def _finite_invocation(case: str, target: BrokerTarget) -> tuple[Any, bool]:
     if case == "alias_list":
-        _seed(path)
-        assert commands.cmd_alias_add(str(path), "worker", "source") == 0
-        return lambda: commands.cmd_alias_list(str(path)), False
+        _seed(target)
+        assert commands.cmd_alias_add(target, "worker", "source") == 0
+        return lambda: commands.cmd_alias_list(target), False
     if case == "write":
         return (
-            lambda: commands.cmd_write(
-                str(path), "written", "payload", json_output=True
-            ),
+            lambda: commands.cmd_write(target, "written", "payload", json_output=True),
             True,
         )
     if case == "list":
-        _seed(path)
-        return lambda: commands.cmd_list(str(path), json_output=True), True
+        _seed(target)
+        return lambda: commands.cmd_list(target, json_output=True), True
     if case == "exists":
-        _seed(path)
-        return lambda: commands.cmd_exists(str(path), "source", json_output=True), True
+        _seed(target)
+        return lambda: commands.cmd_exists(target, "source", json_output=True), True
     if case == "stats":
-        _seed(path)
-        return lambda: commands.cmd_stats(str(path), "source", json_output=True), True
+        _seed(target)
+        return lambda: commands.cmd_stats(target, "source", json_output=True), True
     if case == "status":
-        _seed(path)
-        return lambda: commands.cmd_status(str(path), json_output=True), True
+        _seed(target)
+        return lambda: commands.cmd_status(target, json_output=True), True
     if case == "rename":
-        _seed(path, "old-name")
+        _seed(target, "old-name")
         return (
             lambda: commands.cmd_rename(
-                str(path), "old-name", "new-name", json_output=True
+                target, "old-name", "new-name", json_output=True
             ),
             True,
         )
@@ -74,15 +77,15 @@ def _finite_invocation(case: str, path: Path) -> tuple[Any, bool]:
     ["alias_list", "write", "list", "exists", "stats", "status", "rename"],
 )
 @pytest.mark.parametrize("failure", ["write", "flush"])
+@pytest.mark.shared
 def test_finite_direct_commands_return_one_on_closed_stdout(
-    tmp_path: Path,
+    broker_target: BrokerTarget,
     monkeypatch: pytest.MonkeyPatch,
     capfd: pytest.CaptureFixture[str],
     case: str,
     failure: Literal["write", "flush"],
 ) -> None:
-    path = tmp_path / "broker.db"
-    invoke, json_output = _finite_invocation(case, path)
+    invoke, json_output = _finite_invocation(case, broker_target)
     monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
     monkeypatch.setattr(commands.sys, "stdout", _ClosedStdout(failure))
 
@@ -100,32 +103,32 @@ def test_finite_direct_commands_return_one_on_closed_stdout(
         assert stderr.startswith("simplebroker: error:")
 
     if case == "write":
-        with Queue("written", db_path=str(path)) as queue:
+        with Queue("written", db_path=broker_target) as queue:
             assert queue.peek() == "payload"
         assert "inspect broker state before retrying" in stderr
     elif case == "rename":
-        with Queue("new-name", db_path=str(path)) as queue:
+        with Queue("new-name", db_path=broker_target) as queue:
             assert queue.peek() == "payload"
         assert "inspect broker state before retrying" in stderr
 
 
 def _streaming_invocation(
     case: str,
-    path: Path,
+    target: BrokerTarget,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Any:
     if case == "read":
-        _seed(path)
-        return lambda: commands.cmd_read(str(path), "source")
+        _seed(target)
+        return lambda: commands.cmd_read(target, "source")
     if case == "peek":
-        _seed(path)
-        return lambda: commands.cmd_peek(str(path), "source")
+        _seed(target)
+        return lambda: commands.cmd_peek(target, "source")
     if case == "move":
-        _seed(path)
-        return lambda: commands.cmd_move(str(path), "source", "destination")
+        _seed(target)
+        return lambda: commands.cmd_move(target, "source", "destination")
     if case == "dump":
-        _seed(path)
-        return lambda: commands.cmd_dump(str(path))
+        _seed(target)
+        return lambda: commands.cmd_dump(target)
     if case == "watch":
 
         class _OneMessageWatcher:
@@ -147,30 +150,39 @@ def _streaming_invocation(
                 return
 
         monkeypatch.setattr(commands, "QueueWatcher", _OneMessageWatcher)
-        return lambda: commands.cmd_watch(str(path), "source", quiet=True)
+        return lambda: commands.cmd_watch(target, "source", quiet=True)
     raise AssertionError(f"unknown streaming command case: {case}")
 
 
-@pytest.mark.parametrize("case", ["read", "peek", "move", "dump", "watch"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "read",
+        "peek",
+        "move",
+        "dump",
+        pytest.param("watch", marks=pytest.mark.sqlite_only),
+    ],
+)
 @pytest.mark.parametrize("failure", ["write", "flush"])
+@pytest.mark.shared
 def test_streaming_direct_commands_clean_stop_on_closed_stdout(
-    tmp_path: Path,
+    broker_target: BrokerTarget,
     monkeypatch: pytest.MonkeyPatch,
     case: str,
     failure: Literal["write", "flush"],
 ) -> None:
-    path = tmp_path / "broker.db"
-    invoke = _streaming_invocation(case, path, monkeypatch)
+    invoke = _streaming_invocation(case, broker_target, monkeypatch)
     monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
     monkeypatch.setattr(commands.sys, "stdout", _ClosedStdout(failure))
 
     assert invoke() == 0
 
     if case == "peek":
-        with Queue("source", db_path=str(path)) as queue:
+        with Queue("source", db_path=broker_target) as queue:
             assert queue.peek() == "payload"
     elif case == "move":
-        with Queue("destination", db_path=str(path)) as queue:
+        with Queue("destination", db_path=broker_target) as queue:
             assert queue.peek() == "payload"
 
 

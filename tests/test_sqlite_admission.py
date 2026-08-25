@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -94,7 +96,7 @@ def test_foreign_magic_is_checked_on_the_normal_runner_connection(
         connection.execute("INSERT INTO meta VALUES ('magic', 'another-product')")
         connection.commit()
 
-    real_connect = sqlite3.connect
+    real_connect = cast(Callable[..., sqlite3.Connection], sqlite3.connect)
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:

@@ -30,16 +30,14 @@ def test_timestamp_error_outcome_ambiguity_defaults_false() -> None:
     assert ambiguous.outcome_ambiguous is True
 
 
-def test_advance_rejects_none_before_backend_work(
-    tmp_path: Path,
-) -> None:
-    with open_broker(str(tmp_path / "none.db")) as broker:
-        assert broker.refresh_last_timestamp() == 0
+@pytest.mark.shared
+def test_advance_rejects_none_before_backend_work(broker: Any) -> None:
+    assert broker.refresh_last_timestamp() == 0
 
-        with pytest.raises(TypeError, match="timestamp must be an int"):
-            broker.advance_last_timestamp(None)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="timestamp must be an int"):
+        broker.advance_last_timestamp(None)
 
-        assert broker.refresh_last_timestamp() == 0
+    assert broker.refresh_last_timestamp() == 0
 
 
 def test_advance_skips_initial_read_and_caches_one_final_observation(

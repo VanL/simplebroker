@@ -1034,6 +1034,26 @@ def pytest_configure(config: pytest.Config) -> None:
             del os.environ[key]
 
 
+def _module_backend_mark_names(module: object) -> set[str]:
+    """Return evaluated backend-scope marks declared through ``pytestmark``."""
+    raw_marks = getattr(module, "pytestmark", ())
+    if not isinstance(raw_marks, (list, tuple, set, frozenset)):
+        raw_marks = (raw_marks,)
+    names = {
+        getattr(getattr(marker, "mark", marker), "name", None) for marker in raw_marks
+    }
+    return {name for name in names if name in {"shared", "sqlite_only"}}
+
+
+def _validate_module_backend_scope(module: object, path: Path) -> None:
+    """Reject module scope that selects and excludes every backend test."""
+    names = _module_backend_mark_names(module)
+    if {"shared", "sqlite_only"} <= names:
+        raise pytest.UsageError(
+            f"{path}: module pytestmark cannot combine shared and sqlite_only"
+        )
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Mark tests by backend scope.
 
@@ -1042,7 +1062,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     - unless they still assert SQLite file/catalog behavior
     - everything else in the core suite is SQLite-specific
     """
+    checked_modules: set[object] = set()
     for item in items:
+        module = getattr(item, "module", None)
+        if module is not None and module not in checked_modules:
+            _validate_module_backend_scope(module, item.path)
+            checked_modules.add(module)
         if item.get_closest_marker("shared") or item.get_closest_marker("sqlite_only"):
             continue
         if item.path.name in _SQLITE_ONLY_RUN_CLI_MODULE_REASONS:

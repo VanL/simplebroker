@@ -11,7 +11,7 @@ from simplebroker.watcher import QueueMoveWatcher, QueueWatcher, StopWatching
 
 from .helper_scripts.timing import scale_timeout_for_ci
 
-pytestmark = [pytest.mark.shared, pytest.mark.sqlite_only]
+pytestmark = pytest.mark.shared
 
 
 def _pending_messages(broker: Any, queue: str) -> list[str]:

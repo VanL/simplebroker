@@ -5,8 +5,9 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
+from typing import Any
 
-from simplebroker import Queue, open_broker
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "docs" / "specs" / "17-ops.md"
@@ -223,40 +224,39 @@ def test_ops_affected_evidence_rows_match_exact_executable_manifests() -> None:
             assert nodes <= _test_functions(relative_path)
 
 
-def test_ops_exists_includes_claimed_only(tmp_path: Path) -> None:
+@pytest.mark.shared
+def test_ops_exists_includes_claimed_only(queue_factory: Any) -> None:
     """[SB-OPS-1]/[SB-OPS-2] Claimed-only queue still exists until vacuum."""
-    db = tmp_path / "ops.db"
-    with Queue("q", db_path=str(db)) as q:
-        mid = q.write("body")
-        assert q.read_one(exact_timestamp=mid) == "body"
-        assert q.exists() is True
-        stats = q.stats()
-        assert stats.pending == 0
-        assert stats.claimed == 1
-        assert stats.total == 1
-        assert stats.exists is True
+    q = queue_factory("q")
+    mid = q.write("body")
+    assert q.read_one(exact_timestamp=mid) == "body"
+    assert q.exists() is True
+    stats = q.stats()
+    assert stats.pending == 0
+    assert stats.claimed == 1
+    assert stats.total == 1
+    assert stats.exists is True
 
 
-def test_ops_delete_removes_row_immediately(tmp_path: Path) -> None:
+@pytest.mark.shared
+def test_ops_delete_removes_row_immediately(queue_factory: Any) -> None:
     """[SB-OPS-3] Delete by id is physical removal."""
-    db = tmp_path / "del.db"
-    with Queue("q", db_path=str(db)) as q:
-        mid = q.write("gone")
-        q.delete(message_id=mid)
-        assert q.exists() is False
-        assert q.peek_one() is None
+    q = queue_factory("q")
+    mid = q.write("gone")
+    q.delete(message_id=mid)
+    assert q.exists() is False
+    assert q.peek_one() is None
 
 
-def test_ops_rename_moves_pending_and_claimed(tmp_path: Path) -> None:
+@pytest.mark.shared
+def test_ops_rename_moves_pending_and_claimed(broker: Any) -> None:
     """[SB-OPS-4] Rename retags pending and claimed rows."""
-    db = tmp_path / "ren.db"
-    with open_broker(str(db)) as broker:
-        broker.write("old", "a")
-        broker.write("old", "b")
-        assert broker.claim_one("old", with_timestamps=False) == "a"
-        result = broker.rename_queue("old", "new")
-        assert result.messages_renamed == 2
-        assert broker.get_queue_stat("old").total == 0
-        assert broker.get_queue_stat("new").total == 2
-        assert broker.get_queue_stat("new").claimed == 1
-        assert broker.get_queue_stat("new").pending == 1
+    broker.write("old", "a")
+    broker.write("old", "b")
+    assert broker.claim_one("old", with_timestamps=False) == "a"
+    result = broker.rename_queue("old", "new")
+    assert result.messages_renamed == 2
+    assert broker.get_queue_stat("old").total == 0
+    assert broker.get_queue_stat("new").total == 2
+    assert broker.get_queue_stat("new").claimed == 1
+    assert broker.get_queue_stat("new").pending == 1

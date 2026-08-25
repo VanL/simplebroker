@@ -12,7 +12,7 @@ from simplebroker.watcher import PollingStrategy, QueueWatcher, StopWatching
 
 from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 
-pytestmark = [pytest.mark.shared, pytest.mark.sqlite_only]
+pytestmark = pytest.mark.shared
 
 
 class _CountingWaiter:
@@ -30,7 +30,7 @@ class _CountingWaiter:
 
 
 class _WaiterWatcher(QueueWatcher):
-    """Use a counted native waiter while retaining the real SQLite queue path."""
+    """Use a counted native waiter while retaining the active-backend queue path."""
 
     def __init__(self, *args, waiter: _CountingWaiter, **kwargs) -> None:
         self._test_waiter = waiter
