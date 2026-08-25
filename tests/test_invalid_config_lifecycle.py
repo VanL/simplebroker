@@ -6,7 +6,7 @@ import ast
 import os
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
 import pytest
@@ -23,6 +23,11 @@ from simplebroker.ext import InvalidConfigError
 pytestmark = [pytest.mark.shared]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _canonical_module_path(path: PurePath) -> str:
+    """Return a host-independent repository module identifier."""
+    return path.as_posix()
 
 
 def _run_python_with_invalid_config(code: str) -> subprocess.CompletedProcess[str]:
@@ -271,7 +276,7 @@ def test_config_consumers_do_not_resolve_ambient_config_at_module_scope() -> Non
     # files by default). Sanity anchors below keep the derivation
     # honest.
     module_paths = sorted(
-        str(path.relative_to(PROJECT_ROOT))
+        _canonical_module_path(path.relative_to(PROJECT_ROOT))
         for pattern in (
             "simplebroker/**/*.py",
             "extensions/simplebroker_pg/simplebroker_pg/**/*.py",
@@ -298,6 +303,13 @@ def test_config_consumers_do_not_resolve_ambient_config_at_module_scope() -> Non
                 offenders.append(relative_path)
 
     assert offenders == []
+
+
+def test_module_path_inventory_normalizes_windows_separators() -> None:
+    assert (
+        _canonical_module_path(PureWindowsPath(r"simplebroker\cli.py"))
+        == "simplebroker/cli.py"
+    )
 
 
 COMMAND_CALLS = {
