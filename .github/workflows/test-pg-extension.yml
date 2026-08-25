@@ -56,7 +56,7 @@ jobs:
 
     - name: Run PG-backed test suites
       run: |
-        uv run --frozen --no-sync ./bin/pytest-pg
+        uv run --frozen --no-sync ./bin/pytest-pg --max-worker-restart=0
 
     - name: Run PostgreSQL cross-thread finalization probe
       if: matrix.python-version == '3.13'

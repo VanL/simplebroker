@@ -22,7 +22,9 @@ from simplebroker._phaselock import (
     PhaseLockService,
     PhaseLockTimeout,
 )
+from tests.helper_scripts.timing import scale_timeout_for_ci
 from tests.helpers.state_machine_contracts import TransitionCase, fires_transition_table
+from tests.test_phaselock import _subprocess_holding_phase_lock
 
 
 def _case(
@@ -128,39 +130,41 @@ def _assert_marked_while_waiting(
     calls: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    liveness_timeout = scale_timeout_for_ci(5.0)
     service = PhaseLockService(
         target,
         use_xattrs=False,
         strict_marker_locking=False,
-        timeout=1,
+        timeout=liveness_timeout,
         retry_delay=0.001,
     )
-    holder = PhaseLockService(target, use_xattrs=False, timeout=1)
     waiting = threading.Event()
     result_holder: list[Any] = []
-    real_acquire = phaselock._AdvisoryLock._acquire_process_lock
+    real_wait_to_retry = phaselock._AdvisoryLock._wait_to_retry
 
-    def observe_wait(self: object, *args: object, **kwargs: object) -> bool:
+    def observe_file_lock_retry(self: object, *args: object, **kwargs: object) -> bool:
         if threading.current_thread().name == "phase-contender":
             waiting.set()
-        return real_acquire(self, *args, **kwargs)  # type: ignore[arg-type]
+        return real_wait_to_retry(self, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(
         phaselock._AdvisoryLock,
-        "_acquire_process_lock",
-        observe_wait,
+        "_wait_to_retry",
+        observe_file_lock_retry,
     )
 
     def contend() -> None:
         result_holder.append(service.run_phases([phase]))
 
     contender_thread = threading.Thread(target=contend, name="phase-contender")
-    with holder.locked():
+    with _subprocess_holding_phase_lock(target):
         contender_thread.start()
-        assert waiting.wait(1)
+        assert waiting.wait(liveness_timeout)
         service._write_status_phases(["schema"])
-        contender_thread.join(1)
-    assert not contender_thread.is_alive()
+        contender_thread.join(liveness_timeout)
+        assert not contender_thread.is_alive(), (
+            "non-strict waiter did not stop while another process held the file lock"
+        )
     assert result_holder[0].skipped == ("schema",)
     assert calls == []
 

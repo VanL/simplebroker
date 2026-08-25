@@ -149,6 +149,13 @@ def _assert_recovered_source(
         assert source.peek_many(10, with_timestamps=False) == ["one", "two"]
         if operation == "move":
             assert destination.peek_many(10, with_timestamps=False) == []
+        assert list(
+            source.read_generator(
+                with_timestamps=False,
+                delivery_guarantee="at_least_once",
+            )
+        ) == ["one", "two"]
+        assert source.peek_many(10, with_timestamps=False) == []
     finally:
         source.close()
         destination.close()

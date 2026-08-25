@@ -503,17 +503,22 @@ _DEFAULT_PYTEST_TIMEOUT_ARGS = ("--timeout=180", "--timeout-method=thread")
 
 
 def _with_default_timeout_bounds(args: list[str]) -> list[str]:
-    """Append the default per-test timeout unless the caller set one.
+    """Fill each missing per-test timeout control independently.
 
-    Add-if-missing only (audit plan Task 8.1): an explicit --timeout,
-    --timeout-method, or worker-restart control from the caller is never
-    overridden by an appended default.
+    Add-if-missing only (audit plan Task 8.1): explicit timeout values and
+    methods are preserved. Worker-restart policy is orthogonal and cannot
+    suppress the per-test deadline.
     """
-    explicit = ("--timeout", "--timeout-method", "--max-worker-restart")
-    for arg in args:
-        if arg in explicit or arg.startswith(tuple(f"{name}=" for name in explicit)):
-            return args
-    return [*args, *_DEFAULT_PYTEST_TIMEOUT_ARGS]
+
+    def has_option(name: str) -> bool:
+        return any(arg == name or arg.startswith(f"{name}=") for arg in args)
+
+    bounded = list(args)
+    for default_arg in _DEFAULT_PYTEST_TIMEOUT_ARGS:
+        option_name = default_arg.partition("=")[0]
+        if not has_option(option_name):
+            bounded.append(default_arg)
+    return bounded
 
 
 def _with_default_suite_path(args: list[str], default_path: str) -> list[str]:

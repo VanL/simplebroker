@@ -13,6 +13,14 @@ import pytest
 logger = logging.getLogger(__name__)
 
 
+def _watcher_needs_cleanup(watcher: Any) -> bool:
+    is_running = getattr(watcher, "is_running", None)
+    if callable(is_running) and is_running():
+        return True
+    finalizer = getattr(watcher, "_finalizer", None)
+    return finalizer is None or finalizer.alive
+
+
 class WatcherTracker:
     """Track all watcher instances created during tests."""
 
@@ -28,20 +36,12 @@ class WatcherTracker:
     def stop_all(self, timeout: float = 5.0) -> None:
         """Stop all registered watchers."""
         with self._lock:
-            # Get all live watchers
-            live_watchers = []
-            dead_refs = []
-
-            for watcher_ref in self._watchers:
-                watcher = watcher_ref()
-                if watcher is not None:
-                    live_watchers.append(watcher)
-                else:
-                    dead_refs.append(watcher_ref)
-
-            # Clean up dead references
-            for ref in dead_refs:
-                self._watchers.discard(ref)
+            live_watchers = [
+                watcher
+                for watcher_ref in self._watchers
+                if (watcher := watcher_ref()) is not None
+                and _watcher_needs_cleanup(watcher)
+            ]
 
             # Stop all live watchers
             for watcher in live_watchers:

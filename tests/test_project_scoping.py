@@ -250,6 +250,34 @@ class TestProjectDatabaseSearch:
         finally:
             cleanup_func()
 
+    def test_default_search_probes_exactly_the_documented_100_levels(
+        self,
+        temp_db_cleanup: TempDBCleanup,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The default path owns the documented 100-level security ceiling."""
+        tmp_path, cleanup_func = temp_db_cleanup
+        probes: list[Path] = []
+
+        def reject_candidate(candidate: Path, verify_magic: bool = True) -> bool:
+            del verify_magic
+            probes.append(candidate)
+            return False
+
+        monkeypatch.setattr("simplebroker._paths._is_valid_sqlite_db", reject_candidate)
+        monkeypatch.setattr(
+            "simplebroker._paths._is_filesystem_root", lambda _path: False
+        )
+        monkeypatch.setattr(
+            "simplebroker._paths._same_filesystem", lambda _current, _parent: True
+        )
+
+        try:
+            assert _find_project_database(".broker.db", tmp_path) is None
+            assert len(probes) == 100
+        finally:
+            cleanup_func()
+
     def test_permission_denied_skipped(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test that directories with permission issues are skipped."""
         tmp_path, cleanup_func = temp_db_cleanup

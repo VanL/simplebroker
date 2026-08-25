@@ -581,13 +581,19 @@ class TestWatcherEdgeCases(WatcherTestBase):
         ``threading.current_thread``, which every other live watcher
         thread in the worker would observe.
         """
-        watcher = QueueWatcher("queue", lambda m, t: None, db=broker_target)
+        entered_run_loop = threading.Event()
+
+        class SinglePassWatcher(QueueWatcher):
+            def _run_with_retries(self, max_retries: int = 3) -> None:
+                del max_retries
+                entered_run_loop.set()
+
+        watcher = SinglePassWatcher("queue", lambda m, t: None, db=broker_target)
         handler_before = signal.getsignal(signal.SIGINT)
 
         def run_watcher() -> None:
             # Genuinely not the main thread: run_forever must skip signal
-            # handler installation entirely.
-            watcher.stop()
+            # handler installation and continue into the run loop.
             watcher.run_forever()
 
         thread = threading.Thread(target=run_watcher)
@@ -604,6 +610,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 with contextlib.suppress(Exception):
                     watcher.stop()
 
+        assert entered_run_loop.is_set()
         assert signal.getsignal(signal.SIGINT) is handler_before
 
     def test_absolute_timeout_exceeded(self, broker_target) -> None:

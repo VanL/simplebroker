@@ -329,8 +329,8 @@ def test_all_extras_job_validates_the_full_state_machine_manifest() -> None:
     assert "uv sync --frozen --extra dev --extra pg --extra redis" in lint_job
     assert (
         "SIMPLEBROKER_REQUIRE_FULL_MANIFEST=1 "
-        "uv run --frozen --no-sync pytest -q tests/test_state_machine_policy.py"
-        in lint_job
+        "uv run --frozen --no-sync pytest -n0 -q --timeout=180 "
+        "--timeout-method=thread tests/test_state_machine_policy.py" in lint_job
     )
 
 

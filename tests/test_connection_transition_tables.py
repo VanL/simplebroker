@@ -92,6 +92,22 @@ CONNECTION_TRANSITIONS = (
         "failure is wrapped with connection context",
     ),
     _case(
+        "DISTINCT_REGISTERED_AND_THREAD_LOCAL_CLEANUP",
+        "registered and thread-local resources open",
+        "cleanup",
+        "empty",
+        "close both distinct resources and clear thread state",
+        "each resource is closed exactly once",
+    ),
+    _case(
+        "ALIASED_CORE_AND_REGISTERED_CLEANUP",
+        "one owned core registered through two ownership paths",
+        "cleanup",
+        "empty",
+        "deduplicate the aliased core before shutdown",
+        "the core is shut down exactly once",
+    ),
+    _case(
         "REGISTERED_CLOSE_FAILURE",
         "registered managed resource open",
         "cleanup and resource shutdown fails",
@@ -136,6 +152,22 @@ class _FailingClose:
         raise RuntimeError("close failed")
 
 
+class _CountingShutdown:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def shutdown(self) -> None:
+        self.calls += 1
+
+
+class _CountingClose:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def close(self) -> None:
+        self.calls += 1
+
+
 def _assert_cleanup_failure(
     payload: str,
     path: str,
@@ -164,6 +196,32 @@ def _assert_cleanup_failure(
     assert list(manager._connection_registry) == []
 
 
+def _assert_cleanup_topology(payload: str, path: str) -> None:
+    manager = DBConnection(path)
+    if payload == "DISTINCT_REGISTERED_AND_THREAD_LOCAL_CLEANUP":
+        registered: Any = _CountingClose()
+        thread_local: Any = _CountingShutdown()
+        manager._connection_registry.add(registered)
+        manager._thread_local.db = thread_local
+
+        manager.cleanup()
+
+        assert registered.calls == 1
+        assert thread_local.calls == 1
+    else:
+        core: Any = _CountingShutdown()
+        manager._core = core
+        manager._connection_registry.add(core)
+
+        manager.cleanup()
+
+        assert core.calls == 1
+
+    assert not hasattr(manager._thread_local, "db")
+    assert manager._core is None
+    assert list(manager._connection_registry) == []
+
+
 @fires_transition_table("SM-CONNECTION", CONNECTION_TRANSITIONS)
 def test_connection_fires_transition_table(
     transition_case: TransitionCase[str],
@@ -174,6 +232,12 @@ def test_connection_fires_transition_table(
     path = str(tmp_path / f"{transition_case.payload}.db")
     if transition_case.payload.endswith("CLOSE_FAILURE"):
         _assert_cleanup_failure(transition_case.payload, path, caplog)
+        return
+    if transition_case.payload in {
+        "DISTINCT_REGISTERED_AND_THREAD_LOCAL_CLEANUP",
+        "ALIASED_CORE_AND_REGISTERED_CLEANUP",
+    }:
+        _assert_cleanup_topology(transition_case.payload, path)
         return
     if transition_case.payload == "BORROWED_RUNNER_CLEANUP":
         runner = SQLiteRunner(path)

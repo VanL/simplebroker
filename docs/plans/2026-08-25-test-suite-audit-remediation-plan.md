@@ -1,6 +1,6 @@
 # Test Suite Audit Remediation Plan
 
-Status: active
+Status: completed
 Class: 4 — the plan deletes and rewrites tests across the whole suite,
 changes CI workflow timeout wiring, and adds small private clock, rng,
 and pid alias seams to production modules (no file-operation
@@ -886,6 +886,60 @@ wording/internals freeze.
   `sqlite_only` with rationale); doc gates, suppression index
   `--check`, `check-dom15-fixtures`, and `check-plan-context` green.
   Durable lessons recorded in `docs/lessons.md` (five entries).
+- 2026-08-25 — post-implementation equivalence review, OpenAI Codex plus
+  three independent specialist passes: aggregate core coverage did not
+  regress (3,127 -> 3,109 collected nodes; line 93.34% -> 93.46%; branch
+  84.03% -> 84.21%), but the `strictly stronger` claim failed at seven
+  narrow owners. The connection table omitted distinct thread-local plus
+  registered cleanup and aliased-core deduplication; the consolidated
+  `read --after` owner omitted the excluded-row preservation postcondition;
+  restart recovery stopped at peek visibility instead of reclaim-and-drain;
+  the deterministic unresolved-symlink depth guard disappeared; the
+  marked-while-waiting phase-lock owner changed from file-lock process
+  contention to process-local contention; the derived THEORY-3 route gate
+  accepted one valid cross-product pair while another route was wrong; and
+  partial pytest timeout controls suppressed the remaining defaults while a
+  job ceiling could mask an unbounded direct pytest step. A claimed
+  non-main-thread signal-handler strengthening also returned before signal
+  setup, and a released synthetic watcher could be stopped again by the
+  autouse tracker. Owner authorized remediation. The canonical owners now
+  fire both cleanup topologies, destructive-read preservation, recovery
+  reclaim-and-drain, deterministic depth exhaustion, and cross-process
+  non-strict phase-lock exit; the THEORY-3 gate validates each derived
+  concern/code/spec tuple with negative mutation cases; timeout dimensions
+  compose independently and every direct pytest step requires a per-test
+  bound; the signal test reaches its controlled run loop; and the cleanup
+  tracker skips watcher resources whose finalizer is already dead. The
+  existing 2026-08-25 equivalence lesson already states the reusable
+  correction, so no duplicate durable lesson was added. Full verification
+  and independent re-review remain required before landing.
+- 2026-08-25 — remediation re-review follow-up: the three independent passes
+  agreed that the seven named equivalence repairs fire, then found five
+  residual owners. The default project-discovery path did not pin the
+  documented 100-level ceiling; CLI timestamp-bound whitespace acceptance had
+  become dead test data; the workflow gate did not account for xdist inherited
+  from project `addopts`; the cross-process phase-lock test used unscaled
+  one-second liveness valves; and the strengthened signal test had accidentally
+  removed the only deterministic stop-then-run lifecycle owner. One pass also
+  found a cleanup-tracker race while a successfully completed watcher re-enters
+  between publishing its running state and re-arming its dead finalizer. The
+  default search now fires exactly 100 candidate probes, the real CLI format
+  matrix includes surrounding whitespace, every direct pytest step declares
+  either `-n0` or the complete bounded xdist topology, wrapper steps declare
+  either serial execution or zero worker restarts, the manifest gate is
+  explicitly serial, and the primary PostgreSQL/Redis wrappers now carry the
+  same worker-loss bound. Phase-lock liveness budgets scale for CI,
+  stop-then-run is separately owned as a non-resurrection contract, and the
+  tracker prioritizes live run state over finalizer state with the exact
+  re-entry interleaving under test. Local completion gates are green: 3,109
+  passed and 16 skipped under
+  default xdist; full core line coverage is 7,822/8,363 (93.53%) and branch
+  coverage is 2,158/2,558 (84.36%), both above the pre-remediation baseline;
+  targeted Ruff, production mypy, documentation/context, suppression-index,
+  and diff checks are green. All three final independent re-reviews found no
+  remaining rigor or enforcement gap; one review's wrapper worker-loss finding
+  was fixed and then cleared on a narrow follow-up. Landing-SHA
+  SQLite/Windows/PostgreSQL/Redis CI remains required.
 
 ## Deviation Log
 
@@ -906,6 +960,13 @@ wording/internals freeze.
   `pytest.mark.sqlite_only` after failing on the pg and redis
   completion-gate lanes — it asserts the on-disk `.broker.db`
   artifact, which a remote-backend `init` legitimately never creates.
+- 2026-08-25, owner-directed targeted closure: the owner directed this
+  plan closed in the remediation commit after the full local suite,
+  branch coverage, static/documentation gates, firing mutations, and
+  three independent re-reviews passed. The original landing-SHA
+  Windows/PostgreSQL/Redis gate is retained as post-commit evidence,
+  not represented as having run locally and not used as a closure
+  blocker under this explicit direction.
 
 ## Out of Scope
 

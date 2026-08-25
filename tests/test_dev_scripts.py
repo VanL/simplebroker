@@ -3323,20 +3323,30 @@ def test_wrapper_appends_default_timeout_bounds_when_caller_sets_none() -> None:
 
 
 @pytest.mark.parametrize(
-    "explicit",
+    ("explicit", "expected_defaults"),
     [
-        ["--timeout", "30"],
-        ["--timeout=30"],
-        ["--timeout-method", "signal"],
-        ["--timeout-method=signal"],
-        ["--max-worker-restart", "1"],
-        ["--max-worker-restart=1"],
+        (["--timeout", "30"], ["--timeout-method=thread"]),
+        (["--timeout=30"], ["--timeout-method=thread"]),
+        (["--timeout-method", "signal"], ["--timeout=180"]),
+        (["--timeout-method=signal"], ["--timeout=180"]),
+        (
+            ["--max-worker-restart", "1"],
+            ["--timeout=180", "--timeout-method=thread"],
+        ),
+        (
+            ["--max-worker-restart=1"],
+            ["--timeout=180", "--timeout-method=thread"],
+        ),
+        (
+            ["--timeout=30", "--timeout-method=signal", "--max-worker-restart=1"],
+            [],
+        ),
     ],
 )
-def test_wrapper_never_overrides_explicit_timeout_controls(
+def test_wrapper_preserves_explicit_controls_and_fills_each_missing_timeout(
     explicit: list[str],
+    expected_defaults: list[str],
 ) -> None:
-    """An explicit caller control suppresses every appended default."""
+    """Each timeout dimension is add-if-missing; worker policy is independent."""
     args = _scripts._with_default_timeout_bounds(["tests", *explicit])
-    assert args == ["tests", *explicit]
-    assert "--timeout=180" not in args
+    assert args == ["tests", *explicit, *expected_defaults]

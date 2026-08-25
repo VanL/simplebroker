@@ -50,6 +50,11 @@ RETIRED_SOURCE = re.compile(
     r"^(?P<plan>[^ /]+\.md) at (?P<sha>[0-9a-f]{7,40}) "
     r"\[(?P<record>ALT-[A-Z][A-Z0-9]*-\d{3})\]$"
 )
+REGISTRY_ROUTE = re.compile(
+    r"Registry `(?P<concern>[^`]+)`\s*→\s*"
+    r"\[`\[(?P<code>SB-[A-Z0-9-]+\*?)\]`\]"
+    r"\((?P<target>specs/[^)]+\.md)\)"
+)
 
 
 @dataclass(frozen=True)
@@ -623,30 +628,66 @@ def test_core_concepts_resolve_to_registry_owners(theory_text: str) -> None:
     assert concept_rows, "THEORY-3 must route concepts through the registry"
     referenced = 0
     for concept, owner in concept_rows.items():
-        concerns = re.findall(r"Registry `([^`]+)`", owner)
-        targets = re.findall(r"\]\((specs/[^)]+\.md)\)", owner)
-        for concern in concerns:
+        declared_concerns = re.findall(r"Registry `([^`]+)`", owner)
+        declared_targets = re.findall(r"\]\((specs/[^)]+\.md)\)", owner)
+        routes = list(REGISTRY_ROUTE.finditer(owner))
+        assert routes, (concept, owner)
+        assert len(routes) == len(declared_concerns) == len(declared_targets), (
+            concept,
+            declared_concerns,
+            declared_targets,
+        )
+
+        for route in routes:
+            concern = route.group("concern")
+            target = route.group("target")
+            code = route.group("code")
             referenced += 1
             assert concern in registry_rows, (concept, concern)
-        for target in targets:
-            assert (ROOT / "docs" / target).exists(), (concept, target)
-        if concerns and targets:
-            # A canonical-spec concern must own at least one of the specs
-            # the concept links to (no dangling routing).
-            spec_cells = [
-                registry_rows[concern][1]
-                for concern in concerns
-                if registry_rows[concern][0] == "canonical-spec"
-            ]
-            if spec_cells:
-                assert any(
-                    target.removeprefix("specs/") in cell
-                    for target in targets
-                    for cell in spec_cells
-                ), (concept, targets, spec_cells)
+            state, spec_cell, _locus = registry_rows[concern]
+            assert state == "canonical-spec", (concept, concern, state)
+            target_path = ROOT / "docs" / target
+            assert target_path.exists(), (concept, target)
+            assert target.removeprefix("specs/") in spec_cell, (
+                concept,
+                concern,
+                target,
+                spec_cell,
+            )
+
+            spec_text = target_path.read_text(encoding="utf-8")
+            if code.endswith("*"):
+                assert f"[{code[:-1]}" in spec_text, (concept, code, target)
+            else:
+                assert f"[{code}]" in spec_text, (concept, code, target)
     assert referenced >= len(concept_rows), (
         "each concept row should reference at least one registry concern"
     )
+
+
+@pytest.mark.parametrize(
+    ("old_fragment", "new_fragment"),
+    [
+        ("specs/12-broadcast.md", "specs/17-ops.md"),
+        ("[SB-BCAST-*]", "[SB-OPS-*]"),
+    ],
+)
+def test_core_concept_route_gate_rejects_a_mismatched_registry_route(
+    theory_text: str,
+    old_fragment: str,
+    new_fragment: str,
+) -> None:
+    broadcast_route = (
+        "Registry `Broadcast selection, creation, and atomicity` → "
+        "[`[SB-BCAST-*]`](specs/12-broadcast.md)"
+    )
+    mismatched_route = broadcast_route.replace(old_fragment, new_fragment)
+    assert broadcast_route in theory_text
+
+    with pytest.raises(AssertionError):
+        test_core_concepts_resolve_to_registry_owners(
+            theory_text.replace(broadcast_route, mismatched_route, 1)
+        )
 
 
 def test_identity_concepts_route_ordered_selection_contract(

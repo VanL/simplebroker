@@ -265,6 +265,31 @@ def test_cleanup_failure_keeps_lifecycle_retryable(broker_target) -> None:
     assert not watcher._finalizer.alive
 
 
+def test_run_after_stop_is_a_noop_and_does_not_resurrect_resources(
+    broker_target: Any,
+) -> None:
+    """A released watcher with its stop event set cannot be restarted."""
+
+    class NoRestartWatcher(QueueWatcher):
+        def _run_with_retries(self, max_retries: int = 3) -> None:
+            del max_retries
+            pytest.fail("stopped watcher re-entered its run loop")
+
+    watcher = NoRestartWatcher(
+        "stop_then_run",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+    )
+    watcher.stop(join=False)
+
+    assert watcher._stop_event.is_set()
+    assert not watcher._finalizer.alive
+    watcher.run_forever()
+
+    assert not watcher.is_running()
+    assert not watcher._finalizer.alive
+
+
 @pytest.mark.parametrize("body_raises", [False, True])
 def test_context_exit_suppresses_stop_failure_without_replacing_body_exception(
     broker_target: Any,

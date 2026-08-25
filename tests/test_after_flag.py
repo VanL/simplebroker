@@ -17,16 +17,6 @@ from simplebroker._constants import LOGICAL_COUNTER_MASK, load_config
 from .conftest import _reset_pg_tables, run_cli
 from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 
-# Test data for timestamp validation
-VALID_TIMESTAMPS = [
-    ("0", 0),  # Min value
-    ("1", 1),
-    (" 123 ", 123),  # Python int() strips whitespace
-    ("1234567890123456789", 1234567890123456789),
-    (str(2**63 - 1), 2**63 - 1),  # Max 64-bit signed
-]
-
-
 # Test data for explicit unit suffixes
 UNIT_SUFFIX_TESTS = [
     # (input, description, should_work)
@@ -566,19 +556,29 @@ def _seed_around_anchor(workdir, queue_name):
 
 @pytest.mark.parametrize("command", ["read", "peek"])
 @pytest.mark.parametrize(
-    ("after_value", "expected", "expected_rc"),
+    ("after_value", "expected", "expected_rc", "remaining_after_read"),
     [
-        ("0", ["before", "at", "after"], 0),
-        (str(_ANCHOR_ID - 4096), ["at", "after"], 0),  # strictly greater
-        (str(_ANCHOR_ID), ["after"], 0),
-        (str(_ANCHOR_ID + 4096), [], 2),
-        (str(2**63 - 1), [], 2),
+        ("0", ["before", "at", "after"], 0, []),
+        (
+            str(_ANCHOR_ID - 4096),
+            ["at", "after"],
+            0,
+            ["before"],
+        ),  # strictly greater
+        (str(_ANCHOR_ID), ["after"], 0, ["before", "at"]),
+        (str(_ANCHOR_ID + 4096), [], 2, ["before", "at", "after"]),
+        (str(2**63 - 1), [], 2, ["before", "at", "after"]),
     ],
 )
 def test_after_boundary_is_strictly_greater(
-    workdir, command, after_value, expected, expected_rc
+    workdir,
+    command,
+    after_value,
+    expected,
+    expected_rc,
+    remaining_after_read,
 ):
-    """Strict-> boundary semantics at exact seeded IDs, both commands."""
+    """Strict-> selection and destructive-read preservation at exact IDs."""
     queue_name = f"boundary_{command}_{after_value}"
     _seed_around_anchor(workdir, queue_name)
 
@@ -587,6 +587,13 @@ def test_after_boundary_is_strictly_greater(
     )
     assert rc == expected_rc, err
     assert [line for line in out.splitlines() if line] == expected
+
+    target = target_for_directory(workdir)
+    with Queue(queue_name, db_path=target) as queue:
+        remaining = queue.peek_many(10, with_timestamps=False)
+    assert remaining == (
+        ["before", "at", "after"] if command == "peek" else remaining_after_read
+    )
 
 
 @pytest.mark.parametrize("command", ["read", "peek"])
@@ -644,6 +651,8 @@ def test_after_flag_combinations(workdir, mode):
         f"{_ANCHOR_SECONDS * 1000}ms",  # milliseconds
         f"{_ANCHOR_NS}ns",  # nanoseconds
         str(_ANCHOR_ID),  # native hybrid ID
+        f"  {_ANCHOR_ID}  ",  # deleted native-ID whitespace contract
+        f"  {_ANCHOR_SECONDS}s  ",  # explicit whitespace stripping, not int() leniency
     ],
 )
 def test_after_documented_formats_select_the_same_boundary(workdir, after_form):

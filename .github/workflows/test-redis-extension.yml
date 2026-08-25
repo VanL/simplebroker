@@ -56,7 +56,7 @@ jobs:
 
     - name: Run Redis-backed test suites
       run: |
-        uv run --frozen --no-sync ./bin/pytest-redis
+        uv run --frozen --no-sync ./bin/pytest-redis --max-worker-restart=0
 
     - name: Run Redis cross-thread finalization probe
       if: matrix.python-version == '3.13'

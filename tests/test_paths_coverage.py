@@ -237,6 +237,39 @@ def test_resolve_symlinks_safely_rejects_inner_read_error() -> None:
         _resolve_symlinks_safely(link)  # type: ignore[arg-type]
 
 
+def test_resolve_symlinks_safely_rejects_depth_exhaustion() -> None:
+    """Deterministically fire the Windows unresolved-symlink loop guard.
+
+    Real symlinks exercise the public CLI path, but Path.resolve() normally
+    detects loops before this Windows fallback branch on POSIX. This adapter
+    models only the unresolved Path interface so the explicit depth bound
+    remains covered on every platform.
+    """
+
+    class LoopingSymlink:
+        parent: LoopingSymlink
+
+        def __init__(self) -> None:
+            self.parent = self
+
+        def __truediv__(self, child: Path) -> LoopingSymlink:
+            assert child == Path("loop.db")
+            return self
+
+        def resolve(self, *, strict: bool = False) -> LoopingSymlink:
+            assert strict is False
+            return self
+
+        def is_symlink(self) -> bool:
+            return True
+
+        def readlink(self) -> Path:
+            return Path("loop.db")
+
+    with pytest.raises(RuntimeError, match="maximum depth exceeded"):
+        _resolve_symlinks_safely(LoopingSymlink(), max_depth=1)  # type: ignore[arg-type]
+
+
 # Folded from the retired test_compound_db_names.py (audit Task 7.3);
 # end-to-end compound behavior lives in test_queue_config_defaults.
 @pytest.mark.parametrize(

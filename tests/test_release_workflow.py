@@ -4,6 +4,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 
@@ -815,18 +816,47 @@ def _job_pytest_steps(job_block: str) -> tuple[dict[str, str], dict[str, str]]:
     return pytest_steps, wrapper_steps
 
 
-def _assert_step_bounded(context: str, step: str, job_header: str) -> None:
-    explicit_step_timeout = "timeout-minutes:" in step.split("run:", 1)[0]
-    assert (
-        "--timeout=180" in step
-        or explicit_step_timeout
-        or "timeout-minutes:" in job_header
-    ), context
-    if "--timeout=180" in step:
-        assert "--timeout-method=thread" in step, context
-    if "-n auto" in step:
-        assert "--dist loadgroup" in step, context
-        assert "--max-worker-restart=0" in step, context
+def _assert_step_bounded(context: str, step: str) -> None:
+    assert "--timeout=180" in step, context
+    assert "--timeout-method=thread" in step, context
+    explicit_serial = "-n0" in step or "-n 0" in step
+    explicit_bounded_xdist = all(
+        control in step
+        for control in ("-n auto", "--dist loadgroup", "--max-worker-restart=0")
+    )
+    assert explicit_serial or explicit_bounded_xdist, context
+
+
+def _assert_wrapper_step_bounds_worker_loss(context: str, step: str) -> None:
+    explicit_serial = "-n0" in step or "-n 0" in step
+    assert explicit_serial or "--max-worker-restart=0" in step, context
+
+
+def test_direct_pytest_step_requires_per_test_timeout_despite_job_ceiling() -> None:
+    step = """\
+    - name: Synthetic direct pytest step
+      run: uv run pytest -q
+"""
+    with pytest.raises(AssertionError, match="synthetic.yml::test"):
+        _assert_step_bounded("synthetic.yml::test", step)
+
+
+def test_direct_pytest_step_must_override_inherited_xdist_topology() -> None:
+    step = """\
+    - name: Synthetic direct pytest step
+      run: uv run pytest -q --timeout=180 --timeout-method=thread
+"""
+    with pytest.raises(AssertionError, match="synthetic.yml::test"):
+        _assert_step_bounded("synthetic.yml::test", step)
+
+
+def test_wrapper_step_must_bound_its_default_xdist_worker_loss() -> None:
+    step = """\
+    - name: Synthetic wrapper step
+      run: uv run ./bin/pytest-pg
+"""
+    with pytest.raises(AssertionError, match="synthetic.yml::test"):
+        _assert_wrapper_step_bounds_worker_loss("synthetic.yml::test", step)
 
 
 def test_every_matrix_pytest_path_bounds_hangs_and_worker_loss() -> None:
@@ -853,10 +883,12 @@ def test_every_matrix_pytest_path_bounds_hangs_and_worker_loss() -> None:
             pytest_steps, wrapper_steps = _job_pytest_steps(job_block)
             if wrapper_steps:
                 assert "timeout-minutes:" in job_header, f"{workflow_name}::{job_name}"
-            for step_name, step in pytest_steps.items():
-                _assert_step_bounded(
-                    f"{workflow_name}::{job_name}::{step_name}", step, job_header
+            for step_name, step in wrapper_steps.items():
+                _assert_wrapper_step_bounds_worker_loss(
+                    f"{workflow_name}::{job_name}::{step_name}", step
                 )
+            for step_name, step in pytest_steps.items():
+                _assert_step_bounded(f"{workflow_name}::{job_name}::{step_name}", step)
 
     # The derivation itself is load-bearing: these known steps must be
     # found in test.yml, or the parser is matching nothing.
