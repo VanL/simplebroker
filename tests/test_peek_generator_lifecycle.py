@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import simplebroker.sbqueue as sbqueue_module
 from simplebroker import Queue
 from simplebroker._runner import SQLiteRunner
 from simplebroker.db import BrokerCore, DBConnection
@@ -65,16 +66,26 @@ class _CountingSQLiteRunner(SQLiteRunner):
 def _observe_real_connection_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[DBConnection]:
-    """Record each real ``DBConnection.close()`` only after it completes."""
-    real_close = DBConnection.close
+    """Record Queue-created connection closes without patching global finalizers."""
     completed: list[DBConnection] = []
 
-    def recording_close(connection: DBConnection) -> None:
-        real_close(connection)
-        completed.append(connection)
+    class _ObservedDBConnection(DBConnection):
+        def close(self) -> None:
+            super().close()
+            completed.append(self)
 
-    monkeypatch.setattr(DBConnection, "close", recording_close)
+    monkeypatch.setattr(sbqueue_module, "DBConnection", _ObservedDBConnection)
     return completed
+
+
+def test_close_observer_does_not_patch_global_dbconnection_finalizers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_close = DBConnection.close
+
+    _observe_real_connection_closes(monkeypatch)
+
+    assert DBConnection.close is real_close
 
 
 def _persistent_active_operations(queue: Queue) -> int:
