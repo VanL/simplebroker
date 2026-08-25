@@ -5,7 +5,7 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [7.4.2] - 2026-08-24
 
 ### Added
 
@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source checkout, rejects checkout-shadowed imports, and exercises SQLite
   early-close reuse. A version-pinned published-artifact mode also verifies
   both PyPI SHA-256 digests before running the same probes.
+- Advanced the coordinated first-party extensions to `simplebroker-pg` 3.9.2
+  and `simplebroker-redis` 3.9.2. Both extensions now require
+  `simplebroker>=7.4.2`, and the root `pg` and `redis` extras require the new
+  extension patch versions.
+
+### simplebroker-pg 3.9.2
+
+- Synchronized the package and core dependency floor with SimpleBroker 7.4.2.
+
+### simplebroker-redis 3.9.2
+
+- Synchronized the package and core dependency floor with SimpleBroker 7.4.2.
 
 ## [7.4.1] - 2026-08-24
 
