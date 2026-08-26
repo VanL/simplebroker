@@ -25,6 +25,7 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
@@ -44,6 +45,7 @@ from ._backend_plugins import (
     get_backend_plugin,
     resolve_runner_backend_plugin,
 )
+from ._backends.sqlite.plugin import sqlite_backend_plugin
 from ._broker_session import (
     acquire_process_broker_session,
     release_process_broker_session,
@@ -59,6 +61,7 @@ from ._constants import (
 )
 from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
 from ._exceptions import (
+    DatabaseError,
     IntegrityError,
     MessageError,
     OperationalError,
@@ -78,7 +81,15 @@ from ._message_search import (
     validate_body_contains,
     validate_body_search_limit,
 )
+from ._phaselock import (
+    Phase,
+    PhaseLockCancelled,
+    PhaseLockService,
+    PhaseLockTimeout,
+    PhaseLockUnavailable,
+)
 from ._retry_policy import (
+    SETUP_PHASE_LOCK_TIMEOUT,
     SetupProgressBudget,
     _execute_connection_retry,
     _execute_with_retry,
@@ -109,6 +120,66 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
+
+_SQLITE_SCHEMA_PROOF_VERSION = 1
+
+
+def _initialize_project_backend_target(
+    target: BrokerTarget,
+    *,
+    config: Mapping[str, Any],
+    stop_event: threading.Event | None = None,
+) -> None:
+    """Initialize a project backend under the config file's phase lock."""
+    if target.backend_name == "sqlite" or target.config_path is None:
+        target.plugin.initialize_target(
+            target.target,
+            backend_options=target.backend_options,
+            config=config,
+        )
+        return
+
+    plugin = target.plugin
+    service = PhaseLockService(
+        target.config_path,
+        namespace="user.simplebroker",
+        lock_suffix=".lock",
+        status_suffix=".status",
+        timeout=SETUP_PHASE_LOCK_TIMEOUT,
+        retry_delay=0.05,
+    )
+
+    def initialized_target_is_current(_under_lock: bool) -> bool:
+        try:
+            plugin.validate_target(
+                target.target,
+                backend_options=target.backend_options,
+                verify_initialized=True,
+                config=config,
+            )
+        except DatabaseError:
+            return False
+        return True
+
+    try:
+        service.run_phases(
+            (
+                Phase(
+                    f"{target.backend_name}-target-schema-v1",
+                    lambda: plugin.initialize_target(
+                        target.target,
+                        backend_options=target.backend_options,
+                        config=config,
+                    ),
+                ),
+            ),
+            should_cancel=(stop_event.is_set if stop_event is not None else None),
+            completion_is_valid=initialized_target_is_current,
+        )
+    except PhaseLockCancelled as exc:
+        raise StopException("Retry interrupted by stop event") from exc
+    except (PhaseLockTimeout, PhaseLockUnavailable) as exc:
+        raise OperationalError(str(exc)) from exc
 
 
 class _AliasShadowsQueueWarning(RuntimeWarning):
@@ -233,23 +304,104 @@ def _merge_config(config: Mapping[str, Any] | None) -> ResolvedConfig:
     return snapshot_config(config)
 
 
-def _read_explicit_sqlite_magic_before_setup(runner: SQLiteRunner) -> str | None:
-    """Read ownership through the runner connection before broker setup writes."""
+@dataclass(frozen=True)
+class _SQLiteAdmissionSnapshot:
+    """Scalar SQLite facts read on the normal connection before setup."""
+
+    magic: str | None
+    stored_version: int | None
+    proof_version: int | None
+    proof_cookie: int | None
+    schema_cookie: int
+
+
+def _parse_sqlite_meta_integer(key: str, value: object) -> int:
+    """Parse an integer value across SQLite INTEGER and TEXT affinity."""
+
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[+-]?[0-9]+", value):
+        return int(value, 10)
+    raise DatabaseError(f"SQLite metadata row '{key}' must contain an integer")
+
+
+def _sqlite_snapshot_without_meta(
+    connection: sqlite3.Connection,
+    original_error: sqlite3.DatabaseError,
+) -> _SQLiteAdmissionSnapshot:
+    """Return the absent-meta snapshot or preserve a malformed-meta failure."""
+
     try:
-        cursor = runner.get_connection().execute(
-            "SELECT value FROM meta WHERE key = 'magic'"
+        fallback_row = connection.execute(
+            "SELECT cookie.schema_version, "
+            "EXISTS(SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'meta') "
+            "FROM pragma_schema_version AS cookie"
+        ).fetchone()
+    except sqlite3.DatabaseError as fallback_error:
+        raise sqlite3.OperationalError(
+            "File is not a valid SQLite database"
+        ) from fallback_error
+    if fallback_row and bool(fallback_row[1]):
+        raise original_error
+    schema_cookie = int(fallback_row[0]) if fallback_row else 0
+    return _SQLiteAdmissionSnapshot(None, None, None, None, schema_cookie)
+
+
+def _read_explicit_sqlite_magic_before_setup(
+    runner: SQLiteRunner,
+) -> _SQLiteAdmissionSnapshot:
+    """Read scalar admission facts on the normal connection before setup writes."""
+    connection = runner.get_connection()
+    try:
+        cursor = connection.execute(
+            "SELECT meta.key, meta.value, cookie.schema_version "
+            "FROM pragma_schema_version AS cookie "
+            "LEFT JOIN meta ON meta.key IN "
+            "('magic', 'schema_version', 'schema_proof_version', "
+            "'schema_proof_cookie')"
         )
         try:
-            row = cursor.fetchone()
+            rows = cursor.fetchall()
         finally:
             cursor.close()
-    except sqlite3.Error:
-        # Existing validation and bootstrap retain ownership of absent metadata,
-        # malformed SQLite, and ordinary filesystem diagnostics. Opening the
-        # normal connection may perform SQLite's own recovery or coordination;
-        # SimpleBroker setup still has not written to the database.
-        return None
-    return None if row is None or row[0] is None else str(row[0])
+    except sqlite3.DatabaseError as error:
+        return _sqlite_snapshot_without_meta(connection, error)
+
+    # pragma_schema_version is the single left-hand row, so the LEFT JOIN
+    # always returns at least one row and carries one cookie for this statement.
+    schema_cookie = int(rows[0][2])
+
+    metadata: dict[str, object] = {}
+    for key, value, _schema_cookie in rows:
+        if key is None:
+            continue
+        normalized_key = str(key)
+        if normalized_key in metadata:
+            raise RuntimeError(f"SQLite metadata row '{normalized_key}' is duplicated")
+        metadata[normalized_key] = value
+
+    magic_value = metadata.get("magic")
+    magic = None if magic_value is None else str(magic_value)
+
+    def optional_integer(key: str, *, strict: bool) -> int | None:
+        value = metadata.get(key)
+        if value is None:
+            return None
+        try:
+            return _parse_sqlite_meta_integer(key, value)
+        except DatabaseError:
+            if strict:
+                raise
+            return None
+
+    return _SQLiteAdmissionSnapshot(
+        magic=magic,
+        stored_version=optional_integer("schema_version", strict=True),
+        proof_version=optional_integer("schema_proof_version", strict=False),
+        proof_cookie=optional_integer("schema_proof_cookie", strict=False),
+        schema_cookie=schema_cookie,
+    )
 
 
 class _ProcessSessionCoreFactory:
@@ -541,6 +693,16 @@ class DBConnection:
                 else get_backend_plugin("sqlite")
             )
         )
+        if (
+            self._resolved_target is not None
+            and self._resolved_target.backend_name == "sqlite"
+            and self._resolved_target.backend_options
+        ):
+            self._resolved_target.plugin.init_backend(
+                self._config,
+                toml_target=self._resolved_target.target,
+                toml_options=self._resolved_target.backend_options,
+            )
         self._runner: SQLRunner | None = None
         if runner is not None:
             self._runner = (
@@ -551,6 +713,8 @@ class DBConnection:
         self._core: BrokerConnection | None = None
         self._thread_local = threading.local()
         self._stop_event = threading.Event()
+        self._project_setup_lock = threading.Lock()
+        self._project_setup_complete = False
         self._shared_key: _SessionKey | None = None
         self._shared_session: _ProcessBrokerSession | None = None
         self._shared_released = False
@@ -568,6 +732,7 @@ class DBConnection:
 
         # If we have an external runner, create a borrowed core immediately.
         if self._runner:
+            self._ensure_project_target_initialized()
             if _is_direct_backend(self._backend_plugin):
                 create_core = self._backend_plugin.create_core_from_runner
                 self._core = create_core(
@@ -583,8 +748,28 @@ class DBConnection:
                     stop_event=self._stop_event,
                 )
 
+    def _ensure_project_target_initialized(self) -> None:
+        target = self._resolved_target
+        if (
+            target is None
+            or target.backend_name == "sqlite"
+            or target.config_path is None
+            or self._project_setup_complete
+        ):
+            return
+        with self._project_setup_lock:
+            if self._project_setup_complete:
+                return
+            _initialize_project_backend_target(
+                target,
+                config=self._config,
+                stop_event=self._stop_event,
+            )
+            self._project_setup_complete = True
+
     def _create_managed_connection(self) -> BrokerConnection:
         """Create one owned connection/core for the current thread."""
+        self._ensure_project_target_initialized()
         if (
             self._resolved_target is None
             or self._resolved_target.backend_name == "sqlite"
@@ -721,6 +906,7 @@ class DBConnection:
         effective_config = _overlay_config(self._config, config)
 
         def open_connection() -> BrokerConnection:
+            self._ensure_project_target_initialized()
             session = self._ensure_shared_session()
             connection = session.get_connection(self._stop_event)
             try:
@@ -765,6 +951,7 @@ class DBConnection:
         Returns:
             BrokerCore instance
         """
+        self._ensure_project_target_initialized()
         if self._share_in_process:
             session = self._ensure_shared_session()
             return session.get_connection(
@@ -1039,17 +1226,29 @@ class BrokerCore:
             int(config["BROKER_AUTO_VACUUM_INTERVAL"])
         )
 
-        if (
-            isinstance(self._runner, SQLiteRunner)
-            and self._runner._cached_database_magic() != SIMPLEBROKER_MAGIC
-        ):
-            existing_magic = _read_explicit_sqlite_magic_before_setup(self._runner)
-            if existing_magic is not None and existing_magic != SIMPLEBROKER_MAGIC:
+        self._sqlite_admission_snapshot: _SQLiteAdmissionSnapshot | None = None
+        if isinstance(self._runner, SQLiteRunner):
+            snapshot = _read_explicit_sqlite_magic_before_setup(self._runner)
+            self._sqlite_admission_snapshot = snapshot
+            if snapshot.magic is not None and snapshot.magic != SIMPLEBROKER_MAGIC:
                 raise RuntimeError(
                     f"Database magic string mismatch. Expected '{SIMPLEBROKER_MAGIC}', "
-                    f"found '{existing_magic}'. This database may not be a "
+                    f"found '{snapshot.magic}'. This database may not be a "
                     "SimpleBroker database."
                 )
+            if snapshot.stored_version is not None:
+                if snapshot.stored_version < 1:
+                    raise RuntimeError(
+                        "Database schema version must be a positive integer, "
+                        f"found {snapshot.stored_version}."
+                    )
+                if snapshot.stored_version > self._backend_plugin.schema_version:
+                    raise RuntimeError(
+                        f"Database schema version {snapshot.stored_version} is newer "
+                        "than supported version "
+                        f"{self._backend_plugin.schema_version}. Please upgrade "
+                        "SimpleBroker."
+                    )
 
         # Ensure backend-wide connection setup (for example SQLite WAL mode)
         # runs for all core paths, not only BrokerDB.
@@ -1186,16 +1385,37 @@ class BrokerCore:
         def operation() -> None:
             progress_budget = SetupProgressBudget()
             self._setup_database(progress_budget=progress_budget)
-            self._run_setup_with_retry(
-                self._verify_database_magic,
-                phase=SetupPhase.SCHEMA,
-                progress_budget=progress_budget,
-            )
+            if not isinstance(self._runner, SQLiteRunner):
+                self._run_setup_with_retry(
+                    self._verify_database_magic,
+                    phase=SetupPhase.SCHEMA,
+                    progress_budget=progress_budget,
+                )
             self._run_setup_with_retry(
                 self._migrate_schema,
                 phase=SetupPhase.SCHEMA,
                 progress_budget=progress_budget,
             )
+            if isinstance(self._runner, SQLiteRunner):
+                self._run_setup_with_retry(
+                    self._publish_sqlite_schema_proof,
+                    phase=SetupPhase.SCHEMA,
+                    progress_budget=progress_budget,
+                )
+
+        conditional_setup = getattr(
+            self._runner,
+            "run_exclusive_setup_conditionally_with_stop_event",
+            None,
+        )
+        if isinstance(self._runner, SQLiteRunner) and callable(conditional_setup):
+            conditional_setup(
+                SetupPhase.SCHEMA,
+                operation,
+                self._stop_event,
+                completion_is_valid=self._sqlite_schema_marker_is_valid,
+            )
+            return
 
         run_exclusive_setup_with_stop_event = getattr(
             self._runner,
@@ -1224,6 +1444,63 @@ class BrokerCore:
             return
 
         operation()
+
+    def _sqlite_schema_snapshot_has_current_proof(
+        self,
+        snapshot: _SQLiteAdmissionSnapshot,
+    ) -> bool:
+        """Return whether one scalar snapshot proves current setup completion."""
+
+        return (
+            snapshot.magic == SIMPLEBROKER_MAGIC
+            and snapshot.stored_version == self._backend_plugin.schema_version
+            and snapshot.proof_version == _SQLITE_SCHEMA_PROOF_VERSION
+            and snapshot.proof_cookie == snapshot.schema_cookie
+        )
+
+    def _sqlite_schema_marker_is_valid(self, under_lock: bool) -> bool:
+        """Validate a schema marker against its database-owned proof receipt."""
+
+        initial = self._sqlite_admission_snapshot
+        if initial is not None and self._sqlite_schema_snapshot_has_current_proof(
+            initial
+        ):
+            return True
+        if not under_lock or not isinstance(self._runner, SQLiteRunner):
+            return False
+        return self._sqlite_schema_snapshot_has_current_proof(
+            _read_explicit_sqlite_magic_before_setup(self._runner)
+        )
+
+    def _publish_sqlite_schema_proof(self) -> None:
+        """Publish a receipt only after the current SQLite slow path succeeds."""
+
+        with self._lock:
+            self._runner.begin_immediate()
+            try:
+                stored_version = self._backend_plugin.read_schema_version(self._runner)
+                if stored_version != self._backend_plugin.schema_version:
+                    raise RuntimeError(
+                        "Cannot publish SQLite schema proof for stored version "
+                        f"{stored_version}; expected "
+                        f"{self._backend_plugin.schema_version}."
+                    )
+                rows = list(self._runner.run("PRAGMA schema_version", fetch=True))
+                schema_cookie = int(rows[0][0])
+                for key, value in (
+                    ("schema_proof_version", _SQLITE_SCHEMA_PROOF_VERSION),
+                    ("schema_proof_cookie", schema_cookie),
+                ):
+                    self._runner.run(
+                        "INSERT INTO meta (key, value) VALUES (?, ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (key, value),
+                    )
+                self._runner.commit()
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    self._runner.rollback()
+                raise
 
     def _verify_database_magic(self) -> None:
         """Verify database magic string and schema version for existing databases."""
@@ -1840,6 +2117,32 @@ class BrokerCore:
 
         return self._run_with_retry(_do_peek)
 
+    def _normalize_retrieve_rows(
+        self,
+        rows: Iterable[tuple[Any, ...]],
+    ) -> list[tuple[str, int]]:
+        """Restore FIFO for built-in SQLite's unordered ``RETURNING`` rows."""
+        rows_list = rows if isinstance(rows, list) else list(rows)
+        if self._sql is not sqlite_backend_plugin.sql:
+            return cast(list[tuple[str, int]], rows_list)
+
+        keyed_rows: list[tuple[int, str, int]] = []
+        for row in rows_list:
+            try:
+                storage_id, body, timestamp = row
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    "Built-in SQLite retrieve query returned an invalid row shape"
+                ) from exc
+            if not isinstance(storage_id, int) or isinstance(storage_id, bool):
+                raise TypeError(
+                    "Built-in SQLite retrieve query returned an invalid storage id"
+                )
+            keyed_rows.append((storage_id, body, timestamp))
+
+        keyed_rows.sort(key=lambda row: row[0])
+        return [(body, timestamp) for _storage_id, body, timestamp in keyed_rows]
+
     def _execute_transactional_operation(
         self,
         queue: str,
@@ -1867,7 +2170,7 @@ class BrokerCore:
                     queue=queue,
                 )
                 results = self._runner.run(query, params, fetch=True)
-                results_list = results if isinstance(results, list) else list(results)
+                results_list = self._normalize_retrieve_rows(results)
 
                 if results_list:
                     # Commit BEFORE returning for exactly-once semantics
@@ -1936,7 +2239,7 @@ class BrokerCore:
                     queue=queue,
                 )
                 results = self._runner.run(query, params, fetch=True)
-                results_list = results if isinstance(results, list) else list(results)
+                results_list = self._normalize_retrieve_rows(results)
                 if not results_list:
                     self._runner.rollback()
                     transaction_open = False

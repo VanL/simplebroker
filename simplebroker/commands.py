@@ -48,7 +48,12 @@ from ._message_id import (
 from ._paths import _validate_sqlite_database
 from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
-from .db import BrokerDB, DBConnection, _suppress_alias_shadow_warning
+from .db import (
+    BrokerDB,
+    DBConnection,
+    _initialize_project_backend_target,
+    _suppress_alias_shadow_warning,
+)
 from .metadata import QueueRenameResult, QueueStats
 from .sbqueue import Queue, _close_iterator
 from .watcher import QueueMoveWatcher, QueueWatcher, StopWatching
@@ -1692,11 +1697,7 @@ def _init_broker_target(
             return EXIT_SUCCESS
 
     resolved_config = snapshot_config(config)
-    db_target.plugin.initialize_target(
-        db_target.target,
-        backend_options=db_target.backend_options,
-        config=resolved_config,
-    )
+    _initialize_project_backend_target(db_target, config=resolved_config)
     target_kind = "database" if db_target.backend_name == "sqlite" else "target"
     _status(
         f"Initialized SimpleBroker {target_kind}: {db_target.display_target}",

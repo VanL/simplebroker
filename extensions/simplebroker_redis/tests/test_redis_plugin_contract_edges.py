@@ -122,6 +122,41 @@ def test_direct_runner_snapshots_environment_when_pool_options_are_missing(
     assert runner.pool_options.timeout == 1.25
 
 
+def test_initialize_target_rejects_owned_older_namespace_before_redis_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        redis_plugin_module,
+        "inspect_namespace",
+        lambda *args, **kwargs: NamespaceInspection(
+            "tenant",
+            NamespaceState.OWNED,
+            1,
+            schema_version=0,
+            current_shape_ready=False,
+        ),
+    )
+    connection_attempts: list[str] = []
+
+    def unexpected_client(target: str, **kwargs: object) -> object:
+        connection_attempts.append(target)
+        raise AssertionError("owned old namespace must fail before Redis mutation")
+
+    monkeypatch.setattr(
+        redis_plugin_module.redis.Redis,
+        "from_url",
+        unexpected_client,
+    )
+
+    with pytest.raises(DatabaseError, match="older than supported.*no migration"):
+        RedisBackendPlugin().initialize_target(
+            "redis://example/0",
+            backend_options={"namespace": "tenant"},
+        )
+
+    assert connection_attempts == []
+
+
 def test_cleanup_reuses_one_snapshot_for_runner_and_core(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

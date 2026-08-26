@@ -41,6 +41,18 @@ if TYPE_CHECKING:
 _CleanupFailure = tuple[str, Path, BaseException]
 
 
+def _reject_backend_options(
+    backend_options: Mapping[str, Any] | None,
+) -> None:
+    """Reject options SQLite does not implement instead of discarding them."""
+
+    if backend_options:
+        raise ValueError(
+            "SQLite backend does not support backend_options; remove them or "
+            "select a backend that supports them"
+        )
+
+
 def _lstat_path(path: Path) -> os.stat_result:
     """Inspect one cleanup entry without following its final component."""
 
@@ -178,9 +190,10 @@ class SQLiteBackendPlugin:
         toml_options: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         del config
+        _reject_backend_options(toml_options)
         return {
             "target": toml_target,
-            "backend_options": dict(toml_options) if toml_options else {},
+            "backend_options": {},
         }
 
     def create_runner(
@@ -190,7 +203,7 @@ class SQLiteBackendPlugin:
         backend_options: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> SQLiteRunner:
-        del backend_options
+        _reject_backend_options(backend_options)
         from ..._runner import SQLiteRunner
 
         return SQLiteRunner(target, config=config)
@@ -202,7 +215,7 @@ class SQLiteBackendPlugin:
         backend_options: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> None:
-        del backend_options
+        _reject_backend_options(backend_options)
         from ...db import BrokerDB
 
         with BrokerDB(target, config=config):
@@ -216,7 +229,8 @@ class SQLiteBackendPlugin:
         verify_initialized: bool = True,
         config: Mapping[str, Any] | None = None,
     ) -> None:
-        del backend_options, config
+        _reject_backend_options(backend_options)
+        del config
         validate_database(Path(target), verify_magic=verify_initialized)
 
     def cleanup_target(
@@ -226,7 +240,8 @@ class SQLiteBackendPlugin:
         backend_options: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> bool:
-        del backend_options, config
+        _reject_backend_options(backend_options)
+        del config
         path = _resolve_cleanup_path(target)
         if path is None:
             return False

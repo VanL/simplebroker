@@ -650,6 +650,7 @@ class PhaseLockService:
         *,
         should_cancel: Callable[[], bool] | None = None,
         discard_status_if: Callable[[], bool] | None = None,
+        completion_is_valid: Callable[[bool], bool] | None = None,
     ) -> PhaseRunResult:
         """Run missing phases in order under the setup lock.
 
@@ -667,6 +668,10 @@ class PhaseLockService:
         existing fallback entries even when best-effort unlink cannot remove the
         stale file. Fallback publication replaces it atomically; xattr mode first
         replaces any surviving stable status file with an empty one.
+
+        ``completion_is_valid`` lets a caller treat an existing marker as a
+        cache hint. Its argument is false before locking and true under the
+        lock, where a false result reruns the marked phase before republishing.
         """
 
         phase_list = tuple(phases)
@@ -684,6 +689,7 @@ class PhaseLockService:
             discard_status_if is None
             and not self.strict_marker_locking
             and self._all_marked(phase_list, using_xattrs=using_xattrs)
+            and (completion_is_valid is None or completion_is_valid(False))
         ):
             return PhaseRunResult(
                 completed=(),
@@ -709,13 +715,14 @@ class PhaseLockService:
         def should_stop_lock_wait() -> bool:
             if cancellation_requested():
                 return True
-            return (
-                discard_status_if is None
-                and not self.strict_marker_locking
-                and self._all_marked(
-                    phase_list,
-                    using_xattrs=self._should_use_xattrs(),
-                )
+            if discard_status_if is not None or self.strict_marker_locking:
+                return False
+            marked = self._all_marked(
+                phase_list,
+                using_xattrs=self._should_use_xattrs(),
+            )
+            return marked and (
+                completion_is_valid is None or completion_is_valid(False)
             )
 
         lock = _AdvisoryLock(
@@ -758,14 +765,25 @@ class PhaseLockService:
                 self.discard_status_markers()
                 if using_xattrs and self.status_base_path.exists():
                     self._write_status_phases([])
+            rerun_marked = bool(
+                completion_is_valid is not None
+                and self._all_marked(phase_list, using_xattrs=using_xattrs)
+                and not completion_is_valid(True)
+            )
             if using_xattrs:
-                self._run_xattr_phases(phase_list, completed, skipped)
+                self._run_xattr_phases(
+                    phase_list,
+                    completed,
+                    skipped,
+                    rerun_marked=rerun_marked,
+                )
             else:
                 self._run_status_phases(
                     phase_list,
                     completed,
                     skipped,
                     ignore_existing=discard_required,
+                    rerun_marked=rerun_marked,
                 )
         finally:
             lock.release()
@@ -785,9 +803,13 @@ class PhaseLockService:
         phases: tuple[Phase, ...],
         completed: list[str],
         skipped: list[str],
+        *,
+        rerun_marked: bool = False,
     ) -> None:
         for phase in phases:
-            if self._has_xattr_phase(phase.name, attr_name=phase.attr_name):
+            if not rerun_marked and self._has_xattr_phase(
+                phase.name, attr_name=phase.attr_name
+            ):
                 skipped.append(phase.name)
                 continue
             phase.action()
@@ -807,6 +829,7 @@ class PhaseLockService:
         skipped: list[str],
         *,
         ignore_existing: bool = False,
+        rerun_marked: bool = False,
     ) -> None:
         status_order, _diagnostic = (
             ([], None) if ignore_existing else self._read_status_entries()
@@ -814,12 +837,13 @@ class PhaseLockService:
         status_phases = set(status_order)
         for phase in phases:
             _validate_phase_name(phase.name)
-            if phase.name in status_phases:
+            if phase.name in status_phases and not rerun_marked:
                 skipped.append(phase.name)
                 continue
             phase.action()
-            status_phases.add(phase.name)
-            status_order.append(phase.name)
+            if phase.name not in status_phases:
+                status_phases.add(phase.name)
+                status_order.append(phase.name)
             self._write_status_phases(status_order)
             completed.append(phase.name)
 

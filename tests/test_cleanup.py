@@ -389,9 +389,9 @@ def test_cleanup_cli_accepts_literal_percent_filename(workdir):
 
 @pytest.mark.sqlite_only
 @pytest.mark.skipif(os.name == "nt", reason="Unix CLI path grammar probe")
-@pytest.mark.parametrize("filename", ["broker?.db", "broker#.db"])
+@pytest.mark.parametrize("filename", ["broker?.db", "broker*.db"])
 def test_cleanup_cli_retains_unsafe_metacharacter_rejection(workdir, filename):
-    """The validation URI repair does not widen the CLI path grammar."""
+    """Cleanup still rejects names interpreted by owned pattern consumers."""
     literal_path = workdir / filename
     literal_path.write_text("keep", encoding="utf-8")
 

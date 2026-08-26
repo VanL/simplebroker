@@ -31,8 +31,10 @@ class EntryPointStub:
         self.name = name
         self._loaded = loaded
         self._error = error
+        self.load_calls = 0
 
     def load(self) -> Any:
+        self.load_calls += 1
         if self._error is not None:
             raise self._error
         return self._loaded
@@ -187,6 +189,32 @@ def test_queue_backend_name_preserves_first_party_extension_name_without_io(
     )
 
     assert queue.backend_name == backend_name
+
+
+@pytest.mark.parametrize("reverse_discovery", [False, True])
+def test_duplicate_entry_points_fail_before_loading_either_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    reverse_discovery: bool,
+) -> None:
+    """Ambiguous registrations must not make discovery order authoritative."""
+    first = EntryPointStub("dummy", ValidDummyPlugin)
+    second = EntryPointStub("dummy", ValidDummyPlugin)
+    discovered = [first, second]
+    if reverse_discovery:
+        discovered.reverse()
+    monkeypatch.setattr(
+        "simplebroker._backend_plugins.metadata.entry_points",
+        lambda: EntryPointsMock(discovered),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Ambiguous backend plugin 'dummy': 2 matching entry points",
+    ):
+        get_backend_plugin("dummy")
+
+    assert first.load_calls == 0
+    assert second.load_calls == 0
 
 
 def test_entry_point_plugin_name_must_match_the_requested_backend(

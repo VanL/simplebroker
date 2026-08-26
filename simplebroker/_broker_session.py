@@ -8,12 +8,13 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
 from ._constants import ResolvedConfig
-from ._key_material import FrozenValue, freeze_key_material
+from ._key_material import FrozenValue, freeze_key_material, snapshot_key_material
 from ._targets import BrokerTarget
 
 _CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
@@ -64,6 +65,36 @@ class _RegistryEntry:
     refcount: int = 0
 
 
+def _retain_cleanup_failure(
+    primary: Exception | None,
+    failure: Exception,
+) -> Exception:
+    """Keep one cleanup failure primary and attach each later diagnostic."""
+
+    if primary is None:
+        return failure
+    primary.add_note(
+        "Additional process-session cleanup failure: "
+        f"{type(failure).__qualname__}: {failure}"
+    )
+    for note in getattr(failure, "__notes__", ()):
+        primary.add_note(f"Additional process-session cleanup diagnostic: {note}")
+    return primary
+
+
+def _capture_process_session_cleanup(
+    primary: Exception | None,
+    action: Callable[[], None],
+) -> Exception | None:
+    """Run one cleanup while retaining arbitrary ordinary failure evidence."""
+
+    try:
+        action()
+    except Exception as failure:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-035] exception
+        return _retain_cleanup_failure(primary, failure)
+    return primary
+
+
 def _normalize_sqlite_target(target: str) -> str:
     path = Path(target).expanduser()
     try:
@@ -102,19 +133,25 @@ def _session_spec(
     config: ResolvedConfig,
 ) -> _SessionSpec:
     backend_name, target, backend_options, backend_plugin = _target_parts(db_path)
+    backend_options_snapshot = cast(
+        dict[str, Any], snapshot_key_material(backend_options)
+    )
+    config_snapshot = ResolvedConfig(
+        cast(Mapping[str, Any], snapshot_key_material(config))
+    )
     key = _SessionKey(
         pid=_getpid(),
         backend_name=backend_name,
         target=target,
-        backend_options=freeze_key_material(backend_options),
-        config=freeze_key_material(config),
+        backend_options=freeze_key_material(backend_options_snapshot),
+        config=freeze_key_material(config_snapshot),
     )
     return _SessionSpec(
         key=key,
         backend_name=backend_name,
         target=target,
-        backend_options=dict(backend_options),
-        config=config,
+        backend_options=backend_options_snapshot,
+        config=config_snapshot,
         backend_plugin=backend_plugin,
     )
 
@@ -262,9 +299,19 @@ class _ProcessBrokerSession:
             if hasattr(self._thread_local, "core"):
                 delattr(self._thread_local, "core")
 
+        cleanup_failure: Exception | None = None
         for core in cores:
-            self._factory.close_core(core)
-        self._factory.close()
+            cleanup_failure = _capture_process_session_cleanup(
+                cleanup_failure,
+                partial(self._factory.close_core, core),
+            )
+        cleanup_failure = _capture_process_session_cleanup(
+            cleanup_failure,
+            self._factory.close,
+        )
+
+        if cleanup_failure is not None:
+            raise cleanup_failure
 
 
 class _ProcessBrokerSessionRegistry:
@@ -312,8 +359,15 @@ class _ProcessBrokerSessionRegistry:
             entries = list(self._entries.values())
             self._entries.clear()
 
+        cleanup_failure: Exception | None = None
         for entry in entries:
-            entry.session.close_all()
+            cleanup_failure = _capture_process_session_cleanup(
+                cleanup_failure,
+                entry.session.close_all,
+            )
+
+        if cleanup_failure is not None:
+            raise cleanup_failure
 
 
 _registry = _ProcessBrokerSessionRegistry()

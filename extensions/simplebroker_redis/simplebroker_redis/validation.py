@@ -40,6 +40,7 @@ class NamespaceInspection:
     state: NamespaceState
     key_count: int
     schema_version: int | None = None
+    current_shape_ready: bool = False
 
 
 def require_namespace(backend_options: Mapping[str, Any] | None) -> str:
@@ -116,8 +117,7 @@ def inspect_namespace(
         meta = response_dict(client.hgetall(meta_key))
         key_count = 0
         for _key in client.scan_iter(f"{prefix}:*"):
-            if is_namespace_key(prefix, _key):
-                key_count += 1
+            key_count += 1
             if key_count > 1 and meta:
                 break
 
@@ -136,19 +136,13 @@ def inspect_namespace(
             schema_version = None
 
         required_fields = {"magic", "schema_version", "last_ts", "alias_version"}
-        if not required_fields.issubset(meta):
-            return NamespaceInspection(
-                namespace,
-                NamespaceState.PARTIAL_SIMPLEBROKER,
-                max(key_count, 1),
-                schema_version,
-            )
-        if magic == SIMPLEBROKER_MAGIC and schema_version == REDIS_SCHEMA_VERSION:
+        if magic == SIMPLEBROKER_MAGIC and schema_version is not None:
             return NamespaceInspection(
                 namespace,
                 NamespaceState.OWNED,
                 max(key_count, 1),
                 schema_version,
+                required_fields.issubset(meta),
             )
         return NamespaceInspection(
             namespace,
@@ -160,22 +154,21 @@ def inspect_namespace(
         client.close()
 
 
-def validate_target(
-    target: str,
+def validate_namespace_inspection(
+    inspection: NamespaceInspection,
     *,
-    backend_options: Mapping[str, Any] | None = None,
-    verify_initialized: bool = True,
+    verify_initialized: bool,
 ) -> None:
-    inspection = inspect_namespace(target, backend_options=backend_options)
-    if not verify_initialized:
-        if inspection.state in {NamespaceState.ABSENT, NamespaceState.OWNED}:
-            return
-        raise DatabaseError(
-            f"Redis namespace '{inspection.namespace}' is not available for "
-            f"SimpleBroker init: {inspection.state.value}"
-        )
+    """Apply init/open admission after namespace ownership inspection."""
+    if not verify_initialized and inspection.state is NamespaceState.ABSENT:
+        return
 
     if inspection.state is not NamespaceState.OWNED:
+        if not verify_initialized:
+            raise DatabaseError(
+                f"Redis namespace '{inspection.namespace}' is not available for "
+                f"SimpleBroker init: {inspection.state.value}"
+            )
         if inspection.state is NamespaceState.ABSENT:
             raise DatabaseError(
                 f"Redis namespace '{inspection.namespace}' does not exist; "
@@ -185,3 +178,36 @@ def validate_target(
             f"Redis namespace '{inspection.namespace}' is not SimpleBroker-managed "
             f"({inspection.state.value})"
         )
+
+    version = inspection.schema_version
+    if version is None:
+        raise DatabaseError(
+            f"Redis namespace '{inspection.namespace}' has no readable schema version"
+        )
+    if version < REDIS_SCHEMA_VERSION:
+        raise DatabaseError(
+            f"Redis schema version {version} is older than supported version "
+            f"{REDIS_SCHEMA_VERSION}; no migration is available"
+        )
+    if version > REDIS_SCHEMA_VERSION:
+        raise DatabaseError(
+            f"Redis schema version {version} is newer than supported version "
+            f"{REDIS_SCHEMA_VERSION}"
+        )
+    if not inspection.current_shape_ready:
+        raise DatabaseError(
+            f"Redis namespace '{inspection.namespace}' current metadata shape is "
+            "incomplete"
+        )
+
+
+def validate_target(
+    target: str,
+    *,
+    backend_options: Mapping[str, Any] | None = None,
+    verify_initialized: bool = True,
+) -> None:
+    validate_namespace_inspection(
+        inspect_namespace(target, backend_options=backend_options),
+        verify_initialized=verify_initialized,
+    )

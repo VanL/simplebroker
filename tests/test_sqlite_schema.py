@@ -177,6 +177,116 @@ def test_initialize_database_bootstraps_core_schema_and_metadata(
         runner.close()
 
 
+def test_fresh_schema_uses_existing_unique_constraint_without_redundant_index(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path / "fresh.db")
+    try:
+        initialize_database(runner, run_with_retry=_run_direct)
+        migrate_schema(
+            runner,
+            current_version=SCHEMA_VERSION,
+            write_schema_version=lambda _version: None,
+        )
+
+        unique_ts_indexes = []
+        for (name,) in runner.run(
+            "SELECT name FROM pragma_index_list('messages') "
+            'WHERE "unique" = 1 AND partial = 0',
+            fetch=True,
+        ):
+            columns = [
+                row[0]
+                for row in runner.run(
+                    "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
+                    (name,),
+                    fetch=True,
+                )
+            ]
+            if columns == ["ts"]:
+                unique_ts_indexes.append(name)
+
+        assert unique_ts_indexes == ["sqlite_autoindex_messages_1"]
+    finally:
+        runner.close()
+
+
+def test_schema_v3_accepts_equivalent_unique_index_with_another_name(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "equivalent-index.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    versions: list[int] = []
+    try:
+        ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
+        runner.run("CREATE UNIQUE INDEX custom_unique_ts ON messages(ts)")
+
+        ensure_schema_v3(
+            runner,
+            current_version=2,
+            write_schema_version=versions.append,
+        )
+
+        assert versions == [3]
+        assert ts_unique_index_exists(runner) is True
+        assert runner.run(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type = 'index' AND name = 'idx_messages_ts_unique'",
+            fetch=True,
+        ) == [(0,)]
+    finally:
+        runner.close()
+
+
+def test_schema_v3_rejects_conflicting_owned_index_name(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "conflicting-index.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    versions: list[int] = []
+    try:
+        ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
+        runner.run("CREATE INDEX idx_messages_ts_unique ON messages(queue)")
+
+        with pytest.raises(RuntimeError, match="idx_messages_ts_unique.*conflicts"):
+            ensure_schema_v3(
+                runner,
+                current_version=2,
+                write_schema_version=versions.append,
+            )
+
+        assert versions == []
+        assert ts_unique_index_exists(runner) is False
+    finally:
+        runner.close()
+
+
+def test_schema_v3_rejects_conflicting_owned_name_even_with_equivalent_index(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "conflicting-and-equivalent-index.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    versions: list[int] = []
+    try:
+        ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
+        runner.run("CREATE UNIQUE INDEX custom_unique_ts ON messages(ts)")
+        runner.run("CREATE INDEX idx_messages_ts_unique ON messages(queue)")
+
+        with pytest.raises(RuntimeError, match="idx_messages_ts_unique.*conflicts"):
+            ensure_schema_v3(
+                runner,
+                current_version=2,
+                write_schema_version=versions.append,
+            )
+
+        assert versions == []
+    finally:
+        runner.close()
+
+
 @pytest.mark.parametrize(
     "failure_marker",
     [

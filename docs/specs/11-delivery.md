@@ -274,7 +274,7 @@ _Implementation mapping_:
 |--------|--------------|
 | [SB-DELIVERY-1] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_watcher.py::TestErrorScenarios::test_consuming_watcher_queue_preservation_on_failure` |
 | [SB-DELIVERY-2] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_watcher_error_handler_contract.py` (consume, peek, and move terminal-callback matrix); `tests/test_watcher_stop_contract.py::test_batch_consume_checks_handler_stop_before_next_iterator_advance`, `test_batch_consume_handler_stop_leaves_later_message_pending`; `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_handler_failure_isolation`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_transaction_safety` |
-| [SB-DELIVERY-3] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_move.py`; `tests/test_move_by_id.py`; `tests/test_move_claim_patterns.py`; first-party PostgreSQL and Redis exact-ID move tests |
+| [SB-DELIVERY-3] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_move.py`; `tests/test_move_by_id.py`; `tests/test_move_claim_patterns.py`; `tests/test_sqlite_fifo_returning.py` (reversed raw `RETURNING` order across claim/move list and generator paths); first-party PostgreSQL and Redis exact-ID move tests |
 | [SB-DELIVERY-4] | `tests/test_peek_generator_lifecycle.py`; `tests/test_delivery_contract_sb_delivery.py::test_live_peek_stream_rejects_naive_cursor_completeness`, `::test_closeable_peek_lifecycle_contract_is_bound_to_real_backends`; `tests/test_agent_kernel_contract.py` |
 | [SB-DELIVERY-5] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_generator_methods.py`; `extensions/simplebroker_redis/tests/test_redis_batches.py` |
 | [SB-DELIVERY-6] | `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`, `::test_foreign_thread_contract_binds_sql_and_redis_process_probes`; `tests/test_queue_typing_contract.py`; `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`; `tests/test_cross_thread_finalization_poisoning.py`; `tests/test_cross_thread_probe_transitions.py`; `tests/test_cross_thread_generator_probe.py`; `extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`; `extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py` |
@@ -283,6 +283,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- active: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
+  — built-in SQLite storage-order FIFO independent of `RETURNING` order
 - active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
   — handler-boundary consume admission and owner-thread iterator cleanup
 - completed: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)

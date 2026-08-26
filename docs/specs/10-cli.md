@@ -111,6 +111,21 @@ selected path and its directories are protected by the operating-system
 permissions and ACLs chosen by the operator; they do not claim protection
 against concurrent replacement in a directory another principal may modify.
 
+Path admission is based on hazards in an actual SimpleBroker or operating-
+system consumer, not on characters a shell would interpret if a path were
+later copied into an unquoted command. On POSIX, shell-only punctuation such
+as `#`, `$`, backtick, single/double quotes, parentheses, braces, semicolon,
+ampersand, exclamation, caret, pipe, and angle brackets is accepted when the
+filesystem accepts it.
+
+NUL and control characters, applicable traversal or containment violations,
+platform-reserved names and syntax, and punctuation still interpreted by an
+internal path-pattern consumer remain rejected. In particular, `*`, `?`, `[`,
+and `]` remain rejected until every owned-file enumeration treats them
+literally, and `~` remains rejected while target consumers expand it. POSIX
+target length is governed by the effective filesystem and system calls;
+SimpleBroker does not impose a smaller product-wide total-path ceiling.
+
 `init` and `[SB-OPS-7]` cleanup retain their separately specified preparation
 and path behavior.
 
@@ -123,6 +138,7 @@ _Implementation mapping_:
 - `simplebroker/commands.py`
 - `simplebroker/cli.py`
 - `simplebroker/_paths.py`
+- `simplebroker/_constants.py` (lexical path hazards)
 
 ## Global options position [SB-CLI-3]
 
@@ -324,6 +340,8 @@ _Verification_:
 
 ## Related Plans
 
+- active: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
+  — consumer-based path admission and representation-assumption corrections
 - active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
   — delete no-match parity, invocation-owned load warnings, exact ISO bounds,
   and bounded hostile-input rejection
@@ -436,6 +454,11 @@ _Verification_:
   `tests/test_cli_main.py::test_compound_default_is_finalized_before_canonical_containment`,
   `tests/test_project_config.py::test_project_config_trust_anchor_allows_parent_target`, and
   `tests/test_project_config.py::test_project_config_trust_anchor_follows_target_symlink`
+- `[SB-CLI-2]` semantic POSIX path admission and retained consumer hazards:
+  `tests/test_path_security.py::test_posix_punctuation_works_across_explicit_status_and_cleanup_paths`,
+  `tests/test_path_security.py::test_posix_punctuation_works_for_init_and_project_discovery`,
+  `tests/test_path_security.py::test_filesystem_supported_posix_path_over_1024_reaches_sqlite`, and
+  `tests/test_path_security.py::test_live_path_hazard_uses_json_diagnostic_without_side_effects`
 - `[SB-CLI-4]` post-parse JSON and closed vocabulary:
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_error_classifier_uses_cause_with_database_precedence`,
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_error_inventory_and_public_paths`,

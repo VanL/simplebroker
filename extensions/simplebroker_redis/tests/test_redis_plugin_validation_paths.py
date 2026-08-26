@@ -7,6 +7,7 @@ from typing import Never
 
 import pytest
 import redis
+from redis.typing import EncodableT
 from simplebroker_redis.plugin import RedisBackendPlugin
 from simplebroker_redis.validation import (
     NamespaceState,
@@ -17,6 +18,7 @@ from simplebroker_redis.validation import (
     validate_target,
 )
 
+from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError
 
 pytestmark = [pytest.mark.redis_only]
@@ -54,6 +56,38 @@ def test_connect_wraps_redis_connection_errors(
         match="Could not connect to Valkey/Redis target: connection refused",
     ):
         connect("redis://127.0.0.1:1/0")
+
+
+def test_inspect_namespace_counts_unrecognized_physical_prefix_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = "tenant"
+    unknown_key = f"{key_prefix(namespace)}:future-layout"
+
+    class Client:
+        def hgetall(self, key: str) -> dict[str, str]:
+            del key
+            return {}
+
+        def scan_iter(self, pattern: str) -> list[str]:
+            assert pattern == f"{key_prefix(namespace)}:*"
+            return [unknown_key]
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "simplebroker_redis.validation.connect",
+        lambda target: Client(),
+    )
+
+    inspection = inspect_namespace(
+        "redis://example/0",
+        backend_options={"namespace": namespace},
+    )
+
+    assert inspection.state is NamespaceState.FOREIGN
+    assert inspection.key_count == 1
 
 
 def test_inspect_namespace_classifies_absent_foreign_and_partial_states(
@@ -104,12 +138,65 @@ def test_inspect_namespace_classifies_absent_foreign_and_partial_states(
         client.close()
 
 
+def test_initialize_target_preserves_unrecognized_physical_prefix_key(
+    redis_url: str,
+    redis_namespace: str,
+) -> None:
+    client = redis.Redis.from_url(redis_url, decode_responses=True)
+    prefix = key_prefix(redis_namespace)
+    unknown_key = f"{prefix}:future-layout"
+    meta_key = f"{prefix}:meta"
+    client.set(unknown_key, "preserve-me")
+    try:
+        with pytest.raises(DatabaseError, match="FOREIGN"):
+            RedisBackendPlugin().initialize_target(
+                redis_url,
+                backend_options={"namespace": redis_namespace},
+            )
+
+        assert client.get(unknown_key) == "preserve-me"
+        assert client.exists(meta_key) == 0
+    finally:
+        client.delete(unknown_key, meta_key)
+        client.close()
+
+
 def test_validate_target_reports_absent_redis_namespace(
     redis_url: str,
     redis_namespace: str,
 ) -> None:
     with pytest.raises(DatabaseError, match="does not exist"):
         validate_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_owned_older_redis_namespace_reports_unsupported_without_mutation(
+    redis_url: str,
+    redis_namespace: str,
+) -> None:
+    client = redis.Redis.from_url(redis_url, decode_responses=True)
+    meta_key = f"{key_prefix(redis_namespace)}:meta"
+    old_meta: dict[EncodableT, EncodableT] = {
+        "magic": SIMPLEBROKER_MAGIC,
+        "schema_version": "0",
+    }
+    client.hset(meta_key, mapping=old_meta)
+    try:
+        inspection = inspect_namespace(
+            redis_url,
+            backend_options={"namespace": redis_namespace},
+        )
+        assert inspection.state is NamespaceState.OWNED
+
+        with pytest.raises(DatabaseError, match="older than supported.*no migration"):
+            validate_target(
+                redis_url,
+                backend_options={"namespace": redis_namespace},
+            )
+
+        assert client.hgetall(meta_key) == old_meta
+    finally:
+        client.delete(meta_key)
+        client.close()
 
 
 def test_redis_init_backend_builds_target_from_parts() -> None:

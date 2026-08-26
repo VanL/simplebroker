@@ -713,6 +713,16 @@ re-review found no remaining P0-P2 finding.
   real PG18 passed the complete 33-test file including autovacuum, real PG15
   passed 32 tests with only the opt-in autovacuum case skipped, workflow/static
   checks passed, and independent re-review approved with no remaining P0-P2.
+- 2026-08-26: the combined pre-release review found two blockers outside the
+  inspection helper itself: a supported-old PostgreSQL schema could borrow a
+  completed project PhaseLock marker, and a malformed SQLite reserved index
+  name could be hidden by another equivalent index. Both were reproduced and
+  fixed with firing tests. The final integrated core pass ran 3,227 tests with
+  17 documented skips; PostgreSQL ran 1,504 shared plus 291 extension tests;
+  Redis ran 1,497 shared plus 283 extension tests; packaging, Ruff, source and
+  test mypy, docs, Weft compatibility, and diff gates passed. Re-review found
+  no remaining code P0-P2. Release order remains core minor, PostgreSQL minor,
+  then the conditional root-extra metadata patch.
 - 2026-08-26: prepared a targeted implementation commit from an isolated
   staged-index export. That exact snapshot passed focused core/API tests,
   feature Ruff and mypy, documentation gates, real PG18 including autovacuum,

@@ -257,8 +257,9 @@ def test_relative_symlink_loop_json_failure_is_one_error_object(
         assert stdout == ""
         assert len(stderr.splitlines()) == 1
         payload = json.loads(stderr)
-        assert tuple(payload) == ("error", "message", "retryable")
+        assert set(payload) == {"error", "message", "retryable"}
         assert payload["error"] == "ERROR"
+        assert isinstance(payload["message"], str)
         assert payload["retryable"] is False
         assert (
             "could not safely resolve relative database target"

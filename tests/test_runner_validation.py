@@ -337,7 +337,7 @@ class TestSQLiteRunnerValidation:
         with pytest.raises(RuntimeError, match="not a valid SQLite database") as exc:
             queue.write("msg")
 
-        assert isinstance(exc.value.__cause__, OperationalError)
+        assert isinstance(exc.value.__cause__, sqlite3.OperationalError)
         assert db_path.read_bytes() == original_bytes
 
     @pytest.mark.sqlite_only

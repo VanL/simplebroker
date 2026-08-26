@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 import simplebroker_pg.plugin as pg_plugin_module
+import simplebroker_pg.validation as pg_validation
 from simplebroker_pg.plugin import PostgresBackendPlugin
 from simplebroker_pg.runner import RunnerMetaState
 from simplebroker_pg.validation import SchemaInspection, SchemaState
@@ -219,6 +220,79 @@ def test_initialize_target_passes_one_config_snapshot_to_runner_and_core(
 
     assert runner_config == [marker]
     assert core_config == [marker]
+
+
+@pytest.mark.parametrize("state", [SchemaState.EMPTY, SchemaState.OWNED])
+def test_initialize_target_admits_empty_and_current_owned_schema(
+    monkeypatch: pytest.MonkeyPatch,
+    state: SchemaState,
+) -> None:
+    """EMPTY initializes and current OWNED initialization remains idempotent."""
+    shutdowns: list[str] = []
+
+    class Core:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def shutdown(self) -> None:
+            shutdowns.append("core")
+
+    monkeypatch.setattr(
+        pg_plugin_module,
+        "inspect_schema",
+        lambda *args, **kwargs: SchemaInspection(
+            schema="broker_data",
+            state=state,
+            objects=(
+                frozenset(pg_validation.REQUIRED_TABLES)
+                if state is SchemaState.OWNED
+                else frozenset()
+            ),
+            schema_version=(
+                PostgresBackendPlugin.schema_version
+                if state is SchemaState.OWNED
+                else None
+            ),
+            current_shape_ready=state is SchemaState.OWNED,
+        ),
+    )
+    monkeypatch.setattr(db_module, "BrokerCore", Core)
+    plugin = PostgresBackendPlugin()
+    monkeypatch.setattr(plugin, "create_runner", lambda *args, **kwargs: object())
+
+    plugin.initialize_target(
+        "postgresql://example/test",
+        backend_options={"schema": "broker_data"},
+    )
+    assert shutdowns == ["core"]
+
+
+def test_initialize_target_rejects_current_incomplete_owned_schema_before_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pg_plugin_module,
+        "inspect_schema",
+        lambda *args, **kwargs: SchemaInspection(
+            schema="broker_data",
+            state=SchemaState.OWNED,
+            objects=frozenset({"meta", "messages"}),
+            schema_version=PostgresBackendPlugin.schema_version,
+            current_shape_ready=False,
+        ),
+    )
+    plugin = PostgresBackendPlugin()
+
+    def unexpected_runner(*args: object, **kwargs: object) -> object:
+        raise AssertionError("runner creation must follow readiness admission")
+
+    monkeypatch.setattr(plugin, "create_runner", unexpected_runner)
+
+    with pytest.raises(DatabaseError, match="current schema shape is incomplete"):
+        plugin.initialize_target(
+            "postgresql://example/test",
+            backend_options={"schema": "broker_data"},
+        )
 
 
 def test_prepare_queue_operation_locks_unknown_operation_by_queue() -> None:

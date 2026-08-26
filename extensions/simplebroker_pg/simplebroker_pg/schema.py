@@ -158,7 +158,6 @@ def initialize_database(
             return
 
     run_with_retry(lambda: runner.run(_bootstrap_schema_sql(schema)))
-
     rows = list(
         run_with_retry(
             lambda: runner.run(
@@ -168,6 +167,7 @@ def initialize_database(
             )
         )
     )
+
     if rows and isinstance(runner, PostgresRunner):
         runner.prime_meta_cache(
             RunnerMetaState(

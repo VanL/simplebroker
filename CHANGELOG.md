@@ -18,6 +18,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   may include autovacuum and other non-client workers, so it is a conservative
   pressure signal rather than a hard admission permit.
 
+### Changed
+
+- POSIX SQLite targets now accept shell-only punctuation and use filesystem
+  limits instead of a SimpleBroker-wide 1,024-character path ceiling. Glob
+  and expansion characters used by internal consumers remain rejected.
+- Project backend options may contain nested TOML tables and arrays. The
+  selected plugin now owns validation and normalization, with lossless target
+  serialization required; SQLite rejects unsupported options explicitly.
+- Duplicate installed backend entry points for the same name now fail as
+  ambiguous before either plugin is loaded.
+- Coverage-shard marker recovery now compares required coverage tables and
+  columns by name, so physical column order and harmless extra tables no
+  longer block an otherwise readable shard.
+
+### Fixed
+
+- SQLite now rejects an owned newer schema before SimpleBroker setup mutates
+  it, advances unversioned legacy schemas only after completed migrations, and
+  treats the `schema-v5` phase marker as a cache hint backed by a cheap
+  database-internal schema-cookie proof. Timestamp uniqueness is recognized by
+  index semantics while a conflicting SimpleBroker-reserved index name still
+  fails closed. Ordinary proven opens use one normal connection and scalar
+  reads only.
+- SQLite claim and move results now preserve storage FIFO even when SQLite
+  returns `UPDATE ... RETURNING` rows out of order. Public result shapes and
+  backend API v7 are unchanged.
+- PostgreSQL and Redis now classify ownership separately from stored-version
+  compatibility and current-shape readiness. PostgreSQL can initialize an
+  empty pre-created schema; older Redis state reports its explicit lack of a
+  migration instead of being mislabeled foreign. Project-scoped service
+  initialization is serialized through the existing PhaseLock on
+  `.broker.toml`; a completed marker is revalidated against the current schema
+  before it can skip setup.
+- Process sessions no longer merge type-distinct or same-repr opaque options,
+  use one detached nested snapshot for identity and lazy construction, and
+  continue safe ordinary cleanup after an earlier close failure.
+
 ## [7.4.2] - 2026-08-25
 
 ### Added

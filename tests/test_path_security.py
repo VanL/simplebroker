@@ -1,12 +1,86 @@
 """Tests for path security validation functions."""
 
+import ast
+import json
+import os
 import platform
-from typing import cast
+from pathlib import Path
+from typing import ClassVar, cast
 
 import pytest
 
 from simplebroker import _constants
 from simplebroker._paths import _validate_safe_path_components
+
+from .conftest import run_cli
+
+
+class _ShellSinkVisitor(ast.NodeVisitor):
+    """Find runtime calls that could reinterpret an admitted path as shell code."""
+
+    _SUBPROCESS_CALLS: ClassVar[set[str]] = {
+        "Popen",
+        "call",
+        "check_call",
+        "check_output",
+        "run",
+    }
+
+    def __init__(self) -> None:
+        self.module_aliases = {"os": "os", "subprocess": "subprocess"}
+        self.direct_calls: dict[str, tuple[str, str]] = {}
+        self.lines: list[int] = []
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for imported in node.names:
+            if imported.name in self.module_aliases:
+                self.module_aliases[imported.asname or imported.name] = imported.name
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.module in {"os", "subprocess"}:
+            for imported in node.names:
+                self.direct_calls[imported.asname or imported.name] = (
+                    node.module,
+                    imported.name,
+                )
+
+    def _call_target(self, node: ast.Call) -> tuple[str | None, str | None]:
+        if isinstance(node.func, ast.Attribute) and isinstance(
+            node.func.value, ast.Name
+        ):
+            return self.module_aliases.get(node.func.value.id), node.func.attr
+        if isinstance(node.func, ast.Name):
+            return self.direct_calls.get(node.func.id, (None, None))
+        return None, None
+
+    def visit_Call(self, node: ast.Call) -> None:
+        owner, name = self._call_target(node)
+        shell_interpreting = owner == "os" and name in {"popen", "system"}
+        if owner == "subprocess" and name in self._SUBPROCESS_CALLS:
+            shell_keyword = next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "shell"),
+                None,
+            )
+            shell_interpreting = shell_keyword is not None and not (
+                isinstance(shell_keyword, ast.Constant) and shell_keyword.value is False
+            )
+        if shell_interpreting:
+            self.lines.append(node.lineno)
+        self.generic_visit(node)
+
+
+def test_runtime_has_no_shell_interpreting_path_sink() -> None:
+    """POSIX path widening remains safe only while runtime subprocesses stay literal."""
+
+    package_root = Path(_constants.__file__).parent
+    offenders: list[str] = []
+    for source_path in package_root.rglob("*.py"):
+        visitor = _ShellSinkVisitor()
+        visitor.visit(ast.parse(source_path.read_text(encoding="utf-8")))
+        offenders.extend(
+            f"{source_path.relative_to(package_root)}:{line}" for line in visitor.lines
+        )
+    assert offenders == []
 
 
 class TestValidateSafePathComponents:
@@ -55,10 +129,16 @@ class TestValidateSafePathComponents:
     def test_control_characters_rejection(self) -> None:
         """Test that control characters are rejected."""
         dangerous_paths = [
+            "test\x01.db",
+            "test\x08.db",
             "test\r.db",
             "test\n.db",
             "test\t.db",
+            "test\x1b.db",
+            "test\x1f.db",
             "test\x7f.db",
+            "test\u0085.db",
+            "test\u009b.db",
         ]
 
         for path in dangerous_paths:
@@ -90,13 +170,12 @@ class TestValidateSafePathComponents:
             with pytest.raises(ValueError, match="current directory references"):
                 _validate_safe_path_components(path, "Test path")
 
-    def test_unix_shell_metacharacters_rejection(self) -> None:
-        """Test that Unix shell metacharacters are rejected on non-Windows."""
+    def test_posix_shell_only_punctuation_is_accepted(self) -> None:
+        """Shell syntax is inert when the path is passed to filesystem APIs."""
         if platform.system() == "Windows":
             pytest.skip("Unix shell validation not applicable on Windows")
 
-        # Note: backslash is NOT included as it's allowed as a path separator on Unix
-        dangerous_chars = [
+        accepted_chars = [
             "|",
             "&",
             ";",
@@ -110,17 +189,21 @@ class TestValidateSafePathComponents:
             ")",
             "{",
             "}",
-            "[",
-            "]",
-            "*",
-            "?",
-            "~",
             "^",
             "!",
             "#",
         ]
 
-        for char in dangerous_chars:
+        for char in accepted_chars:
+            path = f"test{char}file.db"
+            _validate_safe_path_components(path, "Test path")
+
+    def test_posix_pattern_and_expansion_characters_remain_rejected(self) -> None:
+        """Owned glob and expanduser consumers keep their metacharacters blocked."""
+        if platform.system() == "Windows":
+            pytest.skip("Unix path validation not applicable on Windows")
+
+        for char in ["[", "]", "*", "?", "~"]:
             path = f"test{char}file.db"
             with pytest.raises(ValueError, match="dangerous character"):
                 _validate_safe_path_components(path, "Test path")
@@ -276,16 +359,16 @@ class TestValidateSafePathComponents:
         with pytest.raises(ValueError, match="component too long"):
             _validate_safe_path_components(path, "Test path")
 
-    def test_long_total_path_rejection(self) -> None:
-        """Test that excessively long total paths are rejected."""
-        is_windows = platform.system() == "Windows"
-        max_length = 260 if is_windows else 1024
+    def test_total_path_length_uses_platform_policy(self) -> None:
+        """POSIX defers total length to the OS while Windows retains its rule."""
+        if platform.system() == "Windows":
+            with pytest.raises(ValueError, match="too long"):
+                _validate_safe_path_components("x" * 261, "Test path")
+            return
 
-        # Create a path longer than the limit
-        long_path = "x" * (max_length + 1)
-
-        with pytest.raises(ValueError, match="too long"):
-            _validate_safe_path_components(long_path, "Test path")
+        long_path = "/".join("x" * 220 for _ in range(5))
+        assert len(long_path) > 1024
+        _validate_safe_path_components(long_path, "Test path")
 
     def test_empty_string_rejection(self) -> None:
         """Test that empty strings are rejected."""
@@ -358,3 +441,136 @@ class TestValidateSafePathComponents:
         for name in edge_cases:
             # Should not raise any exception
             _validate_safe_path_components(name, "Database name")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX pathname contract")
+@pytest.mark.sqlite_only
+def test_posix_punctuation_works_across_explicit_status_and_cleanup_paths(
+    tmp_path: Path,
+) -> None:
+    path_dir = tmp_path / "shell #$`'\"(){};&!^|<> dir"
+    path_dir.mkdir()
+    db_name = "queue #$`'\"(){};&!^|<>.db"
+    db_path = path_dir / db_name
+    env = {"BROKER_TEST_BACKEND": "sqlite", "PHASELOCK_ENABLE_XATTRS": "0"}
+
+    code, stdout, stderr = run_cli(
+        "-d",
+        path_dir,
+        "-f",
+        db_name,
+        "write",
+        "jobs",
+        "payload",
+        cwd=tmp_path,
+        env=env,
+    )
+    assert code == 0, stderr
+    assert stdout == ""
+    assert db_path.exists()
+    assert Path(f"{db_path}.status").exists()
+
+    code, stdout, stderr = run_cli(
+        "-d", path_dir, "-f", db_name, "--status", "--json", cwd=tmp_path, env=env
+    )
+    assert code == 0, stderr
+    assert json.loads(stdout)["total_messages"] == 1
+
+    code, stdout, stderr = run_cli(
+        "-d", path_dir, "-f", db_name, "--cleanup", cwd=tmp_path, env=env
+    )
+    assert code == 0, stderr
+    assert stdout == ""
+    assert not db_path.exists()
+    assert not Path(f"{db_path}.status").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX pathname contract")
+@pytest.mark.sqlite_only
+def test_posix_punctuation_works_for_init_and_project_discovery(tmp_path: Path) -> None:
+    init_name = "init#$(){};&!^|<>.db"
+    env = {
+        "BROKER_TEST_BACKEND": "sqlite",
+        "BROKER_DEFAULT_DB_NAME": init_name,
+        "PHASELOCK_ENABLE_XATTRS": "0",
+    }
+
+    code, stdout, stderr = run_cli("init", cwd=tmp_path, env=env)
+    assert code == 0, stderr
+    assert stdout == ""
+    assert (tmp_path / init_name).exists()
+    assert Path(f"{tmp_path / init_name}.status").exists()
+
+    project = tmp_path / "project#$(){};&!^|<>"
+    child = project / "child"
+    child.mkdir(parents=True)
+    project_db_name = "project#$(){};&!^|<>.db"
+    (project / ".broker.toml").write_text(
+        f'version = 1\nbackend = "sqlite"\ntarget = "{project_db_name}"\n',
+        encoding="utf-8",
+    )
+    project_env = {
+        "BROKER_TEST_BACKEND": "sqlite",
+        "BROKER_PROJECT_SCOPE": "1",
+    }
+
+    code, stdout, stderr = run_cli(
+        "write", "jobs", "project", cwd=child, env=project_env
+    )
+    assert code == 0, stderr
+    assert stdout == ""
+    assert (project / project_db_name).exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX pathname contract")
+@pytest.mark.sqlite_only
+def test_filesystem_supported_posix_path_over_1024_reaches_sqlite(
+    tmp_path: Path,
+) -> None:
+    try:
+        path_max = os.pathconf(tmp_path, "PC_PATH_MAX")
+    except (OSError, ValueError):
+        pytest.skip("filesystem does not report a path limit")
+    if path_max <= 1200:
+        pytest.skip("filesystem cannot support the over-1024 probe")
+
+    directory = tmp_path
+    while len(str(directory / "queue.db")) <= 1100:
+        directory /= "x" * 100
+    directory.mkdir(parents=True)
+    db_path = directory / "queue.db"
+
+    code, stdout, stderr = run_cli(
+        "-f",
+        db_path,
+        "write",
+        "jobs",
+        "payload",
+        cwd=tmp_path,
+        env={"BROKER_TEST_BACKEND": "sqlite"},
+    )
+
+    assert code == 0, stderr
+    assert stdout == ""
+    assert db_path.exists()
+
+
+@pytest.mark.sqlite_only
+def test_live_path_hazard_uses_json_diagnostic_without_side_effects(
+    tmp_path: Path,
+) -> None:
+    code, stdout, stderr = run_cli(
+        "-f",
+        "queue*.db",
+        "--status",
+        "--json",
+        cwd=tmp_path,
+        env={"BROKER_TEST_BACKEND": "sqlite"},
+    )
+
+    assert code == 1
+    assert stdout == ""
+    payload = json.loads(stderr)
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert "dangerous character '*'" in payload["message"]
+    assert not list(tmp_path.glob("queue*.db"))

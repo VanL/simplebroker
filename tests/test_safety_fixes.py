@@ -24,6 +24,48 @@ from .conftest import run_cli
 from .helper_scripts.timing import scale_timeout_for_calibration, scale_timeout_for_ci
 
 
+class _OldSQLiteCursor:
+    def __init__(self, row):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
+
+    def fetchall(self):
+        return [self.row]
+
+    def close(self):
+        pass
+
+
+class _OldSQLiteConnection:
+    def __init__(self, *args, **kwargs):
+        del args, kwargs
+        self.call_count = 0
+
+    def execute(self, query, params=None):
+        del params
+        self.call_count += 1
+        normalized = " ".join(query.lower().split())
+        if "left join meta" in normalized:
+            raise sqlite3.OperationalError("no such table: meta")
+        if "from pragma_schema_version" in normalized:
+            return _OldSQLiteCursor((0, 0))
+        if "sqlite_version" in normalized:
+            return _OldSQLiteCursor(("3.34.0",))
+        if "pragma" in normalized:
+            return _OldSQLiteCursor((0,))
+        if "from meta" in normalized:
+            raise sqlite3.OperationalError("no such table: meta")
+        raise RuntimeError("Mock connection")
+
+    def commit(self):
+        pass
+
+    def close(self):
+        pass
+
+
 def test_delete_safety_no_args(workdir):
     """Test that delete with no arguments is rejected for safety."""
     # Write some messages first
@@ -422,38 +464,8 @@ def test_sqlite_version_check(workdir, monkeypatch):
     """Test that old SQLite versions are rejected."""
     db_path = workdir / ".broker.db"
 
-    # Create a mock that simulates old SQLite version
-    class MockCursor:
-        def fetchone(self):
-            return ("3.34.0",)  # Version before 3.35
-
-        def close(self):
-            pass
-
-    class MockConnection:
-        def __init__(self, *args, **kwargs):
-            self.call_count = 0
-
-        def execute(self, query, params=None):
-            self.call_count += 1
-            if "sqlite_version" in query:
-                return MockCursor()
-            elif "PRAGMA" in query:
-                # Allow all PRAGMA statements to succeed
-                return MockCursor()
-            elif "FROM meta" in query:
-                raise sqlite3.OperationalError("no such table: meta")
-            # For other queries, raise to trigger error
-            raise RuntimeError("Mock connection")
-
-        def commit(self):
-            pass
-
-        def close(self):
-            pass
-
     # Patch sqlite3.connect to return our mock
-    monkeypatch.setattr("sqlite3.connect", MockConnection)
+    monkeypatch.setattr("sqlite3.connect", _OldSQLiteConnection)
 
     # Try to create BrokerDB - should fail with version error
     with pytest.raises(RuntimeError) as exc_info:

@@ -79,10 +79,14 @@ pass; bootstrap source `2f93ee5`)
   invisible, and missing or corrupt data fails at the producing test boundary.
 - A coverage SQLite shard can be otherwise complete yet lack only the
   `coverage_schema` version row if initialization is interrupted between schema
-  creation and marker insertion. The resulting coverage.py error has an empty
-  detail string. After writers have settled, recover that narrow case only when
-  every expected table and column matches the installed schema; keep arbitrary
-  corruption and partial measurement schemas as hard failures.
+  creation and marker insertion. After writers settle, repair only that marker
+  when installed coverage.py's required tables and columns are present by name
+  and version rows are absent or duplicate the installed version. Physical
+  column order and unrelated extra tables are not correctness constraints. A
+  successful transaction plus a real installed `CoverageData.read()` is the
+  authority; conflicting versions, missing required structure, unreadable data,
+  and transaction failure remain hard failures. (revised 2026-08-25; was: every
+  expected table and column had to match the installed schema exactly.)
 - A timing gate cannot share an xdist run with unrelated tests merely because
   its own cases have one xdist group. The group serializes those cases with
   each other, not with work on other workers. Run threshold-bearing benchmarks

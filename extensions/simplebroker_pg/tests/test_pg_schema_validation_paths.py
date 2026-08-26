@@ -221,18 +221,10 @@ def test_read_existing_meta_state_distinguishes_absence_from_other_failures() ->
 @pytest.mark.parametrize(
     ("fetchones", "fetchalls", "expected_state"),
     [
-        ([(1,)], [[]], SchemaState.EMPTY),
+        ([(1,), None], [[]], SchemaState.EMPTY),
         (
             [(1,)],
             [[("meta",)], [("magic",)]],
-            SchemaState.PARTIAL_SIMPLEBROKER,
-        ),
-        (
-            [(1,), (SIMPLEBROKER_MAGIC, PostgresBackendPlugin.schema_version)],
-            [
-                [("meta",)],
-                [(column,) for column in pg_validation.TYPED_META_COLUMNS],
-            ],
             SchemaState.PARTIAL_SIMPLEBROKER,
         ),
         (
@@ -265,6 +257,169 @@ def test_inspect_schema_classifies_non_owned_schema_shapes(
     assert inspection.schema == "broker_data"
 
 
+@pytest.mark.parametrize("catalog", ["pg_proc", "pg_type"])
+def test_inspect_schema_does_not_treat_nonrelation_objects_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    catalog: str,
+) -> None:
+    cursor = SchemaInspectionCursor(
+        fetchones=[(1,), (catalog,)],
+        fetchalls=[[]],
+    )
+    connection = SchemaInspectionConnection(cursor)
+    monkeypatch.setattr(pg_validation, "connect", lambda dsn: connection)
+
+    inspection = inspect_schema(
+        "postgresql://example/test",
+        backend_options={"schema": "broker_data"},
+    )
+
+    assert inspection.state is SchemaState.FOREIGN
+    assert inspection.objects == frozenset()
+
+
+def test_inspect_schema_keeps_an_older_owned_shape_out_of_partial_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Current tables are readiness evidence, not stable ownership anchors."""
+    cursor = SchemaInspectionCursor(
+        fetchones=[(1,), (SIMPLEBROKER_MAGIC, 3)],
+        fetchalls=[
+            [("messages",), ("meta",)],
+            [(column,) for column in pg_validation.TYPED_META_COLUMNS],
+        ],
+    )
+    connection = SchemaInspectionConnection(cursor)
+    monkeypatch.setattr(pg_validation, "connect", lambda dsn: connection)
+
+    inspection = inspect_schema(
+        "postgresql://example/test",
+        backend_options={"schema": "broker_data"},
+    )
+
+    assert inspection.state is SchemaState.OWNED
+    assert inspection.schema_version == 3
+    assert inspection.current_shape_ready is False
+
+    monkeypatch.setattr(
+        pg_validation, "inspect_schema", lambda *args, **kwargs: inspection
+    )
+    with pytest.raises(DatabaseError, match="older than current version 5"):
+        validate_target("postgresql://example/test")
+    validate_target(
+        "postgresql://example/test",
+        verify_initialized=False,
+    )
+
+
+def test_inspect_schema_uses_stable_meta_columns_as_postgres_ownership_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Current mutable metadata fields must not define older-version ownership."""
+    cursor = SchemaInspectionCursor(
+        fetchones=[(1,), (SIMPLEBROKER_MAGIC, 1)],
+        fetchalls=[
+            [("messages",), ("meta",)],
+            [("singleton",), ("magic",), ("schema_version",)],
+        ],
+    )
+    connection = SchemaInspectionConnection(cursor)
+    monkeypatch.setattr(pg_validation, "connect", lambda dsn: connection)
+
+    inspection = inspect_schema(
+        "postgresql://example/test",
+        backend_options={"schema": "broker_data"},
+    )
+
+    assert inspection.state is SchemaState.OWNED
+    assert inspection.schema_version == 1
+    assert inspection.current_shape_ready is False
+
+
+@pytest.mark.parametrize("raw_version", ["not-an-integer", True])
+def test_inspect_schema_rejects_unreadable_postgres_version_as_partial(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_version: object,
+) -> None:
+    cursor = SchemaInspectionCursor(
+        fetchones=[(1,), (SIMPLEBROKER_MAGIC, raw_version)],
+        fetchalls=[
+            [("messages",), ("meta",)],
+            [(column,) for column in pg_validation.OWNERSHIP_META_COLUMNS],
+        ],
+    )
+    connection = SchemaInspectionConnection(cursor)
+    monkeypatch.setattr(pg_validation, "connect", lambda dsn: connection)
+
+    inspection = inspect_schema(
+        "postgresql://example/test",
+        backend_options={"schema": "broker_data"},
+    )
+
+    assert inspection.state is SchemaState.PARTIAL_SIMPLEBROKER
+    assert inspection.schema_version is None
+
+
+@pytest.mark.parametrize("verify_initialized", [False, True])
+def test_owned_postgres_version_below_baseline_is_rejected_before_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    verify_initialized: bool,
+) -> None:
+    monkeypatch.setattr(
+        pg_validation,
+        "inspect_schema",
+        lambda *args, **kwargs: SchemaInspection(
+            schema="broker_data",
+            state=SchemaState.OWNED,
+            objects=frozenset({"meta", "messages"}),
+            schema_version=0,
+            current_shape_ready=False,
+        ),
+    )
+
+    with pytest.raises(DatabaseError, match="older than oldest supported version 1"):
+        validate_target(
+            "postgresql://example/test",
+            verify_initialized=verify_initialized,
+        )
+
+
+def test_current_owned_postgres_shape_must_pass_readiness_after_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A current version does not excuse a missing current required table."""
+    cursor = SchemaInspectionCursor(
+        fetchones=[
+            (1,),
+            (SIMPLEBROKER_MAGIC, PostgresBackendPlugin.schema_version),
+        ],
+        fetchalls=[
+            [("messages",), ("meta",)],
+            [(column,) for column in pg_validation.TYPED_META_COLUMNS],
+        ],
+    )
+    connection = SchemaInspectionConnection(cursor)
+    monkeypatch.setattr(pg_validation, "connect", lambda dsn: connection)
+    inspection = inspect_schema(
+        "postgresql://example/test",
+        backend_options={"schema": "broker_data"},
+    )
+
+    assert inspection.state is SchemaState.OWNED
+    assert inspection.current_shape_ready is False
+
+    monkeypatch.setattr(
+        pg_validation, "inspect_schema", lambda *args, **kwargs: inspection
+    )
+    with pytest.raises(DatabaseError, match="current schema shape is incomplete"):
+        validate_target("postgresql://example/test")
+    with pytest.raises(DatabaseError, match="current schema shape is incomplete"):
+        validate_target(
+            "postgresql://example/test",
+            verify_initialized=False,
+        )
+
+
 @pytest.mark.parametrize(
     "state", [SchemaState.ABSENT, SchemaState.EMPTY, SchemaState.OWNED]
 )
@@ -278,7 +433,17 @@ def test_validate_target_allows_initializable_schema_states(
         lambda *args, **kwargs: SchemaInspection(
             schema="broker_data",
             state=state,
-            objects=frozenset(),
+            objects=(
+                frozenset(pg_validation.REQUIRED_TABLES)
+                if state is SchemaState.OWNED
+                else frozenset()
+            ),
+            schema_version=(
+                PostgresBackendPlugin.schema_version
+                if state is SchemaState.OWNED
+                else None
+            ),
+            current_shape_ready=state is SchemaState.OWNED,
         ),
     )
 
@@ -316,8 +481,10 @@ def test_validate_target_reports_state_specific_ownership_errors(
         )
 
 
+@pytest.mark.parametrize("verify_initialized", [False, True])
 def test_validate_target_rejects_schema_from_newer_backend_version(
     monkeypatch: pytest.MonkeyPatch,
+    verify_initialized: bool,
 ) -> None:
     monkeypatch.setattr(
         pg_validation,
@@ -331,7 +498,10 @@ def test_validate_target_rejects_schema_from_newer_backend_version(
     )
 
     with pytest.raises(DatabaseError, match="newer than supported"):
-        validate_target("postgresql://example/test")
+        validate_target(
+            "postgresql://example/test",
+            verify_initialized=verify_initialized,
+        )
 
 
 @pytest.mark.parametrize(

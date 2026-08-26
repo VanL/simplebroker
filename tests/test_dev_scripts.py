@@ -547,10 +547,10 @@ COVERAGE_SETTLEMENT_TRANSITIONS = (
         transition_id="SCHEMA-MARKER-REPAIR",
         start_state="stable-missing-schema-version",
         event="deadline arrives",
-        guard="every installed coverage table and column matches exactly",
+        guard="required installed coverage tables and columns are present by name",
         next_state="settled-after-repair",
-        effects="atomically restores the installed coverage schema version",
-        expected_result="repaired measured data remains readable",
+        effects="atomically restores only the installed coverage schema version",
+        expected_result="installed coverage.py reads the repaired measured data",
         payload=_settlement_repairs_schema_marker,
     ),
     TransitionCase(
@@ -1331,13 +1331,15 @@ def test_combine_coverage_rejects_conflicting_schema_versions(
     assert combined.lines(str(base_source)) == [1]
 
 
-def test_combine_coverage_rejects_schema_repair_with_an_extra_table(
+def test_combine_coverage_repairs_schema_with_a_harmless_extra_table(
     tmp_path: Path,
 ) -> None:
     data_file = tmp_path / ".coverage"
     shard_file = tmp_path / ".coverage.worker"
-    _write_coverage_lines(data_file, tmp_path / "base_source.py", {1})
-    _write_coverage_lines(shard_file, tmp_path / "worker_source.py", {2})
+    base_source = tmp_path / "base_source.py"
+    worker_source = tmp_path / "worker_source.py"
+    _write_coverage_lines(data_file, base_source, {1})
+    _write_coverage_lines(shard_file, worker_source, {2})
     connection = sqlite3.connect(shard_file)
     try:
         connection.execute(
@@ -1354,9 +1356,144 @@ def test_combine_coverage_rejects_schema_repair_with_an_extra_table(
         settle_seconds=0,
     )
 
+    assert result.returncode == 0, result.stderr
+    assert "Repaired schema version markers in 1 coverage data file(s)" in result.stdout
+    combined = CoverageData(basename=str(data_file))
+    try:
+        combined.read()
+        assert combined.lines(base_source.as_posix()) == [1]
+        assert combined.lines(worker_source.as_posix()) == [2]
+    finally:
+        combined.close(force=True)
+    assert not shard_file.exists()
+
+
+def test_combine_coverage_repairs_schema_with_reordered_columns(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    base_source = tmp_path / "base_source.py"
+    worker_source = tmp_path / "worker_source.py"
+    _write_coverage_lines(data_file, base_source, {1})
+    _write_coverage_lines(shard_file, worker_source, {2})
+    connection = sqlite3.connect(shard_file)
+    try:
+        connection.execute(
+            "INSERT INTO coverage_schema (version) SELECT version FROM coverage_schema"
+        )
+        connection.executescript(
+            """
+            ALTER TABLE meta RENAME TO original_meta;
+            CREATE TABLE meta (value text, key text, unique (key));
+            INSERT INTO meta (key, value) SELECT key, value FROM original_meta;
+            DROP TABLE original_meta;
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = _run_combine_coverage(
+        data_file,
+        retry_timeout=0.2,
+        settle_seconds=0,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Repaired schema version markers in 1 coverage data file(s)" in result.stdout
+    combined = CoverageData(basename=str(data_file))
+    try:
+        combined.read()
+        assert combined.lines(base_source.as_posix()) == [1]
+        assert combined.lines(worker_source.as_posix()) == [2]
+    finally:
+        combined.close(force=True)
+    assert not shard_file.exists()
+
+
+@pytest.mark.parametrize(
+    "damage_sql",
+    (
+        "DROP TABLE tracer",
+        "ALTER TABLE tracer DROP COLUMN tracer",
+    ),
+    ids=("missing-required-table", "missing-required-column"),
+)
+def test_combine_coverage_rejects_schema_repair_missing_required_structure(
+    tmp_path: Path,
+    damage_sql: str,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    _write_coverage_lines(data_file, tmp_path / "base_source.py", {1})
+    _write_coverage_lines(shard_file, tmp_path / "worker_source.py", {2})
+    connection = sqlite3.connect(shard_file)
+    try:
+        connection.execute(
+            "INSERT INTO coverage_schema (version) SELECT version FROM coverage_schema"
+        )
+        connection.execute(damage_sql)
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = _run_combine_coverage(
+        data_file,
+        retry_timeout=0.2,
+        settle_seconds=0,
+    )
+
     assert result.returncode != 0
-    assert "shouldn't return 2 rows" in result.stderr
+    assert "Could not combine coverage data" in result.stderr
     assert shard_file.exists()
+
+
+def test_coverage_schema_repair_rejects_commit_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shard_file = tmp_path / ".coverage.worker"
+    _write_coverage_lines(shard_file, tmp_path / "worker_source.py", {2})
+    connection = sqlite3.connect(shard_file)
+    try:
+        connection.execute(
+            "INSERT INTO coverage_schema (version) SELECT version FROM coverage_schema"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    real_connect = sqlite3.connect
+
+    class CommitFailureConnection(sqlite3.Connection):
+        def commit(self) -> None:
+            raise sqlite3.OperationalError("forced commit failure")
+
+    def connect_with_commit_failure(
+        *args: object, **kwargs: object
+    ) -> sqlite3.Connection:
+        return cast(
+            sqlite3.Connection,
+            cast(Any, real_connect)(*args, **kwargs, factory=CommitFailureConnection),
+        )
+
+    monkeypatch.setattr(
+        combine_coverage.sqlite3,
+        "connect",
+        connect_with_commit_failure,
+    )
+
+    assert combine_coverage._repair_schema_version_marker(shard_file) is False
+
+    verification = real_connect(shard_file)
+    try:
+        assert (
+            verification.execute("SELECT version FROM coverage_schema").fetchall()
+            == [(combine_coverage.SCHEMA_VERSION,)] * 2
+        )
+    finally:
+        verification.close()
 
 
 def test_combine_coverage_excludes_interrupted_empty_shard(

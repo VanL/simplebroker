@@ -185,6 +185,30 @@ def test_create_activity_waiter_for_queues_rejects_mixed_backend_options(
         )
 
 
+def test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SameRepr:
+        def __repr__(self) -> str:
+            return "same-repr"
+
+    _install_dummy_plugin(monkeypatch, RecordingPlugin)
+    queue_a = Queue(
+        "a",
+        db_path=BrokerTarget("dummy", "target", {"opaque": SameRepr()}),
+    )
+    queue_b = Queue(
+        "b",
+        db_path=BrokerTarget("dummy", "target", {"opaque": SameRepr()}),
+    )
+
+    with pytest.raises(ValueError, match="queues cannot safely share one"):
+        create_activity_waiter_for_queues(
+            [queue_a, queue_b],
+            stop_event=threading.Event(),
+        )
+
+
 def test_create_activity_waiter_for_queues_accepts_same_injected_runner(
     workdir: Path,
 ) -> None:

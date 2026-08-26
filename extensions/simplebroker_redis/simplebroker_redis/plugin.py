@@ -32,6 +32,7 @@ from .validation import (
     is_namespace_key,
     key_prefix,
     require_namespace,
+    validate_namespace_inspection,
     validate_target,
 )
 
@@ -468,11 +469,7 @@ class RedisBackendPlugin:
         del config
         namespace = require_namespace(backend_options)
         inspection = inspect_namespace(target, backend_options={"namespace": namespace})
-        if inspection.state not in {NamespaceState.ABSENT, NamespaceState.OWNED}:
-            raise DatabaseError(
-                f"Redis namespace '{namespace}' is not available for SimpleBroker "
-                f"init: {inspection.state.value}"
-            )
+        validate_namespace_inspection(inspection, verify_initialized=False)
         if inspection.state is NamespaceState.OWNED:
             return
         client = redis.Redis.from_url(target, decode_responses=True)

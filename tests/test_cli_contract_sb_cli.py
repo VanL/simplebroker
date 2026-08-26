@@ -354,7 +354,8 @@ def test_sb_cli_4_error_inventory_and_public_paths(workdir: Path) -> None:
     documented_keys = frozenset(re.findall(r"`([a-z][a-z_]*)`", error_contract))
     assert documented_codes == _JSON_ERROR_CODES
     assert documented_keys == frozenset(_JSON_ERROR_KEYS)
-    assert _JSON_ERROR_KEYS == ("error", "message", "retryable")
+    assert frozenset(_JSON_ERROR_KEYS) == {"error", "message", "retryable"}
+    assert len(_JSON_ERROR_KEYS) == 3
 
     invalid_db = workdir / "invalid.db"
     invalid_db.write_text("not sqlite", encoding="utf-8")
@@ -373,8 +374,9 @@ def test_sb_cli_4_error_inventory_and_public_paths(workdir: Path) -> None:
         assert rc == EXIT_ERROR
         assert out == ""
         payload = json.loads(err)
-        assert tuple(payload) == _JSON_ERROR_KEYS
+        assert set(payload) == set(_JSON_ERROR_KEYS)
         assert payload["error"] == expected_code
+        assert isinstance(payload["message"], str)
         assert payload["retryable"] is False
         if expected_code == "INVALID_MESSAGE_ID":
             message = payload["message"].lower()
@@ -412,8 +414,9 @@ def test_sb_cli_5_invalid_bounds_win_before_corrupt_target_inspection(
     assert "Traceback" not in err
     if json_output:
         payload = json.loads(err)
-        assert tuple(payload) == _JSON_ERROR_KEYS
+        assert set(payload) == set(_JSON_ERROR_KEYS)
         assert payload["error"] == "INVALID_TIMESTAMP"
+        assert isinstance(payload["message"], str)
         assert payload["retryable"] is False
     else:
         assert not err.startswith("{")
@@ -439,8 +442,9 @@ def test_sb_cli_4_post_parse_global_errors_preserve_json(
     assert rc == EXIT_ERROR
     assert out == ""
     payload = json.loads(err)
-    assert tuple(payload) == _JSON_ERROR_KEYS
+    assert set(payload) == set(_JSON_ERROR_KEYS)
     assert payload["error"] == "INVALID_ARGUMENT"
+    assert isinstance(payload["message"], str)
     assert payload["retryable"] is False
     assert "Traceback" not in err
     assert not (workdir / ".broker.db").exists()
@@ -460,8 +464,9 @@ def test_sb_cli_4_oversized_message_is_invalid_argument(workdir: Path) -> None:
     assert rc == EXIT_ERROR
     assert out == ""
     payload = json.loads(err)
-    assert tuple(payload) == _JSON_ERROR_KEYS
+    assert set(payload) == set(_JSON_ERROR_KEYS)
     assert payload["error"] == "INVALID_ARGUMENT"
+    assert isinstance(payload["message"], str)
     assert payload["retryable"] is False
     assert "maximum size" in payload["message"]
     assert "Traceback" not in err
@@ -510,8 +515,9 @@ def _assert_json_error(
     assert rc == EXIT_ERROR
     assert out == ""
     payload = json.loads(err)
-    assert tuple(payload) == _JSON_ERROR_KEYS
+    assert set(payload) == set(_JSON_ERROR_KEYS)
     assert payload["error"] == expected_code
+    assert isinstance(payload["message"], str)
     assert payload["retryable"] is False
     assert "Traceback" not in err
     return cast(dict[str, object], payload)

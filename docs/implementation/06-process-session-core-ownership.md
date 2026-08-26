@@ -114,6 +114,32 @@ the runner owner's checkout contract. Psycopg pool statistics are not a
 substitute for the PostgreSQL catalog probe because each process owns its own
 pool and cannot see other processes or unrelated clients.
 
+### Project-scoped service bootstrap coordination
+
+Project-scoped PostgreSQL and Redis targets reuse `PhaseLockService` with the
+resolved `.broker.toml` as the coordination target. The config file is the
+shared local identity for a service target, just as the database path is the
+identity for SQLite setup. This serializes first initialization and migration
+without extending backend transactions across catalog inspection and schema
+DDL. Explicit service targets have no config-path identity and retain direct,
+backend-owned idempotent initialization.
+
+The completion marker remains a cache hint. Before it can skip setup, the
+backend must validate a current initialized target. PostgreSQL therefore
+distinguishes `verify_initialized=True` (current version and shape) from the
+`False` admission used by `initialize_target()` and connection setup, which
+must still let an older owned schema reach migration. A restored older schema
+cannot borrow the config file's newer marker.
+
+The service keeps `PhaseLockService`'s platform policy. POSIX may accept a
+validated marker without taking the advisory lock, preserving the normal CLI
+startup fast path. Windows acquires and releases the lock before trusting the
+marker, giving marker observation a happens-after edge on the prior owner.
+Forcing the Windows policy on POSIX would serialize every project CLI startup
+and was rejected after it caused PostgreSQL CLI timeouts. Controlled
+PostgreSQL and Redis CLI A/B runs with the native policy remained within trial
+noise.
+
 An `ActivityWaiter` sits below that boundary. It owns a backend activity
 registration or composite registration, not the runner, pool, listener
 substrate, or process session. It therefore exposes only `close()`. Terminal
@@ -198,6 +224,15 @@ selects an existing entry. The registry invokes the builder only when the key
 is new, so a repeated acquisition cannot allocate and discard an unused
 factory.
 
+Acquisition recursively detaches supported option and configuration containers
+once. The registry key and the lazy factory both derive from that same detached
+snapshot, so later nested caller mutation cannot leave an old key describing
+new factory inputs. Key material preserves primitive and container type
+distinctions and treats mappings and sets as order-insensitive. Unsupported
+opaque values retain process-local object identity through a strong reference.
+That fallback may create an extra session for distinct but value-equivalent
+objects; it cannot make distinct configuration share backend resources.
+
 `BrokerTarget` snapshots the top level of `backend_options` into an ordinary
 dict when the descriptor is constructed. That prevents later mutation of the
 caller's source mapping from changing a session target while preserving the
@@ -281,6 +316,12 @@ calls. If the deadline expires, in-flight work is not cancelled:
 - a late unpublished runner candidate closes itself;
 - an in-flight checkout rollback continues;
 - a core returned to the closing session is discarded rather than cached.
+
+After ownership is detached, an ordinary `Exception` from one core, factory,
+or registry-session close does not prevent the remaining safe closes. One
+failure remains primary and later failures are retained as diagnostics without
+making their incidental order public behavior. A `BaseException` outside
+`Exception` keeps propagation priority and may interrupt later cleanup.
 
 For runner-backed cores, a successful checkout stays leased for the cached
 core lifetime. If construction fails, the adapter releases that checkout once.

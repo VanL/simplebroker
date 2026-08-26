@@ -826,12 +826,30 @@ class SQLiteRunner:
 
         return self._run_exclusive_setup(phase, operation, stop_event=stop_event)
 
+    def run_exclusive_setup_conditionally_with_stop_event(
+        self,
+        phase: SetupPhase,
+        operation: Callable[[], None],
+        stop_event: threading.Event | None,
+        *,
+        completion_is_valid: Callable[[bool], bool],
+    ) -> bool:
+        """Run a marked phase when its caller-owned completion proof is stale."""
+
+        return self._run_exclusive_setup(
+            phase,
+            operation,
+            stop_event=stop_event,
+            completion_is_valid=completion_is_valid,
+        )
+
     def _run_exclusive_setup(
         self,
         phase: SetupPhase,
         operation: Callable[[], None],
         *,
         stop_event: threading.Event | None,
+        completion_is_valid: Callable[[bool], bool] | None = None,
     ) -> bool:
         """Run a setup operation once under the phase's cross-process lock.
 
@@ -859,6 +877,7 @@ class SQLiteRunner:
                     if phase == SetupPhase.CONNECTION
                     else None
                 ),
+                completion_is_valid=completion_is_valid,
             )
         except PhaseLockCancelled as exc:
             raise StopException("Retry interrupted by stop event") from exc

@@ -12,7 +12,6 @@ from ..._sql import (
     CHECK_CLAIMED_COLUMN,
     CHECK_DUPLICATE_TIMESTAMPS,
     CHECK_PENDING_QUEUE_TS_INDEX,
-    CHECK_TS_UNIQUE_INDEX,
     CREATE_ALIAS_TARGET_INDEX,
     CREATE_ALIASES_TABLE,
     CREATE_MESSAGES_TABLE,
@@ -39,6 +38,35 @@ def initialize_database(
     """Run the built-in SQLite schema/bootstrap setup atomically."""
     run_with_retry(runner.begin_immediate)
     try:
+        existing_message_rows = run_with_retry(
+            lambda: runner.run(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'messages')",
+                fetch=True,
+            )
+        )
+        existing_messages = bool(next(iter(existing_message_rows))[0])
+        if existing_messages:
+            # A pre-versioned database is legacy, not a fresh bootstrap. Publish
+            # only the oldest supported baseline here; each migration publishes
+            # its own version in the transaction that installs that version.
+            run_with_retry(lambda: runner.run(CREATE_META_TABLE))
+            run_with_retry(lambda: runner.run(INIT_LAST_TS))
+            run_with_retry(
+                lambda: runner.run(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('magic', ?)",
+                    (SIMPLEBROKER_MAGIC,),
+                )
+            )
+            run_with_retry(
+                lambda: runner.run(
+                    "INSERT OR IGNORE INTO meta (key, value) "
+                    "VALUES ('schema_version', 1)"
+                )
+            )
+            run_with_retry(runner.commit)
+            return
+
         run_with_retry(lambda: runner.run(CREATE_MESSAGES_TABLE))
 
         for drop_sql in DROP_OLD_INDEXES:
@@ -125,10 +153,52 @@ def messages_has_claimed_column(runner: SQLRunner) -> bool:
     return bool(rows and rows[0][0])
 
 
+def _timestamp_unique_index_state(runner: SQLRunner) -> tuple[bool, bool]:
+    """Return (semantic constraint exists, owned name conflicts)."""
+
+    semantic_index_names: set[str] = set()
+    owned_name_exists = False
+    for name, unique, partial in runner.run(
+        "SELECT name, \"unique\", partial FROM pragma_index_list('messages')",
+        fetch=True,
+    ):
+        index_name = str(name)
+        if index_name == "idx_messages_ts_unique":
+            owned_name_exists = True
+        if int(unique) != 1 or int(partial) != 0:
+            continue
+        columns = [
+            row[0]
+            for row in runner.run(
+                "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
+                (index_name,),
+                fetch=True,
+            )
+        ]
+        if columns == ["ts"]:
+            semantic_index_names.add(index_name)
+
+    has_semantic_index = bool(semantic_index_names)
+    return (
+        has_semantic_index,
+        owned_name_exists and "idx_messages_ts_unique" not in semantic_index_names,
+    )
+
+
+def _reject_conflicting_timestamp_index_name(owned_name_conflicts: bool) -> None:
+    if owned_name_conflicts:
+        raise RuntimeError(
+            "Index 'idx_messages_ts_unique' conflicts with the required "
+            "non-partial unique index on messages(ts); rename or replace "
+            "the conflicting index before retrying."
+        )
+
+
 def ts_unique_index_exists(runner: SQLRunner) -> bool:
-    """Return whether the SQLite timestamp unique index exists."""
-    rows = list(runner.run(CHECK_TS_UNIQUE_INDEX, fetch=True))
-    return bool(rows and rows[0][0])
+    """Return whether one non-partial unique index covers only ``messages.ts``."""
+
+    exists, _conflict = _timestamp_unique_index_state(runner)
+    return exists
 
 
 def duplicate_timestamps_exist(runner: SQLRunner) -> bool:
@@ -185,13 +255,15 @@ def ensure_schema_v3(
     if current_version < 2:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
-    has_unique_index = ts_unique_index_exists(runner)
+    has_unique_index, owned_name_conflicts = _timestamp_unique_index_state(runner)
+    _reject_conflicting_timestamp_index_name(owned_name_conflicts)
     if current_version >= 3 and has_unique_index:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
     runner.begin_immediate()
     try:
-        has_unique_index = ts_unique_index_exists(runner)
+        has_unique_index, owned_name_conflicts = _timestamp_unique_index_state(runner)
+        _reject_conflicting_timestamp_index_name(owned_name_conflicts)
         if not has_unique_index:
             if duplicate_timestamps_exist(runner):
                 raise RuntimeError(
@@ -261,6 +333,9 @@ def ensure_schema_v5(
     if current_version >= 5:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         runner.begin_immediate()
         try:
+            for drop_sql in DROP_OLD_INDEXES:
+                runner.run(drop_sql)
+            runner.run(CREATE_QUEUE_TS_ID_INDEX)
             runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
             runner.commit()
         except Exception:
@@ -273,6 +348,9 @@ def ensure_schema_v5(
 
     try:
         runner.begin_immediate()
+        for drop_sql in DROP_OLD_INDEXES:
+            runner.run(drop_sql)
+        runner.run(CREATE_QUEUE_TS_ID_INDEX)
         runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
         write_schema_version(5)
         runner.commit()

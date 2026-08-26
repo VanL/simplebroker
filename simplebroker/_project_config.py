@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tomllib
 from collections.abc import Mapping
@@ -44,22 +45,9 @@ def _warn_for_inline_project_config_password(config_path: Path, target: str) -> 
 def _validated_backend_options(raw_options: object) -> dict[str, Any]:
     match raw_options:
         case dict() as raw_options_dict:
-            pass
+            return dict(raw_options_dict)
         case _:
             raise ValueError("'backend_options' must be a table in .broker.toml")
-
-    options: dict[str, Any] = {}
-    for key, value in raw_options_dict.items():
-        match value:
-            case str() | int() | float() | bool():
-                pass
-            case _:
-                raise ValueError(
-                    "'backend_options' values must be strings, integers, floats, "
-                    "or booleans in .broker.toml"
-                )
-        options[str(key)] = value
-    return options
 
 
 def load_project_config(config_path: Path) -> dict[str, Any]:
@@ -94,6 +82,49 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
 
 def _config_snapshot(config: Mapping[str, Any] | None) -> ResolvedConfig:
     return snapshot_config(config)
+
+
+def _require_lossless_backend_options(
+    backend_name: str,
+    backend_options: dict[str, Any],
+) -> None:
+    """Enforce the existing JSON target-transport boundary after plugin return."""
+
+    def is_exact_json_value(value: Any) -> bool:
+        value_type = type(value)
+        if value is None or value_type in {bool, int, float, str}:
+            return True
+        if value_type is list:
+            return all(is_exact_json_value(item) for item in value)
+        if value_type is dict:
+            return all(
+                type(key) is str and is_exact_json_value(item)
+                for key, item in value.items()
+            )
+        return False
+
+    failure: BaseException | None
+    try:
+        encoded = json.dumps(
+            backend_options,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if not is_exact_json_value(backend_options):
+            raise TypeError("backend_options contain a non-JSON-native type")
+        restored = json.loads(encoded)
+    except (TypeError, ValueError, OverflowError) as exc:
+        failure = exc
+    else:
+        if restored == backend_options:
+            return
+        failure = None
+    raise ValueError(
+        f"Backend plugin '{backend_name}' returned backend_options that are not "
+        "lossless through BrokerTarget serialization; normalize TOML-native "
+        "values or reject them in the plugin"
+    ) from failure
 
 
 def project_config_path_for_directory(
@@ -168,26 +199,27 @@ def resolve_project_target(
     target = config_data["target"]
     backend_options = dict(config_data["backend_options"])
 
+    config_dict = _overlay_config(
+        snapshot_config(config),
+        {"BROKER_BACKEND_TARGET": ""},
+    )
+    # The selected plugin owns option validation and normalization, including
+    # for SQLite. Project values are not replaced by ambient target state.
+    resolved = plugin.init_backend(
+        config_dict,
+        toml_target=target,
+        toml_options=backend_options,
+    )
+    target = str(resolved["target"])
+    backend_options = dict(resolved["backend_options"])
+    _require_lossless_backend_options(backend_name, backend_options)
+
     if backend_name == "sqlite":
         resolved_target = (config_path.parent / target).expanduser().resolve()
         _validate_safe_path_components(
             str(resolved_target), ".broker.toml sqlite target"
         )
         target = str(resolved_target)
-    else:
-        config_dict = _overlay_config(
-            snapshot_config(config),
-            {"BROKER_BACKEND_TARGET": ""},
-        )
-        # Project config owns the target. Backends receive it through the TOML
-        # arguments rather than through ambient BROKER_BACKEND_TARGET.
-        resolved = plugin.init_backend(
-            config_dict,
-            toml_target=target,
-            toml_options=backend_options,
-        )
-        target = str(resolved["target"])
-        backend_options = dict(resolved["backend_options"])
 
     return BrokerTarget(
         backend_name=backend_name,

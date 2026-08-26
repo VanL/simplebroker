@@ -105,8 +105,9 @@ def test_cli_vacuum_json_structures_post_parse_target_error(workdir: Path):
     assert returncode == 1
     assert stdout == ""
     payload = json.loads(stderr)
-    assert tuple(payload) == ("error", "message", "retryable")
+    assert set(payload) == {"error", "message", "retryable"}
     assert payload["error"] == "INVALID_ARGUMENT"
+    assert isinstance(payload["message"], str)
     assert payload["retryable"] is False
     assert "Traceback" not in stderr
 
@@ -122,8 +123,9 @@ def test_cli_vacuum_json_structures_corrupt_target_error(workdir: Path):
     assert returncode == 1
     assert stdout == ""
     payload = json.loads(stderr)
-    assert tuple(payload) == ("error", "message", "retryable")
+    assert set(payload) == {"error", "message", "retryable"}
     assert payload["error"] == "ERROR"
+    assert isinstance(payload["message"], str)
     assert payload["retryable"] is False
     assert "Traceback" not in stderr
 

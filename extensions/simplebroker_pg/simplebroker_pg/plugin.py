@@ -43,6 +43,7 @@ from .validation import (
     inspect_schema,
     quote_ident,
     require_schema_name,
+    validate_schema_inspection,
     validate_target,
 )
 
@@ -538,11 +539,7 @@ class PostgresBackendPlugin:
     ) -> None:
         resolved_config = snapshot_config(config)
         inspection = inspect_schema(target, backend_options=backend_options)
-        if inspection.state not in {SchemaState.ABSENT, SchemaState.OWNED}:
-            raise DatabaseError(
-                f"Schema '{inspection.schema}' is not available for SimpleBroker init: "
-                f"{inspection.state.value}"
-            )
+        validate_schema_inspection(inspection, verify_initialized=False)
 
         runner = self.create_runner(
             target,

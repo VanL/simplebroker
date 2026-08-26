@@ -595,10 +595,16 @@ def resolve_runner_backend_plugin(
 
 def _load_entry_point_plugin(name: str) -> BackendPlugin:
     """Load an external backend plugin by entry point name."""
-    matches = metadata.entry_points().select(
-        group=BACKEND_ENTRY_POINT_GROUP,
-        name=name,
+    matches = list(
+        metadata.entry_points().select(
+            group=BACKEND_ENTRY_POINT_GROUP,
+            name=name,
+        )
     )
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"Ambiguous backend plugin '{name}': {len(matches)} matching entry points"
+        )
 
     for entry_point in matches:
         try:

@@ -152,7 +152,7 @@ def test_postgres_runner_skips_schema_ddl_after_bootstrap() -> None:
 
         original_run = second_runner.run
 
-        def tracked_run(sql, params=(), *, fetch=False):  # type: ignore[no-untyped-def]
+        def tracked_run(sql, params=(), *, fetch=False):
             seen_sql.append(sql)
             return original_run(sql, params, fetch=fetch)
 
@@ -284,7 +284,7 @@ def test_postgres_project_persistent_queues_share_plugin_runner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Same-target persistent Queue handles should allocate one pg runner."""
+    """Project bootstrap is isolated; persistent queues share one runtime runner."""
     schema = _schema_name()
     dsn = _require_test_dsn()
     project_root = tmp_path / "project"
@@ -310,7 +310,7 @@ def test_postgres_project_persistent_queues_share_plugin_runner(
     create_runner_calls = 0
     runner_ids: list[int] = []
 
-    def tracked_create_runner(target, *, backend_options=None, config=None):  # type: ignore[no-untyped-def]
+    def tracked_create_runner(target, *, backend_options=None, config=None):
         nonlocal create_runner_calls
         create_runner_calls += 1
         runner = original_create_runner(
@@ -340,8 +340,10 @@ def test_postgres_project_persistent_queues_share_plugin_runner(
             backend_options={"schema": schema},
         )
 
-    assert create_runner_calls == 1
-    assert len(set(runner_ids)) == 1
+    # The phase-lock owner uses one short-lived bootstrap runner. The three
+    # persistent handles then share exactly one process-session runner.
+    assert create_runner_calls == 2
+    assert len(set(runner_ids)) == 2
 
 
 def test_postgres_cli_env_selected_backend_roundtrip(tmp_path: Path) -> None:

@@ -95,6 +95,28 @@ parent-directory permissions, or ACLs. Confidentiality and integrity of the
 config path are governed by the effective operating-system permissions across
 the file and its containing directories.
 
+A project file's `backend_options` value must be a TOML table. Its recursive
+TOML-native values, including nested tables and arrays, are passed unchanged to
+the selected backend plugin; the core project loader does not impose a scalar-
+only option schema before plugin dispatch. The plugin owns option validation
+and normalization and returns an ordinary options dictionary that remains
+lossless through `BrokerTarget` serialization. SQLite follows the same
+ownership rule and rejects or normalizes its options through its plugin rather
+than bypassing plugin validation. TOML date/time values reach the plugin as
+native values; a plugin must normalize them to lossless target transport values
+or reject them explicitly rather than relying on the core to coerce them.
+
+Process-session identity preserves type distinctions within recursively
+supported option and configuration values. It does not merge distinct opaque
+values solely because their `repr()` strings match. When no stable value
+representation exists, process-local object identity is the safe fallback:
+creating an extra session is acceptable; sharing a session across distinct
+backend configuration is not. At session acquisition, supported mutable
+containers are recursively detached once, and the same detached snapshot is
+used for both registry identity and lazy factory construction. Later nested
+mutation of the source target or config cannot make a stored key describe
+different factory inputs.
+
 `load_config()` remains the strict complete environment parser.
 `resolve_config(None|ordinary_mapping)` performs a fresh strict read of the
 current environment/default base, applies ordinary overrides, preserves
@@ -157,6 +179,7 @@ _Implementation mapping_:
 - `simplebroker/_constants.py`
 - `simplebroker/project.py`
 - `simplebroker/_project_config.py`
+- `simplebroker/_key_material.py` and `simplebroker/_broker_session.py`
 - `simplebroker/db.py` (`open_broker`)
 - `simplebroker/_targets.py` / target types via public re-exports
 
@@ -575,6 +598,47 @@ first-party extension requires a backend API version bump. Fork recovery
 replaces inherited process-owned locks and resources before any affected lock
 acquisition in the child.
 
+Backend target admission separates four questions: whether the target is owned
+by SimpleBroker, whether its stored version is older, current, or newer than
+this implementation, whether current-version correctness postconditions hold,
+and whether a setup coordination phase previously completed. An older owned
+target reaches its migration path, or an explicit owned-but-unsupported
+diagnostic when that backend has no migration. A newer owned target is rejected
+before any connection-wide setup or SimpleBroker-authored durable schema,
+index, metadata, or marker mutation. Opening the one normal SQLite connection,
+applying connection-local settings, and SQLite's own recovery or WAL
+coordination are outside that durable-state invariant. Foreign, malformed, and
+irrecoverably partial targets remain rejected. Absent targets and backend
+namespaces that are present but empty may be initialized; initialization never
+overwrites a foreign or partial target.
+
+A SQLite `schema-vN` phase marker is a cache hint, not schema proof. The marker
+may skip idempotent migration and repair only when database-internal proof
+metadata names the current proof algorithm and records the current SQLite
+`PRAGMA schema_version` cookie. Missing or stale proof takes the existing schema
+lock, rechecks state, runs the fact-level slow path, and republishes proof before
+phase completion. Matching proof requires only scalar metadata reads and does
+not perform table, index, or message scans on ordinary open. Proof metadata is
+additive and optional to older clients; it does not require a stored schema-
+version bump.
+
+Proof means only that the existing idempotent setup, migration, and repair
+routine completed successfully for this SQLite schema generation using the
+current proof algorithm. It is not a general schema attestation and does not
+attest mutable metadata or message data. The slow path remains the single owner
+of schema correctness; proof publication must not add a second schema validator
+that can drift from it.
+
+A backend entry-point name must resolve to exactly one installed entry point.
+Ambiguous duplicate registrations fail before either candidate is loaded.
+
+Process-session shutdown attempts every ordinary core, factory, and remaining
+registry cleanup that is still safe after an `Exception`. One ordinary cleanup
+exception remains primary using the existing convention; later failures remain
+available as diagnostics, but their order is not public behavior. A
+`BaseException` outside `Exception` retains its existing propagation priority
+and may interrupt later cleanup.
+
 Persistence helpers are public from the package root. The exact load interface
 is `load_lines(broker, lines, *, force=False, config=None)`; its policy and
 failure order are `[SB-IO-4]`. `DumpClockSkewWarning` is a public `UserWarning`
@@ -588,6 +652,8 @@ strings.
 
 _Implementation mapping_:
 - `simplebroker/ext.py` and its re-export sources
+- `simplebroker/db.py`, `simplebroker/_runner.py`, `simplebroker/_phaselock.py`
+- `simplebroker/_backend_plugins.py`, `simplebroker/_broker_session.py`
 - first-party `extensions/simplebroker_pg`, `extensions/simplebroker_redis`
 
 ## Cross-surface matrix [SB-API-12]
@@ -691,7 +757,7 @@ _Implementation mapping_:
 | Clause | Firing evidence |
 |--------|-----------------|
 | [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`, `::test_api_moved_message_is_package_root_public`, `::test_api_closeable_peek_iterator_contract`; `tests/test_queue_typing_contract.py`; `tests/test_dev_scripts.py` (isolated root wheel/sdist import and published-artifact verification); `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
-| [SB-API-2] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_target_discovery_samples_environment_for_each_call`; `tests/test_project_config.py::test_project_config_warns_for_inline_url_password`, `tests/test_project_config.py::test_project_config_warns_for_inline_conninfo_password`, `tests/test_project_config.py::test_project_config_does_not_judge_group_or_other_mode_bits`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
+| [SB-API-2] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_target_discovery_samples_environment_for_each_call`; `tests/test_project_config.py` (recursive plugin-owned options, TOML-native normalization/rejection, target serialization, and SQLite rejection); `tests/test_process_broker_session.py` (type/opaque identity, one recursive key/factory snapshot, and all SQLite public option paths); `tests/test_activity_waiter_api.py::test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
 | [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_backend_plugin_resolution.py` (built-in, third-party, and injected-runner backend identity without target I/O); `tests/test_connection_config.py::test_ephemeral_queue_keeps_constructor_snapshot_after_invalid_env_change`, `tests/test_connection_config.py::test_new_queue_observes_later_environment_while_existing_queue_stays_fixed`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py` (high-level `all_messages=True` path); `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`, `::test_queue_delete_explicit_none_is_rejected_without_mutation`, `::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py` (library-shape language + matrix); delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_closeable_peek_iterator_contract`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_reads_ordinary_override_on_first_iteration`; Queue generator / `*_many` suites |
@@ -700,7 +766,7 @@ _Implementation mapping_:
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`, including `test_load_samples_environment_for_each_invocation` |
 | [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_invalid_config_lifecycle.py::test_invalid_environment_does_not_break_package_import`, `tests/test_invalid_config_lifecycle.py::test_sensitive_config_failure_redacts_before_formatting`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
 | [SB-API-10] | `tests/test_commands_error_ownership.py` (direct invalid-input/operational exceptions, selector parity, delete no-mutation, queue/all delete result, and CLI-owned diagnostic boundary); `tests/test_commands_status.py`; `tests/test_commands_init.py`; `tests/test_cli_dump_load.py`; `tests/test_dump_load.py::test_quiet_cmd_load_does_not_hide_another_threads_clock_skew_warning`, `test_cmd_load_warning_policy_resets_after_success`, `test_cmd_load_warning_policy_resets_after_every_failure`, `test_load_warning_sink_restores_outer_nested_policy`; `tests/test_commands_stdout_delivery.py` (exact direct stdout inventory, write-versus-flush failures, mutation durability, and bare-stdout static gate); `tests/test_cli_main.py::test_keyboard_interrupt_handling`; `tests/test_cli_watch.py::TestWatchCommand::test_watch_sigint_remains_success`; `tests/test_cli_main.py::test_repeated_main_calls_rebuild_defaults_from_invocation_snapshot`; `tests/test_public_surface.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_invalid_config_lifecycle.py::test_direct_commands_raise_when_their_path_consumes_invalid_config`, `tests/test_invalid_config_lifecycle.py::test_direct_command_early_validation_can_remain_config_independent`, `tests/test_invalid_config_lifecycle.py::test_repeated_direct_command_calls_sample_current_environment` |
-| [SB-API-11] | `tests/test_python_library_api_contract_sb_api.py::test_api_owned_runner_lifecycle_and_backend_v7_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_load_future_skew_surface_is_root_importable_and_keyword_only`; `tests/test_custom_runner_integration.py::test_sql_borrowed_runner_masks_destructive_verbs_across_teardown`; `tests/test_core_persistence_transition_tables.py::test_sqlite_runner_fires_transition_table` (`CLOSE_REOPEN`); `tests/test_runner_lifecycle.py`; `tests/test_backend_plugin_resolution.py`, including `test_sqlite_initialize_target_passes_config_snapshot_to_broker`; `extensions/simplebroker_pg/tests/test_pg_plugin_contract_edges.py::test_initialize_target_passes_one_config_snapshot_to_runner_and_core`; `extensions/simplebroker_redis/tests/test_redis_plugin_contract_edges.py::test_plugin_runner_receipt_keeps_marker_out_of_redundant_config_path`, `test_direct_runner_snapshots_environment_when_pool_options_are_missing`, `test_cleanup_reuses_one_snapshot_for_runner_and_core`; `tests/test_release_script.py::test_repository_backend_api_v7_handshake_and_floors_match`; `tests/test_dump_load.py::test_load_header_floor_persists_when_local_cache_is_ahead`, `tests/test_dump_load.py::test_load_header_floor_observes_concurrent_durable_winner`, `tests/test_dump_load.py::test_load_header_floor_final_read_failure_is_outcome_ambiguous`; `tests/test_timestamp_advance.py`; `extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py::test_postgres_missing_last_ts_row_fails_loudly`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval`; `tests/test_timestamp_bound_grammar.py` (public validator grammar and exact ISO conversion) |
+| [SB-API-11] | `tests/test_python_library_api_contract_sb_api.py::test_api_owned_runner_lifecycle_and_backend_v7_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_load_future_skew_surface_is_root_importable_and_keyword_only`; `tests/test_sqlite_admission.py` (early version admission, factual migration receipts, scalar proof fast path, stale/missing/fault/concurrent proof cases); `tests/test_sqlite_schema.py` (semantic uniqueness); `tests/test_phaselock.py`; `tests/test_process_broker_session.py` (continued cleanup and diagnostics); `tests/test_custom_runner_integration.py::test_sql_borrowed_runner_masks_destructive_verbs_across_teardown`; `tests/test_core_persistence_transition_tables.py::test_sqlite_runner_fires_transition_table` (`CLOSE_REOPEN`); `tests/test_runner_lifecycle.py`; `tests/test_backend_plugin_resolution.py` (including duplicate ambiguity before load); `extensions/simplebroker_pg/tests/test_pg_schema_validation_paths.py`, `test_pg_plugin_contract_edges.py`, `test_pg_ownership.py`; `extensions/simplebroker_redis/tests/test_redis_validation.py`, `test_redis_plugin_validation_paths.py`, `test_redis_plugin_contract_edges.py`; `tests/test_release_script.py::test_repository_backend_api_v7_handshake_and_floors_match`; `tests/test_dump_load.py::test_load_header_floor_persists_when_local_cache_is_ahead`, `tests/test_dump_load.py::test_load_header_floor_observes_concurrent_durable_winner`, `tests/test_dump_load.py::test_load_header_floor_final_read_failure_is_outcome_ambiguous`; `tests/test_timestamp_advance.py`; `extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py::test_postgres_missing_last_ts_row_fails_loudly`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval`; `tests/test_timestamp_bound_grammar.py` (public validator grammar and exact ISO conversion) |
 | [SB-API-12] | `tests/test_python_library_api_contract_sb_api.py` (matrix present); kernel CLI↔Python map |
 | [SB-API-13] | `tests/test_python_library_api_contract_sb_api.py::test_api_postgres_connection_inspection_contract`; `tests/test_backend_probe.py`; `extensions/simplebroker_pg/tests/test_connection_stats.py` (shape, ordinary role, cross-role/database, lifecycle, autovacuum, PG15, and PG18) |
 
@@ -709,6 +775,9 @@ _Implementation mapping_:
 - active: [2026-08-25-postgres-connection-pressure-inspection-plan](../plans/2026-08-25-postgres-connection-pressure-inspection-plan.md)
   — PostgreSQL-only zero-setup connection pressure through the Queue's normal
   connection lifecycle
+- active: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
+  — storage admission/proof, backend target states, session identity/cleanup,
+  and plugin uniqueness
 - active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
   — borrowed-runner teardown, watcher iterator cleanup, command results and
   warning ownership, and exact bounded timestamp parsing

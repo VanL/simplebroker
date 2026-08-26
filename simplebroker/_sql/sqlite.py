@@ -181,7 +181,7 @@ WHERE id IN (
     ORDER BY id
     LIMIT ?
 )
-RETURNING body, ts
+RETURNING id, body, ts
 """
 
 # Move operation - change queue
@@ -194,7 +194,7 @@ WHERE id IN (
     ORDER BY id
     LIMIT ?
 )
-RETURNING body, ts
+RETURNING id, body, ts
 """
 
 # Check for pending messages

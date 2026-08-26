@@ -5,12 +5,14 @@ from __future__ import annotations
 import ast
 import concurrent.futures as cf
 import contextlib
+import gc
 import os
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import weakref
 from collections.abc import Iterator
 from importlib.metadata import EntryPoint
 from pathlib import Path
@@ -19,7 +21,7 @@ from typing import Any, cast
 import pytest
 
 import simplebroker._broker_session as broker_session_module
-from simplebroker import Queue, resolve_isolated_config
+from simplebroker import Queue, open_broker, resolve_isolated_config
 from simplebroker._backend_plugins import BACKEND_ENTRY_POINT_GROUP
 from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
 from simplebroker._broker_session import (
@@ -119,6 +121,8 @@ class CountingBackendPlugin:
         self.runner_close_calls = 0
         self.runner_release_calls = 0
         self.runner_lease_calls = 0
+        self.runner_backend_options: list[dict[str, Any]] = []
+        self.runner_configs: list[dict[str, Any]] = []
 
     def create_runner(
         self,
@@ -127,8 +131,9 @@ class CountingBackendPlugin:
         backend_options: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
     ) -> CountingSQLiteRunner:
-        del backend_options, config
         self.create_runner_calls += 1
+        self.runner_backend_options.append(dict(backend_options or {}))
+        self.runner_configs.append(dict(config or {}))
         return CountingSQLiteRunner(target, self)
 
     def __getattr__(self, name: str) -> Any:
@@ -430,6 +435,256 @@ def test_persistent_queues_different_backend_options_do_not_share_backend_runner
     assert counting_backend.create_runner_calls == 2
 
 
+def test_persistent_sqlite_target_does_not_silently_discard_backend_options(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "sqlite-options.db"
+    with pytest.raises(
+        ValueError,
+        match="SQLite backend does not support backend_options",
+    ):
+        Queue(
+            "jobs",
+            db_path=BrokerTarget(
+                "sqlite",
+                str(db_path),
+                {"pool": {"size": 2}},
+            ),
+            persistent=True,
+        )
+
+    assert not db_path.exists()
+
+
+def test_ephemeral_sqlite_target_does_not_silently_discard_backend_options(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "ephemeral-sqlite-options.db"
+    queue = Queue(
+        "jobs",
+        db_path=BrokerTarget(
+            "sqlite",
+            str(db_path),
+            {"pool": {"size": 2}},
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="SQLite backend does not support backend_options",
+    ):
+        queue.write("payload")
+
+    assert not db_path.exists()
+
+
+def test_open_broker_sqlite_target_does_not_silently_discard_backend_options(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "open-broker-sqlite-options.db"
+    target = BrokerTarget(
+        "sqlite",
+        str(db_path),
+        {"pool": {"size": 2}},
+    )
+
+    with (
+        pytest.raises(
+            ValueError,
+            match="SQLite backend does not support backend_options",
+        ),
+        open_broker(target),
+    ):
+        pass
+
+    assert not db_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("left_value", "right_value"),
+    [(True, 1), (1, 1.0), (True, 1.0)],
+)
+def test_type_distinct_backend_options_do_not_share_process_session(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+    left_value: object,
+    right_value: object,
+) -> None:
+    with contextlib.ExitStack() as stack:
+        queue_a = stack.enter_context(
+            Queue(
+                "a",
+                db_path=counting_target(tmp_path, mode=left_value),
+                persistent=True,
+            )
+        )
+        queue_b = stack.enter_context(
+            Queue(
+                "b",
+                db_path=counting_target(tmp_path, mode=right_value),
+                persistent=True,
+            )
+        )
+        queue_a.write("one")
+        queue_b.write("two")
+
+    assert counting_backend.create_runner_calls == 2
+
+
+def test_same_repr_opaque_options_do_not_share_process_session(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+) -> None:
+    class SameRepr:
+        def __repr__(self) -> str:
+            return "same-repr"
+
+    with contextlib.ExitStack() as stack:
+        queue_a = stack.enter_context(
+            Queue(
+                "a",
+                db_path=counting_target(tmp_path, opaque=SameRepr()),
+                persistent=True,
+            )
+        )
+        queue_b = stack.enter_context(
+            Queue(
+                "b",
+                db_path=counting_target(tmp_path, opaque=SameRepr()),
+                persistent=True,
+            )
+        )
+        queue_a.write("one")
+        queue_b.write("two")
+
+    assert counting_backend.create_runner_calls == 2
+
+
+def test_opaque_session_identity_retains_its_object() -> None:
+    class Opaque:
+        pass
+
+    opaque = Opaque()
+    retained = weakref.ref(opaque)
+    key = _session_key(
+        BrokerTarget("sqlite", "opaque-key.db", {"opaque": opaque}),
+        resolve_isolated_config({}),
+    )
+
+    del opaque
+    gc.collect()
+
+    assert retained() is not None
+    del key
+    gc.collect()
+    assert retained() is None
+
+
+def test_list_and_tuple_options_do_not_share_process_session(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+) -> None:
+    with contextlib.ExitStack() as stack:
+        queue_a = stack.enter_context(
+            Queue(
+                "a",
+                db_path=counting_target(tmp_path, nested=["value"]),
+                persistent=True,
+            )
+        )
+        queue_b = stack.enter_context(
+            Queue(
+                "b",
+                db_path=counting_target(tmp_path, nested=("value",)),
+                persistent=True,
+            )
+        )
+        queue_a.write("one")
+        queue_b.write("two")
+
+    assert counting_backend.create_runner_calls == 2
+
+
+def test_mapping_and_set_permutations_share_process_session(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+) -> None:
+    target_a = counting_target(
+        tmp_path,
+        nested={"second": [2], "first": [1]},
+        members={"beta", "alpha"},
+    )
+    target_b = counting_target(
+        tmp_path,
+        members={"alpha", "beta"},
+        nested={"first": [1], "second": [2]},
+    )
+
+    with contextlib.ExitStack() as stack:
+        queue_a = stack.enter_context(Queue("a", db_path=target_a, persistent=True))
+        queue_b = stack.enter_context(Queue("b", db_path=target_b, persistent=True))
+        queue_a.write("one")
+        queue_b.write("two")
+
+    assert counting_backend.create_runner_calls == 1
+
+
+def test_session_key_and_lazy_factory_share_one_recursive_snapshot(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+) -> None:
+    opaque = object()
+    target = counting_target(
+        tmp_path,
+        pool={"hosts": ["primary"]},
+        opaque=opaque,
+    )
+    metadata = {"labels": ["original"]}
+    config = resolve_isolated_config(
+        {"BROKER_EMBEDDER_METADATA": metadata},
+        preserve_unknown=True,
+    )
+    queue_a = Queue(
+        "a",
+        db_path=target,
+        persistent=True,
+        config=config,
+    )
+
+    target.backend_options["pool"]["hosts"].append("mutated")
+    config["BROKER_EMBEDDER_METADATA"]["labels"].append("mutated")
+
+    original_target = counting_target(
+        tmp_path,
+        pool={"hosts": ["primary"]},
+        opaque=opaque,
+    )
+    original_config = resolve_isolated_config(
+        {"BROKER_EMBEDDER_METADATA": {"labels": ["original"]}},
+        preserve_unknown=True,
+    )
+    queue_b = Queue(
+        "b",
+        db_path=original_target,
+        persistent=True,
+        config=original_config,
+    )
+
+    try:
+        queue_a.write("one")
+        queue_b.write("two")
+    finally:
+        queue_a.close()
+        queue_b.close()
+
+    assert counting_backend.create_runner_calls == 1
+    assert counting_backend.runner_backend_options[0]["pool"] == {"hosts": ["primary"]}
+    assert counting_backend.runner_backend_options[0]["opaque"] is opaque
+    assert counting_backend.runner_configs[0]["BROKER_EMBEDDER_METADATA"] == {
+        "labels": ["original"]
+    }
+
+
 def test_persistent_queues_different_config_do_not_share_backend_runner(
     tmp_path: Path,
     counting_backend: CountingBackendPlugin,
@@ -452,6 +707,33 @@ def test_persistent_queues_different_config_do_not_share_backend_runner(
                 persistent=True,
                 config={"BROKER_BUSY_TIMEOUT": 2000},
             )
+        )
+        queue_a.write("one")
+        queue_b.write("two")
+
+    assert counting_backend.create_runner_calls == 2
+
+
+def test_type_distinct_config_extras_do_not_share_process_session(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+) -> None:
+    target = counting_target(tmp_path, schema="same")
+    config_a = resolve_isolated_config(
+        {"BROKER_EMBEDDER_METADATA": True},
+        preserve_unknown=True,
+    )
+    config_b = resolve_isolated_config(
+        {"BROKER_EMBEDDER_METADATA": 1},
+        preserve_unknown=True,
+    )
+
+    with contextlib.ExitStack() as stack:
+        queue_a = stack.enter_context(
+            Queue("a", db_path=target, persistent=True, config=config_a)
+        )
+        queue_b = stack.enter_context(
+            Queue("b", db_path=target, persistent=True, config=config_b)
         )
         queue_a.write("one")
         queue_b.write("two")
@@ -919,6 +1201,108 @@ def test_closed_session_rejects_connections_and_extra_releases(tmp_path: Path) -
     session.release_current_thread_connection()
 
 
+def test_process_session_close_attempts_every_safe_cleanup_after_exceptions() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-030] exception
+    class Core:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def set_stop_event(self, stop_event: threading.Event | None) -> None:
+            del stop_event
+
+    class FailingFactory:
+        def __init__(self) -> None:
+            self._create_lock = threading.Lock()
+            self.created = 0
+            self.core_close_calls: list[str] = []
+            self.close_calls = 0
+
+        def create(self, stop_event: threading.Event | None) -> Core:
+            del stop_event
+            with self._create_lock:
+                label = f"core-{self.created}"
+                self.created += 1
+            return Core(label)
+
+        def close_core(self, core: Core) -> None:
+            self.core_close_calls.append(core.label)
+            raise RuntimeError(f"{core.label} close failed")
+
+        def close(self) -> None:
+            self.close_calls += 1
+            raise RuntimeError("factory close failed")
+
+    factory = FailingFactory()
+    session = _ProcessBrokerSession(cast(Any, factory))
+    all_created = threading.Barrier(4)
+
+    def create_thread_core() -> None:
+        session.get_connection(None, lease_operation=False)
+        all_created.wait(timeout=_LIVENESS)
+
+    workers = [threading.Thread(target=create_thread_core) for _ in range(3)]
+    for worker in workers:
+        worker.start()
+    all_created.wait(timeout=_LIVENESS)
+    for worker in workers:
+        worker.join(timeout=_LIVENESS)
+    assert all(not worker.is_alive() for worker in workers)
+
+    with pytest.raises(RuntimeError, match="close failed") as caught:
+        session.close_all()
+
+    diagnostics = "\n".join(
+        [str(caught.value), *getattr(caught.value, "__notes__", ())]
+    )
+    assert set(factory.core_close_calls) == {"core-0", "core-1", "core-2"}
+    assert factory.close_calls == 1
+    for label in ("core-0", "core-1", "core-2", "factory"):
+        assert f"{label} close failed" in diagnostics
+
+    session.close_all()
+    assert len(factory.core_close_calls) == 3
+    assert factory.close_calls == 1
+
+
+def test_process_session_cleanup_base_exception_keeps_priority() -> None:
+    interruption = KeyboardInterrupt("cleanup interrupted")
+
+    class Core:
+        def set_stop_event(self, stop_event: threading.Event | None) -> None:
+            del stop_event
+
+    class InterruptingFactory:
+        def __init__(self) -> None:
+            self.core_close_calls = 0
+            self.close_calls = 0
+
+        def create(self, stop_event: threading.Event | None) -> Core:
+            del stop_event
+            return Core()
+
+        def close_core(self, core: Core) -> None:
+            del core
+            self.core_close_calls += 1
+            raise interruption
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    factory = InterruptingFactory()
+    session = _ProcessBrokerSession(cast(Any, factory))
+    session.get_connection(None, lease_operation=False)
+
+    with pytest.raises(KeyboardInterrupt, match="cleanup interrupted") as caught:
+        session.close_all()
+
+    assert caught.value is interruption
+    assert factory.core_close_calls == 1
+    assert factory.close_calls == 0
+
+    session.close_all()
+    assert factory.core_close_calls == 1
+    assert factory.close_calls == 0
+
+
 @pytest.mark.parametrize(
     ("branch", "supports_lease", "release_fails"),
     [
@@ -1046,6 +1430,56 @@ def test_registry_shutdown_closes_live_sessions_and_tolerates_late_release(
     registry.release(key)
 
     assert session._closed
+
+
+def test_registry_shutdown_attempts_every_session_after_cleanup_exceptions(
+    tmp_path: Path,
+) -> None:
+    close_calls: list[str] = []
+
+    class FailingFactory:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def create(self, stop_event: threading.Event | None) -> Any:
+            raise AssertionError(f"unexpected create for {self.label}: {stop_event}")
+
+        def close_core(self, core: Any) -> None:
+            raise AssertionError(f"unexpected core for {self.label}: {core}")
+
+        def close(self) -> None:
+            close_calls.append(self.label)
+            raise RuntimeError(f"{self.label} session close failed")
+
+    registry = _ProcessBrokerSessionRegistry()
+    config = resolve_isolated_config({})
+
+    def build_factory(spec: Any) -> FailingFactory:
+        return FailingFactory(Path(spec.target).name)
+
+    registry.acquire(
+        str(tmp_path / "first.db"),
+        config=config,
+        factory_builder=build_factory,
+    )
+    registry.acquire(
+        str(tmp_path / "second.db"),
+        config=config,
+        factory_builder=build_factory,
+    )
+
+    with pytest.raises(RuntimeError, match="session close failed") as caught:
+        registry.close_all()
+
+    diagnostics = "\n".join(
+        [str(caught.value), *getattr(caught.value, "__notes__", ())]
+    )
+    assert set(close_calls) == {"first.db", "second.db"}
+    assert "first.db session close failed" in diagnostics
+    assert "second.db session close failed" in diagnostics
+
+    registry.close_all()
+    assert len(close_calls) == 2
 
 
 def test_registry_builds_factory_only_for_new_session_key(tmp_path: Path) -> None:

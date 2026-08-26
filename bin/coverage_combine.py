@@ -98,13 +98,15 @@ def _repair_schema_version_marker(path: Path) -> bool:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-        if tables != set(_COVERAGE_SCHEMA_COLUMNS):
+        # Coverage reads these by name. The settlement path's post-repair
+        # CoverageData.read() is the authority for compatible representation.
+        if not set(_COVERAGE_SCHEMA_COLUMNS).issubset(tables):
             return False
         for table, expected_columns in _COVERAGE_SCHEMA_COLUMNS.items():
-            columns = tuple(
+            columns = {
                 str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")
-            )
-            if columns != expected_columns:
+            }
+            if not set(expected_columns).issubset(columns):
                 return False
         version_rows = connection.execute(
             "SELECT version FROM coverage_schema"

@@ -29,7 +29,7 @@ from ._constants import (
 )
 from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
 from ._exceptions import QueueNameError
-from ._key_material import FrozenValue, freeze_key_material
+from ._key_material import FrozenValue, freeze_key_material, snapshot_key_material
 from ._message_id import MessageIdInput
 from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
@@ -102,14 +102,16 @@ class _ActivityWaiterIdentity:
     plugin: BackendPlugin
     backend_name: str
     target_key: str | None
-    backend_options_key: FrozenValue
+    backend_options_key: FrozenValue | None
     runner_id: int | None
     target_arg: str | None
     backend_options_arg: dict[str, Any] | None
     runner_arg: SQLRunner | None
 
     @property
-    def compatibility_key(self) -> tuple[str, str | None, FrozenValue, int | None]:
+    def compatibility_key(
+        self,
+    ) -> tuple[str, str | None, FrozenValue | None, int | None]:
         return (
             self.backend_name,
             self.target_key,
@@ -1788,7 +1790,10 @@ class Queue:
                 if self._db_path.backend_name == "sqlite"
                 else target
             )
-            backend_options = dict(self._db_path.backend_options)
+            backend_options = cast(
+                dict[str, Any],
+                snapshot_key_material(self._db_path.backend_options),
+            )
             return _ActivityWaiterIdentity(
                 plugin=plugin,
                 backend_name=self._db_path.backend_name,

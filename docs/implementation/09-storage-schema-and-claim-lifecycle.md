@@ -31,16 +31,27 @@ CREATE TABLE messages (
 
 ## Ownership admission before setup
 
-An existing non-empty SQLite file is inspected through a read-only connection
-before runner setup can enable WAL or create schema. An explicit `meta.magic`
-value belonging to another product is rejected at that boundary. A missing
-table, missing value, absent file, or empty file is not treated as foreign:
-those states continue through the existing legacy/bootstrap path, which owns
-the final schema and validity diagnostics. This narrow three-state check avoids
-mutating a file that has positively identified another owner without inventing
-a second schema classifier.
+SQLite admission uses the runner's one normal connection. It does not open a
+read-only probe and then reopen for writes. Before any SimpleBroker setup phase,
+one scalar statement reads magic, stored schema version, optional proof rows,
+and SQLite's `PRAGMA schema_version` cookie from one SQLite statement snapshot.
+Foreign
+magic and a newer owned version fail at this point, before connection setup,
+bootstrap DDL, index cleanup, metadata writes, or marker mutation. Opening the
+normal connection may still perform SQLite-owned recovery and coordination.
+
+An absent `meta` table, missing value, absent file, or empty file is not treated
+as foreign. Those states continue under the existing schema lock, where an
+existing `messages` table follows legacy preparation and a target without it
+follows fresh bootstrap. This is not a current-shape classifier.
 
 ## Schema migration serialization and publication
+
+Fresh bootstrap publishes the current version only after its complete atomic
+schema transaction succeeds. A pre-existing unversioned `messages` table is
+instead seeded at version 1. Each later migration publishes its own version in
+the transaction that installs that version, so a failed v3 migration cannot
+durably claim v5.
 
 SQLite v2 and v3 upgrades use `BEGIN IMMEDIATE` before the schema state that
 controls a migration is read. The v2 claimed-column check and the v3 timestamp
@@ -48,7 +59,7 @@ index check are repeated under that write transaction, so another connection
 that wins before lock acquisition becomes observed state rather than an
 exception-message race. Repair of a missing v3 index uses the same transaction;
 an initial no-lock check may only skip work when an already-current database has
-the named index.
+an equivalent non-partial unique index over `messages.ts`.
 
 Before creating the v3 unique index, the migration queries for duplicate
 `messages.ts` values inside the owned transaction. Only that observed data
@@ -56,16 +67,30 @@ state produces the actionable duplicate-timestamp diagnostic. An unrelated
 `IntegrityError` from index creation propagates unchanged. Migration success
 does not depend on native exception prose.
 
-The claimed column and the named `idx_messages_ts_unique` index are checked
-again before their schema versions are written. The version callback writes on
-the same runner transaction in production, so neither its update nor the DDL is
-durable until commit succeeds. A callback used by a test may record that it was
-invoked even when the database transaction later rolls back; invocation is not
-publication.
+The claimed column and semantic timestamp-uniqueness rule are checked again
+before their schema versions are written. The version callback writes on the
+same runner transaction in production, so neither its update nor the DDL is
+durable until commit succeeds. A table-level `UNIQUE(ts)` autoindex or an
+equivalent named index satisfies v3 regardless of physical order. If the owned
+name `idx_messages_ts_unique` is occupied by a conflicting definition and no
+equivalent rule exists, setup fails without dropping it.
 
-The v3 postcondition deliberately checks only the established index name. It
-does not validate the index definition or repair a same-named index with a
-different shape.
+## Schema completion proof
+
+The path-level `schema-v5` marker is a coordination cache, not live schema
+proof. After the existing idempotent setup, migration, and repair routine
+succeeds, SimpleBroker records a proof-algorithm version and the current SQLite
+schema cookie in `meta`, then publishes the marker. A marker skips the slow path
+only when those scalar rows match. Missing proof or a changed cookie takes the
+same schema lock, rechecks proof there, and lets one owner run the existing slow
+path while waiters observe its receipt.
+
+The receipt deliberately does not attest columns, every index, mutable metadata,
+or message data. Ordinary open performs no schema inventory or data scan. A
+proof-algorithm bump invalidates an old receipt when the setup/repair algorithm
+changes without requiring a stored product-schema version bump. A crash after
+repair but before proof publication causes another idempotent pass; it cannot
+publish a false fast path.
 
 ## Concurrency and delivery realization
 
@@ -116,9 +141,12 @@ precedes result rendering. Output failure does not roll the mutation back, so
 the diagnostic directs callers to inspect state before retrying.
 
 **FIFO Ordering:** Messages are read in write order for a queue, regardless of
-which process wrote them. SQLite uses the autoincrement `id` plus serialized
-write transactions; other backends must preserve the same public ordering
-contract.
+which process wrote them. SQLite selects by autoincrement `id`, includes that
+private key in claim/move `RETURNING`, and one shared core helper sorts and
+strips it before either materialized return or generator yield. This avoids
+depending on SQLite's unspecified `RETURNING` order without changing the public
+row shape or backend API v7. PostgreSQL keeps its ordered two-column query and
+Redis keeps its direct-core ordering.
 
 **Message Lifecycle:**
 1. **Write Phase**: Message inserted with unique timestamp
@@ -266,6 +294,9 @@ Promoted to: none
 
 ## Related Plans
 
+- active: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
+  — single-connection admission, factual migration receipts, schema-proof
+  caching, semantic timestamp uniqueness, and SQLite FIFO normalization
 - active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
   — PostgreSQL vacuum session discard after uncertain unlock
 - completed: 2026-08-24-comprehensive-review-findings-remediation-plan —

@@ -23,6 +23,7 @@ Usage:
 import os
 import platform
 import re
+import unicodedata
 import warnings
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
@@ -106,6 +107,7 @@ COMPOUND_DB_NAME_PARTS: Final[int] = 2
 # Longest single path component accepted from configuration; matches the
 # common POSIX/NTFS per-component filename limit in bytes.
 _MAX_PATH_COMPONENT_LENGTH: Final[int] = 255
+_WINDOWS_MAX_PATH_LENGTH: Final[int] = 260
 
 # Safe-display bounds: ASCII control characters below space (0x20) and
 # DEL (0x7f) are hex-escaped before a rejected value is shown.
@@ -224,38 +226,16 @@ directory structures. Set to match reasonable project depth expectations.
 # PATH SECURITY VALIDATION
 # ==============================================================================
 
-# Common dangerous characters across all platforms
-_COMMON_DANGEROUS_CHARS = [
-    "\0",  # Null byte - can truncate paths
-    "\r",
-    "\n",  # Line endings - can cause injection
-    "\t",  # Tab - can cause parsing issues
-    "\x7f",  # DEL character
-]
+# NUL, the ASCII C0 controls, and DEL are unsafe across all platforms.
+_COMMON_DANGEROUS_CHARS = [*(chr(value) for value in range(32)), "\x7f"]
 
-# Unix/Mac shell metacharacters (excluding backslash - it's allowed as path separator)
-_UNIX_SHELL_CHARS = [
-    "|",
-    "&",
-    ";",
-    "$",
-    "`",
-    '"',
-    "'",
-    "<",
-    ">",
-    "(",
-    ")",
-    "{",
-    "}",
+# POSIX characters interpreted by owned pattern or expansion consumers.
+_POSIX_PATH_CONSUMER_CHARS = [
     "[",
     "]",
     "*",
     "?",
     "~",
-    "^",
-    "!",
-    "#",
 ]
 
 # Windows dangerous characters
@@ -271,7 +251,7 @@ _WINDOWS_DANGEROUS_CHARS = [
 ]
 
 # Create platform-specific character lists
-_unix_chars = _COMMON_DANGEROUS_CHARS + _UNIX_SHELL_CHARS
+_unix_chars = _COMMON_DANGEROUS_CHARS + _POSIX_PATH_CONSUMER_CHARS
 _windows_chars = _COMMON_DANGEROUS_CHARS + _WINDOWS_DANGEROUS_CHARS
 
 # Pre-compile regex patterns for maximum performance
@@ -313,6 +293,17 @@ def _reject_dangerous_path_characters(
     dangerous_regex: re.Pattern[str],
 ) -> None:
     """Reject the first unsafe character while allowing a Windows drive colon."""
+    unicode_control = next(
+        (character for character in path if unicodedata.category(character) == "Cc"),
+        None,
+    )
+    if unicode_control is not None:
+        raise ValueError(
+            f"{context} contains dangerous character '{unicode_control}': {path}. "
+            "Path components must not contain reserved, internally interpreted, "
+            "or control characters."
+        )
+
     match = dangerous_regex.search(path)
     if match is None:
         return
@@ -325,7 +316,8 @@ def _reject_dangerous_path_characters(
     dangerous_char = match.group()
     raise ValueError(
         f"{context} contains dangerous character '{dangerous_char}': {path}. "
-        "Path components must not contain shell metacharacters or control characters."
+        "Path components must not contain reserved, internally interpreted, "
+        "or control characters."
     )
 
 
@@ -423,11 +415,12 @@ def _validate_safe_path_components(path: str, context: str = "path") -> None:
             f"{context} must not contain current directory references: {path}"
         )
 
-    # Check total path length (Windows has 260 char limit, Unix varies but 1024 is safe)
-    max_path_length = 260 if is_windows else 1024
-    if len(path) > max_path_length:
+    # POSIX limits depend on the filesystem and system call. Windows retains
+    # the existing product rule for paths that do not use extended syntax.
+    if is_windows and len(path) > _WINDOWS_MAX_PATH_LENGTH:
         raise ValueError(
-            f"{context} too long (max {max_path_length} chars): {len(path)} chars in {path[:50]}..."
+            f"{context} too long (max {_WINDOWS_MAX_PATH_LENGTH} chars): "
+            f"{len(path)} chars in {path[:50]}..."
         )
 
 

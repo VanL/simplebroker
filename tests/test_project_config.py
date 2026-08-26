@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+import json
 import os
 import pickle
 import sqlite3
+import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
+from enum import IntEnum
 from pathlib import Path
 from typing import Any, get_type_hints
 
 import pytest
 
+from simplebroker._backend_plugins import get_backend_plugin
 from simplebroker._constants import load_config
-from simplebroker._exceptions import UnknownBackendPluginError
+from simplebroker._exceptions import DatabaseError, UnknownBackendPluginError
 from simplebroker._project_config import (
     _same_filesystem,
     find_project_config,
@@ -23,7 +29,7 @@ from simplebroker._project_config import (
     resolve_project_target,
 )
 from simplebroker._targets import BrokerTarget
-from simplebroker.db import BrokerDB
+from simplebroker.db import BrokerDB, _initialize_project_backend_target
 from simplebroker.project import (
     broker_root,
     deserialize_broker_target,
@@ -419,8 +425,8 @@ def test_load_project_config_rejects_duplicate_toml_keys(tmp_path: Path) -> None
         load_project_config(config_path)
 
 
-def test_load_project_config_rejects_backend_option_arrays(tmp_path: Path) -> None:
-    """Backend options should remain a shallow scalar table."""
+def test_load_project_config_preserves_backend_option_arrays(tmp_path: Path) -> None:
+    """Core parsing preserves recursive TOML values for the owning plugin."""
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(
         (
@@ -434,14 +440,15 @@ def test_load_project_config_rejects_backend_option_arrays(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError):
-        load_project_config(config_path)
+    config = load_project_config(config_path)
+
+    assert config["backend_options"] == {"namespace": ["one", "two"]}
 
 
-def test_load_project_config_rejects_nested_backend_option_tables(
+def test_load_project_config_preserves_nested_backend_option_tables(
     tmp_path: Path,
 ) -> None:
-    """Nested backend options should not leak through to backend plugins."""
+    """Nested tables reach backend plugins without a core-owned schema."""
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(
         (
@@ -455,8 +462,351 @@ def test_load_project_config_rejects_nested_backend_option_tables(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError):
-        load_project_config(config_path)
+    config = load_project_config(config_path)
+
+    assert config["backend_options"] == {"pool": {"timeout": 5}}
+
+
+@pytest.mark.sqlite_only
+def test_sqlite_project_options_are_rejected_by_the_sqlite_plugin(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        (
+            "version = 1\n"
+            'backend = "sqlite"\n'
+            'target = "queue.db"\n'
+            "\n"
+            "[backend_options.pool]\n"
+            "timeout = 5\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError, match="SQLite backend does not support backend_options"
+    ):
+        resolve_project_target(config_path)
+
+
+@pytest.mark.sqlite_only
+def test_sqlite_project_option_rejection_is_one_json_cli_error(tmp_path: Path) -> None:
+    (tmp_path / ".broker.toml").write_text(
+        (
+            "version = 1\n"
+            'backend = "sqlite"\n'
+            'target = "queue.db"\n'
+            "\n"
+            "[backend_options]\n"
+            "pool_size = 2\n"
+        ),
+        encoding="utf-8",
+    )
+
+    code, stdout, stderr = run_cli(
+        "--status",
+        "--json",
+        cwd=tmp_path,
+        env={"BROKER_TEST_BACKEND": "sqlite", "BROKER_PROJECT_SCOPE": "1"},
+    )
+
+    assert code == 1
+    assert stdout == ""
+    payload = json.loads(stderr)
+    assert payload["error"] == "ERROR"
+    assert payload["message"] == (
+        "SQLite backend does not support backend_options; remove them or select a "
+        "backend that supports them"
+    )
+    assert "Traceback" not in stderr
+    assert not (tmp_path / "queue.db").exists()
+
+
+@pytest.mark.sqlite_only
+def test_sqlite_plugin_never_silently_discards_backend_options(tmp_path: Path) -> None:
+    plugin = get_backend_plugin("sqlite")
+    target = str(tmp_path / "queue.db")
+    options = {"pool": {"timeout": 5}}
+    calls = (
+        lambda: plugin.init_backend(
+            load_config(), toml_target=target, toml_options=options
+        ),
+        lambda: plugin.create_runner(target, backend_options=options),
+        lambda: plugin.initialize_target(target, backend_options=options),
+        lambda: plugin.validate_target(target, backend_options=options),
+        lambda: plugin.cleanup_target(target, backend_options=options),
+    )
+
+    for call in calls:
+        with pytest.raises(
+            ValueError, match="SQLite backend does not support backend_options"
+        ):
+            call()
+
+    assert not Path(target).exists()
+
+
+def test_plugin_must_normalize_toml_datetime_for_target_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        (
+            "version = 1\n"
+            'backend = "fixture"\n'
+            'target = "fixture://queue"\n'
+            "\n"
+            "[backend_options]\n"
+            "cutoff = 1979-05-27T07:32:00Z\n"
+        ),
+        encoding="utf-8",
+    )
+
+    class PassthroughPlugin:
+        def init_backend(self, config, *, toml_target="", toml_options=None):
+            del config
+            return {
+                "target": toml_target,
+                "backend_options": dict(toml_options or {}),
+            }
+
+    monkeypatch.setattr(
+        "simplebroker._project_config.get_backend_plugin",
+        lambda name: PassthroughPlugin(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Backend plugin 'fixture' returned backend_options that are not "
+            "lossless through BrokerTarget serialization"
+        ),
+    ):
+        resolve_project_target(config_path)
+
+
+def test_plugin_must_not_return_json_scalar_subclasses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        'version = 1\nbackend = "fixture"\ntarget = "fixture://queue"\n',
+        encoding="utf-8",
+    )
+
+    class PoolSize(IntEnum):
+        SMALL = 1
+
+    class EnumPlugin:
+        def init_backend(self, config, *, toml_target="", toml_options=None):
+            del config, toml_options
+            return {
+                "target": toml_target,
+                "backend_options": {"pool_size": PoolSize.SMALL},
+            }
+
+    monkeypatch.setattr(
+        "simplebroker._project_config.get_backend_plugin",
+        lambda name: EnumPlugin(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Backend plugin 'fixture' returned backend_options that are not "
+            "lossless through BrokerTarget serialization"
+        ),
+    ):
+        resolve_project_target(config_path)
+
+
+def test_plugin_cyclic_options_fail_at_the_controlled_transport_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        'version = 1\nbackend = "fixture"\ntarget = "fixture://queue"\n',
+        encoding="utf-8",
+    )
+    cyclic_options: dict[str, Any] = {}
+    cyclic_options["self"] = cyclic_options
+
+    class CyclicPlugin:
+        def init_backend(self, config, *, toml_target="", toml_options=None):
+            del config, toml_options
+            return {"target": toml_target, "backend_options": cyclic_options}
+
+    monkeypatch.setattr(
+        "simplebroker._project_config.get_backend_plugin",
+        lambda name: CyclicPlugin(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Backend plugin 'fixture' returned backend_options that are not "
+            "lossless through BrokerTarget serialization"
+        ),
+    ):
+        resolve_project_target(config_path)
+
+
+@pytest.mark.parametrize("backend_name", ["postgres", "redis"])
+def test_project_backend_setup_uses_config_file_phase_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend_name: str,
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text("version = 1\n", encoding="utf-8")
+    state_lock = threading.Lock()
+    initialized = False
+    initialize_calls = 0
+
+    class CoordinatedPlugin:
+        def validate_target(self, *args, **kwargs) -> None:
+            del args, kwargs
+            with state_lock:
+                if not initialized:
+                    raise DatabaseError("not initialized")
+
+        def initialize_target(self, *args, **kwargs) -> None:
+            del args, kwargs
+            nonlocal initialized, initialize_calls
+            with state_lock:
+                initialize_calls += 1
+            time.sleep(0.05)
+            with state_lock:
+                initialized = True
+
+    plugin = CoordinatedPlugin()
+    monkeypatch.setattr(
+        "simplebroker._backend_plugins.get_backend_plugin",
+        lambda name: plugin,
+    )
+    target = BrokerTarget(
+        backend_name=backend_name,
+        target="backend://fixture",
+        backend_options={"scope": "one"},
+        project_root=tmp_path,
+        config_path=config_path,
+        used_project_scope=True,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                _initialize_project_backend_target,
+                target,
+                config={},
+            )
+            for _ in range(2)
+        ]
+        for future in futures:
+            future.result()
+
+    assert initialize_calls == 1
+    assert Path(f"{config_path}.lock").exists()
+
+
+def test_nested_options_reach_plugin_and_normalize_losslessly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        (
+            "version = 1\n"
+            'backend = "fixture"\n'
+            'target = "fixture://queue"\n'
+            "\n"
+            "[backend_options.tls]\n"
+            "enabled = true\n"
+            'ca_paths = ["one.pem", "two.pem"]\n'
+            "not_before = 1979-05-27T07:32:00Z\n"
+            "maintenance_date = 1979-05-27\n"
+            "cutover_time = 07:32:00\n"
+            "\n"
+            "[[backend_options.pools]]\n"
+            "size = 2\n"
+            "\n"
+            "[[backend_options.pools]]\n"
+            "size = 4\n"
+        ),
+        encoding="utf-8",
+    )
+    seen: dict[str, Any] = {}
+
+    class NormalizingPlugin:
+        def init_backend(self, config, *, toml_target="", toml_options=None):
+            del config
+            options = dict(toml_options or {})
+            seen.update(options)
+            tls = dict(options["tls"])
+            for key in ("not_before", "maintenance_date", "cutover_time"):
+                tls[key] = tls[key].isoformat()
+            return {
+                "target": toml_target,
+                "backend_options": {"tls": tls, "pools": options["pools"]},
+            }
+
+    monkeypatch.setattr(
+        "simplebroker._project_config.get_backend_plugin",
+        lambda name: NormalizingPlugin(),
+    )
+
+    target = resolve_project_target(config_path)
+    restored = deserialize_broker_target(serialize_broker_target(target))
+
+    assert seen["tls"]["ca_paths"] == ["one.pem", "two.pem"]
+    assert seen["pools"] == [{"size": 2}, {"size": 4}]
+    assert seen["tls"]["not_before"].isoformat() == "1979-05-27T07:32:00+00:00"
+    assert seen["tls"]["maintenance_date"].isoformat() == "1979-05-27"
+    assert seen["tls"]["cutover_time"].isoformat() == "07:32:00"
+    assert restored == target
+    assert restored.backend_options == {
+        "tls": {
+            "enabled": True,
+            "ca_paths": ["one.pem", "two.pem"],
+            "not_before": "1979-05-27T07:32:00+00:00",
+            "maintenance_date": "1979-05-27",
+            "cutover_time": "07:32:00",
+        },
+        "pools": [{"size": 2}, {"size": 4}],
+    }
+
+
+def test_plugin_option_rejection_keeps_plugin_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        (
+            "version = 1\n"
+            'backend = "fixture"\n'
+            'target = "fixture://queue"\n'
+            "\n"
+            "[backend_options.pool]\n"
+            "timeout = -1\n"
+        ),
+        encoding="utf-8",
+    )
+    failure = ValueError("fixture plugin: pool.timeout must be positive")
+
+    class RejectingPlugin:
+        def init_backend(self, config, *, toml_target="", toml_options=None):
+            del config, toml_target, toml_options
+            raise failure
+
+    monkeypatch.setattr(
+        "simplebroker._project_config.get_backend_plugin",
+        lambda name: RejectingPlugin(),
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        resolve_project_target(config_path)
+
+    assert exc_info.value is failure
 
 
 @pytest.mark.parametrize(

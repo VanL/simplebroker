@@ -767,7 +767,7 @@ class TestConfigValidation:
 
         # Create a platform-appropriate absolute path with dangerous characters
         with tempfile.TemporaryDirectory() as temp_dir:
-            test_path = create_dangerous_path(temp_dir, "|")
+            test_path = create_dangerous_path(temp_dir, "*")
 
             with (
                 patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}),
@@ -796,7 +796,7 @@ class TestConfigValidation:
         # Since we now validate dangerous characters at config load time,
         # this should fail during load_config() itself
         with (
-            patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "test|dir/broker.db"}),
+            patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "test*dir/broker.db"}),
             pytest.raises(
                 ValueError,
                 match="expected a relative database path with at most one directory",

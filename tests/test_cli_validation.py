@@ -29,7 +29,7 @@ class TestCliArgumentValidation:
 
     def test_file_argument_validation(self) -> None:
         """Test that -f/--file argument is validated for dangerous characters."""
-        dangerous_file = "test|file.db"
+        dangerous_file = "test*file.db"
 
         with patch("sys.argv", ["simplebroker", "-f", dangerous_file, "list"]):
             exit_code = main()
