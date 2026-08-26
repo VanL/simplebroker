@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from simplebroker_pg import PostgresRunner, get_backend_plugin
 from simplebroker_pg.validation import connect
 
 from simplebroker import BrokerTarget, Queue
-from simplebroker._runner import SetupPhase
+from simplebroker._runner import SetupPhase, SQLRunner
 from simplebroker.db import BrokerCore
 
 TEST_DSN = os.environ.get("SIMPLEBROKER_PG_TEST_DSN")
@@ -152,7 +153,12 @@ def test_postgres_runner_skips_schema_ddl_after_bootstrap() -> None:
 
         original_run = second_runner.run
 
-        def tracked_run(sql, params=(), *, fetch=False):
+        def tracked_run(
+            sql: str,
+            params: tuple[Any, ...] = (),
+            *,
+            fetch: bool = False,
+        ) -> Iterable[tuple[Any, ...]]:
             seen_sql.append(sql)
             return original_run(sql, params, fetch=fetch)
 
@@ -310,7 +316,12 @@ def test_postgres_project_persistent_queues_share_plugin_runner(
     create_runner_calls = 0
     runner_ids: list[int] = []
 
-    def tracked_create_runner(target, *, backend_options=None, config=None):
+    def tracked_create_runner(
+        target: str,
+        *,
+        backend_options: Mapping[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> SQLRunner:
         nonlocal create_runner_calls
         create_runner_calls += 1
         runner = original_create_runner(
