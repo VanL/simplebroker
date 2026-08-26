@@ -569,7 +569,7 @@ def test_filesystem_supported_posix_path_over_1024_reaches_sqlite(
         assert stdout == ""
         assert stderr == (
             "simplebroker: error: Failed to get database connection: "
-            "unable to open database file\n"
+            "unable to open database file"
         )
         assert not db_path.exists()
 
