@@ -9,7 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -32,6 +32,44 @@ def _raw_database_state(db_path: Path) -> dict[str, bytes]:
             if candidate != db_path and candidate.is_file()
         },
     }
+
+
+def test_admission_retries_when_concurrent_bootstrap_creates_meta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "concurrent-meta.db"
+    runner = SQLiteRunner(str(db_path))
+    connection = runner.get_connection()
+
+    class CreateMetaAfterMissingTable:
+        def __init__(self) -> None:
+            self.injected = False
+
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> Any:
+            if "LEFT JOIN meta" in sql and not self.injected:
+                self.injected = True
+                try:
+                    return connection.execute(sql, params)
+                except sqlite3.OperationalError:
+                    with closing(sqlite3.connect(db_path)) as initializer:
+                        initializer.execute(
+                            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)"
+                        )
+                    raise
+            return connection.execute(sql, params)
+
+    proxy = CreateMetaAfterMissingTable()
+    monkeypatch.setattr(runner, "get_connection", lambda: proxy)
+    try:
+        snapshot = db_module._read_explicit_sqlite_magic_before_setup(runner)
+    finally:
+        runner.close()
+
+    assert proxy.injected is True
+    assert snapshot.magic is None
+    assert snapshot.stored_version is None
+    assert snapshot.schema_cookie == 1
 
 
 def test_broker_db_rejects_explicit_foreign_magic_before_any_setup_write(

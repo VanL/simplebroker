@@ -607,3 +607,8 @@ Dated moment-tier entries (foldable after age floor and distillation).
   invisible under SQLite but can finalize a Redis or PostgreSQL socket during
   forced teardown GC. That turns a real resource leak into a load-sensitive
   `ResourceWarning`; fix lifecycle ownership, not the warning detector.
+- 2026-08-26: A fallback read after a failed schema query observes a later
+  database instant. If it finds that the missing object now exists, rethrowing
+  the original missing-object error converts healthy concurrent bootstrap into
+  a failure. Retry the primary snapshot narrowly and with a hard bound; do not
+  turn every schema error into retry or treat the fallback as atomic proof.

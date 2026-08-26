@@ -1176,6 +1176,14 @@ Runbook feedback: no new reusable interface pattern surfaced.
   update resolves its final documentation finding.
 - **Final core rerun:** `PYTEST_XDIST_AUTO_NUM_WORKERS=17 uv run pytest`
   passed 3,227 tests with 17 documented platform, service, and opt-in skips.
+- **Release-gate bootstrap correction:** the first core-release attempt after
+  static cleanup exposed a concurrent SQLite constructor observing no `meta`
+  table while another constructor created it before the fallback snapshot. The
+  stale `no such table` error was incorrectly re-raised. Admission now retries
+  that exact transition once, retains every malformed-present-table failure,
+  and remains bounded. A deterministic real-SQLite interleaving test passes,
+  the full admission file passes, and the original watcher concurrency case
+  passed 20 consecutive runs.
 - **Unavailable release-only evidence:** `SIMPLEBROKER_PG_TEST_DSN` and
   `SIMPLEBROKER_VALKEY_TEST_URL` were unset, so live-service cases remain
   explicitly skipped. Exact-SHA hosted Windows/POSIX jobs and publication are

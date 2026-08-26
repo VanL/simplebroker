@@ -328,7 +328,7 @@ def _parse_sqlite_meta_integer(key: str, value: object) -> int:
 def _sqlite_snapshot_without_meta(
     connection: sqlite3.Connection,
     original_error: sqlite3.DatabaseError,
-) -> _SQLiteAdmissionSnapshot:
+) -> _SQLiteAdmissionSnapshot | None:
     """Return the absent-meta snapshot or preserve a malformed-meta failure."""
 
     try:
@@ -343,9 +343,41 @@ def _sqlite_snapshot_without_meta(
             "File is not a valid SQLite database"
         ) from fallback_error
     if fallback_row and bool(fallback_row[1]):
+        if str(original_error).casefold() == "no such table: meta":
+            # Another initializer may have created meta after the failed
+            # statement but before this fallback snapshot. Retry the joined
+            # read once so that in-progress bootstrap reaches the setup lock.
+            return None
         raise original_error
     schema_cookie = int(fallback_row[0]) if fallback_row else 0
     return _SQLiteAdmissionSnapshot(None, None, None, None, schema_cookie)
+
+
+def _read_sqlite_admission_rows(
+    connection: sqlite3.Connection,
+) -> list[tuple[Any, ...]] | _SQLiteAdmissionSnapshot:
+    """Read admission rows, retrying one concurrent meta-table creation."""
+
+    for attempt in range(2):
+        try:
+            cursor = connection.execute(
+                "SELECT meta.key, meta.value, cookie.schema_version "
+                "FROM pragma_schema_version AS cookie "
+                "LEFT JOIN meta ON meta.key IN "
+                "('magic', 'schema_version', 'schema_proof_version', "
+                "'schema_proof_cookie')"
+            )
+            try:
+                return cursor.fetchall()
+            finally:
+                cursor.close()
+        except sqlite3.DatabaseError as error:
+            fallback = _sqlite_snapshot_without_meta(connection, error)
+            if fallback is not None:
+                return fallback
+            if attempt == 1:
+                raise
+    raise RuntimeError("SQLite admission retry loop exited unexpectedly")
 
 
 def _read_explicit_sqlite_magic_before_setup(
@@ -353,20 +385,9 @@ def _read_explicit_sqlite_magic_before_setup(
 ) -> _SQLiteAdmissionSnapshot:
     """Read scalar admission facts on the normal connection before setup writes."""
     connection = runner.get_connection()
-    try:
-        cursor = connection.execute(
-            "SELECT meta.key, meta.value, cookie.schema_version "
-            "FROM pragma_schema_version AS cookie "
-            "LEFT JOIN meta ON meta.key IN "
-            "('magic', 'schema_version', 'schema_proof_version', "
-            "'schema_proof_cookie')"
-        )
-        try:
-            rows = cursor.fetchall()
-        finally:
-            cursor.close()
-    except sqlite3.DatabaseError as error:
-        return _sqlite_snapshot_without_meta(connection, error)
+    rows = _read_sqlite_admission_rows(connection)
+    if isinstance(rows, _SQLiteAdmissionSnapshot):
+        return rows
 
     # pragma_schema_version is the single left-hand row, so the LEFT JOIN
     # always returns at least one row and carries one cookie for this statement.

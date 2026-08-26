@@ -41,8 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   treats the `schema-v5` phase marker as a cache hint backed by a cheap
   database-internal schema-cookie proof. Timestamp uniqueness is recognized by
   index semantics while a conflicting SimpleBroker-reserved index name still
-  fails closed. Ordinary proven opens use one normal connection and scalar
-  reads only.
+  fails closed. A concurrent constructor that creates `meta` between the
+  admission query and its absent-table fallback is retried once instead of
+  surfacing the stale missing-table error. Ordinary proven opens use one normal
+  connection and scalar reads only.
 - SQLite claim and move results now preserve storage FIFO even when SQLite
   returns `UPDATE ... RETURNING` rows out of order. Public result shapes and
   backend API v7 are unchanged.
