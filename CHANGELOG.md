@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.5.0] - 2026-08-26
+
 ### Added
 
 - Added read-only `Queue.backend_name`, which reports the resolved built-in or
@@ -54,6 +56,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Process sessions no longer merge type-distinct or same-repr opaque options,
   use one detached nested snapshot for identity and lazy construction, and
   continue safe ordinary cleanup after an earlier close failure.
+
+### simplebroker-pg 3.10.0
+
+- Added package-root `get_connection_stats(queue)` for a conservative,
+  ordinary-role PostgreSQL connection-pressure snapshot through the Queue's
+  existing connection lifecycle.
+- Separated schema ownership, version compatibility, and current-shape
+  readiness. Empty pre-created schemas initialize safely, supported older
+  schemas reach migration, and project-scoped bootstrap is serialized through
+  the `.broker.toml` PhaseLock.
+
+### simplebroker-redis 3.9.3
+
+- Separated namespace ownership, version compatibility, and current metadata
+  readiness. Older owned state now reports the lack of a migration explicitly,
+  and project-scoped bootstrap shares the `.broker.toml` PhaseLock.
 
 ## [7.4.2] - 2026-08-25
 
