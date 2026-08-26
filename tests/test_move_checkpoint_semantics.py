@@ -25,7 +25,6 @@ import pytest
 from simplebroker.watcher import QueueWatcher
 
 from .conftest import run_cli
-from .helper_scripts.broker_factory import make_broker
 
 pytestmark = [pytest.mark.shared]
 
@@ -81,7 +80,7 @@ def test_peek_watcher_skips_message_moved_in_behind_checkpoint(broker, broker_ta
     checkpoint must NOT deliver the moved (older-ts) message while it DOES
     deliver a freshly written one.
     """
-    core = make_broker(broker_target)
+    core = broker
 
     # Seed an old-ts message in src that we will later move into dst.
     core.write("src", "moved-old")
@@ -145,7 +144,7 @@ def test_consume_watcher_without_filter_delivers_moved_message(broker, broker_ta
     A consume-mode watcher with no ``after_timestamp`` claims whatever is
     unclaimed regardless of ts, so a moved (older-ts) message IS delivered.
     """
-    core = make_broker(broker_target)
+    core = broker
 
     core.write("src", "moved-old")
     core.move_one("src", "dst")
@@ -176,7 +175,7 @@ def test_consume_watcher_with_after_skips_moved_message(broker, broker_target):
     filter at the claim query, so a message moved in behind the checkpoint is
     NOT claimed/delivered, while a fresh post-checkpoint message IS.
     """
-    core = make_broker(broker_target)
+    core = broker
 
     # Old-ts message to be moved in behind the checkpoint.
     core.write("src", "moved-old")

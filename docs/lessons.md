@@ -601,3 +601,9 @@ Dated moment-tier entries (foldable after age floor and distillation).
   were shadowed by subprocess coverage invisible to in-process
   measurement — compare per-file missing branches before concluding
   loss. (Test-suite audit remediation plan, Tasks 4/7.)
+- 2026-08-26: Backend-agnostic tests must use the managed `broker` or Queue
+  factory fixture when one is already requested. Creating an extra core with
+  `make_broker()` and dropping it without `close()` or `shutdown()` is usually
+  invisible under SQLite but can finalize a Redis or PostgreSQL socket during
+  forced teardown GC. That turns a real resource leak into a load-sensitive
+  `ResourceWarning`; fix lifecycle ownership, not the warning detector.
