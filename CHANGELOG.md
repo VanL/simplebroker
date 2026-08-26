@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.5.1] - 2026-08-26
+
+### Changed
+
+- Published the package changes recorded under 7.5.0 as corrective version
+  7.5.1. GitHub Actions rejected the immutable `v7.5.0` release gate before
+  creating any jobs, so no 7.5.0 package artifact was published.
+- Release-gate workflows now permit future manual recovery at an immutable tag
+  that already contains the dispatch trigger. Same-tag publication runs queue
+  instead of canceling one another; exact-SHA CI, tag-only PyPI environment,
+  Trusted Publishing, attestation, and GitHub Release gates are unchanged.
+
 ## [7.5.0] - 2026-08-26
 
 ### Added
