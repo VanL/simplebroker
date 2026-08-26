@@ -4,6 +4,7 @@ import ast
 import json
 import os
 import platform
+import sqlite3
 from pathlib import Path
 from typing import ClassVar, cast
 
@@ -540,6 +541,15 @@ def test_filesystem_supported_posix_path_over_1024_reaches_sqlite(
     directory.mkdir(parents=True)
     db_path = directory / "queue.db"
 
+    sqlite_accepts_path = True
+    try:
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("PRAGMA user_version").fetchone()
+        db_path.unlink()
+    except sqlite3.OperationalError as exc:
+        assert str(exc) == "unable to open database file"
+        sqlite_accepts_path = False
+
     code, stdout, stderr = run_cli(
         "-f",
         db_path,
@@ -550,9 +560,18 @@ def test_filesystem_supported_posix_path_over_1024_reaches_sqlite(
         env={"BROKER_TEST_BACKEND": "sqlite"},
     )
 
-    assert code == 0, stderr
-    assert stdout == ""
-    assert db_path.exists()
+    if sqlite_accepts_path:
+        assert code == 0, stderr
+        assert stdout == ""
+        assert db_path.exists()
+    else:
+        assert code == 1
+        assert stdout == ""
+        assert stderr == (
+            "simplebroker: error: Failed to get database connection: "
+            "unable to open database file\n"
+        )
+        assert not db_path.exists()
 
 
 @pytest.mark.sqlite_only
