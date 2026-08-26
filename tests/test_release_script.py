@@ -1366,9 +1366,7 @@ def test_remote_tag_reuse_note_names_immutable_tag_recovery_command() -> None:
     assert "will not retrigger .github/workflows/release-gate.yml" in note
     assert "only when that immutable tag already contains" in note
     assert "otherwise choose a new version and never move the tag" in note
-    assert (
-        "gh workflow run .github/workflows/release-gate.yml --ref v3.1.10"
-    ) in note
+    assert ("gh workflow run .github/workflows/release-gate.yml --ref v3.1.10") in note
 
 
 @pytest.mark.parametrize(
