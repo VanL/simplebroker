@@ -270,6 +270,12 @@ class Queue:
 
         return self._db_path
 
+    @property
+    def backend_name(self) -> str:
+        """Return the resolved backend plugin name without opening a connection."""
+
+        return self._activity_waiter_identity().backend_name
+
     def _move_destination_name(self, destination: Union[str, "Queue"]) -> str:
         if not isinstance(destination, Queue):
             return destination

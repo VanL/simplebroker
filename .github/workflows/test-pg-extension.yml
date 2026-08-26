@@ -67,6 +67,51 @@ jobs:
         test "${SIMPLEBROKER_RUN_FINALIZATION_PROBE}" = "1"
         uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py
 
+    - name: Run PostgreSQL 18 connection-statistics and autovacuum probes
+      if: matrix.python-version == '3.13'
+      env:
+        SIMPLEBROKER_RUN_AUTOVACUUM_PROBE: "1"
+        PYTEST_ADDOPTS: ""
+      run: |
+        test "${SIMPLEBROKER_RUN_AUTOVACUUM_PROBE}" = "1"
+        uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q extensions/simplebroker_pg/tests/test_connection_stats.py
+
+  test-pg15-connection-stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SIMPLEBROKER_PG_TEST_IMAGE: "postgres:15"
+      UV_PYTHON: "3.13"
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+    - name: Set up Python
+      id: sync-python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.13"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: ${{ env.UV_VERSION }}
+        enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_pg/pyproject.toml
+          extensions/simplebroker_pg/uv.lock
+
+    - name: Install dependencies
+      run: uv sync --frozen --extra dev --extra pg --python "${{ steps.sync-python.outputs.python-path }}"
+
+    - name: Run PostgreSQL 15 connection-statistics compatibility tests
+      env:
+        PYTEST_ADDOPTS: ""
+      run: |
+        uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q extensions/simplebroker_pg/tests/test_connection_stats.py
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 45

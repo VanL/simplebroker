@@ -7,7 +7,7 @@ reactor pattern, embedding, the command layer, and extension hooks.
 
 Normative public surfaces (package root, `simplebroker.ext`, command layer):
 [`docs/specs/16-python-library-api.md`](../specs/16-python-library-api.md)
-(`[SB-API-1]`–`[SB-API-12]`). Delivery rules:
+(`[SB-API-1]`–`[SB-API-13]`). Delivery rules:
 [`docs/specs/11-delivery.md`](../specs/11-delivery.md)
 (`[SB-DELIVERY-1]`–`[SB-DELIVERY-8]`).
 
@@ -725,6 +725,41 @@ replacement preserves the data-version cache and local-activity hints, but
 resets polling backoff and the backend-native generation for responsiveness.
 Coalesce superseded topology generations before building and installing new
 waiters so rapid changes do not repeatedly restart that cadence.
+
+## PostgreSQL connection pressure
+
+Normative behavior: `[SB-API-13]` in the
+[Python library contract](../specs/16-python-library-api.md#first-party-postgresql-inspection-sb-api-13).
+
+`Queue.backend_name` lets an embedder narrow to a backend-specific capability
+without adding that capability to every backend. The PostgreSQL extension
+exposes the connection-pressure helper at its package root:
+
+```python
+from simplebroker_pg import get_connection_stats
+
+if queue.backend_name == "postgres":
+    pressure = get_connection_stats(queue)
+    observed = pressure["numbackends"]
+```
+
+The result contains exactly `numbackends`, `max_connections`,
+`superuser_reserved_connections`, and `reserved_connections`. `numbackends`
+is the unfiltered server-wide sum from `pg_stat_database`, so an ordinary role
+can observe established connections owned by other roles and databases without
+a monitoring grant or installed function. The tradeoff is deliberate: it can
+also include autovacuum and other database-attached workers that do not consume
+a `max_connections` client slot. Treat it as a conservative pressure signal,
+not an exact client count.
+
+The helper uses the Queue's normal connection lease, lock, and retry path. A
+target-resolved persistent Queue reuses its thread's process-session checkout;
+an ephemeral Queue releases the operation-owned connection afterward. It does
+not use sidecar and creates no table, function, role, grant, or schema object.
+
+This is an observation, not a reservation. Other clients can connect after the
+statement. Admission control must retain a safety margin and tolerate both
+early rejection from worker overcount and concurrent overshoot.
 
 ## Sidecar tables
 

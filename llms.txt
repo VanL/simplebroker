@@ -14,7 +14,7 @@
 - [Message identity spec](docs/specs/13-message-identity.md): Canonical hybrid-ID representation, allocation, write-return, high-water/cache, exact-ID, and move-preservation rules `[SB-ID-1]` through `[SB-ID-5]`
 - [Timestamp selection spec](docs/specs/14-timestamp-selection.md): Canonical id filters, late older ids, and watch progress `[SB-SELECT-1]`–`[SB-SELECT-4]`
 - [Persistence I/O spec](docs/specs/15-persistence-io.md): Canonical dump/load format, selection filters, caller-owned load freshness, and claimed-row inspection `[SB-IO-1]`–`[SB-IO-5]`
-- [Python library API spec](docs/specs/16-python-library-api.md): Canonical public package root, `ext`, command layer, targets, and library packaging `[SB-API-1]`–`[SB-API-12]`
+- [Python library API spec](docs/specs/16-python-library-api.md): Canonical public package root, `ext`, command layer, targets, first-party PostgreSQL inspection, and library packaging `[SB-API-1]`–`[SB-API-13]`
 - [Operations spec](docs/specs/17-ops.md): Canonical implicit queues, metadata, physical delete, rename, aliases, vacuum, and destructive backend target cleanup `[SB-OPS-1]`–`[SB-OPS-7]`
 - [Specs index](docs/specs/00-specs-index.md): Process and product spec read order
 - [Advanced Python API and embedding guide](docs/guides/python.md): How-to depth for delivery guarantees, generators, watchers, async, sidecar, reactor, embedding client pattern, and command layer

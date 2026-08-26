@@ -102,7 +102,7 @@ Direct command functions return integer codes for ordinary outcomes and raise
 Python exceptions for invalid input or operational failures; only the CLI
 translates those failures to diagnostics and exit `1`.
 Underscore-prefixed modules are implementation details and may change.
-Specifications: `docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-12]`).
+Specifications: `docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-13]`).
 
 ## Project Specifications and Agent Instructions
 
@@ -843,6 +843,8 @@ covers the rest of the API surface:
 - exact-ID workflows: `generate_timestamp()`, `insert_messages()`,
   `latest_pending_timestamp()`, high-water tracking (`[SB-ID-2]`–`[SB-ID-4]`)
 - sidecar tables (`[SB-API-7]`), the reactor pattern, and activity waiters
+- backend identity and PostgreSQL connection-pressure inspection
+  (`[SB-API-3]`, `[SB-API-13]`)
 - custom extensions (`BrokerCore` / `BrokerDB` boundaries)
 
 ## Embedding SimpleBroker in Your Project

@@ -91,6 +91,7 @@ _EXTENSION_ARTIFACT_PROBE = (
     "from pathlib import Path\n"
     "import simplebroker\n" + _ARTIFACT_ORIGIN_CHECK + "import simplebroker_pg\n"
     "import simplebroker_redis\n"
+    "from simplebroker_pg import get_connection_stats\n"
     "from simplebroker.ext import get_backend_plugin\n"
     "pg_plugin = get_backend_plugin('postgres')\n"
     "redis_plugin = get_backend_plugin('redis')\n"
@@ -103,6 +104,10 @@ _EXTENSION_ARTIFACT_PROBE = (
     "    raise RuntimeError(\n"
     "        f\"Packaging smoke expected backend 'redis', "
     'got {redis_plugin.name!r}"\n'
+    "    )\n"
+    "if not callable(get_connection_stats):\n"
+    "    raise RuntimeError(\n"
+    "        'simplebroker-pg connection stats export is unavailable'\n"
     "    )\n"
 )
 

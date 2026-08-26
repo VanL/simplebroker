@@ -4,6 +4,28 @@ from __future__ import annotations
 
 from simplebroker._sql import RetrieveOperation, RetrieveQuerySpec
 
+POSTGRES_CONNECTION_STATS_SQL = """
+SELECT pg_catalog.jsonb_build_object(
+    'numbackends',
+    COALESCE(
+        (
+            SELECT sum(numbackends)::bigint
+            FROM pg_catalog.pg_stat_database
+        ),
+        0
+    ),
+    'max_connections',
+    pg_catalog.current_setting('max_connections')::integer,
+    'superuser_reserved_connections',
+    pg_catalog.current_setting('superuser_reserved_connections')::integer,
+    'reserved_connections',
+    COALESCE(
+        pg_catalog.current_setting('reserved_connections', true),
+        '0'
+    )::integer
+)
+"""
+
 CHECK_PENDING_MESSAGES = """
 SELECT EXISTS(
     SELECT 1

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added read-only `Queue.backend_name`, which reports the resolved built-in or
+  third-party plugin name without opening the target.
+- Added PostgreSQL-only `simplebroker_pg.get_connection_stats(queue)`. It
+  returns the server-wide `numbackends` catalog sum and configured connection
+  limits through the Queue's existing connection, lock, and retry path. Stock
+  roles need no monitoring grant or installed database object. `numbackends`
+  may include autovacuum and other non-client workers, so it is a conservative
+  pressure signal rather than a hard admission permit.
+
 ## [7.4.2] - 2026-08-25
 
 ### Added

@@ -1110,6 +1110,22 @@ class BrokerCore:
 
         return _execute_with_retry(stop_checked_operation, **kwargs)
 
+    def _run_backend_probe(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+    ) -> list[tuple[Any, ...]]:
+        """Run one materialized read for a trusted first-party SQL backend."""
+
+        self._check_fork_safety()
+        self._assert_no_reentrant_mutation_during_batch("backend probe")
+        with self._lock:
+            rows = self._run_with_retry(
+                lambda: list(self._runner.run(sql, params, fetch=True))
+            )
+            self._raise_if_poisoned()
+            return rows
+
     def _operation_progress_token(self) -> object | None:
         """Return SQLite's external-commit counter when the backend has one."""
 

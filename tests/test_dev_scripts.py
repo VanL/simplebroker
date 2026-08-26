@@ -2773,7 +2773,10 @@ def get_backend_plugin(name):
 """,
         encoding="utf-8",
     )
-    (tmp_path / "simplebroker_pg.py").write_text("", encoding="utf-8")
+    (tmp_path / "simplebroker_pg.py").write_text(
+        "def get_connection_stats(queue):\n    return {}\n",
+        encoding="utf-8",
+    )
     (tmp_path / "simplebroker_redis.py").write_text("", encoding="utf-8")
     command = [sys.executable]
     if optimized:
@@ -3174,6 +3177,7 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
     )
     assert "get_backend_plugin('postgres')" in extension_probe[1][2]
     assert "get_backend_plugin('redis')" in extension_probe[1][2]
+    assert "from simplebroker_pg import get_connection_stats" in extension_probe[1][2]
     assert all(call[2] != REPO_ROOT for call in run_calls)
     assert all(
         call[3] is not None and "PYTHONPATH" not in call[3] for call in run_calls

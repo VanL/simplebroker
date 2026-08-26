@@ -95,6 +95,39 @@ finally:
     runner.close()
 ```
 
+## Connection Pressure Inspection
+
+Callers that have narrowed a Queue to PostgreSQL can inspect server-wide
+connection pressure through the public package-root helper:
+
+```python
+from simplebroker_pg import get_connection_stats
+
+if queue.backend_name == "postgres":
+    stats = get_connection_stats(queue)
+```
+
+The returned dictionary has exactly `numbackends`, `max_connections`,
+`superuser_reserved_connections`, and `reserved_connections` integer fields.
+`reserved_connections` is zero on PostgreSQL versions where that setting does
+not exist.
+
+`numbackends` is `sum(pg_stat_database.numbackends)` across the server. Stock
+catalog permissions let an ordinary role observe other established roles and
+databases without `pg_monitor`, `pg_read_all_stats`, a grant, or an installed
+function. It is intentionally conservative: autovacuum and other
+database-attached workers can be included even when they do not consume a
+`max_connections` client slot. The snapshot is not a reservation, so callers
+must retain a safety margin and tolerate concurrent change.
+
+The helper executes one read-only statement through the Queue's normal
+connection lease, core lock, and retry path. It does not use sidecar or create
+database objects. A target-resolved persistent Queue reuses its existing
+process-session checkout on that thread; an ephemeral Queue may open one
+connection for the operation. Malformed result data raises `ValueError`;
+database and permission failures retain SimpleBroker's database exception
+types.
+
 ## Multi-Queue Activity Waiters
 
 Postgres supports `simplebroker.create_activity_waiter_for_queues(...)` with

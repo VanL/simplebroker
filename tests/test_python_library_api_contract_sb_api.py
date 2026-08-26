@@ -49,7 +49,7 @@ def _section(code: str) -> str:
 def test_api_clause_inventory_and_authority() -> None:
     text = SPEC.read_text(encoding="utf-8")
     codes = re.findall(r"^## .+ \[SB-API-(\d+)\]$", text, re.MULTILINE)
-    assert codes == [str(i) for i in range(1, 13)]
+    assert codes == [str(i) for i in range(1, 14)]
     for number in codes:
         assert f"| [SB-API-{number}] |" in text
 
@@ -185,6 +185,11 @@ def test_api_queue_lifecycle_and_library_shape_language() -> None:
     lifecycle = _section("SB-API-3")
     assert "Queue" in lifecycle
     assert "close" in lifecycle.lower() or "context" in lifecycle.lower()
+    assert "Queue.backend_name" in lifecycle
+    assert '"sqlite"' in lifecycle
+    assert '"redis"' in lifecycle
+    assert '"postgres"' in lifecycle
+    assert '`"pg"` is not an alias' in lifecycle
 
     shape = _section("SB-API-4")
     assert "return" in shape.lower()
@@ -289,6 +294,31 @@ def test_api_cross_surface_matrix_present() -> None:
         "SB-CLI",
     ):
         assert needle in matrix
+
+
+def test_api_postgres_connection_inspection_contract() -> None:
+    postgres = _section("SB-API-13")
+    normalized = " ".join(postgres.split())
+    for needle in (
+        "simplebroker_pg.get_connection_stats(queue) -> dict[str, int]",
+        "numbackends",
+        "max_connections",
+        "superuser_reserved_connections",
+        "reserved_connections",
+        "pg_catalog.pg_stat_database",
+        "autovacuum",
+        "ValueError",
+        "DatabaseError",
+        "safety margin",
+    ):
+        assert needle in normalized
+    assert "monitoring-role grant" in normalized
+    assert "does not use sidecar" in normalized
+
+    registry = REGISTRY.read_text(encoding="utf-8")
+    row = next(line for line in registry.splitlines() if "Python library" in line)
+    assert "[SB-API-13]" in row
+    assert "extensions/simplebroker_pg/tests/test_connection_stats.py" in row
 
 
 def test_api_queue_write_returns_id_not_exit_code(tmp_path: Path) -> None:

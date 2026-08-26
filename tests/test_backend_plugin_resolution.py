@@ -81,6 +81,17 @@ def test_builtin_sqlite_backend_plugin_resolves() -> None:
 
 
 @pytest.mark.sqlite_only
+def test_queue_backend_name_reports_sqlite_without_opening_target(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "not-created.db"
+    queue = Queue("tasks", db_path=str(db_path))
+
+    assert queue.backend_name == "sqlite"
+    assert not db_path.exists()
+
+
+@pytest.mark.sqlite_only
 def test_sqlite_initialize_target_passes_config_snapshot_to_broker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -148,6 +159,34 @@ def test_external_backend_plugin_resolves_via_entry_point(
 
     plugin = get_backend_plugin("dummy")
     assert plugin.name == "dummy"
+
+
+def test_queue_backend_name_preserves_third_party_plugin_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_entry_point(monkeypatch, "dummy", ValidDummyPlugin)
+    queue = Queue(
+        "tasks",
+        db_path=BrokerTarget("dummy", "dummy-target", {}),
+    )
+
+    assert queue.backend_name == "dummy"
+
+
+@pytest.mark.parametrize("backend_name", ["redis", "postgres"])
+def test_queue_backend_name_preserves_first_party_extension_name_without_io(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_name: str,
+) -> None:
+    plugin = ValidDummyPlugin()
+    plugin.name = backend_name
+    _install_entry_point(monkeypatch, backend_name, plugin)
+    queue = Queue(
+        "tasks",
+        db_path=BrokerTarget(backend_name, f"{backend_name}-target", {}),
+    )
+
+    assert queue.backend_name == backend_name
 
 
 def test_entry_point_plugin_name_must_match_the_requested_backend(
@@ -474,6 +513,7 @@ def test_non_aware_runner_with_resolved_target_uses_target_plugin(  # noqa: C901
 
     queue = Queue("jobs", db_path=target, runner=runner, persistent=True)
     try:
+        assert queue.backend_name == "dummy"
         assert queue.create_activity_waiter(stop_event=threading.Event()) is (
             target_plugin.waiter
         )

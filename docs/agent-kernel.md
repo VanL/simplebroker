@@ -58,7 +58,7 @@ Public package surface is intentionally small: see `simplebroker.__all__`
 modules.
 
 Normative library surfaces: `docs/specs/16-python-library-api.md`
-`[SB-API-1]`–`[SB-API-12]`.
+`[SB-API-1]`–`[SB-API-13]`.
 
 **Examples (use):** `examples/python_api.py`. For shell job workers, prefer the
 **move-to-inflight** recipe in this file.
@@ -307,7 +307,7 @@ uses the same use primitives; it adds **policy and context**, not a second
 queue product.
 
 Normative public surfaces and packaging:
-`docs/specs/16-python-library-api.md` `[SB-API-1]`–`[SB-API-12]`.
+`docs/specs/16-python-library-api.md` `[SB-API-1]`–`[SB-API-13]`.
 
 ## Resolve once, stamp every handle
 

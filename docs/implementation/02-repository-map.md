@@ -24,10 +24,11 @@ Quick pointers to the key guidance documents in this repository.
 | `simplebroker/` | The package: CLI (`__main__.py`), broker session, delivery, backends (`_backends/`), constants, maintenance |
 | `simplebroker/_broker_session.py` | Process-session identity, registry/refcount, admission and drain, per-thread core cache |
 | `simplebroker/_message_id.py` | Exact message-ID normalization and canonical JSON-string formatting |
-| `simplebroker/db.py` | Concrete process-session core factory, runner publication and checkout rollback, plus database operations |
+| `simplebroker/sbqueue.py` | Public named-queue handle, backend identity, Queue operation leases, and activity-waiter binding |
+| `simplebroker/db.py` | Concrete process-session core factory, runner publication and checkout rollback, database operations, and the private first-party SQL probe |
 | `simplebroker/_retry_policy.py` | Retry and setup policy; pairs with `_retry.py`, which owns the retry mechanism |
 | `simplebroker/_paths.py` | Filesystem path validation and project-database discovery |
-| `extensions/` | Optional extensions (Postgres support etc.) |
+| `extensions/` | Optional extensions; PostgreSQL-only operational inspection lives in `extensions/simplebroker_pg/simplebroker_pg/connections.py` |
 | `examples/` | Runnable usage examples (async wrappers, multi-queue) — examples are claims; keep them working |
 | `tests/` | Pytest suite (~148 files), `uv run pytest` |
 | `fuzz/` | Fuzzing harness |

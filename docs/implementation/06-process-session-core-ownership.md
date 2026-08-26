@@ -92,6 +92,28 @@ read, move, and stream iterators is `[SB-DELIVERY-6]`; the common public shape
 is `[SB-API-5]`. This section records the implementation reason for those
 contracts.
 
+### Trusted first-party operational probes
+
+`BrokerCore._run_backend_probe()` is a private seam for a first-party SQL
+extension to materialize one read through the core's existing runner. It is
+not raw SQL for embedders and is deliberately absent from the public
+`BrokerConnection` protocol and backend API handshake.
+
+The seam checks fork and active-batch state, acquires the poison-aware core
+lock, and materializes the runner result inside the normal retry call before
+releasing that lock. Read-only SQL still needs this serialization: the lock
+owns connection overlap, retry state, poison publication, close interaction,
+and at-least-once batch isolation, not only write transactions.
+
+`simplebroker_pg.get_connection_stats()` enters `Queue.get_connection()` and
+uses this seam. A target-resolved persistent Queue therefore reuses its
+thread-local process-session core and held PostgreSQL checkout. An ephemeral
+Queue owns and releases one operation connection. An injected runner is
+supported through its borrowed core, but `persistent=True` does not strengthen
+the runner owner's checkout contract. Psycopg pool statistics are not a
+substitute for the PostgreSQL catalog probe because each process owns its own
+pool and cannot see other processes or unrelated clients.
+
 An `ActivityWaiter` sits below that boundary. It owns a backend activity
 registration or composite registration, not the runner, pool, listener
 substrate, or process session. It therefore exposes only `close()`. Terminal

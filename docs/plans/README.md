@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-25-postgres-connection-pressure-inspection-plan.md | active - class 5; independently reviewed public Queue backend identity plus PostgreSQL-only zero-setup `numbackends` pressure helper through a private locked core probe; conservative worker overcount, no monitoring grant or database install, phased core/PG release, and formal stale-Weft-plan reopen fence |
 | 2026-08-25-shared-backend-proof-remediation-plan.md | completed — class 3; `shared and not sqlite_only` retained; 59 promoted contract nodes pass SQLite, PostgreSQL, and Redis with full default-topology wrapper suites green; evaluated module-scope collision gate and test-local opt-outs independently reviewed; full test, static, type, and docs gates passed |
 | 2026-08-25-verified-review-findings-remediation-plan.md | completed — class 5; findings 2, 8, 24, 31, 32, 36, 38, and 41 implemented with specs, rationale, changelog, red/green contracts, hardened suppression review, full core and real-backend suites, packaging, Weft compatibility, and independent final review |
 | 2026-08-25-closeable-queue-iterator-contract-plan.md | completed - existing owner-thread close capability for read, move, and stream Queue iterators is public through `CloseableIterator`; high-level move forwards close; compact lifecycle proof passed SQLite, PostgreSQL, and Redis/Valkey; full static, docs, and independent-review gates passed at `81b80403` |
