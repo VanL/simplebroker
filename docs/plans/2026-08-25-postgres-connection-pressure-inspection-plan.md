@@ -1,6 +1,6 @@
 # PostgreSQL Connection-Pressure Inspection Plan
 
-Status: active
+Status: completed
 Class: 5. This work adds a public `Queue.backend_name` property and a public
 `simplebroker_pg.get_connection_stats()` package-root API, changes the private
 core-to-first-party-extension seam, and requires coordinated core and
@@ -664,6 +664,7 @@ re-review found no remaining P0-P2 finding.
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
 | Task 1 overlap gate | Wait for or receive handoff from the active schema-remediation plan before implementation. | The owner requested implementation while that plan's uncommitted work remained in the same worktree. Feature edits were kept surgical and verified with the combined full suites. | Waiting would not reduce file overlap because both changes were already present locally; preserving the other plan's edits and proving the integrated tree was the safer executable gate. | None; public behavior still matches [SB-API-3] and [SB-API-13]. |
+| Task 6 publication order | Publish core, wait for it, then publish PG and any needed core metadata patch. | By owner direction, the final corrective core, PG, and Redis versions were prepared at one exact SHA and released by one `release.py all` batch. Core `7.5.1` already carried the final `simplebroker-pg>=3.10.0` extra and PG `3.10.0` required `simplebroker>=7.5.1`, so no later metadata patch was needed. | The earlier `v7.5.0` core tag was retained as an unpublished incident tag. Exact-SHA gates, local artifact smoke, immutable tags, and all three publication gates passed before closure. Concurrent publication created only a brief dependency-availability window; all matching artifacts are now public and clean-install together. | None; published dependency floors and API contracts match the plan's final state. |
 
 ## Execution Log
 
@@ -728,6 +729,28 @@ re-review found no remaining P0-P2 finding.
   feature Ruff and mypy, documentation gates, real PG18 including autovacuum,
   real PG15, and Python 3.11 wheel/sdist artifact smoke. Concurrent
   schema-remediation hunks remain outside the commit.
+- 2026-08-26: exact batch SHA
+  `107bfc617f21ee4d1d197b3cbda3ea783ff86b17` passed hosted core Test run
+  `32997358265`, PostgreSQL run `32985912183`, and Redis run `32997360753`.
+  The full `release.py all` local gate then passed 3,230 core tests plus 14
+  benchmarks, 1,504 shared PG plus 291 PG-extension tests, 1,497 shared Redis
+  plus 283 Redis-extension tests, 119 examples, static/type/lock checks, and
+  Python 3.11 artifact smoke.
+- 2026-08-26: immutable tags `v7.5.1`,
+  `simplebroker_pg/v3.10.0`, and `simplebroker_redis/v3.9.3` were created at
+  the exact batch SHA. Release-gate runs `33000123765`, `33000111475`, and
+  `33000117982` passed through Trusted Publishing and immutable GitHub Release
+  publication. PyPI and GitHub each expose the expected wheel and sdist; the
+  GitHub Releases also expose Sigstore bundles.
+- 2026-08-26: an isolated Python 3.11 install from PyPI verified exact versions
+  `simplebroker==7.5.1`, `simplebroker-pg==3.10.0`, and
+  `simplebroker-redis==3.9.3`, imported the public helper, resolved PostgreSQL
+  and Redis plugins, and exercised the published `Queue.backend_name` with a
+  SQLite write/read. The earlier real PG15/18 ordinary-role, cross-role,
+  autovacuum-overcount, and connection-reuse proofs remain the backend
+  acceptance receipts. Weft compatibility passed and its revised admission
+  plan received fresh independent approval; downstream enablement remains
+  owned by Weft and is not a SimpleBroker release blocker.
 
 ## Out of Scope
 
@@ -758,7 +781,7 @@ re-review found no remaining P0-P2 finding.
 - [x] Payload and failure types are exhaustive and distinct.
 - [x] Backend API v7 and release floors match code.
 - [x] Local PG stays at the published baseline until the core minor exists.
-- [ ] Every retained artifact has a dry-run and exact-SHA evidence.
+- [x] Every retained artifact has a dry-run and exact-SHA evidence.
 - [x] Weft receives sidecar, SQL, field, precision, and rollout corrections.
 - [x] The stale reviewed Weft plan is reopened/superseded/patched and reviewed
       again before it can authorize implementation.

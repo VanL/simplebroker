@@ -1,6 +1,6 @@
 # Release-gate startup-failure recovery plan
 
-Status: active
+Status: completed
 
 Class: 3. Publication recovery crosses the GitHub Actions, immutable-tag,
 Trusted Publishing, and GitHub Release boundaries.
@@ -88,3 +88,35 @@ must finish the matching GitHub Release. Do not dispatch `v7.5.0`, dispatch
 from a branch, add a manual tag input, widen the `pypi` environment, or cancel
 an in-progress publication. Stop if a future recovery tag lacks the trigger,
 the run ref is not the intended tag, or any exact-SHA workflow is not green.
+
+## Completion evidence
+
+- The forward-recovery implementation landed before the release at exact batch
+  SHA `107bfc617f21ee4d1d197b3cbda3ea783ff86b17`. The immutable `v7.5.0`
+  incident tag was not moved, dispatched, published to PyPI, or turned into a
+  GitHub Release.
+- GitHub's declared Actions outage stranded the first core and Redis checks
+  without jobs. After recovery, exact-SHA Test run `32997358265`, PostgreSQL
+  run `32985912183`, and Redis run `32997360753` all passed. Replacement
+  CodeQL run `32990209005` and OSSF Scorecard run `32990244159` also passed;
+  the outage-only zero-step and startup failures were not treated as product
+  failures.
+- `uv run --locked python bin/release.py all` re-ran the full local gate with
+  17 workers for the parallel core suite, passed core, benchmark,
+  PostgreSQL, Redis, examples, static, type, lock, and packaging checks, then
+  revalidated the three exact-SHA hosted workflows before creating tags.
+- Immutable tags `v7.5.1`, `simplebroker_pg/v3.10.0`, and
+  `simplebroker_redis/v3.9.3` all point at the batch SHA. Tag-triggered release
+  runs `33000123765`, `33000111475`, and `33000117982` respectively passed
+  build, attestation, Trusted Publishing, and immutable GitHub Release gates.
+- PyPI exposes a wheel and sdist for `simplebroker==7.5.1`,
+  `simplebroker-pg==3.10.0`, and `simplebroker-redis==3.9.3`. Each matching
+  GitHub Release is public, non-draft, non-prerelease, immutable, and carries
+  the two distributions plus its Sigstore bundle. An isolated Python 3.11
+  install from PyPI imported all three exact versions, resolved both backend
+  plugins, exposed `get_connection_stats`, and exercised
+  `Queue.backend_name` plus a SQLite write/read.
+
+The incident is therefore closed. Future startup recovery is available only
+for immutable tags whose tagged workflow already contains the input-free
+dispatch trigger; normal tag push remains the release path.
