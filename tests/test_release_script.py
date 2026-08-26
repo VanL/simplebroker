@@ -1360,6 +1360,17 @@ def test_release_sha_removed_from_main_fails_closed(
         release.require_release_sha_on_origin_main(sha)
 
 
+def test_remote_tag_reuse_note_names_immutable_tag_recovery_command() -> None:
+    note = release._remote_tag_reuse_note(_state(remote="a" * 40))
+
+    assert "will not retrigger .github/workflows/release-gate.yml" in note
+    assert "only when that immutable tag already contains" in note
+    assert "otherwise choose a new version and never move the tag" in note
+    assert (
+        "gh workflow run .github/workflows/release-gate.yml --ref v3.1.10"
+    ) in note
+
+
 @pytest.mark.parametrize(
     "message",
     (

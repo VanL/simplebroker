@@ -541,6 +541,18 @@ def test_release_gate_workflows_publish_from_top_level_gate() -> None:
         assert "uses: actions/attest@" in workflow_text
 
 
+def test_release_gates_can_recover_at_the_same_immutable_tag_ref() -> None:
+    for workflow_path in RELEASE_WORKFLOWS:
+        workflow_text = _workflow_text(workflow_path)
+
+        assert "  workflow_dispatch:" in workflow_text
+        assert "group: release-gate-${{ github.ref }}" in workflow_text
+        assert "cancel-in-progress: false" in workflow_text
+        assert "inputs:" not in workflow_text
+        assert "ref: ${{ github.sha }}" in workflow_text
+        assert "TAG_NAME: ${{ github.ref_name }}" in workflow_text
+
+
 def test_artifact_downloads_do_not_use_the_warning_emitting_node_action() -> None:
     for workflow_path in ("scorecard.yml", "test.yml", *RELEASE_WORKFLOWS):
         workflow_text = _workflow_text(workflow_path)

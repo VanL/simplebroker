@@ -1976,8 +1976,12 @@ def _print_dry_run_core_baseline_notes(
 def _remote_tag_reuse_note(state: ReleaseState) -> str:
     return (
         f"Tag {state.tag_name} already exists on origin at HEAD. Pushing the same tag "
-        f"again will not retrigger {state.target.release_workflow}; rerun the "
-        "existing release-gate workflow manually in GitHub Actions if needed."
+        f"again will not retrigger {state.target.release_workflow}. Rerun an existing "
+        "release-gate run when GitHub permits it. If a terminal startup failure "
+        "cannot be rerun, dispatch only when that immutable tag already contains "
+        "the workflow_dispatch trigger; otherwise choose a new version and never "
+        "move the tag. Future-tag recovery command: "
+        f"gh workflow run {state.target.release_workflow} --ref {state.tag_name}"
     )
 
 
