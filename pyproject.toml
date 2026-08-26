@@ -48,10 +48,10 @@ dev = [
     "aiosqlitepool>=1.0.0",
 ]
 pg = [
-    "simplebroker-pg>=3.9.2",
+    "simplebroker-pg>=3.10.0",
 ]
 redis = [
-    "simplebroker-redis>=3.9.2",
+    "simplebroker-redis>=3.9.3",
 ]
 
 [dependency-groups]
