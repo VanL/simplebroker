@@ -41,6 +41,19 @@ def _json_message_id(value: int) -> str:
     return f"{value:019d}"
 
 
+def _insert_exact_json(
+    db_path: Path,
+    queue_name: str,
+    message_id: int,
+    payload: dict[str, Any],
+) -> None:
+    queue = Queue(queue_name, db_path=str(db_path))
+    try:
+        queue.insert_messages([(json.dumps(payload, sort_keys=True), message_id)])
+    finally:
+        queue.close()
+
+
 @pytest.fixture(autouse=True)
 def fail_on_thread_exception(
     monkeypatch: pytest.MonkeyPatch,
@@ -502,7 +515,7 @@ def test_manual_drive_thread_self_closes_after_external_stop_join_false(
     assert reactor._resources_closed
 
 
-def test_control_lane_is_peek_checkpointed_not_consumed(tmp_path: Path) -> None:
+def test_control_lane_is_retained_and_durably_completed(tmp_path: Path) -> None:
     db_path = tmp_path / "reactor.db"
     reactor = _make_reactor(db_path)
     thread = reactor.start()
@@ -620,7 +633,7 @@ def test_unknown_object_control_command_returns_error(
         _stop_reactor(reactor, thread)
 
 
-def test_checkpointed_control_is_not_reprocessed_after_restart(tmp_path: Path) -> None:
+def test_processed_control_is_not_reprocessed_after_restart(tmp_path: Path) -> None:
     db_path = tmp_path / "reactor.db"
     reactor = _make_reactor(db_path)
     thread = reactor.start()
@@ -654,6 +667,173 @@ def test_checkpointed_control_is_not_reprocessed_after_restart(tmp_path: Path) -
         assert len(barrier_replies) == 1
     finally:
         _stop_reactor(restarted, restart_thread)
+
+
+def test_late_lower_input_id_is_discovered_after_higher_completion(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "reactor-late-input.db"
+    _insert_exact_json(db_path, INBOX_A, 300, {"id": "higher-first"})
+
+    reactor = _make_reactor(db_path, worker_count=1)
+    thread = reactor.start()
+    try:
+        _wait_for_outputs(db_path, 1)
+        _insert_exact_json(db_path, INBOX_A, 100, {"id": "late-lower"})
+        _wait_for_outputs(db_path, 2)
+
+        observed_inputs = {
+            int(payload["input_timestamp"])
+            for payload, _output_id in _read_json_messages(OUTBOX, db_path)
+        }
+        assert observed_inputs == {100, 300}
+    finally:
+        _stop_reactor(reactor, thread)
+
+
+def test_late_lower_control_id_is_processed_once_and_terminally_seen(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "reactor-late-control.db"
+    _insert_exact_json(
+        db_path,
+        CONTROL_IN,
+        300,
+        {"command": "PING", "request_id": "higher-first"},
+    )
+
+    reactor = _make_reactor(db_path, worker_count=1)
+    thread = reactor.start()
+    try:
+        _wait_for_control_reply_at_timestamp(db_path, input_timestamp=300)
+        _insert_exact_json(
+            db_path,
+            CONTROL_IN,
+            100,
+            {"command": "PING", "request_id": "late-lower"},
+        )
+        _wait_for_control_reply_at_timestamp(db_path, input_timestamp=100)
+
+        replies = [
+            payload
+            for payload, _output_id in _read_json_messages(CONTROL_OUT, db_path)
+            if payload.get("request_id") == "late-lower"
+        ]
+        assert len(replies) == 1
+        assert _sidecar_rows(
+            db_path,
+            """
+            SELECT status
+            FROM reactor_seen
+            WHERE source_queue = ? AND input_ts = ?
+            """,
+            (CONTROL_IN, 100),
+        ) == [("control_processed",)]
+    finally:
+        _stop_reactor(reactor, thread)
+
+
+def test_terminal_state_is_absorbing_during_dispatch_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "reactor-dispatch-race.db"
+    _insert_exact_json(db_path, INBOX_A, 100, {"id": "race"})
+    reactor = _make_reactor(db_path, worker_count=1)
+    real_record_dispatch = reactor._record_dispatch
+
+    def terminalize_before_admission(item: WorkItem) -> bool:
+        with reactor._metadata_queue.sidecar(transaction=True) as session:
+            session.run(
+                """
+                INSERT INTO reactor_seen
+                    (source_queue, input_ts, status, updated_at_ns)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(source_queue, input_ts) DO UPDATE SET
+                    status = excluded.status,
+                    updated_at_ns = excluded.updated_at_ns
+                """,
+                (item.source_queue, item.timestamp, "result_recorded", time.time_ns()),
+            )
+        return bool(real_record_dispatch(item))
+
+    monkeypatch.setattr(reactor, "_record_dispatch", terminalize_before_admission)
+    try:
+        assert reactor._dispatch_next_input(INBOX_A) is False
+        assert (INBOX_A, 100) not in reactor._inflight
+        assert _sidecar_rows(
+            db_path,
+            """
+            SELECT status
+            FROM reactor_seen
+            WHERE source_queue = ? AND input_ts = ?
+            """,
+            (INBOX_A, 100),
+        ) == [("result_recorded",)]
+    finally:
+        reactor.stop()
+
+
+def test_discovery_pages_past_retained_terminal_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "reactor-paging.db"
+    final_message_id = 150
+    queue = Queue(INBOX_A, db_path=str(db_path))
+    try:
+        queue.insert_messages(
+            [
+                (json.dumps({"id": message_id}), message_id)
+                for message_id in range(1, final_message_id + 1)
+            ]
+        )
+    finally:
+        queue.close()
+
+    reactor = _make_reactor(db_path, worker_count=1)
+    try:
+        with reactor._metadata_queue.sidecar(transaction=True) as session:
+            for message_id in range(1, final_message_id):
+                session.run(
+                    """
+                    INSERT INTO reactor_seen
+                        (source_queue, input_ts, status, updated_at_ns)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (INBOX_A, message_id, "output_written", time.time_ns()),
+                )
+
+        assert reactor._dispatch_next_input(INBOX_A) is True
+        assert (INBOX_A, final_message_id) in reactor._inflight
+    finally:
+        reactor.stop()
+
+
+def test_stale_inflight_seen_row_is_redispatched_after_restart(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "reactor-stale-inflight.db"
+    _insert_exact_json(db_path, INBOX_A, 100, {"id": "retry-after-crash"})
+    bootstrap = _make_reactor(db_path, worker_count=1)
+    try:
+        with bootstrap._metadata_queue.sidecar(transaction=True) as session:
+            session.run(
+                """
+                INSERT INTO reactor_seen
+                    (source_queue, input_ts, status, updated_at_ns)
+                VALUES (?, ?, ?, ?)
+                """,
+                (INBOX_A, 100, "inflight", time.time_ns()),
+            )
+    finally:
+        bootstrap.stop()
+
+    restarted = _make_reactor(db_path, worker_count=1)
+    thread = restarted.start()
+    try:
+        _wait_for_outputs(db_path, 1)
+        payload = _read_json_messages(OUTBOX, db_path)[0][0]
+        assert int(payload["input_timestamp"]) == 100
+    finally:
+        _stop_reactor(restarted, thread)
 
 
 def test_pending_output_replay_waits_for_first_driven_turn(tmp_path: Path) -> None:
@@ -852,7 +1032,8 @@ def test_existing_output_exact_id_replay_marks_written_without_duplicate(
 
     output_message_id = 1000
     payload = json.dumps({"already": "published"}, sort_keys=True)
-    Queue(OUTBOX, db_path=str(db_path)).insert_messages([(payload, output_message_id)])
+    with Queue(OUTBOX, db_path=str(db_path)) as output_queue:
+        output_queue.insert_messages([(payload, output_message_id)])
     _seed_pending_result(
         db_path,
         input_timestamp=1000,
@@ -875,6 +1056,58 @@ def test_existing_output_exact_id_replay_marks_written_without_duplicate(
             (INBOX_A, 1000),
         )
         assert rows == [("output_written",)]
+    finally:
+        reactor.stop()
+
+
+@pytest.mark.parametrize("occupant_claimed", [False, True])
+def test_existing_output_exact_id_with_different_body_remains_pending(
+    tmp_path: Path,
+    *,
+    occupant_claimed: bool,
+) -> None:
+    db_path = tmp_path / "reactor-output-collision.db"
+    bootstrap = _make_reactor(db_path, worker_count=1)
+    bootstrap.stop()
+
+    output_message_id = 1000
+    pending_payload = json.dumps({"expected": "payload"}, sort_keys=True)
+    existing_payload = json.dumps({"different": "occupant"}, sort_keys=True)
+    with Queue(OUTBOX, db_path=str(db_path)) as output_queue:
+        output_queue.insert_messages([(existing_payload, output_message_id)])
+        if occupant_claimed:
+            assert (
+                output_queue.read_one(exact_timestamp=output_message_id)
+                == existing_payload
+            )
+    _seed_pending_result(
+        db_path,
+        input_timestamp=100,
+        output_message_id=output_message_id,
+        payload=pending_payload,
+    )
+
+    reactor = _make_reactor(db_path, worker_count=1)
+    try:
+        with pytest.raises(RuntimeError, match="exact-ID output collision"):
+            reactor.process_once()
+        assert _sidecar_rows(
+            db_path,
+            """
+            SELECT status
+            FROM reactor_results
+            WHERE source_queue = ? AND input_ts = ?
+            """,
+            (INBOX_A, 100),
+        ) == [("output_pending",)]
+        with Queue(OUTBOX, db_path=str(db_path)) as output_queue:
+            assert (
+                output_queue.peek_one(
+                    exact_timestamp=output_message_id,
+                    include_claimed=True,
+                )
+                == existing_payload
+            )
     finally:
         reactor.stop()
 

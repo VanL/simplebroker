@@ -9,39 +9,45 @@ demo. It separates the reusable reactor mechanism from the demo policy:
   ``Queue`` handles or mutates reactor sidecar tables during normal operation;
 * worker threads receive plain Python dataclasses through ``queue.Queue`` and
   return plain result envelopes the same way;
-* source queues are observed with peek-plus-sidecar-checkpoint semantics;
+* source queues are observed with retained peeks plus a durable completion
+  ledger;
 * control messages are handled on a separate control lane by the reactor; and
 * result publication is at-least-once and replayable: the reactor records a
   pending output row in a sidecar table, publishes with an exact message ID,
   then marks it written.
   External queue writes are detected through SimpleBroker's polling strategy:
-  SQLite ``PRAGMA data_version`` observes database changes, then the reactor's
-  checkpoint-aware pending check decides whether there is actually work here.
+  SQLite ``PRAGMA data_version`` observes database changes, then the reactor
+  scans retained rows for work not owned by its durable completion ledger.
 
 The point is not to make a complete framework. It is a small executable shape
 to compare against real codebases such as Taut, Summon, and Weft. SimpleBroker
 already handles storage-level multi-process access to one SQLite database with
 short write transactions and retry. The reactor contract is about logical
-workstream ownership: because source and control queues use
-peek-plus-checkpoint semantics, processing is at-least-once across restart even
-with one reactor, and two live reactors on the same lane add another duplicate
-execution path. Output publication is also at-least-once: a crash after the
-exact-ID outbox write but before ``output_written`` can replay the message if a
-downstream consumer has already vacuumed the claimed output row. A production
-reactor should keep SQLite transactions short, make processors and control
-commands idempotent, deduplicate downstream by output message ID rather than
-payload, add a retention or compaction policy appropriate to its durability
-contract, and add worker timeouts if processors are not tightly bounded. Output
-replay failures backpressure new input dispatch, but the control lane stays
-responsive so STATUS and STOP can still get through. Input, output, and control
-role names must all be distinct. Plain-text control commands are supported; JSON
-control payloads must be objects. Pending outputs retain their recorded output
-queue, and a configured-route mismatch raises instead of silently rerouting. In
-background mode that error ends the drive thread, whose finalizer closes reactor
-resources. Replay budgets limit rows returned and materialized, though SQLite may
-scan more rows without a supporting index. Constructing ``Reactor`` performs
-durable setup and starts idle workers; the first driven turn replays pending
-output. Construction is not a side-effect-free configuration step.
+workstream ownership: retained rows are paged from the lowest public message ID
+on every discovery pass, while terminal ``reactor_seen`` states prevent
+completed work from being selected again. A stale ``inflight`` state is eligible
+for at-least-once redispatch after restart. The numeric checkpoint is status
+information only; it is never a completeness filter. One live item per input
+queue is dispatched at a time, and two live reactors on the same lane add
+another duplicate execution path. Output publication is also at-least-once: a
+crash after the exact-ID outbox write but before ``output_written`` can replay
+the message if a downstream consumer has already vacuumed the claimed output
+row. A production reactor should keep SQLite transactions short, make
+processors and control commands idempotent, deduplicate downstream by output
+message ID rather than payload, and add a retention or compaction policy
+appropriate to its durability contract. Complete discovery revisits retained
+history, so scan cost grows with uncompacted completed rows. Add worker timeouts
+if processors are not tightly bounded. Output replay failures backpressure new
+input dispatch, but the control lane stays responsive so STATUS and STOP can
+still get through. Input, output, and control role names must all be distinct.
+Plain-text control commands are supported; JSON control payloads must be
+objects. Pending outputs retain their recorded output queue, and a
+configured-route mismatch raises instead of silently rerouting. In background
+mode that error ends the drive thread, whose finalizer closes reactor resources.
+Replay budgets limit rows returned and materialized, though SQLite may scan more
+rows without a supporting index. Constructing ``Reactor`` performs durable
+setup and starts idle workers; the first driven turn replays pending output.
+Construction is not a side-effect-free configuration step.
 
 Run from the repository root:
 
@@ -78,6 +84,10 @@ from simplebroker.ext import (
 JsonMapping = Mapping[str, Any]
 Processor = Callable[["WorkItem"], JsonMapping]
 TimestampedRows = list[tuple[str, int]]
+_DISCOVERY_PAGE_SIZE = 100
+_TERMINAL_SEEN_STATUSES = frozenset(
+    {"result_recorded", "output_written", "control_processed"}
+)
 
 
 def _timestamped_rows(rows: list[str] | TimestampedRows) -> TimestampedRows:
@@ -395,7 +405,7 @@ class Reactor(BaseReactor):
     """Sidecar-aware single-writer reactor built on ``BaseReactor``.
 
     This concrete example replaces ``MultiQueueWatcher``'s consuming handler
-    path with peek/checkpoint dispatch. Subclasses should not call
+    path with retained-peek and durable-ledger dispatch. Subclasses should not call
     ``super()._drain_queue()`` from this class unless they intentionally want
     the parent consume-and-handler semantics.
     """
@@ -542,10 +552,6 @@ class Reactor(BaseReactor):
             )
         return {str(queue_name): int(last_ts) for queue_name, last_ts in rows}
 
-    def _checkpoint_after(self, queue_name: str) -> int | None:
-        checkpoint = self._checkpoints.get(queue_name, 0)
-        return checkpoint if checkpoint > 0 else None
-
     @staticmethod
     def _advance_checkpoint(
         session: Any,
@@ -571,20 +577,33 @@ class Reactor(BaseReactor):
             (queue_name, timestamp, now_ns),
         )
 
-    def _record_dispatch(self, item: WorkItem) -> None:
+    def _record_dispatch(self, item: WorkItem) -> bool:
         now = time.time_ns()
         with self._metadata_queue.sidecar(transaction=True) as session:
-            session.run(
-                """
+            admitted = list(
+                session.run(
+                    """
                 INSERT INTO reactor_seen
                     (source_queue, input_ts, status, updated_at_ns)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(source_queue, input_ts) DO UPDATE SET
                     status = excluded.status,
                     updated_at_ns = excluded.updated_at_ns
-                """,
-                (item.source_queue, item.timestamp, "inflight", now),
+                WHERE reactor_seen.status NOT IN (?, ?, ?)
+                RETURNING status
+                    """,
+                    (
+                        item.source_queue,
+                        item.timestamp,
+                        "inflight",
+                        now,
+                        *sorted(_TERMINAL_SEEN_STATUSES),
+                    ),
+                    fetch=True,
+                )
             )
+            if not admitted:
+                return False
             session.run(
                 """
                 INSERT INTO reactor_audit
@@ -599,6 +618,7 @@ class Reactor(BaseReactor):
                     now,
                 ),
             )
+        return True
 
     def _record_pending_result(self, result: WorkerResult) -> PendingOutput | None:
         now = time.time_ns()
@@ -851,14 +871,64 @@ class Reactor(BaseReactor):
     # ------------------------------------------------------------------
     # Queue processing
     # ------------------------------------------------------------------
+    def _seen_statuses_for_page(
+        self,
+        queue_name: str,
+        timestamps: list[int],
+    ) -> dict[int, str]:
+        if not timestamps:
+            return {}
+        placeholders = ", ".join("?" for _ in timestamps)
+        with self._metadata_queue.sidecar() as session:
+            rows = list(
+                session.run(
+                    f"""
+                    SELECT input_ts, status
+                    FROM reactor_seen
+                    WHERE source_queue = ?
+                      AND input_ts IN ({placeholders})
+                    """,
+                    (queue_name, *timestamps),
+                    fetch=True,
+                )
+            )
+        return {int(timestamp): str(status) for timestamp, status in rows}
+
+    def _discover_next_pending(self, queue_name: str) -> tuple[str, int] | None:
+        """Find the lowest eligible retained row with pass-local paging only."""
+        queue_obj = self._managed_queue(queue_name)
+        page_after: int | None = None
+        while True:
+            rows = _timestamped_rows(
+                queue_obj.peek_many(
+                    _DISCOVERY_PAGE_SIZE,
+                    with_timestamps=True,
+                    after_timestamp=page_after,
+                )
+            )
+            if not rows:
+                return None
+
+            statuses = self._seen_statuses_for_page(
+                queue_name,
+                [timestamp for _body, timestamp in rows],
+            )
+            for body, timestamp in rows:
+                if (queue_name, timestamp) in self._inflight:
+                    continue
+                if statuses.get(timestamp) in _TERMINAL_SEEN_STATUSES:
+                    continue
+                return body, timestamp
+            if len(rows) < _DISCOVERY_PAGE_SIZE:
+                return None
+            page_after = rows[-1][1]
+
     def _queue_ready_for_dispatch(self, queue_name: str) -> bool:
         if self._reactor_stop_event.is_set():
             return False
         if queue_name == self.control_in_queue:
             try:
-                return self._managed_queue(queue_name).has_pending(
-                    self._checkpoint_after(queue_name)
-                )
+                return self._discover_next_pending(queue_name) is not None
             except OperationalError:
                 if self._reactor_stop_event.is_set():
                     return False
@@ -869,9 +939,8 @@ class Reactor(BaseReactor):
             return False
         if any(active_queue == queue_name for active_queue, _ts in self._inflight):
             return False
-        queue_obj = self._managed_queue(queue_name)
         try:
-            return queue_obj.has_pending(self._checkpoint_after(queue_name))
+            return self._discover_next_pending(queue_name) is not None
         except OperationalError:
             if self._reactor_stop_event.is_set():
                 return False
@@ -881,9 +950,7 @@ class Reactor(BaseReactor):
         if self._reactor_stop_event.is_set():
             return False
         try:
-            return self._managed_queue(self.control_in_queue).has_pending(
-                self._checkpoint_after(self.control_in_queue)
-            )
+            return self._discover_next_pending(self.control_in_queue) is not None
         except OperationalError:
             if self._reactor_stop_event.is_set():
                 return False
@@ -953,40 +1020,27 @@ class Reactor(BaseReactor):
             self._strategy.notify_activity()
 
     def _dispatch_next_input(self, queue_name: str) -> bool:
-        queue_obj = self._managed_queue(queue_name)
-        rows = _timestamped_rows(
-            queue_obj.peek_many(
-                1,
-                with_timestamps=True,
-                after_timestamp=self._checkpoint_after(queue_name),
-            )
-        )
-        if not rows:
+        discovered = self._discover_next_pending(queue_name)
+        if discovered is None:
             return False
 
-        body, timestamp = rows[0]
+        body, timestamp = discovered
         key = (queue_name, timestamp)
         if key in self._inflight:
             return False
 
         item = WorkItem(source_queue=queue_name, timestamp=timestamp, body=body)
-        self._record_dispatch(item)
+        if not self._record_dispatch(item):
+            return False
         self._inflight.add(key)
         self._work_queue.put(item)
         return True
 
     def _process_control_message(self) -> bool:
-        queue_obj = self._managed_queue(self.control_in_queue)
-        rows = _timestamped_rows(
-            queue_obj.peek_many(
-                1,
-                with_timestamps=True,
-                after_timestamp=self._checkpoint_after(self.control_in_queue),
-            )
-        )
-        if not rows:
+        discovered = self._discover_next_pending(self.control_in_queue)
+        if discovered is None:
             return False
-        body, timestamp = rows[0]
+        body, timestamp = discovered
 
         try:
             payload: Any = json.loads(body)
@@ -1070,6 +1124,27 @@ class Reactor(BaseReactor):
             )
             session.run(
                 """
+                INSERT INTO reactor_seen
+                    (source_queue, input_ts, status, updated_at_ns)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(source_queue, input_ts) DO UPDATE SET
+                    status = CASE
+                        WHEN reactor_seen.status IN (?, ?, ?)
+                        THEN reactor_seen.status
+                        ELSE excluded.status
+                    END,
+                    updated_at_ns = excluded.updated_at_ns
+                """,
+                (
+                    self.control_in_queue,
+                    timestamp,
+                    "control_processed",
+                    now,
+                    *sorted(_TERMINAL_SEEN_STATUSES),
+                ),
+            )
+            session.run(
+                """
                 INSERT INTO reactor_audit
                     (lane, message_ts, event, detail, created_at_ns)
                 VALUES (?, ?, ?, ?, ?)
@@ -1125,6 +1200,11 @@ class Reactor(BaseReactor):
             )
             if existing is None:
                 raise
+            if existing != pending.payload:
+                raise RuntimeError(
+                    "exact-ID output collision: existing body does not match "
+                    f"pending payload for message {pending.output_message_id}"
+                ) from None
         self._mark_output_written(pending)
         self._outputs_published += 1
 

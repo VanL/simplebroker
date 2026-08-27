@@ -919,7 +919,42 @@ found no `CREATE`, `ALTER`, `DROP`, or migration builder in
 Independent review found one missing oldest-only/claim-before-processing note
 in `async_simple_example.py` and asked for stronger sidecar-index evidence.
 Both were corrected. Focused re-review reported no remaining actionable
-blocker. The slice commit is recorded immediately after creation.
+blocker. The slice is committed as `6a4d21f1` (`Repair async and Python
+examples`).
+
+### 2026-08-27 Task 3 reactor discovery and replay slice
+
+Five new probes failed against the prior reactor for their intended reasons:
+late lower input and control IDs were hidden by the persisted checkpoint;
+dispatch admission overwrote a terminal seen state; discovery could not page
+past a retained terminal first page; and an exact-ID output occupant with a
+different body was falsely accepted as the pending result. The pre-existing
+restart behavior already redispatched a stale `inflight` row, so that required
+proof was green before the repair and was retained as a regression test rather
+than misreported as a red defect.
+
+The repaired discovery pass starts without a durable bound, pages with a local
+ascending-ID bound, fetches seen state once per page, skips live work and
+terminal ledger rows, and admits input only through a conditional sidecar write.
+`control_processed` is recorded with the control checkpoint and audit record.
+The checkpoint remains visible status information but no longer participates in
+selection. Exact-ID replay now compares the occupant body for both pending and
+already-claimed output rows; a mismatch raises while `output_pending` remains
+unchanged.
+
+The direct and transition reactor suites pass 70 tests. Ruff, format, the full
+16-file examples mypy gate, and `git diff --check` pass. The transition table
+now fires stale-inflight redispatch, terminal-state skip, and durable
+output-backlog ownership after `result_recorded`. The source documents the
+linear retained-history scan cost, application retention/compaction need, and
+one-live-item-per-input-queue boundary.
+
+The independent reactor/restart review read Task 3 plus `[SB-DELIVERY]` and
+`[SB-SELECT]`, reran both suites and the example type gate, and reported no
+actionable findings. It specifically confirmed complete pass-local discovery,
+terminal admission, stale-inflight replay, result-recorded output ownership,
+pending and claimed exact-ID collision handling, and the one-inflight-per-queue
+boundary.
 
 ## Independent Plan Review
 

@@ -63,6 +63,52 @@ def _result_statuses(reactor: Reactor) -> list[str]:
         ]
 
 
+def _set_seen_status(
+    reactor: Reactor,
+    *,
+    timestamp: int,
+    status: str,
+) -> None:
+    with reactor._metadata_queue.sidecar(transaction=True) as session:
+        session.run(
+            """
+            INSERT INTO reactor_seen
+                (source_queue, input_ts, status, updated_at_ns)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(source_queue, input_ts) DO UPDATE SET
+                status = excluded.status,
+                updated_at_ns = excluded.updated_at_ns
+            """,
+            (INBOX, timestamp, status),
+        )
+
+
+def _fire_seen_ledger_transition(reactor: Reactor, mode: str) -> None:
+    timestamps = {
+        "stale-inflight-redispatch": 401,
+        "terminal-seen-skips-input": 402,
+        "result-recorded-owns-input": 403,
+    }
+    timestamp = timestamps[mode]
+    with Queue(INBOX, db_path=reactor._metadata_queue.db_target) as source:
+        source.insert_messages([("retained", timestamp)])
+
+    if mode == "stale-inflight-redispatch":
+        _set_seen_status(reactor, timestamp=timestamp, status="inflight")
+        reactor.process_once()
+        assert (INBOX, timestamp) in reactor._inflight
+    elif mode == "terminal-seen-skips-input":
+        _set_seen_status(reactor, timestamp=timestamp, status="output_written")
+        reactor.process_once()
+        assert (INBOX, timestamp) not in reactor._inflight
+    else:
+        pending = _pending_result(reactor, timestamp)
+        assert pending.input_timestamp == timestamp
+        reactor.process_once()
+        assert _result_statuses(reactor) == ["output_written"]
+        assert (INBOX, timestamp) not in reactor._inflight
+
+
 @dataclass(frozen=True, slots=True)
 class ReactorPayload:
     mode: Literal[
@@ -81,6 +127,9 @@ class ReactorPayload:
         "control-unknown",
         "control-output-failure",
         "control-checkpoint-failure",
+        "stale-inflight-redispatch",
+        "terminal-seen-skips-input",
+        "result-recorded-owns-input",
     ]
 
 
@@ -234,6 +283,36 @@ REACTOR_TRANSITIONS = (
         effects="replays the response, increments again, then checkpoints once",
         expected_result="two responses expose the at-least-once control boundary",
         payload=ReactorPayload("control-checkpoint-failure"),
+    ),
+    TransitionCase(
+        transition_id="stale-inflight-is-redispatchable",
+        start_state="retained-input-with-stale-inflight-seen",
+        event="process one turn after restart",
+        guard="no live in-process inflight item owns the source row",
+        next_state="work-inflight",
+        effects="refreshes inflight admission and queues the retained input",
+        expected_result="the stale input timestamp becomes live inflight work",
+        payload=ReactorPayload("stale-inflight-redispatch"),
+    ),
+    TransitionCase(
+        transition_id="terminal-seen-input-is-not-redispatched",
+        start_state="retained-input-with-terminal-seen-state",
+        event="process one turn",
+        guard="reactor_seen records output_written",
+        next_state="terminal-input-retained",
+        effects="discovery skips the retained source row",
+        expected_result="no live inflight work is created",
+        payload=ReactorPayload("terminal-seen-skips-input"),
+    ),
+    TransitionCase(
+        transition_id="recorded-result-owns-input-completion",
+        start_state="retained-input-with-output-pending",
+        event="process one turn",
+        guard="reactor_seen records result_recorded for the source row",
+        next_state="output-written-input-terminal",
+        effects="publishes the durable output without redispatching the input",
+        expected_result="output advances and the source timestamp is not inflight",
+        payload=ReactorPayload("result-recorded-owns-input"),
     ),
 )
 
@@ -565,6 +644,12 @@ def _fire_scheduling_transition(reactor: Reactor, mode: str) -> None:
         reactor.request_stop()
         reactor.process_once()
         assert (INBOX, timestamp) not in reactor._inflight
+    elif mode in {
+        "stale-inflight-redispatch",
+        "terminal-seen-skips-input",
+        "result-recorded-owns-input",
+    }:
+        _fire_seen_ledger_transition(reactor, mode)
     elif mode == "foreign-turn":
         _assert_foreign_turn_rejected(reactor)
     elif mode == "bounded-run":
