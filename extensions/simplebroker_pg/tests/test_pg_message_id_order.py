@@ -117,7 +117,10 @@ def test_postgres_v5_migration_locks_rechecks_and_removes_surrogate() -> None:
     assert "SELECT magic, schema_version, last_ts, alias_version" in statements
     assert "LOCK TABLE messages IN ACCESS EXCLUSIVE MODE" in statements
     assert "DROP COLUMN order_id RESTRICT" in statements
-    assert "PRIMARY KEY USING INDEX idx_messages_ts_unique" in statements
+    # The promotion resolves the ts unique index by shape; the recording
+    # runner reports none, so the step recreates and uses the canonical
+    # (quoted) name.
+    assert 'PRIMARY KEY USING INDEX "idx_messages_ts_unique"' in statements
     assert "idx_messages_queue_ts" in statements
     assert "idx_messages_pending_queue_ts" in statements
     assert versions == [6]

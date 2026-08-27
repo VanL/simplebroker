@@ -18,7 +18,6 @@ import pytest
 
 from simplebroker import DumpClockSkewWarning, open_broker
 from simplebroker._backends.sqlite.schema import (
-    ensure_schema_v5,
     initialize_database,
     messages_has_claimed_column,
     meta_table_exists,
@@ -213,7 +212,7 @@ def test_sqlite_schema_fires_transition_table(
             if transition_case.payload == "CURRENT_REPAIR":
                 runner.run("DROP INDEX idx_messages_pending_queue_ts")
                 assert not pending_queue_ts_index_exists(runner)
-                ensure_schema_v5(
+                migrate_schema(
                     runner,
                     current_version=SCHEMA_VERSION,
                     write_schema_version=lambda version: versions.append(version),

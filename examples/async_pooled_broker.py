@@ -52,6 +52,15 @@ from simplebroker._constants import (
     SIMPLEBROKER_MAGIC,
 )
 from simplebroker._sql import (
+    ALTER_MESSAGES_ADD_CLAIMED as SQL_ALTER_MESSAGES_ADD_CLAIMED,
+)
+from simplebroker._sql import (
+    ALTER_MESSAGES_RENAME_V5 as SQL_ALTER_MESSAGES_RENAME_V5,
+)
+from simplebroker._sql import (
+    ALTER_MESSAGES_V6_RENAME_CURRENT as SQL_ALTER_MESSAGES_V6_RENAME_CURRENT,
+)
+from simplebroker._sql import (
     CHECK_CLAIMED_COLUMN as SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED,
 )
 from simplebroker._sql import (
@@ -81,13 +90,7 @@ from simplebroker._sql import (
 from simplebroker._sql import (
     DELETE_QUEUE_MESSAGES as SQL_DELETE_MESSAGES_BY_QUEUE,
 )
-from simplebroker._sql import (
-    DROP_OLD_INDEXES,
-    build_claim_batch_query,
-    build_claim_single_query,
-    build_move_by_timestamp_query,
-    build_peek_query,
-)
+from simplebroker._sql import DROP_MESSAGES_V5 as SQL_DROP_MESSAGES_V5
 from simplebroker._sql import (
     GET_DISTINCT_QUEUES as SQL_SELECT_DISTINCT_QUEUES,
 )
@@ -99,6 +102,13 @@ from simplebroker._sql import (
 )
 from simplebroker._sql import (
     INSERT_MESSAGE as SQL_INSERT_MESSAGE,
+)
+from simplebroker._sql import (
+    build_claim_batch_query,
+    build_claim_single_query,
+    build_move_by_timestamp_query,
+    build_peek_query,
+    create_messages_table_sql,
 )
 from simplebroker.ext import (
     DataError,
@@ -440,12 +450,6 @@ class AsyncBrokerCore:
                 lambda: self._runner.run(SQL_CREATE_TABLE_MESSAGES)
             )
 
-            # Drop old indexes
-            for drop_sql in DROP_OLD_INDEXES:
-                await self._execute_with_retry(
-                    lambda sql=drop_sql: self._runner.run(sql)
-                )
-
             # Create optimized index
             await self._execute_with_retry(
                 lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS)
@@ -565,9 +569,7 @@ class AsyncBrokerCore:
 
             try:
                 await self._runner.begin_immediate()
-                await self._runner.run(
-                    "ALTER TABLE messages ADD COLUMN claimed INTEGER DEFAULT 0"
-                )
+                await self._runner.run(SQL_ALTER_MESSAGES_ADD_CLAIMED)
                 await self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
                 if current_version < 2:
                     await self._write_schema_version_locked(2)
@@ -664,44 +666,45 @@ class AsyncBrokerCore:
                 await self._runner.begin_immediate()
                 if current_version < 6:
                     await self._runner.run(
-                        """
-                        CREATE TABLE simplebroker_messages_v6 (
-                            queue TEXT NOT NULL,
-                            body TEXT NOT NULL,
-                            ts INTEGER PRIMARY KEY,
-                            claimed INTEGER DEFAULT 0
+                        create_messages_table_sql(
+                            "simplebroker_messages_v6",
+                            if_not_exists=False,
                         )
-                        """
                     )
                     await self._runner.run(
                         "INSERT INTO simplebroker_messages_v6 "
                         "(queue, body, ts, claimed) "
                         "SELECT queue, body, ts, claimed FROM messages"
                     )
-                    await self._runner.run(
-                        "ALTER TABLE messages RENAME TO simplebroker_messages_v5"
-                    )
-                    await self._runner.run(
-                        "ALTER TABLE simplebroker_messages_v6 RENAME TO messages"
-                    )
-                    await self._runner.run("DROP TABLE simplebroker_messages_v5")
+                    await self._runner.run(SQL_ALTER_MESSAGES_RENAME_V5)
+                    await self._runner.run(SQL_ALTER_MESSAGES_V6_RENAME_CURRENT)
+                    await self._runner.run(SQL_DROP_MESSAGES_V5)
                     await self._write_schema_version_locked(6)
                 else:
                     rows = await self._runner.run(
                         "PRAGMA table_info(messages)", fetch=True
                     )
-                    columns = tuple(str(row[1]) for row in rows)
-                    primary_keys = tuple(str(row[1]) for row in rows if row[5])
-                    if columns != ("queue", "body", "ts", "claimed") or (
-                        primary_keys != ("ts",)
-                    ):
+                    shape = tuple(
+                        (
+                            str(row[1]),
+                            str(row[2]).upper(),
+                            int(row[3]),
+                            row[4],
+                            int(row[5]),
+                        )
+                        for row in rows
+                    )
+                    expected_shape = (
+                        ("queue", "TEXT", 1, None, 0),
+                        ("body", "TEXT", 1, None, 0),
+                        ("ts", "INTEGER", 1, None, 1),
+                        ("claimed", "INTEGER", 0, "0", 0),
+                    )
+                    if shape != expected_shape:
                         raise RuntimeError(
                             "SQLite schema version 6 requires public message ID "
-                            "as the sole row key"
+                            "as the sole row key in the canonical message shape"
                         )
-                await self._runner.run("DROP INDEX IF EXISTS idx_messages_ts_unique")
-                await self._runner.run("DROP INDEX IF EXISTS idx_messages_unclaimed")
-                await self._runner.run("DROP INDEX IF EXISTS idx_messages_queue_ts_id")
                 await self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS)
                 await self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
                 await self._runner.commit()

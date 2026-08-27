@@ -190,3 +190,25 @@ def test_concurrent_writers_get_their_own_ids(queue_factory):
     verify = queues[0]
     for ts, body in combined.items():
         assert verify.peek_one(exact_timestamp=ts) == body
+
+
+def test_write_rejects_non_int_generated_message_id(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken generator fails loudly instead of minting a rowid.
+
+    ``ts`` is the SQLite rowid, and SQLite transforms a NULL bind into
+    auto-assignment rather than raising, so this guard is the loud-failure
+    boundary the old ``ts INTEGER NOT NULL UNIQUE`` schema provided.
+    """
+    from simplebroker.db import BrokerDB
+
+    db = BrokerDB(str(tmp_path / "guard.db"))
+    try:
+        monkeypatch.setattr(db, "generate_timestamp", lambda: None)
+        with pytest.raises(RuntimeError, match="timestamp generator"):
+            db.write("jobs", "body")
+        rows = list(db._runner.run("SELECT COUNT(*) FROM messages", fetch=True))
+        assert int(rows[0][0]) == 0
+    finally:
+        db.close()

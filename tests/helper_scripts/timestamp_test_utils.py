@@ -134,30 +134,11 @@ class ConflictSimulator:
         self.db.generate_timestamp = self.original_generate  # type: ignore[method-assign]
 
 
-def verify_timestamp_monotonicity(db: BrokerDB, queue: str) -> list[int]:
-    """Read all messages from queue and verify timestamps are monotonic."""
-    timestamps = []
-
-    with db._lock:
-        rows = list(
-            db._runner.run(
-                "SELECT ts FROM messages WHERE queue = ? ORDER BY ts",
-                (queue,),
-                fetch=True,
-            )
-        )
-        for row in rows:
-            timestamps.append(row[0])
-
-    # Verify monotonicity
-    for i in range(1, len(timestamps)):
-        if timestamps[i] <= timestamps[i - 1]:
-            raise AssertionError(
-                f"Timestamp monotonicity violated: "
-                f"ts[{i}]={timestamps[i]} <= ts[{i - 1}]={timestamps[i - 1]}"
-            )
-
-    return timestamps
+# NOTE: verify_timestamp_monotonicity was removed: once retrieval order became
+# ascending public message ID, sorting by ts and asserting ts increases could
+# never fire. Generator monotonicity is covered by
+# tests/test_write_returns_id.py::test_broker_write_ids_strictly_increase,
+# which compares write-return order against ID order.
 
 
 def count_unique_timestamps(db: BrokerDB) -> tuple[int, int]:

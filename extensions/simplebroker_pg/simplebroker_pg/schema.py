@@ -83,6 +83,38 @@ SCHEMA_SETUP_LOCK = "SELECT pg_advisory_xact_lock(?)"
 
 POSTGRES_V6_SHAPE_SQL = """
 /* postgres_v6_shape */
+WITH message_table AS (
+    SELECT table_class.oid
+    FROM pg_class AS table_class
+    JOIN pg_namespace AS table_schema
+      ON table_schema.oid = table_class.relnamespace
+    WHERE table_schema.nspname = current_schema()
+      AND table_class.relname = 'messages'
+),
+index_shapes AS (
+    SELECT
+        access_index.relname AS index_name,
+        index_row.indisprimary AS is_primary,
+        index_row.indpred IS NULL AS is_total,
+        regexp_replace(
+            pg_get_expr(index_row.indpred, index_row.indrelid),
+            '[()[:space:]]',
+            '',
+            'g'
+        ) AS normalized_predicate,
+        (
+            SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+            FROM unnest(index_row.indkey)
+                 WITH ORDINALITY AS key_row(attnum, ordinality)
+            JOIN pg_attribute AS attribute_row
+              ON attribute_row.attrelid = index_row.indrelid
+             AND attribute_row.attnum = key_row.attnum
+        ) AS key_columns
+    FROM pg_index AS index_row
+    JOIN pg_class AS access_index
+      ON access_index.oid = index_row.indexrelid
+    WHERE index_row.indrelid = (SELECT oid FROM message_table)
+)
 SELECT
     NOT EXISTS (
         SELECT 1
@@ -93,71 +125,23 @@ SELECT
     )
     AND EXISTS (
         SELECT 1
-        FROM pg_constraint AS constraint_row
-        JOIN pg_class AS message_table
-          ON message_table.oid = constraint_row.conrelid
-        JOIN pg_namespace AS message_schema
-          ON message_schema.oid = message_table.relnamespace
-        WHERE message_schema.nspname = current_schema()
-          AND message_table.relname = 'messages'
-          AND constraint_row.contype = 'p'
-          AND (
-              SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
-              FROM unnest(constraint_row.conkey)
-                   WITH ORDINALITY AS key_row(attnum, ordinality)
-              JOIN pg_attribute AS attribute_row
-                ON attribute_row.attrelid = message_table.oid
-               AND attribute_row.attnum = key_row.attnum
-          ) = ARRAY['ts']::name[]
+        FROM index_shapes
+        WHERE is_primary
+          AND key_columns = ARRAY['ts']::name[]
     )
     AND EXISTS (
         SELECT 1
-        FROM pg_index AS index_row
-        JOIN pg_class AS message_table
-          ON message_table.oid = index_row.indrelid
-        JOIN pg_class AS access_index
-          ON access_index.oid = index_row.indexrelid
-        JOIN pg_namespace AS message_schema
-          ON message_schema.oid = message_table.relnamespace
-        WHERE message_schema.nspname = current_schema()
-          AND message_table.relname = 'messages'
-          AND access_index.relname = 'idx_messages_queue_ts'
-          AND index_row.indpred IS NULL
-          AND (
-              SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
-              FROM unnest(index_row.indkey)
-                   WITH ORDINALITY AS key_row(attnum, ordinality)
-              JOIN pg_attribute AS attribute_row
-                ON attribute_row.attrelid = message_table.oid
-               AND attribute_row.attnum = key_row.attnum
-          ) = ARRAY['queue', 'ts']::name[]
+        FROM index_shapes
+        WHERE index_name = 'idx_messages_queue_ts'
+          AND is_total
+          AND key_columns = ARRAY['queue', 'ts']::name[]
     )
     AND EXISTS (
         SELECT 1
-        FROM pg_index AS index_row
-        JOIN pg_class AS message_table
-          ON message_table.oid = index_row.indrelid
-        JOIN pg_class AS access_index
-          ON access_index.oid = index_row.indexrelid
-        JOIN pg_namespace AS message_schema
-          ON message_schema.oid = message_table.relnamespace
-        WHERE message_schema.nspname = current_schema()
-          AND message_table.relname = 'messages'
-          AND access_index.relname = 'idx_messages_pending_queue_ts'
-          AND regexp_replace(
-              pg_get_expr(index_row.indpred, index_row.indrelid),
-              '[()[:space:]]',
-              '',
-              'g'
-          ) = 'claimed=false'
-          AND (
-              SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
-              FROM unnest(index_row.indkey)
-                   WITH ORDINALITY AS key_row(attnum, ordinality)
-              JOIN pg_attribute AS attribute_row
-                ON attribute_row.attrelid = message_table.oid
-               AND attribute_row.attnum = key_row.attnum
-          ) = ARRAY['queue', 'ts']::name[]
+        FROM index_shapes
+        WHERE index_name = 'idx_messages_pending_queue_ts'
+          AND normalized_predicate = 'claimed=false'
+          AND key_columns = ARRAY['queue', 'ts']::name[]
     )
 """
 
@@ -347,64 +331,175 @@ def meta_table_exists(runner: SQLRunner) -> bool:
     return bool(rows and rows[0][0])
 
 
+def _canonical_v6_access_paths_exist(runner: SQLRunner) -> bool:
+    """Cheap steady-state probe for the two canonical v6 message indexes."""
+    rows = list(
+        runner.run(
+            "SELECT COUNT(*) FROM pg_indexes "
+            "WHERE schemaname = current_schema() "
+            "AND tablename = 'messages' "
+            "AND indexname IN "
+            "('idx_messages_queue_ts', 'idx_messages_pending_queue_ts')",
+            fetch=True,
+        )
+    )
+    expected_index_count = 2
+    return bool(rows) and int(rows[0][0]) == expected_index_count
+
+
+def _fast_path_admits_current_schema(runner: SQLRunner, current_version: int) -> bool:
+    """Admit a healthy current schema without the advisory lock.
+
+    One indexed catalog probe, no advisory lock, no transaction. Anything
+    unexpected falls through to the locked path, which rereads live metadata
+    and validates or repairs.
+    """
+    if current_version > POSTGRES_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Postgres schema version {current_version} is newer than supported "
+            f"version {POSTGRES_SCHEMA_VERSION}"
+        )
+    return (
+        current_version == POSTGRES_SCHEMA_VERSION
+        and _canonical_v6_access_paths_exist(runner)
+    )
+
+
 def migrate_schema(
     runner: SQLRunner,
     *,
     current_version: int,
     write_schema_version: Callable[[int], None],
 ) -> None:
-    """Apply any missing Postgres schema migrations in order."""
-    del current_version
+    """Apply missing Postgres schema migrations as an exact-version ladder.
+
+    Each step runs only on the exact preceding live version, is idempotent in
+    its body, and advances the schema version by exactly one. All steps share
+    one advisory-locked transaction so a partial ladder rolls back whole;
+    steady-state shape assurance follows the ladder.
+    """
+    if _fast_path_admits_current_schema(runner, current_version):
+        return
     runner.begin_immediate()
     try:
         runner.run(SCHEMA_SETUP_LOCK, (_schema_setup_lock_key(runner),))
         live_state = _read_live_meta_state(runner)
-        live_version = live_state.schema_version
-        if live_version > POSTGRES_SCHEMA_VERSION:
+        version = live_state.schema_version
+        if version > POSTGRES_SCHEMA_VERSION:
             raise RuntimeError(
-                f"Postgres schema version {live_version} is newer than supported "
+                f"Postgres schema version {version} is newer than supported "
                 f"version {POSTGRES_SCHEMA_VERSION}"
             )
 
-        if live_version >= POSTGRES_SCHEMA_VERSION:
-            _validate_or_repair_current_v6(runner)
-            runner.commit()
-            return
-
-        if live_version < 2:
-            runner.run(
-                "ALTER TABLE messages "
-                "ADD COLUMN IF NOT EXISTS claimed BOOLEAN NOT NULL DEFAULT FALSE"
-            )
-        if live_version < 3:
-            try:
-                runner.run(CREATE_TS_UNIQUE_INDEX)
-            except IntegrityError as exc:
-                raise RuntimeError(
-                    "Cannot add unique constraint on timestamp column: duplicate "
-                    "timestamps exist in the database."
-                ) from exc
-        if live_version < 4:
+        if version == 1:
+            _step_v2_claimed_column(runner)
+            write_schema_version(2)
+            version = 2
+        if version == 2:
+            _step_v3_ts_unique_index(runner)
+            write_schema_version(3)
+            version = 3
+        if version == 3:
             runner.run(CREATE_ALIASES_TABLE)
             runner.run(CREATE_ALIAS_TARGET_INDEX)
+            write_schema_version(4)
+            version = 4
+        if version == 4:
+            # v5's order-specific index is obsolete: the v6 rebuild retires it,
+            # so this step only publishes the version.
+            write_schema_version(5)
+            version = 5
+        if version == 5:
+            _step_v6_public_id_rebuild(runner)
+            write_schema_version(6)
+            version = 6
 
-        runner.run("LOCK TABLE messages IN ACCESS EXCLUSIVE MODE")
-        runner.run("DROP INDEX IF EXISTS idx_messages_queue_order")
-        runner.run("DROP INDEX IF EXISTS idx_messages_unclaimed")
-        runner.run("DROP INDEX IF EXISTS idx_messages_queue_ts_order_unclaimed")
-        runner.run("ALTER TABLE messages DROP COLUMN order_id RESTRICT")
-        runner.run(
-            "ALTER TABLE messages ADD CONSTRAINT messages_pkey "
-            "PRIMARY KEY USING INDEX idx_messages_ts_unique"
-        )
-        runner.run(CREATE_QUEUE_TS_INDEX)
-        runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
-        if not _postgres_v6_shape_is_current(runner):
-            raise RuntimeError("Postgres schema v6 migration produced an invalid shape")
-
-        write_schema_version(POSTGRES_SCHEMA_VERSION)
+        _validate_or_repair_current_v6(runner)
         runner.commit()
     except Exception:
         runner.rollback()
         _invalidate_meta_state(runner)
         raise
+
+
+def _step_v2_claimed_column(runner: SQLRunner) -> None:
+    """Migrate schema v1 to v2 (claimed column)."""
+    runner.run(
+        "ALTER TABLE messages "
+        "ADD COLUMN IF NOT EXISTS claimed BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+
+
+def _step_v3_ts_unique_index(runner: SQLRunner) -> None:
+    """Migrate schema v2 to v3 (timestamp unique index)."""
+    try:
+        runner.run(CREATE_TS_UNIQUE_INDEX)
+    except IntegrityError as exc:
+        raise RuntimeError(
+            "Cannot add unique constraint on timestamp column: duplicate "
+            "timestamps exist in the database."
+        ) from exc
+
+
+def _ts_unique_index_name(runner: SQLRunner) -> str:
+    """Resolve the non-partial unique index on ``messages(ts)`` by shape.
+
+    Operator maintenance (bloat remediation, ``REINDEX``-style rebuilds) can
+    leave the semantic index under another name; the primary-key promotion
+    uses whatever index actually carries the constraint rather than assuming
+    the canonical name, and recreates the canonical index only when none
+    qualifies.
+    """
+    rows = list(
+        runner.run(
+            """
+            SELECT access_index.relname
+            FROM pg_index AS index_row
+            JOIN pg_class AS message_table
+              ON message_table.oid = index_row.indrelid
+            JOIN pg_class AS access_index
+              ON access_index.oid = index_row.indexrelid
+            JOIN pg_namespace AS message_schema
+              ON message_schema.oid = message_table.relnamespace
+            WHERE message_schema.nspname = current_schema()
+              AND message_table.relname = 'messages'
+              AND index_row.indisunique
+              AND NOT index_row.indisprimary
+              AND index_row.indpred IS NULL
+              AND index_row.indexprs IS NULL
+              AND (
+                  SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+                  FROM unnest(index_row.indkey)
+                       WITH ORDINALITY AS key_row(attnum, ordinality)
+                  JOIN pg_attribute AS attribute_row
+                    ON attribute_row.attrelid = message_table.oid
+                   AND attribute_row.attnum = key_row.attnum
+              ) = ARRAY['ts']::name[]
+            ORDER BY access_index.relname
+            LIMIT 1
+            """,
+            fetch=True,
+        )
+    )
+    if rows:
+        return str(rows[0][0])
+    runner.run(CREATE_TS_UNIQUE_INDEX)
+    return "idx_messages_ts_unique"
+
+
+def _step_v6_public_id_rebuild(runner: SQLRunner) -> None:
+    """Migrate schema v5 to v6 (public message ID as the sole row key)."""
+    runner.run("LOCK TABLE messages IN ACCESS EXCLUSIVE MODE")
+    runner.run("DROP INDEX IF EXISTS idx_messages_queue_order")
+    runner.run("DROP INDEX IF EXISTS idx_messages_unclaimed")
+    runner.run("DROP INDEX IF EXISTS idx_messages_queue_ts_order_unclaimed")
+    runner.run("ALTER TABLE messages DROP COLUMN order_id RESTRICT")
+    ts_index_name = _ts_unique_index_name(runner)
+    runner.run(
+        "ALTER TABLE messages ADD CONSTRAINT messages_pkey "
+        f"PRIMARY KEY USING INDEX {quote_ident(ts_index_name)}"
+    )
+    runner.run(CREATE_QUEUE_TS_INDEX)
+    runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
+    if not _postgres_v6_shape_is_current(runner):
+        raise RuntimeError("Postgres schema v6 migration produced an invalid shape")

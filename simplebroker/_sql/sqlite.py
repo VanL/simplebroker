@@ -6,21 +6,36 @@ operations. It is intentionally SQLite-specific.
 
 from __future__ import annotations
 
+from .._selection import sql_direction
 from ._query_spec import RetrieveOperation, RetrieveQuerySpec
 
 # ============================================================================
 # TABLE CREATION
 # ============================================================================
 
+
 # Messages table - main table for storing messages
-CREATE_MESSAGES_TABLE = """
-CREATE TABLE IF NOT EXISTS messages (
+def create_messages_table_sql(
+    table_name: str = "messages", *, if_not_exists: bool = True
+) -> str:
+    """Build the canonical messages-table DDL.
+
+    The v5-to-v6 rebuild creates the same shape under a temporary name; this
+    builder is the single source of that shape so the fresh path and the
+    migration path cannot drift apart.
+    """
+    clause = "IF NOT EXISTS " if if_not_exists else ""
+    return f"""
+CREATE TABLE {clause}{table_name} (
     queue TEXT NOT NULL,
     body TEXT NOT NULL,
-    ts INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL PRIMARY KEY,
     claimed INTEGER DEFAULT 0
 )
 """
+
+
+CREATE_MESSAGES_TABLE = create_messages_table_sql()
 
 # Meta table - stores internal state like last timestamp
 CREATE_META_TABLE = """
@@ -94,6 +109,21 @@ ON messages(ts)
 # Add claimed column (schema v2)
 ALTER_MESSAGES_ADD_CLAIMED = """
 ALTER TABLE messages ADD COLUMN claimed INTEGER DEFAULT 0
+"""
+
+# Canonical v5-to-v6 table-rebuild DDL. The production migrator and advanced
+# async example share these statements so the example cannot invent a second
+# physical transition.
+ALTER_MESSAGES_RENAME_V5 = """
+ALTER TABLE messages RENAME TO simplebroker_messages_v5
+"""
+
+ALTER_MESSAGES_V6_RENAME_CURRENT = """
+ALTER TABLE simplebroker_messages_v6 RENAME TO messages
+"""
+
+DROP_MESSAGES_V5 = """
+DROP TABLE simplebroker_messages_v5
 """
 
 # Check for claimed column existence
@@ -482,12 +512,6 @@ BEGIN IMMEDIATE
 """
 
 # Legacy index cleanup (from older versions)
-DROP_OLD_INDEXES = [
-    "DROP INDEX IF EXISTS idx_messages_queue_ts",
-    "DROP INDEX IF EXISTS idx_queue_id",
-    "DROP INDEX IF EXISTS idx_queue_ts",
-]
-
 # ============================================================================
 # DYNAMIC SQL BUILDERS
 # ============================================================================
@@ -626,7 +650,7 @@ def build_retrieve_query(
     """Build a SQLite retrieve query and its parameter tuple."""
     where_conditions, params = _build_where_clause(spec)
     where_clause = " AND ".join(where_conditions)
-    order_direction = "ASC" if spec.order == "oldest" else "DESC"
+    order_direction = sql_direction(spec.order)
 
     if operation == "peek":
         return (

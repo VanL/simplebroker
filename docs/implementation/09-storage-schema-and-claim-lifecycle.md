@@ -16,7 +16,7 @@ SimpleBroker uses a single SQLite database with Write-Ahead Logging (WAL) enable
 CREATE TABLE messages (
     queue TEXT NOT NULL,
     body TEXT NOT NULL,
-    ts INTEGER PRIMARY KEY,                -- Public message ID and sole row key
+    ts INTEGER NOT NULL PRIMARY KEY,       -- Public message ID and sole row key
     claimed INTEGER DEFAULT 0              -- For read optimization
 );
 ```

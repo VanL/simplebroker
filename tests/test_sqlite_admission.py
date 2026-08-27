@@ -21,6 +21,11 @@ from simplebroker._exceptions import DatabaseError
 from simplebroker._runner import SQLiteRunner
 from simplebroker.db import BrokerCore, BrokerDB
 
+from .helper_scripts.sqlite_legacy_layouts import (
+    SQLITE_V5_MESSAGES_TABLE_DDL,
+    create_sqlite_v1_layout,
+)
+
 
 def _raw_database_state(db_path: Path) -> dict[str, bytes]:
     """Snapshot the database namespace without opening any SQLite file."""
@@ -164,14 +169,8 @@ def test_newer_owned_database_is_rejected_before_schema_setup_mutates_it(
     db_path = tmp_path / "newer.db"
     with closing(sqlite3.connect(db_path)) as connection:
         connection.executescript(
-            """
-            CREATE TABLE messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue TEXT NOT NULL,
-                body TEXT NOT NULL,
-                ts INTEGER NOT NULL UNIQUE,
-                claimed INTEGER DEFAULT 0
-            );
+            SQLITE_V5_MESSAGES_TABLE_DDL
+            + """
             CREATE TABLE meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
             CREATE TABLE queue_aliases (
                 alias TEXT PRIMARY KEY,
@@ -295,22 +294,11 @@ def test_unversioned_legacy_database_publishes_only_completed_migrations(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "legacy.db"
-    with closing(sqlite3.connect(db_path)) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue TEXT NOT NULL,
-                body TEXT NOT NULL,
-                ts INTEGER NOT NULL
-            );
-            CREATE TABLE meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-            INSERT INTO meta (key, value) VALUES ('last_ts', 7);
-            INSERT INTO messages (queue, body, ts) VALUES ('q', 'one', 7);
-            INSERT INTO messages (queue, body, ts) VALUES ('q', 'two', 7);
-            """
-        )
-        connection.commit()
+    create_sqlite_v1_layout(
+        db_path,
+        last_ts=7,
+        messages=[("q", "one", 7), ("q", "two", 7)],
+    )
 
     with pytest.raises(RuntimeError, match="duplicate timestamps"):
         BrokerDB(str(db_path))
@@ -332,21 +320,11 @@ def test_unversioned_legacy_database_advances_through_completed_migrations(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "legacy-success.db"
-    with closing(sqlite3.connect(db_path)) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue TEXT NOT NULL,
-                body TEXT NOT NULL,
-                ts INTEGER NOT NULL
-            );
-            CREATE TABLE meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-            INSERT INTO meta (key, value) VALUES ('last_ts', 7);
-            INSERT INTO messages (queue, body, ts) VALUES ('q', 'keep-me', 7);
-            """
-        )
-        connection.commit()
+    create_sqlite_v1_layout(
+        db_path,
+        last_ts=7,
+        messages=[("q", "keep-me", 7)],
+    )
 
     with BrokerDB(str(db_path)) as broker:
         assert broker.peek_one("q") == ("keep-me", 7)
@@ -400,20 +378,7 @@ def test_schema_marker_with_changed_schema_cookie_runs_repair_once(
     else:
         monkeypatch.setenv(phaselock_module.PHASELOCK_ENABLE_XATTRS, "0")
     db_path = tmp_path / "stale-marker.db"
-    with closing(sqlite3.connect(db_path)) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue TEXT NOT NULL,
-                body TEXT NOT NULL,
-                ts INTEGER NOT NULL
-            );
-            CREATE TABLE meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-            INSERT INTO meta (key, value) VALUES ('last_ts', 0);
-            """
-        )
-        connection.commit()
+    create_sqlite_v1_layout(db_path)
 
     with BrokerDB(str(db_path)):
         pass
@@ -452,20 +417,7 @@ def test_schema_snapshot_cannot_mix_cookie_and_proof_across_external_ddl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "ddl-race.db"
-    with closing(sqlite3.connect(db_path)) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue TEXT NOT NULL,
-                body TEXT NOT NULL,
-                ts INTEGER NOT NULL
-            );
-            CREATE TABLE meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-            INSERT INTO meta (key, value) VALUES ('last_ts', 0);
-            """
-        )
-        connection.commit()
+    create_sqlite_v1_layout(db_path)
     with BrokerDB(str(db_path)):
         pass
 

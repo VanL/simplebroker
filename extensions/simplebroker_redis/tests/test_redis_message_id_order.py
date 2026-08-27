@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 from simplebroker_redis import RedisRunner, get_backend_plugin
@@ -143,7 +143,8 @@ def test_redis_move_many_orders_pending_and_claimed_candidates_together(
             require_unclaimed=False,
             order=order,
         )
-        assert [timestamp for _body, timestamp in moved] == expected_ids
+        timestamped = cast(list[tuple[str, int]], moved)
+        assert [timestamp for _body, timestamp in timestamped] == expected_ids
     finally:
         core.close()
 

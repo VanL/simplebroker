@@ -363,7 +363,7 @@ _Implementation mapping_:
 - active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
   — owns [SB-CLI-6], registered-token behavior, and the CLI/Python parity proof
 
-- active: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
+- completed: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
   — consumer-based path admission and representation-assumption corrections
 - active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
   — delete no-match parity, invocation-owned load warnings, exact ISO bounds,

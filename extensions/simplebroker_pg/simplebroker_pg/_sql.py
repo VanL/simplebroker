@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from simplebroker._selection import sql_direction
 from simplebroker._sql import RetrieveOperation, RetrieveQuerySpec
 
 POSTGRES_CONNECTION_STATS_SQL = """
@@ -336,7 +337,7 @@ def build_retrieve_query(
     """Build a Postgres retrieve query and its parameter tuple."""
     where_conditions, params = _build_where_clause(spec)
     where_clause = " AND ".join(where_conditions)
-    order_direction = "ASC" if spec.order == "oldest" else "DESC"
+    order_direction = sql_direction(spec.order)
 
     if operation == "peek":
         return (

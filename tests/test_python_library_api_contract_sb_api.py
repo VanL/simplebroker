@@ -220,6 +220,18 @@ def test_api_generators_watchers_sidecar_io_errors_language() -> None:
     assert "ValueError" in errors
 
 
+def test_api_v6_cutover_contract_names_the_legacy_pg_exception() -> None:
+    body = " ".join(_section("SB-API-11").split()).lower()
+    assert "normal target-backed cold-admission path" in body
+    assert "`simplebroker-pg` 3.10.0" in body
+    assert "missing `order_id` diagnostic" in body
+    assert "every transaction that accesses caller-owned sidecars" in body
+    assert "core and its backend extension as one coherent set" in body
+    assert "no old client may open or retain the target" in body
+    assert "not a rollback or mixed-version mechanism" in body
+    assert "restoring the whole pre-v6 target" in body
+
+
 def test_api_polling_strategy_defaults_match_canonical_config() -> None:
     """[SB-API-6] binds all public constructor defaults to canonical config."""
     watch = _section("SB-API-6")

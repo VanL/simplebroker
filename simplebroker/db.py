@@ -2047,7 +2047,9 @@ class BrokerCore:
         with self._lock:
             self._runner.begin_immediate()
             try:
-                timestamp = self.generate_timestamp()
+                timestamp = self._checked_generated_message_id(
+                    self.generate_timestamp()
+                )
                 self._runner.run(
                     self._sql.INSERT_MESSAGE,
                     (queue, message, timestamp),
@@ -2057,6 +2059,25 @@ class BrokerCore:
                 self._runner.rollback()
                 raise
             return timestamp
+
+    @staticmethod
+    def _checked_generated_message_id(value: object) -> int:
+        """Reject a broken timestamp generator before storage can mask it.
+
+        ``ts`` is the storage primary key; on SQLite it is the rowid, and a
+        NULL bind is transformed into rowid auto-assignment instead of
+        raising, so a silently broken generator would mint a fake message ID
+        adjacent to the newest real one. Fail loudly at the insert boundary.
+        """
+        if type(value) is not int:
+            # Not IntegrityError: the write retry loop treats that as a
+            # resolvable timestamp conflict and would retry the broken
+            # generator instead of failing.
+            raise RuntimeError(
+                f"broker timestamp generator returned {value!r}; expected an "
+                "integer message ID"
+            )
+        return value
 
     def _do_insert_messages_transaction(
         self,
@@ -2265,7 +2286,7 @@ class BrokerCore:
                 results = self._runner.run(query, params, fetch=True)
                 results_list = self._normalize_retrieve_rows(
                     results,
-                    order="oldest",
+                    order=spec.order,
                 )
                 if not results_list:
                     self._runner.rollback()
@@ -3590,7 +3611,9 @@ class BrokerCore:
                     # This reduces transaction time and improves concurrency
                     queue_timestamps = []
                     for queue in queues:
-                        timestamp = self.generate_timestamp()
+                        timestamp = self._checked_generated_message_id(
+                            self.generate_timestamp()
+                        )
                         queue_timestamps.append((queue, timestamp))
 
                     # Store count before inserts

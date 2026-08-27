@@ -186,11 +186,13 @@ def test_root_test_command_adds_local_weft_when_available(
     )
     monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
 
-    assert release._root_test_command()[:6] == (
+    assert release._root_test_command()[:8] == (
         "uv",
         "run",
         "--extra",
         "dev",
+        "--with-editable",
+        ".",
         "--with-editable",
         "../weft",
     )
@@ -211,16 +213,13 @@ def test_root_test_command_skips_local_weft_when_unavailable(
     assert command[4] == "pytest"
 
 
-def test_precheck_env_extends_pythonpath_with_local_weft_venv(
+def test_precheck_env_does_not_inject_local_weft_venv(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "simplebroker"
     project_root.mkdir()
-    runtime_python_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    site_packages = (
-        tmp_path / "weft" / ".venv" / "lib" / runtime_python_dir / "site-packages"
-    )
+    site_packages = tmp_path / "weft" / ".venv" / "lib" / "python3.14" / "site-packages"
     site_packages.mkdir(parents=True)
     monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
 
@@ -230,37 +229,37 @@ def test_precheck_env_extends_pythonpath_with_local_weft_venv(
 
     assert env["PYTEST_ADDOPTS"] == "-x --maxfail=1"
     assert env["PYTEST_XDIST_AUTO_NUM_WORKERS"] == str(release.LOCAL_PYTEST_WORKERS)
-    assert env["PYTHONPATH"] == str(site_packages)
+    assert "PYTHONPATH" not in env
     assert release._precheck_env_overrides(backend_command) == {
         "PYTEST_ADDOPTS": "-x --maxfail=1",
         "PYTEST_XDIST_AUTO_NUM_WORKERS": str(release.LOCAL_PYTEST_WORKERS),
     }
+    assert release._precheck_env_unsets(root_command) == ("PYTHONPATH",)
+    assert release._precheck_env_unsets(backend_command) == ("PYTHONPATH",)
 
 
-def test_precheck_env_skips_incompatible_local_weft_venv(
+def test_run_command_removes_ambient_environment_from_real_child(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    project_root = tmp_path / "simplebroker"
-    project_root.mkdir()
-    incompatible_minor = 13 if sys.version_info.minor != 13 else 14
-    site_packages = (
-        tmp_path
-        / "weft"
-        / ".venv"
-        / "lib"
-        / f"python{sys.version_info.major}.{incompatible_minor}"
-        / "site-packages"
+    monkeypatch.setenv("PYTHONPATH", "/tmp/simplebroker-poisoned-pythonpath")
+
+    release.run_command(
+        (
+            sys.executable,
+            "-c",
+            "import os; assert 'PYTHONPATH' not in os.environ",
+        ),
+        env_unsets=("PYTHONPATH",),
     )
-    site_packages.mkdir(parents=True)
-    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
 
-    env = release._precheck_env_overrides(release._root_test_command())
 
-    assert env == {
-        "PYTEST_ADDOPTS": "-x --maxfail=1",
-        "PYTEST_XDIST_AUTO_NUM_WORKERS": str(release.LOCAL_PYTEST_WORKERS),
-    }
+def test_run_command_rejects_setting_and_unsetting_same_key() -> None:
+    with pytest.raises(RuntimeError, match="both set and unset: PYTHONPATH"):
+        release.run_command(
+            (sys.executable, "-c", "pass"),
+            env_overrides={"PYTHONPATH": "/tmp/simplebroker-pythonpath"},
+            env_unsets=("PYTHONPATH",),
+        )
 
 
 def test_command_env_appends_pythonpath_override(

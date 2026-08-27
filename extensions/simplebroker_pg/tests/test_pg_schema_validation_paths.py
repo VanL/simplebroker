@@ -145,7 +145,9 @@ def test_migrate_schema_applies_all_postgres_migrations_in_one_transaction() -> 
     assert "DROP COLUMN order_id RESTRICT" in joined
     assert "idx_messages_queue_ts" in joined
     assert "idx_messages_pending_queue_ts" in joined
-    assert versions == [PostgresBackendPlugin.schema_version]
+    # The exact-version ladder publishes each step's version in order within
+    # the one shared transaction.
+    assert versions == list(range(2, PostgresBackendPlugin.schema_version + 1))
 
 
 def test_migrate_schema_from_previous_version_rebuilds_v6_layout() -> None:
@@ -667,3 +669,124 @@ def test_postgres_multi_queue_activity_waiter_requires_non_empty_queues() -> Non
             queue_names=(),
             stop_event=threading.Event(),
         )
+
+
+class _RecordingPgRunner:
+    """Delegate to a real runner while recording SQL and transaction calls."""
+
+    def __init__(self, runner: Any) -> None:
+        self._runner = runner
+        self.statements: list[str] = []
+        self.begin_immediate_calls = 0
+
+    def run(self, sql: Any, *args: Any, **kwargs: Any) -> Any:
+        self.statements.append(" ".join(str(sql).split()))
+        return self._runner.run(sql, *args, **kwargs)
+
+    def begin_immediate(self) -> None:
+        self.begin_immediate_calls += 1
+        self._runner.begin_immediate()
+
+    def commit(self) -> None:
+        self._runner.commit()
+
+    def rollback(self) -> None:
+        self._runner.rollback()
+
+
+def test_steady_state_migrate_schema_takes_no_advisory_lock(
+    pg_core: Any,
+    pg_runner: Any,
+) -> None:
+    """A healthy v6 open must not serialize on the schema advisory lock.
+
+    Guards the open-time regression where every runner setup unconditionally
+    took ``pg_advisory_xact_lock`` and ran the full catalog shape query.
+    """
+    del pg_core  # fixture initialized the schema to current v6
+    recording = _RecordingPgRunner(pg_runner)
+
+    def _unexpected_version_write(version: int) -> None:
+        raise AssertionError(f"steady state must not write version {version}")
+
+    pg_schema.migrate_schema(
+        cast("Any", recording),
+        current_version=pg_schema.POSTGRES_SCHEMA_VERSION,
+        write_schema_version=_unexpected_version_write,
+    )
+
+    locked = [s for s in recording.statements if "pg_advisory_xact_lock" in s]
+    assert locked == []
+    assert recording.begin_immediate_calls == 0
+    assert len(recording.statements) == 1
+    assert "pg_indexes" in recording.statements[0]
+
+
+def test_v6_migration_promotes_renamed_ts_unique_index(
+    pg_dsn: str,
+    pg_plugin: Any,
+    raw_pg_conn: Any,
+    create_pg_v5_schema: Any,
+) -> None:
+    """The primary-key promotion resolves the ts unique index by shape.
+
+    Operator maintenance can leave the semantic unique index under a
+    different name; migration must promote whatever index carries the
+    constraint instead of assuming the canonical name.
+    """
+    import uuid
+
+    from psycopg import sql
+
+    schema = f"renamed_ts_{uuid.uuid4().hex[:12]}"
+    create_pg_v5_schema(schema)
+    with raw_pg_conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                "ALTER INDEX {}.idx_messages_ts_unique RENAME TO operator_ts_unique"
+            ).format(sql.Identifier(schema))
+        )
+
+    try:
+        pg_plugin.initialize_target(
+            pg_dsn,
+            backend_options={"schema": schema},
+        )
+
+        with raw_pg_conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("SELECT schema_version FROM {}.meta").format(
+                    sql.Identifier(schema)
+                )
+            )
+            assert cur.fetchone()[0] == 6
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = 'messages' "
+                "AND column_name = 'order_id'",
+                (schema,),
+            )
+            assert cur.fetchone()[0] == 0
+            cur.execute(
+                "SELECT attribute_row.attname "
+                "FROM pg_index AS index_row "
+                "JOIN pg_class AS message_table "
+                "  ON message_table.oid = index_row.indrelid "
+                "JOIN pg_namespace AS message_schema "
+                "  ON message_schema.oid = message_table.relnamespace "
+                "JOIN pg_attribute AS attribute_row "
+                "  ON attribute_row.attrelid = message_table.oid "
+                " AND attribute_row.attnum = ANY(index_row.indkey) "
+                "WHERE message_schema.nspname = %s "
+                "  AND message_table.relname = 'messages' "
+                "  AND index_row.indisprimary",
+                (schema,),
+            )
+            assert [row[0] for row in cur.fetchall()] == ["ts"]
+    finally:
+        with raw_pg_conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                    sql.Identifier(schema)
+                )
+            )

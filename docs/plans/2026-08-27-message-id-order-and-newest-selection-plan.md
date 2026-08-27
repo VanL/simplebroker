@@ -108,20 +108,23 @@ release artifacts.
 11. Backend API version advances from 7 to 8. All first-party backends must
     implement the order parameter together; mixed v7/v8 packages fail at the
     existing plugin handshake rather than degrading silently.
-12. The PostgreSQL and Redis extension releases precede the core release by
-    three waited single-target `bin/release.py` invocations; the batch `all`
-    target is forbidden because it does not serialize publication. Core is a major release because the
-    default public order changes for out-of-order exact IDs: the target core
-    version is 8.0.0 and `BACKEND_API_MIN_CORE_VERSION[8]` is `"8.0.0"`.
-    Exact extension version numbers are chosen in the release slice, but their
-    dependency and backend-handshake floors must exclude the old contract.
+12. The authoritative release driver is `uv run python bin/release.py all`.
+    It runs one combined local preflight, produces or reuses the release
+    commit, then waits for the normal workflows on that exact SHA. It prepares
+    extension tags before the core tag and starts the three immutable tag
+    workflows. Their publication may overlap; release acceptance waits until
+    core 8.0.0, `simplebroker-pg` 4.0.0, and `simplebroker-redis` 4.0.0 are all
+    indexed and pass one coherent clean-install probe. Backend API v8 and its
+    dependency floors exclude every old mixed package contract.
 
 ## Alternatives Considered
 
 - **Keep SQL schema version 5.** Rejected. A previous client would accept a
   fresh no-surrogate database and reach an `id` / `order_id` query it cannot
-  execute. A clean version-gate refusal is part of compatibility, even though
-  it makes first v8 open a one-way admission boundary for old clients.
+  execute. Version 6 gives current clients a durable compatibility boundary
+  and gives normal v7 target opens a clean refusal. The published PG 3.10.0
+  injected-runner exception is handled by the required quiesced coordinated
+  upgrade rather than by retaining the obsolete surrogate.
 - **Keep creating the private surrogate.** Rejected. It preserves two row
   identities after public behavior has stopped using one and leaves future
   code tempted to recover backend-specific insertion order.
@@ -490,11 +493,14 @@ Amend [SB-API-11] with:
 > where `ts` is the primary key and no private surrogate exists; the v6
 > migration rebuilds older layouts into it without mutating caller-owned
 > sidecars. PostgreSQL migration is serialized by a database advisory lock and
-> makes its version decision from a live under-lock metadata read. A database
-> with a schema version newer than a client supports is rejected during cold
-> admission, before any message-table operation. Already-admitted old clients
-> are outside that guarantee; operators must quiesce all clients for the
-> one-way migration.
+> makes its version decision from a live under-lock metadata read. Current
+> clients reject a database with a newer schema version during cold admission,
+> before any message-table operation. The v7-to-v8 transition is a coordinated,
+> quiesced cutover: every old process and sidecar transaction stops before
+> migration, and core plus its extension upgrade together. Normal v7 cold opens
+> reject v6 at the version gate. The published `simplebroker-pg` 3.10.0
+> injected-runner path may instead report its missing `order_id`; operators
+> must not use that legacy path as a rollback or mixed-version mechanism.
 
 Amend [SB-API-12] and the firing table so the CLI, direct-command, Queue,
 backend-protocol, typing, and runtime surfaces enumerate the same support and
@@ -600,8 +606,11 @@ meaning:
 > newest-first selection. Fresh SQL databases no longer contain private
 > `id`/`order_id` columns; opening an owned v5 target with v8 rebuilds the
 > SimpleBroker-owned schema and removes the legacy surrogate. SQL schema
-> version 6 makes an older client that opens afterward reject the database
-> cleanly before operation. This is a downtime cutover, not a rolling upgrade:
+> version 6 makes a normal target-backed older client that opens afterward
+> reject the database cleanly before operation. The injected-runner path in
+> `simplebroker-pg` 3.10.0 is a known exception and may report a missing
+> `order_id` column instead. This is a coordinated downtime cutover, not a
+> rolling upgrade:
 > stop all v7 clients and sidecar transactions, take a whole-target backup,
 > install the coherent v8 package set, migrate and verify once, then restart
 > only v8 clients. PostgreSQL takes an `ACCESS EXCLUSIVE` migration lock.
@@ -734,10 +743,13 @@ remain ascending and do not acquire a reverse-order mode.
 
 Advance `SCHEMA_VERSION` and `POSTGRES_SCHEMA_VERSION` to 6. Admission must
 read and compare the owned `meta` version before any query that names a
-message-table column. An old client making a new, cold open of a fresh
-no-surrogate database must fail with its existing clear newer-schema
-diagnostic. It must never reach `no such column: id`, `column order_id does not
-exist`, or an equivalent mid-operation backend error.
+message-table column on every current-client path. A normal immediately
+previous `BrokerTarget` client making a new cold open of a fresh no-surrogate
+database must fail with its existing clear newer-schema diagnostic. The
+published PG 3.10.0 injected-runner path is a recorded legacy exception: its
+ownership wrapper bypasses the old concrete-runner metadata fast path and can
+reach `column order_id does not exist`. The coordinated upgrade prevents that
+old path from opening v6; it is not a supported mixed-version refusal path.
 
 This gate requires a real previous-release compatibility probe, not a mock of
 the version constant:
@@ -746,24 +758,27 @@ the version constant:
    v6 databases.
 2. In isolated environments install the immediately previous published core
    and matching PostgreSQL extension.
-3. Attempt a normal read against each new database.
+3. Attempt a normal target-backed read against each new database.
 4. Assert rejection occurs during setup/admission, mentions the unsupported
    newer schema version, and contains no missing-column diagnostic.
 5. Assert the attempted operation did not mutate metadata, messages, aliases,
-   claims, or queues.
+   claims, queues, or caller-owned sidecars. Separately execute the injected
+   PG 3.10.0 path to preserve evidence for the known diagnostic exception.
 
 The same probe must cover a v5 database after the new client migrates it to
 v6. Its SimpleBroker-owned schema is equivalent to a fresh v6 database, modulo
 engine-derived names and SQLite's persistent internal `sqlite_sequence` table,
-and the old client must produce the same clean newer-schema refusal.
+and the normal target-backed old client must produce the same clean
+newer-schema refusal.
 
-This is a cold-admission guarantee, not a live compatibility guarantee. An
-already-open v7 handle has passed its only version check and may fail against a
-subsequently migrated layout. Production cutover must stop and drain every v7
-process and sidecar transaction before migration; live v7/v8 coexistence is
-unsupported. A disposable transition probe keeps an old handle open across a
-migration to demonstrate this boundary, but its backend-specific failure text
-is not a public contract.
+This is a current-client and normal previous-target admission guarantee, not a
+live or universal historical-client compatibility guarantee. An already-open
+v7 handle has passed its only version check and may fail against a subsequently
+migrated layout. Production cutover must stop and drain every v7 process and
+sidecar transaction before migration; live v7/v8 coexistence is unsupported.
+A disposable transition probe keeps an old handle open across a migration to
+demonstrate this boundary, but its backend-specific failure text is not a
+public contract.
 
 ## Public and Internal API Design
 
@@ -875,28 +890,25 @@ Hidden couplings to inspect explicitly:
 
 ## Rollout and Rollback
 
-This is a coordinated major release. Do not use `python3 bin/release.py all`:
-that target pushes all candidate tags after shared checks and does not serialize
-their publication workflows. Record owner-approved extension versions, then
-run and wait for these single-target releases in order:
+This is a coordinated major release. The executable release driver outranks
+earlier plan prose. With all three version files already bumped, preview and
+then run its batch target:
 
 ```bash
-python3 bin/release.py pg --version <PG_VERSION>
-python3 bin/release.py redis --version <REDIS_VERSION>
-python3 bin/release.py core --version 8.0.0
+uv run python bin/release.py all --dry-run
+uv run python bin/release.py all
 ```
 
-After each extension command, wait for its tag workflow and immutable PyPI
-artifact to succeed. Download the wheel without dependencies and inspect its
-name, hash, backend API v8 metadata, and `simplebroker>=8.0.0` requirement
-before starting the next release. Those extension artifacts are intentionally
-not dependency-resolvable from a clean index until core 8.0.0 is published.
-Keep that interval short, announce it in the release record, and do not claim a
-clean install as extension-publication evidence during it. Only after both
-extension artifacts are visible and correct may the core command run. After
-core publication, require a clean index install of core with both extras and a
-full import/version/handshake smoke before calling the coordinated release
-usable. The release notes must tell operators to back up SQL targets before
+The helper runs the combined local checks, pushes the exact release commit to
+`main`, waits for the normal workflows on that SHA, then prepares and pushes
+the PG, Redis, and core tags in that order. Their immutable tag workflows may
+publish concurrently. During that short interval, an extension may be indexed
+before its core floor is available; that transient is accepted and must not be
+misreported as a clean-install failure. Call the coordinated release usable
+only after all three artifacts are indexed and one clean install of
+`simplebroker[pg,redis]==8.0.0` resolves PG 4.0.0 and Redis 4.0.0, verifies
+hashes/import paths and the v8 handshake, and passes the published-artifact
+smoke. The release notes must tell operators to back up SQL targets before
 first open with the new release.
 
 The operator cutover is a quiesced, one-way transition:
@@ -910,6 +922,28 @@ The operator cutover is a quiesced, one-way transition:
    SimpleBroker-owned shape, row counts, sidecar snapshots, and representative
    behavior.
 5. Start only v8 clients. Do not restart v7 against the migrated target.
+
+Weft and Taut participate in this coordinated cutover. Their dependency and
+behavior updates are separate downstream changes, but must be ready before
+either application resolves or deploys SimpleBroker 8. Existing lock files
+currently hold their v7 package sets; do not refresh those lower-bound-only
+requirements across the v8 publication boundary until the corresponding
+downstream order assumptions and migration tests are updated.
+
+The downstream readiness evidence is an external handoff gate, not a claimed
+SimpleBroker test. Before the SimpleBroker tag push, record an owner-approved
+commit SHA for each downstream at which one of these is true: it adopts the
+coherent core 8.0.0 / PG 4.0.0 / Redis 4.0.0 set and its lock file plus order
+and migration suites pass, or it temporarily caps SimpleBroker below v8 so a
+fresh install cannot cross the boundary. Weft's handoff must resolve the two
+known pipeline exact-ID order failures and pass its ordinary and PostgreSQL
+artifact runs. Taut's handoff starts from baseline
+`50eeb947f1530d70ec8ba070c385191e8b4f6336`; it must update the root
+`simplebroker>=7.4.2` and PG-extra `simplebroker-pg>=3.9.2` declarations plus
+`uv.lock`, assert the selected SimpleBroker metadata versions inside its test
+process, and pass `uv run --extra dev pytest` plus
+`uv run ./bin/pytest-pg --fast`. Preserve the currently unrelated dirty Taut
+plan files; use a clean disposable worktree for that adoption proof.
 
 Opening an existing v5 SQL target with v8 then rebuilds it to the canonical v6
 layout: a transactional table rebuild on SQLite, a column/constraint rewrite
@@ -941,12 +975,15 @@ Post-release success signals:
 - ordinary generated-write workloads retain observed FIFO order;
 - exact out-of-order workloads match ascending/default and descending/newest
   expectations on all backends;
-- previous clients making a cold open reject v6 at admission with the
-  documented diagnostic;
+- normal previous target-backed clients making a cold open reject v6 at
+  admission with the documented diagnostic; the PG 3.10.0 injected-runner
+  exception remains unreachable during the coordinated cutover;
 - PostgreSQL contention proves one migration across project, direct, and
   environment-selected startup paths;
-- Weft's existing suite remains green and its prospective bounded-newest use
-  needs no backend-specific branch.
+- every adopting Weft/Taut handoff proves exact v8 artifact possession and its
+  order/dependency suites; a temporary-cap handoff instead proves a fresh
+  resolution remains on v7. Neither may resolve or deploy v8 before its
+  adoption change lands.
 
 ## Storage Test Matrix
 
@@ -1206,12 +1243,12 @@ In the ordinary SimpleBroker suite the source probe may skip only when all four
 error; with all four present every assertion must fire. The copied Weft-local
 file imports no SimpleBroker test helper or conftest module.
 
-After the three waited single-target publications in **Rollout and Rollback**,
-create a second disposable Weft worktree at the same recorded SHA. Pin the
-three expected published versions explicitly, not through an unconstrained
-upgrade. Add the same byte-identical probe under that worktree's `tests` tree,
-repeat the equality/hash check, then run the in-child possession probe and PG
-suite:
+After the batch publication in **Rollout and Rollback** has indexed all three
+artifacts, create a second disposable Weft worktree at the same recorded SHA.
+Pin the three expected published versions explicitly, not through an
+unconstrained upgrade. Add the same byte-identical probe under that worktree's
+`tests` tree, repeat the equality/hash check, then run the in-child possession
+probe and PG suite:
 
 ```bash
 (cd "$simplebroker_weft_release_worktree" && uv add --optional dev "simplebroker==$SIMPLEBROKER_EXPECTED_CORE_VERSION" "simplebroker-pg==$SIMPLEBROKER_EXPECTED_PG_VERSION" "simplebroker-redis==$SIMPLEBROKER_EXPECTED_REDIS_VERSION")
@@ -1219,17 +1256,31 @@ suite:
 (cd "$simplebroker_weft_release_worktree" && env -u PYTHONPATH uv run --all-extras python bin/pytest-pg --all tests)
 ```
 
-Do not commit either disposable Weft dependency/lock change. Update all
+Before publication, attach the owner-approved Weft and Taut handoff SHAs
+defined in **Rollout and Rollback** to this plan. For an adopting Taut handoff,
+run the pre-release proof from a clean disposable worktree at that handoff SHA
+with the three local wheel paths selected in-process; record exact package
+metadata and import paths, then run its ordinary and `bin/pytest-pg --fast`
+suites. After all three packages are indexed, repeat at the same handoff SHA
+with exact published versions. For a temporary `<8` cap, do not inject v8
+wheels: prove a fresh lock/install at that handoff SHA remains on v7 and record
+the later v8 adoption as outside this release's deployment gate.
+
+Do not commit either disposable downstream dependency/lock change. The actual
+downstream adoption or cap commits belong in Weft and Taut. Update all
 SimpleBroker version floors and backend API mappings before artifact
 construction.
 
 Gate: no source-tree import leakage; artifact metadata selects compatible
-extensions; cold old-client opens reject v6 cleanly; the already-open-handle
-probe documents why quiescence is required; whole-target rollback restores
-broker and sidecar state before old artifacts restart; Weft's default suite
-passes the built artifacts; Weft's PostgreSQL suite passes the exact published
-versions; all SimpleBroker backend suites pass the built artifacts before
-publication.
+extensions; normal target-backed old-client opens reject v6 cleanly; the
+injected-runner and already-open-handle probes document why coordination and
+quiescence are required; whole-target rollback restores broker and sidecar
+state before old artifacts restart. Weft's two identified exact-ID order
+failures and the Taut dependency boundary are owned by recorded downstream
+handoff commits rather than hidden as SimpleBroker passes. All SimpleBroker
+backend suites pass the built artifacts before publication. Post-publication,
+an adopting handoff runs against the exact indexed versions; a cap handoff
+repeats the fresh-resolution proof and remains on v7.
 
 ### Task 8: Final documentation, review, and closure
 
@@ -1337,16 +1388,20 @@ This plan is complete only when:
 6. PostgreSQL migration serialization works for direct and project target
    topologies through an advisory lock and live under-lock version recheck;
    stale cache state cannot rerun DDL and failure releases the lock.
-7. A real old client making a cold open rejects fresh and upgraded v6 databases
-   during admission with a clear version diagnostic and no mutation or
-   missing-column error. Cutover and rollback tests quiesce clients and prove
-   that live v7/v8 coexistence is not promised.
+7. A real old client using the normal target-backed path rejects fresh and
+   upgraded v6 databases during admission with a clear version diagnostic and
+   no mutation or missing-column error. The PG 3.10.0 injected-runner probe
+   preserves the known diagnostic exception. Cutover and rollback tests
+   quiesce clients and prove that no old path may participate in live v7/v8
+   coexistence.
 8. Generators, all, stream, and watch have no newest control and remain
    ascending by public ID.
 9. Engine `RETURNING` order cannot affect exposed order.
 10. Whole-target backup/restore rollback, clean artifact installs, backend
-    handshake, full suites, and Weft proof pass. The rollback rehearsal
-    includes sidecar state.
+    handshake, and full SimpleBroker suites pass. Owner-approved Weft and Taut
+    handoff SHAs prove either coherent v8 adoption (updated bounds, locks,
+    exact artifact possession, and downstream suites) or a temporary `<8` cap;
+    the rollback rehearsal includes sidecar state.
 11. Independent review findings are resolved, final evidence is recorded, the
     work is committed without agent attribution, and the index row is changed
     to `completed` in that same change.
@@ -1368,10 +1423,15 @@ This plan is complete only when:
 
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
-| [SB-API-11], acceptance 7 | Every previous-client PostgreSQL cold open rejects v6 at the metadata-version gate before legacy column use. | The published v7.5.1/PG 3.10.0 `BrokerTarget` path rejects fresh and upgraded v6 cleanly and without mutation. The documented injected `Queue(..., runner=PostgresRunner(...))` path wraps the runner; v7's extension then misses its concrete-runner metadata fast path and parses legacy bootstrap DDL against `order_id` before core performs its version check. It fails with `column "order_id" does not exist`. | The previous artifacts are immutable. PostgreSQL resolves the missing column even when an index of the legacy name already exists, so a surrogate-free v6 target cannot repair that path with an index-name sentinel. Satisfying the unconditional promise requires retaining an `order_id`-compatible column, patching and releasing the old line first, or narrowing the promise. | No contract change has been selected. The no-surrogate implementation remains intact and plan completion is blocked on this owner choice. |
-| Task 0 inventory, Task 7 Weft gate | Weft has no production dependency on insertion order for exact-ID rows and its suites pass the v8 artifacts unchanged. | Pipeline child TIDs are allocated stage-then-edge but exact-ID spawn rows are submitted edge-then-stage. Ascending public-ID retrieval therefore changes the observed internal spawn order. The two pipeline-order tests pass with core 7.5.1 and fail with core 8.0.0 on both SQLite and PostgreSQL artifact runs. | The static Task 0 inventory saw exact insertion but incorrectly assumed the generated IDs were monotone in submission order. SimpleBroker is behaving according to the promoted [SB-SELECT-5] contract. | Keep the SimpleBroker contract. Weft should allocate edge and stage TIDs in dependency/submission order (or otherwise stop relying on exact-ID insertion order) in a separately governed downstream change. |
+| [SB-API-11], acceptance 7 | Every previous-client PostgreSQL cold open rejects v6 at the metadata-version gate before legacy column use. | The published v7.5.1/PG 3.10.0 `BrokerTarget` path rejects fresh and upgraded v6 cleanly and without mutation. The documented injected `Queue(..., runner=PostgresRunner(...))` path wraps the runner; v7's extension then misses its concrete-runner metadata fast path and parses legacy bootstrap DDL against `order_id` before core performs its version check. It fails with `column "order_id" does not exist`. | The previous artifacts are immutable. PostgreSQL resolves the missing column even when an index of the legacy name already exists, so a surrogate-free v6 target cannot repair that path with an index-name sentinel. | Resolved by owner decision on 2026-08-27: retain the surrogate-free layout and scope the transition to a coordinated quiesced update. Normal target-backed cold refusal remains guaranteed and tested; PG 3.10.0 injected-runner admission is a documented legacy exception that must never open v6 during cutover. |
+| Task 0 inventory, Task 7 Weft gate | Weft has no production dependency on insertion order for exact-ID rows and its suites pass the v8 artifacts unchanged. | Pipeline child TIDs are allocated stage-then-edge but exact-ID spawn rows are submitted edge-then-stage. Ascending public-ID retrieval therefore changes the observed internal spawn order. The two pipeline-order tests pass with core 7.5.1 and fail with core 8.0.0 on both SQLite and PostgreSQL artifact runs. Taut also declares lower-bound-only SimpleBroker requirements and must not refresh across the major-version boundary without its adoption suite. | The static Task 0 inventory saw exact insertion but incorrectly assumed the generated IDs were monotone in submission order. SimpleBroker is behaving according to the promoted [SB-SELECT-5] contract. | Resolved for SimpleBroker release readiness by owner decision on 2026-08-27: keep the SimpleBroker contract and coordinate Weft and Taut dependency/behavior updates before either adopts v8. These are downstream migration changes, not a backend-specific SimpleBroker mode. |
 
-Empty at authoring time. Any implementation change to supported surfaces,
+| Storage Design (SQLite migration guard), Task 3 | The v5-to-v6 migration refuses when caller objects textually reference removed `messages.id`, via a pre-flight regex scan. | Owner-directed 2026-08-27: no migration refusal. The regex both over-matched (blocking legitimate sidecar views) and under-matched (missing `WHERE id` references). The guard and regex are removed; caller objects attached to `messages` are unsupported and do not survive the rebuild; detached views survive as definitions and may break. Post-rebuild FK verification is scoped to the preserved `messages(ts)` references. | Anything outside the broker schema belongs in a sidecar and carries no support; refusing migration to protect unsupported objects inverted priorities and the textual scan bricked innocent databases. | Documentation states the strict ownership rule; no [SB-*] clause change required. |
+| Storage Design (steady-state validation), Task 3/4 | The SQLite v6 open-time check required exactly the canonical index list and zero triggers on `messages`. | Owner-directed 2026-08-27: upgrade and validation code is idempotent. The validator requires the canonical columns, primary key, and indexes to exist (repairing missing canonical indexes), and ignores unsupported caller extras instead of failing every subsequent open. | An open that can never converge after harmless caller DDL is a bug, and PostgreSQL validation already anchored on existence. | None; matches [SB-API-11]'s existing anchor language. |
+| Storage Design (migration architecture), Tasks 3/4 | Migrations applied via cumulative `< N` branches with steady-state assurance mixed into each step, including per-open index drop/recreate and an unconditional PostgreSQL advisory lock plus catalog shape query per runner setup. | Owner-directed 2026-08-27: exact-version ladder. Each step runs only on the exact preceding version, is idempotent, and advances the version by exactly one; fresh databases are created directly at v6 and run no steps; steady state costs a read-only shape probe (SQLite) or one `pg_indexes` probe with no advisory lock (PostgreSQL). The legacy SQLite drop list is deleted; the rebuild DDL derives from the single `create_messages_table_sql` builder. | Open-time regressions (double index rebuild per SQLite open; cluster-wide advisory-lock serialization per PostgreSQL setup) and three independently authored copies of the v6 shape. | None; behavior contracts unchanged. |
+| [SB-ID-1] loud-failure boundary | `ts INTEGER NOT NULL UNIQUE` raised `IntegrityError` on a NULL bind. | `ts` as the SQLite rowid alias transforms a NULL bind into auto-assignment even with `NOT NULL` declared (verified on SQLite 3.50.4), so the schema cannot restore the loud failure; a guard at the generated-ID insert boundary raises `RuntimeError` for a non-integer generator result before any row can be minted. The DDL declares `NOT NULL` as stated intent. | Stored NULL remains impossible; only the error surface moved from the engine to the insert boundary, where it can actually fire. | None; [SB-ID-1] already owns integer-only public IDs. |
+
+Any implementation change to supported surfaces,
 schema-version strategy, accepted layouts, order vocabulary, generator
 boundary, release sequence, rollback method, or spec wording must add a row
 before the differing code lands. `pending` is not allowed at plan completion.
@@ -1457,8 +1517,8 @@ Possession answers:
   Redis behavior remained skipped pending Task 6's service gate.
 - Backend API v8 is registered with minimum core `8.0.0`. The coordinated
   source versions are core `8.0.0`, PostgreSQL extension `4.0.0`, and Redis
-  extension `4.0.0`; publication remains forbidden until the ordered Task 7
-  gates and explicit owner authorization.
+  extension `4.0.0`; publication remains forbidden until the Task 7 gates and
+  explicit owner authorization.
 
 ### 2026-08-27 Task 3 SQLite v6 slice
 
@@ -1626,8 +1686,9 @@ observed result, and residual risk for each gate. Do not replace evidence with
   upgraded-target attempt. PostgreSQL `BrokerTarget` rejected fresh and
   upgraded v6 with the same diagnostic; a before/after logical snapshot proved
   no metadata, message, alias, claim, queue, or sidecar mutation. The injected
-  runner exception described in the Deviation Log is a release blocker under
-  the current unconditional acceptance text.
+  runner exception described in the Deviation Log was a release blocker under
+  the then-unconditional acceptance text; the owner-selected coordinated
+  cutover and narrowed normal-target guarantee resolve it for this plan.
 - The SQLite rollback drill quiesced a real v5 target, copied the whole file,
   migrated it with the core wheel, and verified ascending broker rows plus
   unchanged sidecar DDL, data, index, and `sqlite_sequence` state. Restoring
@@ -1656,28 +1717,60 @@ observed result, and residual risk for each gate. Do not replace evidence with
   `--with simplebroker-pg[dev]` process.
 - No package, tag, or repository publication was attempted. The plan's second
   disposable worktree against exact published versions remains unavailable
-  until the owner explicitly authorizes and completes the three serial
-  publications. Task 7 and the plan remain active because the two deviations
-  above must be resolved before publication.
+  until the owner explicitly authorizes the batch release. The two
+  prepublication deviations above are resolved by the owner-selected
+  coordinated update across SimpleBroker, Weft, and Taut. Task 7 and the plan
+  remain active for the unrecorded owner-approved downstream handoff SHAs, the
+  intentionally unperformed publication, and the applicable exact-v8 or
+  capped-v7 post-index acceptance.
 
 ### 2026-08-27 Task 8 pre-closure verification
 
-- `uv run pytest` passed from the final code state with 3263 tests and 18
-  documented platform, opt-in, and dual-service skips in 50.52 seconds.
-- `uv run --frozen --no-sync ./bin/pytest-pg` passed against PostgreSQL 18:
-  1526 shared tests with 11 skips in 62.19 seconds, then 309 extension tests
-  with 7 opt-in skips in 4.77 seconds.
-- `uv run --frozen --no-sync ./bin/pytest-redis` passed against Valkey 7.2:
-  1519 shared tests with 18 skips in 43.57 seconds, then 294 extension tests
-  with one opt-in skip in 3.57 seconds. The extension count includes the
-  independent review corrections below.
-- Repository-wide Ruff lint and format checks passed. Source mypy passed 66
-  files; the explicit core-test mypy sweep passed 209 files. DOM-15 fixtures,
-  plan-context, doc-path, packaging smoke, and diff checks passed.
-- This is pre-closure evidence, not a completion claim. The plan status and
-  index row remain active until the injected-runner admission promise and the
-  Weft exact-ID ordering dependency in the Deviation Log are resolved. The
-  final independent review is recorded separately after this verification.
+- The release helper's exact functional command, including coherent editable
+  SimpleBroker and Weft overlays with ambient `PYTHONPATH` removed, passed
+  3266 tests with 18 documented skips in 72.22 seconds. Its serial benchmark
+  command passed all 14 selected tests.
+- The exact release PostgreSQL command passed against PostgreSQL 18: 1527
+  shared tests with 11 skips in 56.18 seconds, then 310 extension tests with 7
+  opt-in skips in 3.04 seconds.
+- The exact release Redis command passed against Valkey 7.2: 1520 shared tests
+  with 18 skips in 41.17 seconds, then 294 extension tests with one opt-in skip
+  in 3.48 seconds. The extension count includes the independent review
+  corrections below.
+- The exact examples command passed 120 tests. The advanced async SQLite
+  example contains no locally authored schema DDL: production and the example
+  share the canonical table builder plus v6 rename/drop statements. A literal
+  v5 fixture migrates through the example, proves the exact canonical shape,
+  and reopens through the normal synchronous `Queue`; focused independent
+  re-review passed with no finding. Shell examples, repository-wide
+  Ruff lint, and format checks passed. Source mypy passed 65 files; the
+  explicit core-test, PostgreSQL-test, Redis-test, and example sweeps passed
+  209, 25, 19, and 15 files respectively. DOM-15 fixtures, plan-context,
+  suppression-registry, and diff checks passed. The current change adds no
+  suppression; the SQLite ladder simplification retires seven `PLR2004`
+  directives and reduces [RUFF-SUP-036] from 11 to 4.
+- All three locks resolved without a change. The release post-update sequence
+  built core 8.0.0, PostgreSQL 4.0.0, and Redis 4.0.0 distributions. The
+  Python 3.11 packaging smoke installed the three wheels together, then proved
+  isolated core wheel and sdist imports and behavior.
+- The authenticated repository-settings check passed. `uv run python
+  bin/release.py all --dry-run` found all three intended versions unpublished,
+  selected create actions for their tags, printed the exact preflight and
+  PG/Redis/core tag order, and performed no write. The dirty-worktree warning
+  is expected until the owner reviews and commits this preparation.
+- A poisoned-environment possession probe proved both the parent and spawned
+  child resolve core 8.0.0 from this checkout while the editable Weft overlay
+  resolves 0.9.97. The release helper now treats environment removal as an
+  explicit command property, removes `PYTHONPATH` from every precheck, rejects
+  set/unset collisions, and logs the removal without exposing the old value.
+  An independent focused re-review found no remaining release-helper or
+  coordinated-rollout defect.
+- This is pre-closure evidence, not a publication claim. The injected-runner
+  and downstream order findings are resolved as coordinated rollout
+  requirements in the Deviation Log. The plan status and index row remain
+  active until release authorization, exact-SHA release gates, and
+  post-publication indexed-artifact acceptance complete. The final independent
+  review is recorded separately after this verification.
 
 #### Implementation independent review
 
@@ -1692,9 +1785,10 @@ matrix. Both were fixed and independently re-reviewed:
 Focused re-review found no remaining Redis blocker: exact-ID behavior,
 claimed-state preservation, exclusive cursors, bounds, reservations, limits,
 missing bodies, and single-state operation remained sound. The focused
-real-Valkey module passed 11 tests; the full evidence is the 1519/294 matrix
-above. The overall plan verdict remains blocked only by the two compatibility
-deviations, not by an unresolved implementation-review defect.
+real-Valkey module passed 11 tests; the full evidence is the 1520/294 matrix
+above. The implementation-review verdict has no unresolved defect. The two
+compatibility deviations are accepted coordinated-rollout constraints, not
+SimpleBroker implementation blockers.
 
 ## Independent Plan Review
 
@@ -1704,7 +1798,7 @@ accepted into the plan before re-review:
 | Finding | Disposition |
 |---------|-------------|
 | CLI JSON text named a nonexistent `code` field. | Corrected to [SB-CLI-4]'s `error="INVALID_ARGUMENT"` and added an exact object/stream/exit firing test. |
-| `bin/release.py all` did not enforce claimed extension-first publication. | Forbid `all`; use three waited single-target releases and document the temporarily non-resolvable extension interval. |
+| At the time of the first review, `bin/release.py all` did not enforce the claimed extension-first tag order. | Initially forbid `all`. A later release-driver audit superseded that disposition: the current batch target performs one combined local preflight, waits for normal workflows on the final exact SHA, then pushes PG, Redis, and core tags. Use `uv run python bin/release.py all`; accept only the short indexing interval before all three artifacts resolve coherently. |
 | PostgreSQL validation was widened into an unnecessary full catalog validator. | Retain existing magic/version, required-table, and typed-metadata anchors; leave `ts` indexes/uniqueness with setup and migration. The later single-layout amendment supersedes the original both-layout proof. |
 | Strategy A was paired with a committed failing test slice. | Split green spec promotion from uncommitted red probes; land tests, mappings, and docs only with green owner slices. |
 | Dual-layout fixture architecture remained open. | The later single-layout amendment removes the dual-layout behavior matrix. Immutable shared v5 DDL helpers now own transition and rollback proof. |
@@ -1717,7 +1811,7 @@ accepted into the plan before re-review:
 Final focused re-review passed on 2026-08-27 with no material blocker. It
 confirmed admission-before-column-use, the narrowed PostgreSQL validation
 scope, exclusive descending Redis cursors, generator exclusion, operational
-rollback, serial release commands, pre-publication downstream possession, and
+rollback, release sequencing, pre-publication downstream possession, and
 the absence of chronology or persistent-LIFO claims.
 
 ### 2026-08-27 single-layout amendment (owner-directed)
@@ -1750,5 +1844,7 @@ Its material findings and dispositions are:
 The prior review's findings on dual-layout fixtures and both-layout validation
 are superseded by this amendment; its other findings stand. No other material
 gap was found in newest selection, generator exclusion, Redis direction,
-`RETURNING` normalization, release sequencing, or cold old-client admission.
+`RETURNING` normalization, release sequencing, or normal target-backed cold
+old-client admission. The later injected-runner evidence and coordinated
+cutover decision are recorded in the Deviation Log.
 Task 1 remains gated on the plan and documentation checks below.

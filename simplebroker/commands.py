@@ -46,7 +46,7 @@ from ._message_id import (
     normalize_message_id,
 )
 from ._paths import _validate_sqlite_database
-from ._selection import SelectionOrder, validate_selection_order
+from ._selection import SelectionOrder, validate_bounded_order
 from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
 from .db import (
@@ -531,12 +531,10 @@ def _validate_bounded_order(
     all_messages: bool,
 ) -> SelectionOrder:
     """Validate direct-command ordering before resolving a broker target."""
-    validated = validate_selection_order(order)
-    if all_messages and validated != "oldest":
-        raise _ArgumentValidationError(
-            "order='newest' cannot be used with all_messages=True"
-        )
-    return validated
+    try:
+        return validate_bounded_order(order, all_messages=all_messages)
+    except ValueError as exc:
+        raise _ArgumentValidationError(str(exc)) from exc
 
 
 FetchOneFn = Callable[..., str | tuple[str, int] | None]

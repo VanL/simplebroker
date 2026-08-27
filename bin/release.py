@@ -955,31 +955,17 @@ def _extension_test_mypy_commands(
 
 
 def _local_weft_uv_args() -> tuple[str, ...]:
-    """Return local Weft uv args for release-helper root tests when available."""
+    """Return coherent local core + Weft args for root release tests."""
 
     weft_root = PROJECT_ROOT.parent / "weft"
     if not (weft_root / "pyproject.toml").is_file():
         return ()
     return (
         "--with-editable",
+        ".",
+        "--with-editable",
         "../weft",
     )
-
-
-def _local_weft_pythonpath() -> str | None:
-    """Return compatible local Weft venv dependency paths when available."""
-
-    weft_venv = PROJECT_ROOT.parent / "weft" / ".venv"
-    runtime_python_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    site_packages_paths = sorted(
-        (weft_venv / "lib").glob("python*/site-packages")
-    ) + sorted((weft_venv / "lib64").glob("python*/site-packages"))
-    site_packages_paths = [
-        path for path in site_packages_paths if path.parent.name == runtime_python_dir
-    ]
-    if not site_packages_paths:
-        return None
-    return os.pathsep.join(str(path) for path in site_packages_paths)
 
 
 def _is_root_test_command(command: tuple[str, ...]) -> bool:
@@ -994,12 +980,15 @@ def _is_root_test_command(command: tuple[str, ...]) -> bool:
 def _precheck_env_overrides(command: tuple[str, ...]) -> dict[str, str]:
     """Return precheck environment overrides for one command."""
 
-    env = dict(PRECHECK_ENV_OVERRIDES)
-    if _is_root_test_command(command):
-        local_weft_pythonpath = _local_weft_pythonpath()
-        if local_weft_pythonpath is not None:
-            env["PYTHONPATH"] = local_weft_pythonpath
-    return env
+    del command
+    return dict(PRECHECK_ENV_OVERRIDES)
+
+
+def _precheck_env_unsets(command: tuple[str, ...]) -> tuple[str, ...]:
+    """Return ambient environment keys removed from one precheck command."""
+
+    del command
+    return ("PYTHONPATH",)
 
 
 def _root_test_command(
@@ -1145,30 +1134,40 @@ def _merge_command_env(
 def _merge_public_and_private_command_env(
     env_overrides: dict[str, str] | None,
     private_env_overrides: dict[str, str] | None,
+    *,
+    env_unsets: tuple[str, ...] = (),
 ) -> dict[str, str] | None:
     """Merge logged and private command environment without logging private values."""
 
     merged = _merge_command_env(env_overrides)
-    if not private_env_overrides:
+    if private_env_overrides:
+        merged = _merge_command_env(private_env_overrides, base_env=merged)
+    if not env_unsets:
         return merged
-    return _merge_command_env(private_env_overrides, base_env=merged)
+    if merged is None:
+        merged = os.environ.copy()
+    for key in env_unsets:
+        merged.pop(key, None)
+    return merged
 
 
 def _format_command_prefix(
     env_overrides: dict[str, str] | None,
     *,
+    env_unsets: tuple[str, ...] = (),
     private_env_keys: frozenset[str] = frozenset(),
 ) -> str:
     """Format environment overrides shown before a command in logs."""
 
-    if not env_overrides and not private_env_keys:
+    if not env_overrides and not env_unsets and not private_env_keys:
         return ""
+    unset_parts = [f"{key}=<unset>" for key in sorted(env_unsets)]
     public_parts = [
         f"{key}={shlex.quote(value)}"
         for key, value in sorted((env_overrides or {}).items())
     ]
     private_parts = [f"{key}=<redacted>" for key in sorted(private_env_keys)]
-    return " ".join((*public_parts, *private_parts))
+    return " ".join((*unset_parts, *public_parts, *private_parts))
 
 
 def _format_cwd_suffix(cwd: Path) -> str:
@@ -1183,6 +1182,7 @@ def run_command(
     cwd: Path = PROJECT_ROOT,
     dry_run: bool = False,
     env_overrides: dict[str, str] | None = None,
+    env_unsets: tuple[str, ...] = (),
     private_env_overrides: dict[str, str] | None = None,
 ) -> None:
     """Run a command, printing it first."""
@@ -1193,8 +1193,17 @@ def run_command(
             "Command environment keys cannot be both public and private: "
             + ", ".join(sorted(overlapping_keys))
         )
+    unset_overlaps = set(env_unsets) & (
+        set(env_overrides or ()) | set(private_env_overrides or ())
+    )
+    if unset_overlaps:
+        raise RuntimeError(
+            "Command environment keys cannot be both set and unset: "
+            + ", ".join(sorted(unset_overlaps))
+        )
     prefix = _format_command_prefix(
         env_overrides,
+        env_unsets=env_unsets,
         private_env_keys=frozenset(private_env_overrides or ()),
     )
     formatted = _format_command(command)
@@ -1209,6 +1218,7 @@ def run_command(
         env=_merge_public_and_private_command_env(
             env_overrides,
             private_env_overrides,
+            env_unsets=env_unsets,
         ),
     )
 
@@ -2268,6 +2278,7 @@ def _run_batch_release(args: argparse.Namespace) -> int:  # noqa: C901 approved 
                     command,
                     dry_run=True,
                     env_overrides=_precheck_env_overrides(command),
+                    env_unsets=_precheck_env_unsets(command),
                 )
         print("dry-run: would reuse current unpublished version files")
         _print_dry_run_core_baseline_notes(candidates)
@@ -2306,7 +2317,11 @@ def _run_batch_release(args: argparse.Namespace) -> int:  # noqa: C901 approved 
 
     if not args.skip_checks:
         for command in build_precheck_commands_for_targets(release_targets):
-            run_command(command, env_overrides=_precheck_env_overrides(command))
+            run_command(
+                command,
+                env_overrides=_precheck_env_overrides(command),
+                env_unsets=_precheck_env_unsets(command),
+            )
 
     core_candidate = _candidate_for_target(candidates, ROOT_RELEASE_TARGET)
     if core_candidate is not None:
@@ -2398,6 +2413,7 @@ def _run_single_release(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-023] exce
                     command,
                     dry_run=True,
                     env_overrides=_precheck_env_overrides(command),
+                    env_unsets=_precheck_env_unsets(command),
                 )
         if version_changed:
             print(
@@ -2479,7 +2495,11 @@ def _run_single_release(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-023] exce
 
     if not args.skip_checks:
         for command in build_precheck_commands(target):
-            run_command(command, env_overrides=_precheck_env_overrides(command))
+            run_command(
+                command,
+                env_overrides=_precheck_env_overrides(command),
+                env_unsets=_precheck_env_unsets(command),
+            )
 
     if version_changed:
         write_target_version(target, target_version)

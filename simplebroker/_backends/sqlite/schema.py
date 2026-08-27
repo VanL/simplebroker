@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import contextlib
-import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..._constants import SCHEMA_VERSION, SIMPLEBROKER_MAGIC
 from ..._sql import (
     ALTER_MESSAGES_ADD_CLAIMED,
+    ALTER_MESSAGES_RENAME_V5,
+    ALTER_MESSAGES_V6_RENAME_CURRENT,
     CHECK_CLAIMED_COLUMN,
     CHECK_DUPLICATE_TIMESTAMPS,
     CHECK_PENDING_QUEUE_TS_INDEX,
@@ -20,9 +21,10 @@ from ..._sql import (
     CREATE_PENDING_QUEUE_TS_INDEX,
     CREATE_QUEUE_TS_INDEX,
     CREATE_TS_UNIQUE_INDEX,
-    DROP_OLD_INDEXES,
+    DROP_MESSAGES_V5,
     INIT_LAST_TS,
     INSERT_ALIAS_VERSION_META,
+    create_messages_table_sql,
 )
 from ..._sql.sqlite import CHECK_META_TABLE_EXISTS
 
@@ -36,6 +38,42 @@ def initialize_database(
     run_with_retry: Callable[[Callable[[], Any]], Any],
 ) -> None:
     """Run the built-in SQLite schema/bootstrap setup atomically."""
+    # Healthy steady state: an already-versioned database needs no bootstrap
+    # work, so a reopen takes no write transaction at all. Any partial state
+    # (missing tables or a meta table without a schema_version row) falls
+    # through to the transactional bootstrap below.
+    core_tables_exist = bool(
+        next(
+            iter(
+                run_with_retry(
+                    lambda: runner.run(
+                        "SELECT EXISTS(SELECT 1 FROM sqlite_master "
+                        "WHERE type = 'table' AND name = 'messages') "
+                        "AND EXISTS(SELECT 1 FROM sqlite_master "
+                        "WHERE type = 'table' AND name = 'meta')",
+                        fetch=True,
+                    )
+                )
+            )
+        )[0]
+    )
+    if core_tables_exist:
+        version_row_exists = bool(
+            next(
+                iter(
+                    run_with_retry(
+                        lambda: runner.run(
+                            "SELECT EXISTS(SELECT 1 FROM meta "
+                            "WHERE key = 'schema_version')",
+                            fetch=True,
+                        )
+                    )
+                )
+            )[0]
+        )
+        if version_row_exists:
+            return
+
     run_with_retry(runner.begin_immediate)
     try:
         existing_message_rows = run_with_retry(
@@ -68,13 +106,6 @@ def initialize_database(
             return
 
         run_with_retry(lambda: runner.run(CREATE_MESSAGES_TABLE))
-
-        for drop_sql in DROP_OLD_INDEXES:
-
-            def drop_index(sql: str = drop_sql) -> Any:
-                return runner.run(sql)
-
-            run_with_retry(drop_index)
 
         run_with_retry(lambda: runner.run(CREATE_QUEUE_TS_INDEX))
 
@@ -119,46 +150,31 @@ def migrate_schema(
     current_version: int,
     write_schema_version: Callable[[int], None],
 ) -> None:
-    """Apply any missing SQLite schema migrations in order."""
-    if current_version == 5:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
-        dependencies = _legacy_id_sidecar_dependencies(runner)
-        if dependencies:
-            names = ", ".join(dependencies)
-            raise RuntimeError(
-                "Cannot migrate SQLite schema v5 because caller-owned objects "
-                "depend on broker-owned messages during its rebuild; removed "
-                f"messages.id is not preserved: {names}"
+    """Apply missing SQLite schema migrations as an exact-version ladder.
+
+    Each step runs only on the exact preceding version, is idempotent in its
+    body, and advances the schema version by exactly one inside its own
+    transaction. Steady-state shape assurance lives in
+    ``validate_or_repair_current_v6``, which follows the ladder, not in the
+    steps themselves.
+    """
+    version = current_version
+    ladder: tuple[tuple[int, Callable[..., None]], ...] = (
+        (1, ensure_schema_v2),
+        (2, ensure_schema_v3),
+        (3, ensure_schema_v4),
+        (4, ensure_schema_v5),
+        (5, ensure_schema_v6),
+    )
+    for step_version, step in ladder:
+        if version == step_version:
+            step(
+                runner,
+                current_version=version,
+                write_schema_version=write_schema_version,
             )
-    effective_version = current_version
-    ensure_schema_v2(
-        runner,
-        current_version=effective_version,
-        write_schema_version=write_schema_version,
-    )
-    effective_version = max(effective_version, 2)
-    ensure_schema_v3(
-        runner,
-        current_version=effective_version,
-        write_schema_version=write_schema_version,
-    )
-    effective_version = max(effective_version, 3)
-    ensure_schema_v4(
-        runner,
-        current_version=effective_version,
-        write_schema_version=write_schema_version,
-    )
-    effective_version = max(effective_version, 4)
-    ensure_schema_v5(
-        runner,
-        current_version=effective_version,
-        write_schema_version=write_schema_version,
-    )
-    effective_version = max(effective_version, 5)
-    ensure_schema_v6(
-        runner,
-        current_version=effective_version,
-        write_schema_version=write_schema_version,
-    )
+            version = step_version + 1
+    validate_or_repair_current_v6(runner)
 
 
 def messages_has_claimed_column(runner: SQLRunner) -> bool:
@@ -241,7 +257,9 @@ def ensure_schema_v2(
     current_version: int,
     write_schema_version: Callable[[int], None],
 ) -> None:
-    """Ensure SQLite schema v2 (claimed column + partial index)."""
+    """Migrate schema v1 to v2 (claimed column)."""
+    if current_version != 1:
+        return
     runner.begin_immediate()
     try:
         has_claimed_column = messages_has_claimed_column(runner)
@@ -255,9 +273,7 @@ def ensure_schema_v2(
                 "Failed to ensure messages.claimed column during schema migration"
             )
 
-        if current_version < 2:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
-            write_schema_version(2)
-
+        write_schema_version(2)
         runner.commit()
     except BaseException:
         with contextlib.suppress(BaseException):
@@ -271,13 +287,8 @@ def ensure_schema_v3(
     current_version: int,
     write_schema_version: Callable[[int], None],
 ) -> None:
-    """Ensure SQLite schema v3 (timestamp unique index)."""
-    if current_version < 2:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
-        return
-
-    has_unique_index, owned_name_conflicts = _timestamp_unique_index_state(runner)
-    _reject_conflicting_timestamp_index_name(owned_name_conflicts)
-    if current_version >= 3 and has_unique_index:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
+    """Migrate schema v2 to v3 (timestamp unique index)."""
+    if current_version != 2:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
     runner.begin_immediate()
@@ -297,8 +308,7 @@ def ensure_schema_v3(
                 "Failed to ensure the timestamp unique index during schema migration"
             )
 
-        if current_version < 3:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
-            write_schema_version(3)
+        write_schema_version(3)
         runner.commit()
     except BaseException:
         with contextlib.suppress(BaseException):
@@ -312,23 +322,8 @@ def ensure_schema_v4(
     current_version: int,
     write_schema_version: Callable[[int], None],
 ) -> None:
-    """Ensure SQLite schema v4 (queue aliases)."""
-    if current_version >= 4:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
-        runner.begin_immediate()
-        try:
-            for statement in (
-                CREATE_ALIASES_TABLE,
-                CREATE_ALIAS_TARGET_INDEX,
-                INSERT_ALIAS_VERSION_META,
-            ):
-                runner.run(statement)
-            runner.commit()
-        except Exception:
-            runner.rollback()
-            raise
-        return
-
-    if current_version < 3:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
+    """Migrate schema v3 to v4 (queue aliases)."""
+    if current_version != 3:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
     try:
@@ -349,27 +344,12 @@ def ensure_schema_v5(
     current_version: int,
     write_schema_version: Callable[[int], None],
 ) -> None:
-    """Ensure SQLite schema v5 (pending queue/timestamp index)."""
-    if current_version >= 5:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
-        runner.begin_immediate()
-        try:
-            for drop_sql in DROP_OLD_INDEXES:
-                runner.run(drop_sql)
-            runner.run(CREATE_QUEUE_TS_INDEX)
-            runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
-            runner.commit()
-        except Exception:
-            runner.rollback()
-            raise
-        return
-
-    if current_version < 4:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
+    """Migrate schema v4 to v5 (pending queue/timestamp index)."""
+    if current_version != 4:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
     try:
         runner.begin_immediate()
-        for drop_sql in DROP_OLD_INDEXES:
-            runner.run(drop_sql)
         runner.run(CREATE_QUEUE_TS_INDEX)
         runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
         write_schema_version(5)
@@ -380,21 +360,28 @@ def ensure_schema_v5(
 
 
 _CANONICAL_V6_COLUMNS = ("queue", "body", "ts", "claimed")
-_LEGACY_ID_REFERENCE = re.compile(
-    r"(?:\bmessages\b\s*\.\s*[`\"\[]?id\b|"
-    r"\breferences\s+[`\"\[]?messages[`\"\]]?\s*\(\s*[`\"\[]?id\b|"
-    r"\bselect\b.*?\bid\b.*?\bfrom\s+[`\"\[]?messages\b)",
-    re.IGNORECASE | re.DOTALL,
-)
+_CANONICAL_V6_INDEXES = {
+    "idx_messages_queue_ts": (0, 0),
+    "idx_messages_pending_queue_ts": (0, 1),
+}
 
 
 def _messages_v6_shape_is_current(runner: SQLRunner) -> bool:
+    """Check the broker-owned messages shape.
+
+    Columns and the public-ID primary key must match exactly, and the two
+    canonical indexes must exist with their canonical definitions. Extra
+    caller-created indexes or triggers on ``messages`` are outside the
+    supported schema: they are ignored here, never fatal, so repeated opens
+    stay idempotent. Anything outside the broker schema belongs in a sidecar
+    and carries no support.
+    """
     rows = list(runner.run("PRAGMA table_info('messages')", fetch=True))
     columns = tuple(str(row[1]) for row in rows)
     expected_columns = (
         ("queue", "TEXT", 1, None, 0),
         ("body", "TEXT", 1, None, 0),
-        ("ts", "INTEGER", 0, None, 1),
+        ("ts", "INTEGER", 1, None, 1),
         ("claimed", "INTEGER", 0, "0", 0),
     )
     column_shape = tuple(
@@ -404,19 +391,16 @@ def _messages_v6_shape_is_current(runner: SQLRunner) -> bool:
     if columns != _CANONICAL_V6_COLUMNS or column_shape != expected_columns:
         return False
 
-    indexes = list(
-        runner.run(
-            "SELECT name, \"unique\", partial FROM pragma_index_list('messages') "
-            "ORDER BY name",
+    index_flags = {
+        str(name): (int(unique), int(partial))
+        for name, unique, partial in runner.run(
+            "SELECT name, \"unique\", partial FROM pragma_index_list('messages')",
             fetch=True,
         )
-    )
-    if indexes != [
-        ("idx_messages_pending_queue_ts", 0, 1),
-        ("idx_messages_queue_ts", 0, 0),
-    ]:
-        return False
-    for index_name, _unique, _partial in indexes:
+    }
+    for index_name, expected_flags in _CANONICAL_V6_INDEXES.items():
+        if index_flags.get(index_name) != expected_flags:
+            return False
         index_columns = [
             str(row[0])
             for row in runner.run(
@@ -427,64 +411,49 @@ def _messages_v6_shape_is_current(runner: SQLRunner) -> bool:
         ]
         if index_columns != ["queue", "ts"]:
             return False
-    triggers = list(
-        runner.run(
-            "SELECT name FROM sqlite_master "
-            "WHERE type='trigger' AND tbl_name='messages'",
-            fetch=True,
-        )
-    )
-    return not triggers
-
-
-def _legacy_id_sidecar_dependencies(runner: SQLRunner) -> list[str]:
-    """Find caller-owned objects that name the private v5 ``messages.id``."""
-    dependencies: set[str] = set()
-    objects = list(
-        runner.run(
-            "SELECT type, name, tbl_name, sql FROM sqlite_master "
-            "WHERE sql IS NOT NULL ORDER BY type, name",
-            fetch=True,
-        )
-    )
-    for object_type, name, table_name, sql in objects:
-        object_name = str(name)
-        owning_table = str(table_name)
-        if object_name.startswith("sqlite_"):
-            continue
-        if owning_table == "messages" or object_name in {
-            "messages",
-            "meta",
-            "queue_aliases",
-        }:
-            continue
-        definition = str(sql)
-        if _LEGACY_ID_REFERENCE.search(definition):
-            dependencies.add(f"{object_type} {object_name}")
-
-        if str(object_type) != "table":
-            continue
-        quoted_name = object_name.replace("'", "''")
-        for foreign_key in runner.run(
-            f"PRAGMA foreign_key_list('{quoted_name}')",
-            fetch=True,
-        ):
-            referenced_table = str(foreign_key[2])
-            referenced_column = str(foreign_key[4])
-            if referenced_table == "messages" and referenced_column != "ts":
-                dependencies.add(
-                    f"table {object_name} (foreign key to messages."
-                    f"{referenced_column or '<primary-key>'})"
-                )
-    return sorted(dependencies)
+    return True
 
 
 def _verify_foreign_keys_after_v6_rebuild(runner: SQLRunner) -> None:
-    violations = list(runner.run("PRAGMA foreign_key_check", fetch=True))
-    if violations:
-        raise RuntimeError(
-            f"SQLite schema v6 migration produced foreign-key violations: {violations}"
+    """Verify preserved sidecar foreign keys that reference ``messages(ts)``.
+
+    Only ts-referencing foreign keys are supported across the rebuild. A
+    caller foreign key that referenced the removed private column is outside
+    the schema and unsupported; running a global ``foreign_key_check`` against
+    it raises "foreign key mismatch" and would wedge the migration, so
+    verification is scoped to the supported references.
+    """
+    tables = [
+        str(row[0])
+        for row in runner.run(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' AND name != 'messages'",
+            fetch=True,
         )
+    ]
+    for table_name in tables:
+        quoted_name = table_name.replace("'", "''")
+        foreign_keys = list(
+            runner.run(f"PRAGMA foreign_key_list('{quoted_name}')", fetch=True)
+        )
+        references_ts = any(
+            str(fk[2]) == "messages" and str(fk[4]) in {"ts", "None"}
+            for fk in foreign_keys
+        )
+        references_removed = any(
+            str(fk[2]) == "messages" and str(fk[4]) not in {"ts", "None"}
+            for fk in foreign_keys
+        )
+        if not references_ts or references_removed:
+            continue
+        violations = list(
+            runner.run(f"PRAGMA foreign_key_check('{quoted_name}')", fetch=True)
+        )
+        if violations:
+            raise RuntimeError(
+                "SQLite schema v6 migration produced foreign-key violations: "
+                f"{violations}"
+            )
 
 
 def _prepare_v6_rebuild_pragmas(runner: SQLRunner) -> tuple[bool, bool]:
@@ -521,26 +490,8 @@ def ensure_schema_v6(
     current_version: int,
     write_schema_version: Callable[[int], None],
 ) -> None:
-    """Install SQLite schema v6 with public message ID as the sole row key."""
-    if current_version < 5:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
-        return
-
-    if current_version >= 6:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
-        runner.begin_immediate()
-        try:
-            runner.run(CREATE_QUEUE_TS_INDEX)
-            runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
-            if not _messages_v6_shape_is_current(runner):
-                raise RuntimeError(
-                    "SQLite schema version 6 requires messages columns "
-                    "(queue, body, ts, claimed), ts as the primary key, and "
-                    "only the canonical message indexes"
-                )
-            runner.commit()
-        except BaseException:
-            with contextlib.suppress(BaseException):
-                runner.rollback()
-            raise
+    """Migrate schema v5 to v6 (public message ID as the sole row key)."""
+    if current_version != 5:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
     foreign_keys_enabled, legacy_alter_table_enabled = _prepare_v6_rebuild_pragmas(
@@ -548,24 +499,8 @@ def ensure_schema_v6(
     )
     try:
         runner.begin_immediate()
-        dependencies = _legacy_id_sidecar_dependencies(runner)
-        if dependencies:
-            names = ", ".join(dependencies)
-            raise RuntimeError(
-                "Cannot migrate SQLite schema v5 because caller-owned objects "
-                "depend on broker-owned messages during its rebuild; removed "
-                f"messages.id is not preserved: {names}"
-            )
-
         runner.run(
-            """
-            CREATE TABLE simplebroker_messages_v6 (
-                queue TEXT NOT NULL,
-                body TEXT NOT NULL,
-                ts INTEGER PRIMARY KEY,
-                claimed INTEGER DEFAULT 0
-            )
-            """
+            create_messages_table_sql("simplebroker_messages_v6", if_not_exists=False)
         )
         runner.run(
             "INSERT INTO simplebroker_messages_v6 (queue, body, ts, claimed) "
@@ -590,9 +525,9 @@ def ensure_schema_v6(
                 f"source={source_count}, copied={copied_count}"
             )
 
-        runner.run("ALTER TABLE messages RENAME TO simplebroker_messages_v5")
-        runner.run("ALTER TABLE simplebroker_messages_v6 RENAME TO messages")
-        runner.run("DROP TABLE simplebroker_messages_v5")
+        runner.run(ALTER_MESSAGES_RENAME_V5)
+        runner.run(ALTER_MESSAGES_V6_RENAME_CURRENT)
+        runner.run(DROP_MESSAGES_V5)
         runner.run(CREATE_QUEUE_TS_INDEX)
         runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
         if not _messages_v6_shape_is_current(runner):
@@ -610,3 +545,31 @@ def ensure_schema_v6(
             foreign_keys_enabled=foreign_keys_enabled,
             legacy_alter_table_enabled=legacy_alter_table_enabled,
         )
+
+
+def validate_or_repair_current_v6(runner: SQLRunner) -> None:
+    """Assure the canonical v6 shape after the migration ladder.
+
+    Healthy steady state costs read-only catalog pragmas and takes no write
+    transaction. The repair transaction runs only when the shape check fails
+    (for example a missing canonical index) and is idempotent. Caller-created
+    objects on ``messages`` are outside the supported schema and are ignored,
+    never fatal; anything outside the broker schema belongs in a sidecar.
+    """
+    if _messages_v6_shape_is_current(runner):
+        return
+    runner.begin_immediate()
+    try:
+        runner.run(CREATE_QUEUE_TS_INDEX)
+        runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
+        if not _messages_v6_shape_is_current(runner):
+            raise RuntimeError(
+                "SQLite schema version 6 requires messages columns "
+                "(queue, body, ts, claimed) with ts as the public-message-ID "
+                "primary key and the canonical message indexes"
+            )
+        runner.commit()
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            runner.rollback()
+        raise

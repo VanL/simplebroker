@@ -33,7 +33,7 @@ from ._key_material import FrozenValue, freeze_key_material, snapshot_key_materi
 from ._message_id import MessageIdInput
 from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
-from ._selection import validate_selection_order
+from ._selection import validate_bounded_order, validate_selection_order
 from ._sidecar import SidecarSession
 from ._targets import BrokerTarget
 from .db import DBConnection, _validate_queue_name_cached
@@ -545,9 +545,7 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
-        validated_order = validate_selection_order(order)
-        if all_messages and validated_order != "oldest":
-            raise ValueError("order='newest' cannot be used with all_messages=True")
+        validated_order = validate_bounded_order(order, all_messages=all_messages)
 
         has_range_filter = after_timestamp is not None or before_timestamp is not None
         if message_id is not None and (all_messages or has_range_filter):
@@ -924,9 +922,7 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
-        validated_order = validate_selection_order(order)
-        if all_messages and validated_order != "oldest":
-            raise ValueError("order='newest' cannot be used with all_messages=True")
+        validated_order = validate_bounded_order(order, all_messages=all_messages)
 
         has_range_filter = after_timestamp is not None or before_timestamp is not None
         if message_id is not None and (all_messages or has_range_filter):
@@ -1273,9 +1269,7 @@ class Queue:
             QueueNameError: If queue names are invalid
             OperationalError: If the database is locked/busy
         """
-        validated_order = validate_selection_order(order)
-        if all_messages and validated_order != "oldest":
-            raise ValueError("order='newest' cannot be used with all_messages=True")
+        validated_order = validate_bounded_order(order, all_messages=all_messages)
 
         # Get destination queue name
         dest_name = self._move_destination_name(destination)

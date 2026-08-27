@@ -8,6 +8,8 @@ from ._contract import BackendSQLNamespace, ensure_backend_sql_namespace
 from ._query_spec import RetrieveOperation, RetrieveQuerySpec
 from .sqlite import (
     ALTER_MESSAGES_ADD_CLAIMED,
+    ALTER_MESSAGES_RENAME_V5,
+    ALTER_MESSAGES_V6_RENAME_CURRENT,
     BEGIN_IMMEDIATE,
     CHECK_CLAIMED_COLUMN,
     CHECK_DUPLICATE_TIMESTAMPS,
@@ -29,7 +31,7 @@ from .sqlite import (
     DELETE_ALL_MESSAGES,
     DELETE_CLAIMED_BATCH,
     DELETE_QUEUE_MESSAGES,
-    DROP_OLD_INDEXES,
+    DROP_MESSAGES_V5,
     GET_ALIAS_VERSION,
     GET_AUTO_VACUUM,
     GET_DATA_VERSION,
@@ -68,10 +70,13 @@ from .sqlite import (
     build_move_by_timestamp_query,
     build_peek_query,
     build_retrieve_query,
+    create_messages_table_sql,
 )
 
 __all__ = [
     "ALTER_MESSAGES_ADD_CLAIMED",
+    "ALTER_MESSAGES_RENAME_V5",
+    "ALTER_MESSAGES_V6_RENAME_CURRENT",
     "BEGIN_IMMEDIATE",
     "CHECK_CLAIMED_COLUMN",
     "CHECK_DUPLICATE_TIMESTAMPS",
@@ -93,7 +98,7 @@ __all__ = [
     "DELETE_ALL_MESSAGES",
     "DELETE_CLAIMED_BATCH",
     "DELETE_QUEUE_MESSAGES",
-    "DROP_OLD_INDEXES",
+    "DROP_MESSAGES_V5",
     "GET_ALIAS_VERSION",
     "GET_AUTO_VACUUM",
     "GET_DATA_VERSION",
@@ -135,5 +140,6 @@ __all__ = [
     "build_move_by_timestamp_query",
     "build_peek_query",
     "build_retrieve_query",
+    "create_messages_table_sql",
     "ensure_backend_sql_namespace",
 ]

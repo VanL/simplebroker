@@ -25,7 +25,12 @@ from simplebroker._backends.sqlite.schema import (
 )
 from simplebroker._constants import SCHEMA_VERSION, SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import IntegrityError, OperationalError
-from simplebroker._runner import SQLiteRunner
+from simplebroker._runner import SetupPhase, SQLiteRunner, SQLRunner
+
+from .helper_scripts.sqlite_legacy_layouts import (
+    create_sqlite_v1_layout,
+    create_sqlite_v5_layout,
+)
 
 pytestmark = [pytest.mark.sqlite_only]
 
@@ -38,7 +43,7 @@ def _run_direct(operation):
     return operation()
 
 
-def _write_schema_version(runner: SQLiteRunner, version: int) -> None:
+def _write_schema_version(runner: SQLRunner, version: int) -> None:
     runner.run(
         "UPDATE meta SET value=? WHERE key='schema_version'",
         (version,),
@@ -138,51 +143,22 @@ class _CreateTsIndexBeforeFirstBegin:
 
 
 def _create_v1_messages_table(db_path: Path) -> None:
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute("""
-            CREATE TABLE messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue TEXT NOT NULL,
-                body TEXT NOT NULL,
-                ts INTEGER NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE meta (
-                key TEXT PRIMARY KEY,
-                value INTEGER NOT NULL
-            )
-        """)
-        conn.execute("INSERT INTO meta (key, value) VALUES ('last_ts', 0)")
-        conn.commit()
+    create_sqlite_v1_layout(db_path)
 
 
 def _create_v5_database(db_path: Path) -> None:
-    """Create the literal last-release layout without importing current DDL."""
+    """Create the literal last-release layout plus this suite's sidecar state."""
+    create_sqlite_v5_layout(
+        db_path,
+        message_rows=[
+            ("q", "id-300", 300, 0),
+            ("q", "id-100", 100, 1),
+            ("q", "id-200", 200, 0),
+        ],
+    )
     with closing(sqlite3.connect(db_path)) as conn:
         conn.executescript(
             """
-            CREATE TABLE messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue TEXT NOT NULL,
-                body TEXT NOT NULL,
-                ts INTEGER NOT NULL UNIQUE,
-                claimed INTEGER DEFAULT 0
-            );
-            CREATE TABLE meta (
-                key TEXT PRIMARY KEY,
-                value INTEGER NOT NULL
-            );
-            CREATE TABLE queue_aliases (
-                alias TEXT PRIMARY KEY,
-                target TEXT NOT NULL
-            );
-            CREATE INDEX idx_queue_aliases_target ON queue_aliases(target);
-            CREATE INDEX idx_messages_queue_ts_id ON messages(queue, ts, id);
-            CREATE INDEX idx_messages_unclaimed
-                ON messages(queue, claimed, id) WHERE claimed = 0;
-            CREATE INDEX idx_messages_pending_queue_ts
-                ON messages(queue, ts) WHERE claimed = 0;
             CREATE TABLE sidecar_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 value TEXT NOT NULL
@@ -197,29 +173,38 @@ def _create_v5_database(db_path: Path) -> None:
             CREATE VIEW sidecar_message_ts AS SELECT ts FROM messages;
             """
         )
-        conn.executemany(
-            "INSERT INTO meta (key, value) VALUES (?, ?)",
-            [
-                ("last_ts", 300),
-                ("magic", SIMPLEBROKER_MAGIC),
-                ("schema_version", 5),
-                ("alias_version", 0),
-            ],
-        )
-        conn.executemany(
-            "INSERT INTO messages (queue, body, ts, claimed) VALUES (?, ?, ?, ?)",
-            [
-                ("q", "id-300", 300, 0),
-                ("q", "id-100", 100, 1),
-                ("q", "id-200", 200, 0),
-            ],
-        )
         conn.execute("INSERT INTO sidecar_jobs (value) VALUES ('keep')")
         conn.execute(
             "INSERT INTO sidecar_message_refs (message_ts, note) "
             "VALUES (200, 'keep-ref')"
         )
         conn.commit()
+
+
+def _sidecar_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
+    """Capture every caller-owned sidecar definition, row, and sequence."""
+    return {
+        "definition": conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs'"
+        ).fetchone(),
+        "index": conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs_value'"
+        ).fetchone(),
+        "rows": conn.execute("SELECT * FROM sidecar_jobs").fetchall(),
+        "sequence": conn.execute(
+            "SELECT name, seq FROM sqlite_sequence WHERE name='sidecar_jobs'"
+        ).fetchall(),
+        "ref_definition": conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs'"
+        ).fetchone(),
+        "ref_index": conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs_ts'"
+        ).fetchone(),
+        "ref_rows": conn.execute("SELECT * FROM sidecar_message_refs").fetchall(),
+        "view_definition": conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='sidecar_message_ts'"
+        ).fetchone(),
+    }
 
 
 def _owned_message_shape(conn: sqlite3.Connection) -> tuple[object, ...]:
@@ -285,28 +270,7 @@ def test_schema_v6_rebuild_preserves_sidecar_and_matches_fresh_shape(
     _create_v5_database(migrated_path)
 
     with closing(sqlite3.connect(migrated_path)) as before:
-        sidecar_before = {
-            "definition": before.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs'"
-            ).fetchone(),
-            "index": before.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs_value'"
-            ).fetchone(),
-            "rows": before.execute("SELECT * FROM sidecar_jobs").fetchall(),
-            "sequence": before.execute(
-                "SELECT name, seq FROM sqlite_sequence WHERE name='sidecar_jobs'"
-            ).fetchall(),
-            "ref_definition": before.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs'"
-            ).fetchone(),
-            "ref_index": before.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs_ts'"
-            ).fetchone(),
-            "ref_rows": before.execute("SELECT * FROM sidecar_message_refs").fetchall(),
-            "view_definition": before.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_ts'"
-            ).fetchone(),
-        }
+        sidecar_before = _sidecar_snapshot(before)
 
     from simplebroker.db import BrokerDB
 
@@ -330,30 +294,7 @@ def test_schema_v6_rebuild_preserves_sidecar_and_matches_fresh_shape(
         assert migrated.execute(
             "SELECT value FROM meta WHERE key='schema_version'"
         ).fetchone() == (6,)
-        sidecar_after = {
-            "definition": migrated.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs'"
-            ).fetchone(),
-            "index": migrated.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs_value'"
-            ).fetchone(),
-            "rows": migrated.execute("SELECT * FROM sidecar_jobs").fetchall(),
-            "sequence": migrated.execute(
-                "SELECT name, seq FROM sqlite_sequence WHERE name='sidecar_jobs'"
-            ).fetchall(),
-            "ref_definition": migrated.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs'"
-            ).fetchone(),
-            "ref_index": migrated.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs_ts'"
-            ).fetchone(),
-            "ref_rows": migrated.execute(
-                "SELECT * FROM sidecar_message_refs"
-            ).fetchall(),
-            "view_definition": migrated.execute(
-                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_ts'"
-            ).fetchone(),
-        }
+        sidecar_after = _sidecar_snapshot(migrated)
         assert sidecar_after == sidecar_before
         assert migrated.execute(
             "SELECT ts FROM sidecar_message_ts ORDER BY ts"
@@ -414,44 +355,97 @@ def test_schema_v6_failure_rolls_back_owned_and_sidecar_state(
         ).fetchall() == [("id",)]
 
 
-def test_schema_v6_rejects_sidecar_dependency_on_removed_id_without_mutation(
+def test_schema_v6_migrates_despite_unsupported_caller_objects(
     tmp_path: Path,
 ) -> None:
+    """Unsupported attachments never block migration.
+
+    Anything outside the broker schema belongs in a sidecar: caller objects
+    attached to ``messages`` are unsupported and do not survive the rebuild,
+    while detached caller state (tables, rows, views as definitions) is
+    preserved. Migration must not refuse over them.
+    """
     db_path = tmp_path / "dependent-sidecar.db"
     _create_v5_database(db_path)
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("CREATE VIEW sidecar_message_ids AS SELECT id FROM messages")
+        conn.execute("CREATE INDEX caller_body_idx ON messages(body)")
+        conn.execute(
+            "CREATE TRIGGER caller_audit AFTER INSERT ON messages BEGIN SELECT 1; END"
+        )
         conn.commit()
-        before = {
-            "schema": conn.execute(
-                "SELECT type, name, tbl_name, sql FROM sqlite_master "
-                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
-            ).fetchall(),
-            "meta": conn.execute("SELECT * FROM meta ORDER BY key").fetchall(),
-            "messages": conn.execute(
-                "SELECT id, queue, body, ts, claimed FROM messages ORDER BY id"
-            ).fetchall(),
-            "sidecar": conn.execute("SELECT * FROM sidecar_jobs").fetchall(),
-        }
+        sidecar_rows_before = conn.execute("SELECT * FROM sidecar_jobs").fetchall()
+        message_rows_before = conn.execute(
+            "SELECT queue, body, ts, claimed FROM messages ORDER BY ts"
+        ).fetchall()
 
     from simplebroker.db import BrokerDB
 
-    with pytest.raises(RuntimeError, match="removed messages.id"):
-        BrokerDB(str(db_path))
+    db = BrokerDB(str(db_path))
+    db.close()
 
     with closing(sqlite3.connect(db_path)) as conn:
-        after = {
-            "schema": conn.execute(
-                "SELECT type, name, tbl_name, sql FROM sqlite_master "
-                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
-            ).fetchall(),
-            "meta": conn.execute("SELECT * FROM meta ORDER BY key").fetchall(),
-            "messages": conn.execute(
-                "SELECT id, queue, body, ts, claimed FROM messages ORDER BY id"
-            ).fetchall(),
-            "sidecar": conn.execute("SELECT * FROM sidecar_jobs").fetchall(),
+        version = int(
+            conn.execute(
+                "SELECT value FROM meta WHERE key='schema_version'"
+            ).fetchone()[0]
+        )
+        assert version == SCHEMA_VERSION
+        columns = [
+            row[1] for row in conn.execute("PRAGMA table_info('messages')").fetchall()
+        ]
+        assert columns == ["queue", "body", "ts", "claimed"]
+        assert (
+            conn.execute(
+                "SELECT queue, body, ts, claimed FROM messages ORDER BY ts"
+            ).fetchall()
+            == message_rows_before
+        )
+        assert conn.execute("SELECT * FROM sidecar_jobs").fetchall() == (
+            sidecar_rows_before
+        )
+        remaining = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE name IN "
+                "('caller_body_idx', 'caller_audit', 'sidecar_message_ids')"
+            ).fetchall()
         }
-    assert after == before
+        # Attached objects were dropped with the old table; the detached view
+        # definition survives (and is simply broken until its owner fixes it).
+        assert remaining == {"sidecar_message_ids"}
+
+
+def test_open_is_idempotent_with_caller_objects_added_after_v6(
+    tmp_path: Path,
+) -> None:
+    """Steady-state validation ignores unsupported extras instead of failing."""
+    from simplebroker.db import BrokerDB
+
+    db_path = tmp_path / "extras.db"
+    BrokerDB(str(db_path)).close()
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("CREATE INDEX caller_claimed_idx ON messages(claimed)")
+        conn.execute(
+            "CREATE TRIGGER caller_after_insert AFTER INSERT ON messages "
+            "BEGIN SELECT 1; END"
+        )
+        conn.commit()
+
+    for _ in range(2):
+        db = BrokerDB(str(db_path))
+        db.close()
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        remaining = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE name IN "
+                "('caller_claimed_idx', 'caller_after_insert')"
+            ).fetchall()
+        }
+    assert remaining == {"caller_claimed_idx", "caller_after_insert"}
 
 
 def test_schema_v6_preserves_public_id_foreign_key_and_pragma_state(
@@ -736,9 +730,10 @@ def test_migrate_schema_v4_to_v5_creates_pending_queue_ts_index(
         runner.close()
 
 
-def test_ensure_schema_v5_backfills_pending_queue_ts_index_idempotently(
+def test_ensure_schema_v5_runs_once_on_exact_preceding_version(
     tmp_path: Path,
 ) -> None:
+    """The v4-to-v5 step installs its index once; reruns at v5 are no-ops."""
     db_path = tmp_path / "v5.db"
     _create_v1_messages_table(db_path)
     runner = _runner(db_path)
@@ -750,7 +745,7 @@ def test_ensure_schema_v5_backfills_pending_queue_ts_index_idempotently(
 
         ensure_schema_v5(
             runner,
-            current_version=5,
+            current_version=4,
             write_schema_version=versions.append,
         )
         ensure_schema_v5(
@@ -759,7 +754,7 @@ def test_ensure_schema_v5_backfills_pending_queue_ts_index_idempotently(
             write_schema_version=versions.append,
         )
 
-        assert versions == []
+        assert versions == [5]
         assert pending_queue_ts_index_exists(runner) is True
     finally:
         runner.close()
@@ -953,15 +948,17 @@ def test_ensure_schema_v2_handles_concurrent_column_migration(
 
 
 @pytest.mark.parametrize(
-    ("current_version", "precreate_claimed", "expected_versions"),
-    [(1, True, [2]), (2, False, [])],
+    ("current_version", "precreate_claimed", "expected_versions", "expected_column"),
+    [(1, True, [2], True), (2, False, [], False)],
 )
-def test_ensure_schema_v2_repairs_mismatched_version_and_column_state(
+def test_ensure_schema_v2_runs_only_on_exact_preceding_version(
     tmp_path: Path,
     current_version: int,
     precreate_claimed: bool,
     expected_versions: list[int],
+    expected_column: bool,
 ) -> None:
+    """The v1-to-v2 step is idempotent at v1 and a strict no-op elsewhere."""
     db_path = tmp_path / f"mismatched-v2-{current_version}.db"
     _create_v1_messages_table(db_path)
     if precreate_claimed:
@@ -980,7 +977,7 @@ def test_ensure_schema_v2_repairs_mismatched_version_and_column_state(
             write_schema_version=versions.append,
         )
 
-        assert messages_has_claimed_column(runner) is True
+        assert messages_has_claimed_column(runner) is expected_column
         assert versions == expected_versions
     finally:
         runner.close()
@@ -1227,18 +1224,18 @@ def test_ensure_schema_v3_repair_handles_index_created_before_write_lock(
 
         ensure_schema_v3(
             _CreateTsIndexBeforeFirstBegin(runner, competitor),
-            current_version=3,
+            current_version=2,
             write_schema_version=versions.append,
         )
 
-        assert versions == []
+        assert versions == [3]
         assert ts_unique_index_exists(runner) is True
     finally:
         competitor.close()
         runner.close()
 
 
-@pytest.mark.parametrize("current_version", [2, 3])
+@pytest.mark.parametrize("current_version", [2])
 def test_ensure_schema_v3_propagates_index_creation_errors(
     tmp_path: Path,
     current_version: int,
@@ -1291,7 +1288,7 @@ def test_ensure_schema_v3_v4_and_v5_skip_when_prior_versions_are_missing(
         runner.close()
 
 
-@pytest.mark.parametrize("current_version", [3, 4])
+@pytest.mark.parametrize("current_version", [3])
 def test_ensure_schema_v4_rolls_back_sql_errors(
     tmp_path: Path,
     current_version: int,
@@ -1332,7 +1329,7 @@ def test_ensure_schema_v4_rolls_back_sql_errors(
         runner.close()
 
 
-@pytest.mark.parametrize("current_version", [4, 5])
+@pytest.mark.parametrize("current_version", [4])
 def test_ensure_schema_v5_rolls_back_sql_errors(
     tmp_path: Path,
     current_version: int,
@@ -1390,3 +1387,86 @@ def test_ensure_schema_v4_backfills_alias_table_idempotently(tmp_path: Path) -> 
         ) == [(0,)]
     finally:
         runner.close()
+
+
+class _RecordingRunner:
+    """Delegate to a real runner while recording SQL and transaction calls."""
+
+    def __init__(self, runner: SQLiteRunner) -> None:
+        self._runner = runner
+        self.statements: list[str] = []
+        self.begin_immediate_calls = 0
+
+    def run(self, sql, *args, **kwargs):
+        self.statements.append(" ".join(str(sql).split()))
+        return self._runner.run(sql, *args, **kwargs)
+
+    def begin_immediate(self) -> None:
+        self.begin_immediate_calls += 1
+        self._runner.begin_immediate()
+
+    def commit(self) -> None:
+        self._runner.commit()
+
+    def rollback(self) -> None:
+        self._runner.rollback()
+
+    def close(self) -> None:
+        self._runner.close()
+
+    def setup(self, phase: SetupPhase) -> None:
+        self._runner.setup(phase)
+
+    def is_setup_complete(self, phase: SetupPhase) -> bool:
+        return self._runner.is_setup_complete(phase)
+
+
+def test_steady_state_open_runs_no_index_drop_and_no_write_transaction(
+    tmp_path: Path,
+) -> None:
+    """A healthy v6 reopen must not drop, rebuild, or write-lock anything.
+
+    Guards the open-time regression where the canonical ``idx_messages_queue_ts``
+    name appeared in the legacy drop list and was dropped and rebuilt on every
+    database open.
+    """
+    runner = _runner(tmp_path / "steady.db")
+    try:
+        initialize_database(runner, run_with_retry=_run_direct)
+        migrate_schema(
+            runner,
+            current_version=SCHEMA_VERSION,
+            write_schema_version=lambda version: _write_schema_version(runner, version),
+        )
+
+        recording = _RecordingRunner(runner)
+        initialize_database(recording, run_with_retry=_run_direct)
+        migrate_schema(
+            recording,
+            current_version=SCHEMA_VERSION,
+            write_schema_version=lambda version: _write_schema_version(
+                recording, version
+            ),
+        )
+
+        dropped = [s for s in recording.statements if "DROP INDEX" in s.upper()]
+        assert dropped == []
+        # Bootstrap probe-gates on the schema_version row, the migration
+        # ladder runs no step at the current version, and the validator is
+        # read-only when healthy: a steady-state open is fully read-only.
+        assert recording.begin_immediate_calls == 0
+    finally:
+        runner.close()
+
+
+def test_rebuild_table_ddl_derives_from_canonical_builder() -> None:
+    """The v6 rebuild shape has exactly one authored source."""
+    from simplebroker._sql import CREATE_MESSAGES_TABLE, create_messages_table_sql
+
+    assert CREATE_MESSAGES_TABLE == create_messages_table_sql()
+    rebuild = create_messages_table_sql("simplebroker_messages_v6", if_not_exists=False)
+    assert "CREATE TABLE simplebroker_messages_v6 (" in rebuild
+    assert "IF NOT EXISTS" not in rebuild
+    canonical_body = CREATE_MESSAGES_TABLE.split("(", 1)[1]
+    rebuild_body = rebuild.split("(", 1)[1]
+    assert canonical_body == rebuild_body

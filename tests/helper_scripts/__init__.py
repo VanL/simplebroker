@@ -54,7 +54,6 @@ from .timestamp_test_utils import (
     DatabaseCorruptor,
     TimeController,
     count_unique_timestamps,
-    verify_timestamp_monotonicity,
 )
 
 # Timestamp validation
@@ -122,7 +121,6 @@ __all__ = [
     "scale_timeout_for_ci",
     "skip_if_platform",
     "validate_timestamp",
-    "verify_timestamp_monotonicity",
     "wait_for_condition",
     "wait_for_count",
     "wait_for_value",

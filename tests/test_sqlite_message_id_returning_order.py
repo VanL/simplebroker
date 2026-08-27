@@ -55,15 +55,36 @@ def test_equivalent_sqlite_plugin_instance_uses_the_builtin_row_contract(
 
 
 @pytest.mark.parametrize(
-    ("order", "expected_ids"),
-    [("oldest", [100, 200, 300]), ("newest", [300, 200, 100])],
+    ("order", "expected_rows"),
+    [
+        (
+            "oldest",
+            [
+                ("inserted-second", 100),
+                ("inserted-third", 200),
+                ("inserted-first", 300),
+            ],
+        ),
+        (
+            "newest",
+            [
+                ("inserted-first", 300),
+                ("inserted-third", 200),
+                ("inserted-second", 100),
+            ],
+        ),
+    ],
 )
 def test_claim_many_normalizes_sqlite_returning_rows_by_public_id(
     tmp_path: Path,
     order: str,
-    expected_ids: list[int],
+    expected_rows: list[tuple[str, int]],
 ) -> None:
-    """Materialized claims ignore raw engine return order in both directions."""
+    """Materialized claims ignore raw engine return order in both directions.
+
+    Full (body, ts) tuples are asserted so a normalization regression that
+    reorders IDs independently of bodies cannot pass.
+    """
     runner = _ReversingReturningRunner(str(tmp_path / "claim-many.db"))
     broker = BrokerCore(runner)
     try:
@@ -76,7 +97,7 @@ def test_claim_many_normalizes_sqlite_returning_rows_by_public_id(
         )
 
         rows = cast(list[tuple[str, int]], broker.claim_many("jobs", 3, order=order))
-        assert [timestamp for _body, timestamp in rows] == expected_ids
+        assert rows == expected_rows
     finally:
         broker.close()
         runner.close()
@@ -114,15 +135,36 @@ def test_claim_generator_uses_ascending_ids_when_returning_rows_are_reversed(
 
 
 @pytest.mark.parametrize(
-    ("order", "expected_ids"),
-    [("oldest", [100, 200, 300]), ("newest", [300, 200, 100])],
+    ("order", "expected_rows"),
+    [
+        (
+            "oldest",
+            [
+                ("inserted-second", 100),
+                ("inserted-third", 200),
+                ("inserted-first", 300),
+            ],
+        ),
+        (
+            "newest",
+            [
+                ("inserted-first", 300),
+                ("inserted-third", 200),
+                ("inserted-second", 100),
+            ],
+        ),
+    ],
 )
 def test_move_many_normalizes_sqlite_returning_rows_by_public_id(
     tmp_path: Path,
     order: str,
-    expected_ids: list[int],
+    expected_rows: list[tuple[str, int]],
 ) -> None:
-    """Materialized moves expose the selected public-ID direction."""
+    """Materialized moves expose the selected public-ID direction.
+
+    Full (body, ts) tuples are asserted so a normalization regression that
+    reorders IDs independently of bodies cannot pass.
+    """
     runner = _ReversingReturningRunner(str(tmp_path / "move-many.db"))
     broker = BrokerCore(runner)
     try:
@@ -138,7 +180,7 @@ def test_move_many_normalizes_sqlite_returning_rows_by_public_id(
             list[tuple[str, int]],
             broker.move_many("source", "destination", 3, order=order),
         )
-        assert [timestamp for _body, timestamp in rows] == expected_ids
+        assert rows == expected_rows
     finally:
         broker.close()
         runner.close()
