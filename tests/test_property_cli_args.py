@@ -79,6 +79,9 @@ def _process_and_parse(argv: list[str]) -> tuple[str, ...] | None:
 
 @example(argv=["write", "q", "--json"])
 @example(argv=["write", "q", "--cleanup"])
+@example(argv=["write", "q", "--newest"])
+@example(argv=["write", "q", "--", "--newest"])
+@example(argv=["read", "q", "--newest", "--all", "--json"])
 @example(argv=["write", "q", "--after=1s"])
 @example(argv=["write", "q", "-m123"])
 @example(argv=["write", "q", "-t-prefixed"])
@@ -120,6 +123,8 @@ def test_explicit_marker_preserves_following_data(
 
 @example(command="write", token="--json")
 @example(command="write", token="--cleanup")
+@example(command="write", token="--newest")
+@example(command="broadcast", token="--newest")
 @example(command="write", token="--after=1s")
 @example(command="write", token="-m123")
 @example(command="broadcast", token="-pqueue*")

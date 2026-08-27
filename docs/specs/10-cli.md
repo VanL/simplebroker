@@ -353,6 +353,11 @@ mode exits `1`; JSON mode emits the [SB-CLI-4] error object with
 body that begins with that literal must use the existing `--` escape boundary.
 Watch, stream, and generator surfaces do not acquire a corresponding flag.
 
+_Implementation mapping_:
+- `simplebroker/cli.py` (`add_read_peek_args`, `_build_cli_parser`,
+  `_validate_selection_filters_before_target`, and command dispatch)
+- `simplebroker/commands.py` (`cmd_read`, `cmd_peek`, and `cmd_move`)
+
 ## Related Plans
 
 - active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
@@ -515,3 +520,10 @@ Watch, stream, and generator surfaces do not acquire a corresponding flag.
   - `tests/test_timestamp_bound_grammar.py::test_cli_bound_help_teaches_integral_limit_and_alternatives`
   - `tests/test_property_timestamp_validate.py::test_iso_datetimes_agree_with_unix_seconds`
   - `tests/test_timestamp_selection_contract_sb_select.py::test_cli_equivalent_iso_and_seconds_bounds_select_the_same_rows`
+- `[SB-CLI-6]` exact executable evidence:
+  - `tests/test_cli_contract_sb_cli.py::test_sb_cli_6_newest_selects_highest_public_id`
+  - `tests/test_cli_contract_sb_cli.py::test_sb_cli_6_bounds_and_exact_id_compose_with_newest`
+  - `tests/test_cli_contract_sb_cli.py::test_sb_cli_6_newest_all_fails_before_target_inspection`
+  - `tests/test_cli_contract_sb_cli.py::test_sb_cli_6_help_and_surface_inventory`
+  - `tests/test_cli_rearrange_args.py::TestArgumentProcessor::test_newest_registered_operand_requires_explicit_escape`
+  - `tests/test_cli_rearrange_args.py::TestHelpHasNoSideEffects::test_newest_literal_body_uses_explicit_escape`

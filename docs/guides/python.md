@@ -814,6 +814,12 @@ Rules of the road:
 
 - **Prefix your tables** (`myapp_...`) and never touch the broker's own tables —
   see `simplebroker.ext.RESERVED_TABLE_NAMES`.
+- SQL migration may rebuild only those reserved broker objects. Successful or
+  failed migration leaves caller-owned sidecar definitions, rows, indexes,
+  constraints, and sequence state unchanged. A dependency on a retired private
+  broker column fails without `CASCADE`. Columns or constraints added inside
+  `messages`, `meta`, the aliases table, or broker-owned indexes are unsupported
+  reserved-object changes, not sidecars.
 - Connection lifetime follows the `Queue`: ephemeral queues get in and get out
   per session; `persistent=True` queues reuse their connection.
 - Use `?` (qmark) placeholders. They work natively on SQLite and are translated

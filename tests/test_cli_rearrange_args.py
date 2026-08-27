@@ -193,6 +193,18 @@ class TestArgumentProcessor:
         with pytest.raises(ArgumentParserError, match=r"use --.*--cleanup"):
             _normalize_args(args)
 
+    @pytest.mark.parametrize("command", ["write", "broadcast"])
+    def test_newest_registered_operand_requires_explicit_escape(
+        self, command: str
+    ) -> None:
+        args = (
+            [command, "queue", "--newest"]
+            if command == "write"
+            else [command, "--newest"]
+        )
+        with pytest.raises(ArgumentParserError, match=r"use --.*--newest"):
+            _normalize_args(args)
+
     def test_write_output_option_after_queue_is_not_protected(self):
         assert _normalize_args(["write", "queue", "--json"]) == [
             "write",
@@ -552,6 +564,20 @@ class TestHelpHasNoSideEffects:
         assert rc == 0
         rc, stdout, _ = run_cli("read", "tasks", cwd=workdir)
         assert stdout == "--cleanup"
+
+    @pytest.mark.parametrize("command", ["write", "broadcast"])
+    def test_newest_literal_body_uses_explicit_escape(
+        self, workdir: Path, command: str
+    ) -> None:
+        if command == "write":
+            rc, _, err = run_cli("write", "tasks", "--", "--newest", cwd=workdir)
+        else:
+            assert run_cli("write", "tasks", "seed", cwd=workdir)[0] == 0
+            rc, _, err = run_cli("broadcast", "--", "--newest", cwd=workdir)
+        assert rc == 0, err
+        rc, stdout, err = run_cli("read", "tasks", "--newest", cwd=workdir)
+        assert rc == 0, err
+        assert stdout == "--newest"
 
 
 class TestDestructiveGlobalFlagHoisting:

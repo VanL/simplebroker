@@ -76,6 +76,19 @@ def _validate_selection_filters_before_target(args: argparse.Namespace) -> int |
     if command not in {"read", "peek", "move", "watch", "delete"}:
         return None
 
+    if (
+        command in {"read", "peek", "move"}
+        and bool(getattr(args, "newest", False))
+        and bool(getattr(args, "all", False))
+    ):
+        commands._emit_error(
+            "--newest cannot be used with --all; remove --newest for ascending "
+            "all-message traversal or remove --all for newest-first bounded selection",
+            json_output=bool(getattr(args, "json", False)),
+            code="INVALID_ARGUMENT",
+        )
+        return EXIT_ERROR
+
     # ``watch`` registers no --before; getattr covers it with None.
     timestamp_filters = [
         getattr(args, "after", None),
@@ -172,6 +185,12 @@ def add_read_peek_args(
     """Add shared arguments for read and peek commands."""
     add_argument(parser, "queue", help="queue name")
     add_argument(parser, "--all", action="store_true", help="read/peek all messages")
+    add_argument(
+        parser,
+        "--newest",
+        action="store_true",
+        help="select the highest eligible public message ID first (not with --all)",
+    )
     add_argument(
         parser,
         "--json",
@@ -581,6 +600,12 @@ def _build_cli_parser(
         "--all",
         action="store_true",
         help="move all messages from source to destination",
+    )
+    add_argument(
+        move_parser,
+        "--newest",
+        action="store_true",
+        help="select the highest eligible public message ID first (not with --all)",
     )
 
     # --after can be used with or without --all
@@ -1611,6 +1636,7 @@ def _dispatch_message_command(
             after_str=after_str,
             message_id_str=message_id_str,
             before_str=before_str,
+            order="newest" if args.newest else "oldest",
             config=config,
         )
     return commands.cmd_peek(
@@ -1623,6 +1649,7 @@ def _dispatch_message_command(
         message_id_str=message_id_str,
         before_str=before_str,
         include_claimed=args.include_claimed,
+        order="newest" if args.newest else "oldest",
         config=config,
     )
 
@@ -1688,6 +1715,7 @@ def _dispatch_queue_command(
         message_id_str=message_id_str,
         after_str=after_str,
         before_str=before_str,
+        order="newest" if args.newest else "oldest",
         config=config,
     )
 

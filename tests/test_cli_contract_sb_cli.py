@@ -13,7 +13,7 @@ from typing import cast
 
 import pytest
 
-from simplebroker import cli
+from simplebroker import Queue, cli
 from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
 from simplebroker._exceptions import (
     DatabaseError,
@@ -48,6 +48,18 @@ SB_CLI_5_EVIDENCE = {
     "test_cli_rejects_hostile_oversized_bound_with_bounded_diagnostic",
     "test_cli_json_scientific_notation_error_has_actionable_guidance",
     "test_cli_bound_help_teaches_integral_limit_and_alternatives",
+}
+SB_CLI_6_EVIDENCE = {
+    "tests/test_cli_contract_sb_cli.py": {
+        "test_sb_cli_6_newest_selects_highest_public_id",
+        "test_sb_cli_6_bounds_and_exact_id_compose_with_newest",
+        "test_sb_cli_6_newest_all_fails_before_target_inspection",
+        "test_sb_cli_6_help_and_surface_inventory",
+    },
+    "tests/test_cli_rearrange_args.py": {
+        "TestArgumentProcessor::test_newest_registered_operand_requires_explicit_escape",
+        "TestHelpHasNoSideEffects::test_newest_literal_body_uses_explicit_escape",
+    },
 }
 
 
@@ -646,3 +658,153 @@ def test_sb_cli_5_exact_evidence_manifest() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     assert cited_nodes <= executable_nodes
+
+
+def test_sb_cli_6_newest_selects_highest_public_id(workdir: Path) -> None:
+    db = workdir / "newest.db"
+    with Queue("peek", db_path=str(db)) as queue:
+        queue.insert_messages([("id-300", 300), ("id-100", 100), ("id-200", 200)])
+    with Queue("read", db_path=str(db)) as queue:
+        queue.insert_messages([("id-600", 600), ("id-400", 400), ("id-500", 500)])
+    with Queue("move", db_path=str(db)) as queue:
+        queue.insert_messages([("id-900", 900), ("id-700", 700), ("id-800", 800)])
+
+    assert run_cli("-f", str(db), "peek", "--newest", "peek", cwd=workdir) == (
+        EXIT_SUCCESS,
+        "id-300",
+        "",
+    )
+    assert run_cli("-f", str(db), "read", "read", "--newest", cwd=workdir) == (
+        EXIT_SUCCESS,
+        "id-600",
+        "",
+    )
+    assert run_cli(
+        "-f", str(db), "move", "--newest", "move", "archive", cwd=workdir
+    ) == (EXIT_SUCCESS, "id-900", "")
+    with Queue("archive", db_path=str(db)) as queue:
+        assert queue.peek_one(with_timestamps=True) == ("id-900", 900)
+
+
+def test_sb_cli_6_bounds_and_exact_id_compose_with_newest(workdir: Path) -> None:
+    db = workdir / "bounded-newest.db"
+    ids = [
+        1_000_000_000_000_000_300,
+        1_000_000_000_000_000_100,
+        1_000_000_000_000_000_200,
+    ]
+    with Queue("jobs", db_path=str(db)) as queue:
+        queue.insert_messages([(f"id-{message_id}", message_id) for message_id in ids])
+
+    result = run_cli(
+        "-f",
+        str(db),
+        "peek",
+        "jobs",
+        "--newest",
+        "--after",
+        str(ids[1]),
+        "--before",
+        str(ids[0]),
+        cwd=workdir,
+    )
+    assert result == (EXIT_SUCCESS, f"id-{ids[2]}", "")
+
+    result = run_cli(
+        "-f",
+        str(db),
+        "peek",
+        "jobs",
+        "-m",
+        str(ids[1]),
+        "--newest",
+        cwd=workdir,
+    )
+    assert result == (EXIT_SUCCESS, f"id-{ids[1]}", "")
+
+
+@pytest.mark.parametrize("command", ["read", "peek", "move"])
+@pytest.mark.parametrize("json_output", [False, True], ids=["plain", "json"])
+def test_sb_cli_6_newest_all_fails_before_target_inspection(
+    workdir: Path,
+    command: str,
+    json_output: bool,
+) -> None:
+    corrupt_target = workdir / f"{command}-corrupt.db"
+    corrupt_target.write_text("not a SQLite database", encoding="utf-8")
+    command_args = [command, "source"]
+    if command == "move":
+        command_args.append("dest")
+    args = ["-f", str(corrupt_target), *command_args, "--newest", "--all"]
+    if json_output:
+        args.append("--json")
+
+    rc, out, err = run_cli(*args, cwd=workdir)
+
+    assert rc == EXIT_ERROR
+    assert out == ""
+    assert "Traceback" not in err
+    assert "database" not in err.lower()
+    expected_message = (
+        "--newest cannot be used with --all; remove --newest for ascending "
+        "all-message traversal or remove --all for newest-first bounded selection"
+    )
+    if json_output:
+        assert json.loads(err) == {
+            "error": "INVALID_ARGUMENT",
+            "message": expected_message,
+            "retryable": False,
+        }
+    else:
+        assert expected_message in err
+
+
+def test_sb_cli_6_help_and_surface_inventory(workdir: Path) -> None:
+    for command in ("read", "peek", "move"):
+        rc, out, err = run_cli(command, "--help", cwd=workdir)
+        assert rc == EXIT_SUCCESS, err
+        assert "--newest" in out
+        assert "highest" in out.lower()
+
+    rc, out, err = run_cli("watch", "--help", cwd=workdir)
+    assert rc == EXIT_SUCCESS, err
+    assert "--newest" not in out
+
+    readme = README.read_text(encoding="utf-8")
+    for example in (
+        "$ broker peek jobs --newest",
+        "$ broker read jobs --newest",
+        "$ broker move jobs archive --newest",
+        "broker write tasks -- --newest",
+        "broker broadcast -- --newest",
+    ):
+        assert example in readme
+
+
+def test_sb_cli_6_exact_evidence_manifest() -> None:
+    evidence = SPEC.read_text(encoding="utf-8").split(
+        "- `[SB-CLI-6]` exact executable evidence:", 1
+    )[1]
+    cited: dict[str, set[str]] = {}
+    for relative_path, node in re.findall(
+        r"`((?:tests/)[^`:]+\.py)::([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)`",
+        evidence,
+    ):
+        cited.setdefault(relative_path, set()).add(node)
+    assert cited == SB_CLI_6_EVIDENCE
+
+    for relative_path, expected_nodes in cited.items():
+        tree = ast.parse((README.parent / relative_path).read_text(encoding="utf-8"))
+        executable_nodes = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                executable_nodes.update(
+                    f"{node.name}::{child.name}"
+                    for child in node.body
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                )
+        assert expected_nodes <= executable_nodes

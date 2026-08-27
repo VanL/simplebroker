@@ -722,6 +722,7 @@ def cmd_read(
         after_str: Timestamp string for filtering
         message_id_str: Specific message ID to read
         before_str: Timestamp string for upper-bound filtering
+        order: Public message-ID selection order ("oldest" or "newest")
 
     Returns:
         Exit code
@@ -820,6 +821,7 @@ def cmd_peek(
         before_str: Timestamp string for upper-bound filtering
         include_claimed: If True, also show claimed (consumed but not yet
             vacuumed) messages; claimed rows may disappear to vacuum at any time
+        order: Public message-ID selection order ("oldest" or "newest")
 
     Returns:
         Exit code
@@ -1283,6 +1285,7 @@ def cmd_move(
         message_id_str: Specific message ID to move
         after_str: Timestamp string for filtering
         before_str: Timestamp string for upper-bound filtering
+        order: Public message-ID selection order ("oldest" or "newest")
 
     Returns:
         Exit code

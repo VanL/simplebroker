@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Read, peek, and move now use ascending public message ID as their uniform
+  default order. Ordinary generated writes remain FIFO-like; exact inserts,
+  loads, and ID-preserving moves of lower IDs may now return those rows before
+  rows inserted earlier. Added Python `order="newest"` and CLI `--newest` for
+  bounded highest-ID-first selection. `--newest --all` is invalid; because
+  `--newest` is a registered option token, a write or broadcast body with that
+  literal value requires the existing `--` escape.
+- Fresh SQLite and PostgreSQL targets no longer contain private `id` or
+  `order_id` message columns. Opening an owned schema-v5 target with the v8
+  package set transactionally rebuilds the reserved broker schema, removes the
+  legacy surrogate, and publishes SQL schema version 6. Older clients then
+  reject the target cleanly during cold admission. This is a downtime cutover,
+  not a rolling upgrade: stop every v7 client and sidecar transaction, take a
+  whole-target backup, install the coherent v8 core and extension set, migrate
+  and verify once, then restart only v8 clients. PostgreSQL takes an `ACCESS
+  EXCLUSIVE` migration lock plus a transaction advisory lock. Caller-owned
+  sidecar tables and state are preserved; changes inside reserved broker
+  objects are unsupported. Backend API v8 requires matching first-party
+  extension releases.
+
 ## [7.5.1] - 2026-08-26
 
 ### Changed

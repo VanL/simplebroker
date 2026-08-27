@@ -1532,6 +1532,62 @@ Possession answers:
   passed. Task 8 will record the Redis slice commit SHA and final all-suite
   rerun.
 
+### 2026-08-27 Task 6 CLI and agent-interface slice
+
+- `--newest` is registered only on read, peek, and move and dispatches through
+  the direct command layer as `order="newest"`; no CLI-specific retrieval path
+  exists. Normal and rearranged placements, exact `-m`, strict bounds, and
+  out-of-order exact IDs select the highest eligible public ID. Watch help has
+  no reverse flag.
+- `--newest --all` is rejected before target resolution. Text and JSON probes
+  use a corrupt target to prove the target is unobserved; JSON asserts exactly
+  `error="INVALID_ARGUMENT"`, the actionable message, `retryable=false`,
+  stderr-only output, and exit 1. Parser grammar conservation automatically
+  adds `--newest` to the registered-token set, so unescaped write/broadcast
+  bodies fail with the existing `use --` guidance and escaped literals work.
+- The focused CLI, main-dispatch, move, property, command-helper, and
+  [SB-SELECT-5]/[SB-CLI-6] suites passed. Ruff passed on the touched code and
+  tests. README Quick Start/options/escaping, the agent kernel, Python sidecar
+  guidance, the canonical CLI mapping/evidence, and the breaking CHANGELOG
+  entry were aligned. The Hypothesis/Atheris property harness now has explicit
+  `--newest`, conflict, and escaped-literal corpus examples; Atheris itself is
+  dependency-gated to Linux x86_64 and cannot execute on this macOS arm64 host,
+  so its hosted run remains post-commit evidence rather than a local claim.
+
+Interface-review baseline: `5d4f6df` plus the uncommitted Task 6 delta. Surface
+kind: CLI.
+
+| # | Result | Evidence |
+|---|--------|----------|
+| 1. Context is the scarcest resource | met | The flag changes selection only and preserves existing compact output (`simplebroker/cli.py:1628`, `tests/test_cli_contract_sb_cli.py:663`). |
+| 2. Progressive disclosure | met | Command help teaches highest-ID meaning and the `--all` boundary; README adds bounded examples and option interactions (`simplebroker/cli.py:188`, `README.md:182`, `README.md:317`). |
+| 3. Self-explanatory names; no lookup tables | met | `--newest` names the requested result directly and help names the public-ID key (`simplebroker/cli.py:190`). |
+| 4. One identity per thing | met | The interface exposes only public message ID and cites the single cross-backend owner (`docs/specs/10-cli.md:343`, `README.md:334`). |
+| 5. Derive what is derivable | met | The CLI derives the canonical order string from one boolean flag at dispatch (`simplebroker/cli.py:1639`, `simplebroker/cli.py:1718`). |
+| 6. No hidden session setup | met | Each invocation carries command, queue operands, bounds, and `--newest`; no cursor or prior mode setup is introduced (`docs/specs/10-cli.md:343`). |
+| 7. Teach, don't reject | met | The one true conflict names both valid recovery choices before target access (`simplebroker/cli.py:79`). |
+| 8. Every message carries its action | met | The conflict diagnostic says which flag to remove for ascending-all versus newest-bounded behavior, in both text and exact JSON proof (`simplebroker/cli.py:84`, `tests/test_cli_contract_sb_cli.py:748`). |
+| 9. Atomic writes with recovery on conflict | met; merge clause not applicable to a single-invocation CLI | Selection conflict fails before mutation; read/move retain their backend atomic operations (`tests/test_cli_contract_sb_cli.py:728`, `simplebroker/commands.py:1260`). |
+| 10. Draw the trust boundary | met | Reverse live/all traversal is deliberately absent and the inventory proves watch does not advertise it (`docs/specs/10-cli.md:352`, `tests/test_cli_contract_sb_cli.py:762`). |
+| 11. Wire format matches the mental model | met | One `--newest` flag maps to semantic public-ID order; storage keys and backend direction syntax stay internal (`simplebroker/cli.py:1639`). |
+
+Findings:
+
+| ID | Severity | Location | Finding | Disposition |
+|----|----------|----------|---------|-------------|
+| F1 | P2 | `simplebroker/cli.py:84` | The first conflict message named the invalid pair but gave no recovery action. | Resolved: it now names both valid flag-removal choices; exact text/JSON tests pin it. |
+
+Ratified judgments (challenged, upheld): `--newest` remains sugar over the one
+`order` path rather than a persistent LIFO mode; reverse `--all`/generator/watch
+stays out pending a live-cursor contract; making `--newest` a registered token
+correctly requires the existing explicit `--` boundary for literal message
+data.
+
+Verdict: no blocker.
+
+Runbook feedback: no new reusable principle or probe class; the actionable
+two-choice conflict is an instance of principles 7 and 8 already covered.
+
 Later tasks append command, date, commit/artifact SHA, backend/service version,
 observed result, and residual risk for each gate. Do not replace evidence with
 “tests pass.”

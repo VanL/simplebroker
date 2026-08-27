@@ -83,7 +83,12 @@ execution, business retries, worker topology, and completion.
 SimpleBroker's one concession to application state is the ability to route 
 `sidecar` tables to the same backend (on the SQLite and pg backends). This
 allows embedders to use the same configuration information and connection - but
-SimpleBroker does not constrain what is in sidecar tables.
+SimpleBroker does not constrain what is in sidecar tables. SQL schema migration
+may rebuild only reserved broker objects and leaves caller-owned sidecar schema
+and state unchanged on success or failure. Additions to `messages`, `meta`, the
+aliases table, or broker-owned indexes are reserved-object changes, not
+sidecars, and are unsupported. See
+[`SB-API-7`](docs/specs/16-python-library-api.md#backend-packaging-and-sidecar-boundary-sb-api-7).
 
 ## The SimpleBroker API
 
@@ -173,6 +178,11 @@ $ broker read myqueue --all
 
 # Peek without removing
 $ broker peek myqueue
+
+# Select the highest eligible public message ID for one bounded operation
+$ broker peek jobs --newest
+$ broker read jobs --newest
+$ broker move jobs archive --newest
 
 # Move messages between queues
 $ broker move myqueue processed
@@ -313,11 +323,19 @@ $ broker alias remove task1.outbox
   the bound (a filter, not a complete stream offset)
 - `--before <timestamp>` - Process messages with id **strictly less** than the
   bound (`read`, `peek`, and `move`; not `watch`)
+- `--newest` - Select the highest eligible public message ID first. Bounds
+  filter before selection; `-m` may be combined with it; `--all` may not.
 
 Normative filter predicates, late older ids (including after `move` or exact
 insert), and watch progress: `docs/specs/14-timestamp-selection.md`
-`[SB-SELECT-1]`–`[SB-SELECT-4]`. CLI string forms for non-exact bounds:
-`[SB-CLI-5]` in `docs/specs/10-cli.md`.
+`[SB-SELECT-1]`–`[SB-SELECT-5]`. CLI string forms for non-exact bounds and
+newest selection: `[SB-CLI-5]`–`[SB-CLI-6]` in `docs/specs/10-cli.md`.
+
+Read, peek, and move select the lowest eligible public message ID first by
+default. Ordinary generated writes therefore remain FIFO-like, but an exact
+insert, load, or ID-preserving move can add a lower ID later. `--newest`
+selects the highest eligible ID for that bounded call. It is not a durable
+queue mode and is unavailable on `--all`, generators, and watch.
 
 **Write options:**
 - `-t, --timestamps` - Print the new message's 19-digit timestamp ID on stdout
@@ -331,6 +349,9 @@ an option or is rejected when it belongs to another command; it is never
 silently written as message data. Use `broker write tasks -- --json` to write
 the literal body `--json`. Unknown dash-leading bodies remain compatible as
 literal data, though an explicit `--` is the clearest form for scripts.
+Because `--newest` is also registered, use
+`broker write tasks -- --newest` or `broker broadcast -- --newest` for that
+literal body.
 
 **Watch options:**
 - `--peek` - Monitor without consuming
