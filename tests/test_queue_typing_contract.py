@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def assert_high_level_queue_types(queue: Queue, runtime_bool: bool) -> None:
     assert_type(queue.read(), str | None)
+    assert_type(queue.read(order="newest"), str | None)
     assert_type(queue.read(with_timestamps=True), tuple[str, int] | None)
     assert_type(queue.read(all_messages=True), CloseableIterator[str])
     assert_type(
@@ -33,6 +34,7 @@ def assert_high_level_queue_types(queue: Queue, runtime_bool: bool) -> None:
     assert_type(ordinary_read_iterator, Iterator[str])
 
     assert_type(queue.peek(), str | None)
+    assert_type(queue.peek(order="newest"), str | None)
     assert_type(queue.peek(with_timestamps=True), tuple[str, int] | None)
     assert_type(queue.peek(all_messages=True), CloseableIterator[str])
     assert_type(
@@ -46,6 +48,7 @@ def assert_high_level_queue_types(queue: Queue, runtime_bool: bool) -> None:
     queue.peek(all_messages=True).close()
 
     assert_type(queue.move("destination"), MovedMessage | None)
+    assert_type(queue.move("destination", order="newest"), MovedMessage | None)
     assert_type(
         queue.move("destination", all_messages=True),
         CloseableIterator[MovedMessage],
@@ -65,11 +68,13 @@ def assert_high_level_queue_types(queue: Queue, runtime_bool: bool) -> None:
 
 def assert_granular_queue_types(queue: Queue, runtime_bool: bool) -> None:
     assert_type(queue.read_one(), str | None)
+    assert_type(queue.read_one(order="newest"), str | None)
     assert_type(queue.read_one(with_timestamps=True), tuple[str, int] | None)
     assert_type(
         queue.read_one(with_timestamps=runtime_bool), str | tuple[str, int] | None
     )
     assert_type(queue.read_many(5), list[str])
+    assert_type(queue.read_many(5, order="newest"), list[str])
     assert_type(queue.read_many(5, with_timestamps=True), list[tuple[str, int]])
     assert_type(
         queue.read_many(5, with_timestamps=runtime_bool),
@@ -91,11 +96,13 @@ def assert_granular_queue_types(queue: Queue, runtime_bool: bool) -> None:
     assert_type(ordinary_read_iterator, Iterator[str])
 
     assert_type(queue.peek_one(), str | None)
+    assert_type(queue.peek_one(order="newest"), str | None)
     assert_type(queue.peek_one(with_timestamps=True), tuple[str, int] | None)
     assert_type(
         queue.peek_one(with_timestamps=runtime_bool), str | tuple[str, int] | None
     )
     assert_type(queue.peek_many(), list[str])
+    assert_type(queue.peek_many(order="newest"), list[str])
     assert_type(queue.peek_many(with_timestamps=True), list[tuple[str, int]])
     assert_type(
         queue.peek_many(with_timestamps=runtime_bool),
@@ -115,6 +122,7 @@ def assert_granular_queue_types(queue: Queue, runtime_bool: bool) -> None:
     assert_type(ordinary_iterator, Iterator[str])
 
     assert_type(queue.move_one("destination"), str | None)
+    assert_type(queue.move_one("destination", order="newest"), str | None)
     assert_type(
         queue.move_one("destination", with_timestamps=True),
         tuple[str, int] | None,
@@ -124,6 +132,7 @@ def assert_granular_queue_types(queue: Queue, runtime_bool: bool) -> None:
         str | tuple[str, int] | None,
     )
     assert_type(queue.move_many("destination", 5), list[str])
+    assert_type(queue.move_many("destination", 5, order="newest"), list[str])
     assert_type(
         queue.move_many("destination", 5, with_timestamps=True),
         list[tuple[str, int]],
@@ -186,3 +195,27 @@ def test_delete_none_fixture_is_rejected_by_mypy() -> None:
     assert result.stdout.count("error:") == 1
     assert "[call-overload]" in result.stdout
     assert "message_id" in result.stdout
+
+
+def test_generator_order_fixture_is_rejected_by_mypy() -> None:
+    fixture = ROOT / "tests" / "typecheck_fixtures" / "queue_generator_order.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy",
+            "--config-file",
+            str(ROOT / "pyproject.toml"),
+            "--show-error-codes",
+            str(fixture),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == ""
+    assert result.stdout.count("error:") >= 3
+    assert result.stdout.count("Unexpected keyword argument \"order\"") == 3

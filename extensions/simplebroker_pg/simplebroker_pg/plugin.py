@@ -472,7 +472,7 @@ class PostgresBackendPlugin:
 
     name = "postgres"
     sql: BackendSQLNamespace = ensure_backend_sql_namespace(pg_sql)
-    backend_api_version = 7
+    backend_api_version = 8
     schema_version = POSTGRES_SCHEMA_VERSION
 
     def init_backend(

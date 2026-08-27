@@ -33,6 +33,7 @@ from ._key_material import FrozenValue, freeze_key_material, snapshot_key_materi
 from ._message_id import MessageIdInput
 from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
+from ._selection import validate_selection_order
 from ._sidecar import SidecarSession
 from ._targets import BrokerTarget
 from .db import DBConnection, _validate_queue_name_cached
@@ -454,6 +455,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
+        order: str = "oldest",
     ) -> str | None: ...
 
     @overload
@@ -465,6 +467,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
+        order: str = "oldest",
     ) -> tuple[str, int] | None: ...
 
     @overload
@@ -476,6 +479,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
+        order: str = "oldest",
     ) -> CloseableIterator[str]: ...
 
     @overload
@@ -487,6 +491,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
+        order: str = "oldest",
     ) -> CloseableIterator[tuple[str, int]]: ...
 
     @overload
@@ -498,6 +503,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None: ...
 
     def read(
@@ -508,6 +514,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None:
         """Read and remove message(s) from the queue (CLI-mirroring method).
 
@@ -538,6 +545,10 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
+        validated_order = validate_selection_order(order)
+        if all_messages and validated_order != "oldest":
+            raise ValueError("order='newest' cannot be used with all_messages=True")
+
         has_range_filter = after_timestamp is not None or before_timestamp is not None
         if message_id is not None and (all_messages or has_range_filter):
             raise ValueError(
@@ -548,7 +559,9 @@ class Queue:
         if message_id is not None:
             # Read specific message by ID
             return self.read_one(
-                exact_timestamp=message_id, with_timestamps=with_timestamps
+                exact_timestamp=message_id,
+                with_timestamps=with_timestamps,
+                order=validated_order,
             )
         elif all_messages:
             # Return generator for all messages
@@ -560,15 +573,19 @@ class Queue:
         else:
             # Read single message
             if has_range_filter:
-                # Need to use generator with limit 1 for range-filter support
-                gen = self.read_generator(
+                results = self.read_many(
+                    1,
                     with_timestamps=with_timestamps,
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
+                    order=validated_order,
                 )
-                return _next_or_none_and_close(gen)
+                return results[0] if results else None
             else:
-                return self.read_one(with_timestamps=with_timestamps)
+                return self.read_one(
+                    with_timestamps=with_timestamps,
+                    order=validated_order,
+                )
 
     # ========== Granular Read API (maps to internal claim methods) ==========
 
@@ -578,6 +595,7 @@ class Queue:
         *,
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: Literal[False] = False,
+        order: str = "oldest",
     ) -> str | None: ...
 
     @overload
@@ -586,6 +604,7 @@ class Queue:
         *,
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: Literal[True],
+        order: str = "oldest",
     ) -> tuple[str, int] | None: ...
 
     @overload
@@ -594,6 +613,7 @@ class Queue:
         *,
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | None: ...
 
     def read_one(
@@ -601,6 +621,7 @@ class Queue:
         *,
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = False,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | None:
         """Read and remove exactly one message from the queue.
 
@@ -619,11 +640,13 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
+        validated_order = validate_selection_order(order)
         with self.get_connection() as connection:
             return connection.claim_one(
                 self.name,
                 exact_timestamp=exact_timestamp,
                 with_timestamps=with_timestamps,
+                order=validated_order,
             )
 
     @overload
@@ -635,6 +658,7 @@ class Queue:
         delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        order: str = "oldest",
     ) -> list[str]: ...
 
     @overload
@@ -646,6 +670,7 @@ class Queue:
         delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        order: str = "oldest",
     ) -> list[tuple[str, int]]: ...
 
     @overload
@@ -657,6 +682,7 @@ class Queue:
         delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        order: str = "oldest",
     ) -> list[str] | list[tuple[str, int]]: ...
 
     def read_many(
@@ -667,6 +693,7 @@ class Queue:
         delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        order: str = "oldest",
     ) -> list[str] | list[tuple[str, int]]:
         """Read and remove multiple messages from the queue.
 
@@ -689,6 +716,7 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
+        validated_order = validate_selection_order(order)
         validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         with self.get_connection() as connection:
             return connection.claim_many(
@@ -698,6 +726,7 @@ class Queue:
                 delivery_guarantee=validated_delivery,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
+                order=validated_order,
             )
 
     @overload
@@ -794,6 +823,7 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> str | None: ...
 
     @overload
@@ -806,6 +836,7 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> tuple[str, int] | None: ...
 
     @overload
@@ -818,6 +849,7 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> CloseableIterator[str]: ...
 
     @overload
@@ -830,6 +862,7 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> CloseableIterator[tuple[str, int]]: ...
 
     @overload
@@ -842,6 +875,7 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None: ...
 
     def peek(
@@ -853,6 +887,7 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None:
         """View message(s) without removing them from the queue (CLI-mirroring method).
 
@@ -889,6 +924,10 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
+        validated_order = validate_selection_order(order)
+        if all_messages and validated_order != "oldest":
+            raise ValueError("order='newest' cannot be used with all_messages=True")
+
         has_range_filter = after_timestamp is not None or before_timestamp is not None
         if message_id is not None and (all_messages or has_range_filter):
             raise ValueError(
@@ -902,6 +941,7 @@ class Queue:
                 exact_timestamp=message_id,
                 with_timestamps=with_timestamps,
                 include_claimed=include_claimed,
+                order=validated_order,
             )
         elif all_messages:
             # Return generator for all messages
@@ -914,18 +954,20 @@ class Queue:
         else:
             # Peek at single message
             if has_range_filter:
-                # Need to use generator with limit 1 for range-filter support
-                gen = self.peek_generator(
+                results = self.peek_many(
+                    1,
                     with_timestamps=with_timestamps,
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
                     include_claimed=include_claimed,
+                    order=validated_order,
                 )
-                return _next_or_none_and_close(gen)
+                return results[0] if results else None
             else:
                 return self.peek_one(
                     with_timestamps=with_timestamps,
                     include_claimed=include_claimed,
+                    order=validated_order,
                 )
 
     # ========== Granular Peek API ==========
@@ -937,6 +979,7 @@ class Queue:
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: Literal[False] = False,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> str | None: ...
 
     @overload
@@ -946,6 +989,7 @@ class Queue:
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: Literal[True],
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> tuple[str, int] | None: ...
 
     @overload
@@ -955,6 +999,7 @@ class Queue:
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | None: ...
 
     def peek_one(
@@ -963,6 +1008,7 @@ class Queue:
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = False,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | None:
         """Peek at exactly one message without removing it from the queue.
 
@@ -983,12 +1029,14 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
+        validated_order = validate_selection_order(order)
         with self.get_connection() as connection:
             return connection.peek_one(
                 self.name,
                 exact_timestamp=exact_timestamp,
                 with_timestamps=with_timestamps,
                 include_claimed=include_claimed,
+                order=validated_order,
             )
 
     @overload
@@ -1000,6 +1048,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> list[str]: ...
 
     @overload
@@ -1011,6 +1060,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> list[tuple[str, int]]: ...
 
     @overload
@@ -1022,6 +1072,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> list[str] | list[tuple[str, int]]: ...
 
     def peek_many(
@@ -1032,6 +1083,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> list[str] | list[tuple[str, int]]:
         """Peek at multiple messages without removing them from the queue.
 
@@ -1054,6 +1106,7 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
+        validated_order = validate_selection_order(order)
         with self.get_connection() as connection:
             return connection.peek_many(
                 self.name,
@@ -1062,6 +1115,7 @@ class Queue:
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
                 include_claimed=include_claimed,
+                order=validated_order,
             )
 
     @overload
@@ -1153,6 +1207,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: Literal[False] = False,
+        order: str = "oldest",
     ) -> MovedMessage | None: ...
 
     @overload
@@ -1164,6 +1219,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: Literal[True],
+        order: str = "oldest",
     ) -> CloseableIterator[MovedMessage]: ...
 
     @overload
@@ -1175,6 +1231,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: bool,
+        order: str = "oldest",
     ) -> MovedMessage | None | CloseableIterator[MovedMessage]: ...
 
     def move(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-016] exception
@@ -1185,6 +1242,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: bool = False,
+        order: str = "oldest",
     ) -> MovedMessage | None | CloseableIterator[MovedMessage]:
         """Move messages from this queue to another (CLI-mirroring method).
 
@@ -1215,6 +1273,10 @@ class Queue:
             QueueNameError: If queue names are invalid
             OperationalError: If the database is locked/busy
         """
+        validated_order = validate_selection_order(order)
+        if all_messages and validated_order != "oldest":
+            raise ValueError("order='newest' cannot be used with all_messages=True")
+
         # Get destination queue name
         dest_name = self._move_destination_name(destination)
 
@@ -1237,6 +1299,7 @@ class Queue:
                 exact_timestamp=message_id,
                 require_unclaimed=False,  # Allow moving claimed messages by ID
                 with_timestamps=True,
+                order=validated_order,
             )
             if result:
                 return _moved_message(result[0], result[1])
@@ -1261,20 +1324,24 @@ class Queue:
         else:
             # Move single message
             if has_range_filter:
-                # Use generator with single iteration for range-filter support
-                gen = self.move_generator(
+                results = self.move_many(
                     dest_name,
+                    1,
                     with_timestamps=True,
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
+                    order=validated_order,
                 )
-                result = _next_or_none_and_close(gen)
-                if result is None:
+                if not results:
                     return None
-                msg, ts = result
+                msg, ts = results[0]
                 return _moved_message(msg, ts)
             else:
-                result = self.move_one(dest_name, with_timestamps=True)
+                result = self.move_one(
+                    dest_name,
+                    with_timestamps=True,
+                    order=validated_order,
+                )
                 if result:
                     return _moved_message(result[0], result[1])
                 return None
@@ -1289,6 +1356,7 @@ class Queue:
         exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: Literal[False] = False,
+        order: str = "oldest",
     ) -> str | None: ...
 
     @overload
@@ -1299,6 +1367,7 @@ class Queue:
         exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: Literal[True],
+        order: str = "oldest",
     ) -> tuple[str, int] | None: ...
 
     @overload
@@ -1309,6 +1378,7 @@ class Queue:
         exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | None: ...
 
     def move_one(
@@ -1318,6 +1388,7 @@ class Queue:
         exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = False,
+        order: str = "oldest",
     ) -> str | tuple[str, int] | None:
         """Move exactly one message from this queue to another.
 
@@ -1339,6 +1410,7 @@ class Queue:
             QueueNameError: If queue names are invalid
             OperationalError: If the database is locked/busy
         """
+        validated_order = validate_selection_order(order)
         dest_name = self._move_destination_name(destination)
         if self.name == dest_name:
             raise ValueError("Source and destination queues cannot be the same")
@@ -1350,6 +1422,7 @@ class Queue:
                 exact_timestamp=exact_timestamp,
                 require_unclaimed=require_unclaimed,
                 with_timestamps=with_timestamps,
+                order=validated_order,
             )
 
     @overload
@@ -1363,6 +1436,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: str = "oldest",
     ) -> list[str]: ...
 
     @overload
@@ -1376,6 +1450,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: str = "oldest",
     ) -> list[tuple[str, int]]: ...
 
     @overload
@@ -1389,6 +1464,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: str = "oldest",
     ) -> list[str] | list[tuple[str, int]]: ...
 
     def move_many(
@@ -1401,6 +1477,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: str = "oldest",
     ) -> list[str] | list[tuple[str, int]]:
         """Move multiple messages from this queue to another.
 
@@ -1427,6 +1504,7 @@ class Queue:
             QueueNameError: If queue names are invalid
             OperationalError: If the database is locked/busy
         """
+        validated_order = validate_selection_order(order)
         validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         dest_name = self._move_destination_name(destination)
         if self.name == dest_name:
@@ -1442,6 +1520,7 @@ class Queue:
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
                 require_unclaimed=require_unclaimed,
+                order=validated_order,
             )
 
     @overload

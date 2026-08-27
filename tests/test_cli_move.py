@@ -5,7 +5,6 @@ import json
 import threading
 import time
 from collections import Counter
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -259,33 +258,26 @@ class TestBasicFunctionality:
         assert out == "test message"
 
 
-def test_filtered_single_move_closes_bounded_generator(
+def test_filtered_single_move_uses_bounded_many_primitive(
     tmp_path: Path,
     monkeypatch,
     capsys,
 ) -> None:
-    """Moving one filtered item must close the transactional generator."""
+    """Moving one filtered item must not acquire a live generator."""
 
-    closed: list[bool] = []
-    retained_iterators: list[Iterator[tuple[str, int]]] = []
+    calls: list[tuple[str, int, dict[str, Any]]] = []
 
-    def tracked_results() -> Iterator[tuple[str, int]]:
-        try:
-            yield "message", 123
-        finally:
-            closed.append(True)
-
-    def move_generator(
+    def move_many(
         self: Queue,
         destination: str,
+        limit: int,
         **kwargs: Any,
-    ) -> Iterator[tuple[str, int]]:
-        del self, destination, kwargs
-        iterator = tracked_results()
-        retained_iterators.append(iterator)
-        return iterator
+    ) -> list[tuple[str, int]]:
+        del self
+        calls.append((destination, limit, kwargs))
+        return [("message", 123)]
 
-    monkeypatch.setattr(Queue, "move_generator", move_generator)
+    monkeypatch.setattr(Queue, "move_many", move_many)
 
     result = commands.cmd_move(
         str(tmp_path / "move.db"),
@@ -296,8 +288,18 @@ def test_filtered_single_move_closes_bounded_generator(
 
     assert result == commands.EXIT_SUCCESS
     assert capsys.readouterr().out == "message\n"
-    assert retained_iterators
-    assert closed == [True]
+    assert calls == [
+        (
+            "destination",
+            1,
+            {
+                "with_timestamps": True,
+                "after_timestamp": 0,
+                "before_timestamp": None,
+                "order": "oldest",
+            },
+        )
+    ]
 
 
 class TestTimestampFormats:

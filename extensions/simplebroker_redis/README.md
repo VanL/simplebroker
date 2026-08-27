@@ -88,6 +88,11 @@ backend API v7 set. It adds the required monotone durable high-water advance
 used by persistence restore. Package dependency floors remain minimums; the
 exact runtime handshake remains authoritative for every installed pair.
 
+SimpleBroker 8.0.0 and `simplebroker-redis` 4.0.0 are the first coordinated
+backend API v8 set. It adds bounded public-ID selection order. Package
+dependency floors remain minimums; the exact runtime handshake remains
+authoritative for every installed pair.
+
 ## Core Compatibility
 
 This first-party extension declares a minimum supported SimpleBroker core

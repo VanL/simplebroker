@@ -46,6 +46,7 @@ from ._message_id import (
     normalize_message_id,
 )
 from ._paths import _validate_sqlite_database
+from ._selection import SelectionOrder, validate_selection_order
 from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
 from .db import (
@@ -524,13 +525,29 @@ def _validate_exact_selector_combination(
         )
 
 
+def _validate_bounded_order(
+    order: str,
+    *,
+    all_messages: bool,
+) -> SelectionOrder:
+    """Validate direct-command ordering before resolving a broker target."""
+    validated = validate_selection_order(order)
+    if all_messages and validated != "oldest":
+        raise _ArgumentValidationError(
+            "order='newest' cannot be used with all_messages=True"
+        )
+    return validated
+
+
 FetchOneFn = Callable[..., str | tuple[str, int] | None]
+FetchManyFn = Callable[..., list[str] | list[tuple[str, int]]]
 FetchGeneratorFn = Callable[..., Iterator[str | tuple[str, int]]]
 
 
 def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exception
     *,
     fetch_one: FetchOneFn,
+    fetch_many: FetchManyFn,
     fetch_generator: FetchGeneratorFn,
     exact_timestamp: int | None,
     all_messages: bool,
@@ -538,6 +555,7 @@ def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exc
     before_timestamp: int | None,
     json_output: bool,
     show_timestamps: bool,
+    order: SelectionOrder,
 ) -> int:
     """Shared implementation for read/peek operations."""
 
@@ -545,7 +563,9 @@ def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exc
 
     if exact_timestamp is not None:
         result = fetch_one(
-            exact_timestamp=exact_timestamp, with_timestamps=with_timestamps
+            exact_timestamp=exact_timestamp,
+            with_timestamps=with_timestamps,
+            order=order,
         )
         if result is None:
             return EXIT_QUEUE_EMPTY
@@ -594,29 +614,26 @@ def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exc
         return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
 
     if after_timestamp is not None or before_timestamp is not None:
-        gen = cast(
-            Iterator[tuple[str, int]],
-            fetch_generator(
+        rows = cast(
+            list[tuple[str, int]],
+            fetch_many(
+                1,
                 with_timestamps=True,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
+                order=order,
             ),
         )
+        if not rows:
+            return EXIT_QUEUE_EMPTY
+        message, timestamp = rows[0]
         try:
-            try:
-                message, timestamp = next(gen)
-            except StopIteration:
-                return EXIT_QUEUE_EMPTY
-
-            try:
-                _output_message(message, timestamp, json_output, show_timestamps, False)
-            except _StdoutClosed:
-                return EXIT_SUCCESS
+            _output_message(message, timestamp, json_output, show_timestamps, False)
+        except _StdoutClosed:
             return EXIT_SUCCESS
-        finally:
-            _close_iterator(gen)
+        return EXIT_SUCCESS
 
-    result = fetch_one(with_timestamps=with_timestamps)
+    result = fetch_one(with_timestamps=with_timestamps, order=order)
     if result is None:
         return EXIT_QUEUE_EMPTY
 
@@ -691,6 +708,7 @@ def cmd_read(
     after_str: str | None = None,
     message_id_str: str | None = None,
     before_str: str | None = None,
+    order: str = "oldest",
     config: Mapping[str, Any] | None = None,
 ) -> int:
     """Read and remove message(s) from queue using Queue API.
@@ -708,6 +726,7 @@ def cmd_read(
     Returns:
         Exit code
     """
+    validated_order = _validate_bounded_order(order, all_messages=all_messages)
     after_timestamp, before_timestamp, exact_timestamp = _resolve_timestamp_filters(
         after_str,
         before_str,
@@ -762,6 +781,7 @@ def cmd_read(
 
         return _process_queue_fetch(
             fetch_one=queue.read_one,
+            fetch_many=queue.read_many,
             fetch_generator=selected_fetch_generator,
             exact_timestamp=exact_timestamp,
             all_messages=all_messages,
@@ -769,6 +789,7 @@ def cmd_read(
             before_timestamp=before_timestamp,
             json_output=json_output,
             show_timestamps=show_timestamps,
+            order=validated_order,
         )
 
 
@@ -783,6 +804,7 @@ def cmd_peek(
     message_id_str: str | None = None,
     before_str: str | None = None,
     include_claimed: bool = False,
+    order: str = "oldest",
     config: Mapping[str, Any] | None = None,
 ) -> int:
     """Peek at message(s) without removing them using Queue API.
@@ -802,6 +824,7 @@ def cmd_peek(
     Returns:
         Exit code
     """
+    validated_order = _validate_bounded_order(order, all_messages=all_messages)
     after_timestamp, before_timestamp, exact_timestamp = _resolve_timestamp_filters(
         after_str,
         before_str,
@@ -823,6 +846,7 @@ def cmd_peek(
     with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
         return _process_queue_fetch(
             fetch_one=partial(queue.peek_one, include_claimed=include_claimed),
+            fetch_many=partial(queue.peek_many, include_claimed=include_claimed),
             fetch_generator=partial(
                 queue.peek_generator, include_claimed=include_claimed
             ),
@@ -832,6 +856,7 @@ def cmd_peek(
             before_timestamp=before_timestamp,
             json_output=json_output,
             show_timestamps=show_timestamps,
+            order=validated_order,
         )
 
 
@@ -1202,33 +1227,34 @@ def _move_next_message(
     show_timestamps: bool,
     after_timestamp: int | None,
     before_timestamp: int | None,
+    order: SelectionOrder,
 ) -> int:
     """Move and print the next selected message."""
     if after_timestamp is None and before_timestamp is None:
-        result = queue.move_one(destination, with_timestamps=True)
+        result = queue.move_one(
+            destination,
+            with_timestamps=True,
+            order=order,
+        )
         return _print_moved_message(
             result,
             json_output=json_output,
             show_timestamps=show_timestamps,
         )
 
-    generator = queue.move_generator(
+    rows = queue.move_many(
         destination,
+        1,
         with_timestamps=True,
         after_timestamp=after_timestamp,
         before_timestamp=before_timestamp,
+        order=order,
     )
-    try:
-        result = next(generator)
-        return _print_moved_message(
-            result,
-            json_output=json_output,
-            show_timestamps=show_timestamps,
-        )
-    except StopIteration:
-        return EXIT_QUEUE_EMPTY
-    finally:
-        _close_iterator(generator)
+    return _print_moved_message(
+        rows[0] if rows else None,
+        json_output=json_output,
+        show_timestamps=show_timestamps,
+    )
 
 
 def cmd_move(
@@ -1242,6 +1268,7 @@ def cmd_move(
     message_id_str: str | None = None,
     after_str: str | None = None,
     before_str: str | None = None,
+    order: str = "oldest",
     config: Mapping[str, Any] | None = None,
 ) -> int:
     """Move message(s) between queues using Queue API.
@@ -1260,6 +1287,7 @@ def cmd_move(
     Returns:
         Exit code
     """
+    validated_order = _validate_bounded_order(order, all_messages=all_messages)
     # argparse makes --all/--message mutually exclusive before it validates
     # the message ID. Preserve that precedence for the direct equivalent.
     _validate_exact_selector_combination(
@@ -1310,6 +1338,7 @@ def cmd_move(
                 exact_timestamp=exact_timestamp,
                 require_unclaimed=False,  # Allow moving claimed messages by ID
                 with_timestamps=True,
+                order=validated_order,
             )
             return _print_moved_message(
                 result,
@@ -1332,6 +1361,7 @@ def cmd_move(
             show_timestamps=show_timestamps,
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
+            order=validated_order,
         )
 
 

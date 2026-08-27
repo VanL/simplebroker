@@ -1433,6 +1433,31 @@ Possession answers:
    SQLite may retain the engine `sqlite_sequence` table but not a `messages`
    row, and caller sequence rows remain unchanged.
 
+### 2026-08-27 Tasks 1–2 contract and shared API slice
+
+- Spec promotion committed at
+  `a3afca7140e0b2c43e3cb39c81e6475f6351c742`. Its gates were
+  `python3 bin/check-dom15-fixtures`, `bin/check-plan-context`,
+  `python3 bin/check-doc-paths`, the affected canonical-contract tests, and
+  `git diff --check`; all passed.
+- The first public behavior probe inserted IDs `300, 100, 200` and failed
+  because default `peek_one()` returned physical-first ID `300` instead of
+  lowest public ID `100`. After the shared order/query slice, the complete
+  SQLite Queue/direct-command matrix in
+  `tests/test_timestamp_selection_contract_sb_select.py` passed, including
+  default/newest one and many, open bounds, exact ID, pre-target rejection,
+  and generator-signature exclusion.
+- `uv run mypy simplebroker extensions/simplebroker_pg/simplebroker_pg
+  extensions/simplebroker_redis/simplebroker_redis --config-file
+  pyproject.toml` reported no issues in 64 source files. The focused protocol,
+  plugin-resolution, command, SQL-internal, API-contract, and typing suites
+  passed. The Redis extension suite passed all locally runnable tests; real
+  Redis behavior remained skipped pending Task 6's service gate.
+- Backend API v8 is registered with minimum core `8.0.0`. The coordinated
+  source versions are core `8.0.0`, PostgreSQL extension `4.0.0`, and Redis
+  extension `4.0.0`; publication remains forbidden until the ordered Task 7
+  gates and explicit owner authorization.
+
 Later tasks append command, date, commit/artifact SHA, backend/service version,
 observed result, and residual risk for each gate. Do not replace evidence with
 “tests pass.”

@@ -57,6 +57,11 @@ the process-local timestamp cache, then refreshes that cache from one final
 durable read. A failed final read raises ``TimestampError`` with an
 outcome-ambiguous durable result. All v6 plugins are rejected by the
 exact-version handshake.
+
+Backend API v8 adds the validated ``order`` argument to bounded claim, peek,
+and move one/many operations. The closed values are ``"oldest"`` and
+``"newest"``. Generator methods do not accept the argument. All v7 plugins
+are rejected by the exact-version handshake.
 """
 
 from ._backend_plugins import (

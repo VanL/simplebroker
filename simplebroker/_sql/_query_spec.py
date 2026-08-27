@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from .._selection import SelectionOrder
+
 RetrieveOperation = Literal["peek", "claim", "move"]
 
 
@@ -20,3 +22,4 @@ class RetrieveQuerySpec:
     before_timestamp: int | None = None
     require_unclaimed: bool = True
     target_queue: str | None = None
+    order: SelectionOrder = "oldest"

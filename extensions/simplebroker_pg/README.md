@@ -31,6 +31,11 @@ backend API v7 set. It adds the required monotone durable high-water advance
 used by persistence restore. Package dependency floors remain minimums; the
 exact runtime handshake remains authoritative for every installed pair.
 
+SimpleBroker 8.0.0 and `simplebroker-pg` 4.0.0 are the first coordinated
+backend API v8 set. It adds bounded public-ID selection order and SQL storage
+schema v6. Package dependency floors remain minimums; the exact runtime
+handshake remains authoritative for every installed pair.
+
 Timestamp resynchronization uses a guarded compare-and-advance update. If a
 concurrent allocator publishes a higher durable `last_ts` after repair begins,
 the repair preserves that winner and refreshes its local cache from the

@@ -46,6 +46,7 @@ from simplebroker._message_search import (
     validate_body_contains,
     validate_body_search_limit,
 )
+from simplebroker._selection import SelectionOrder, validate_selection_order
 from simplebroker._sidecar import SidecarSession
 from simplebroker._timestamp import TimestampGenerator, validate_timestamp_bound
 from simplebroker.db import (
@@ -466,6 +467,7 @@ class RedisBrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         state: str = "pending",
+        order: SelectionOrder = "oldest",
     ) -> list[str]:
         zset = self._qkey(queue, state)
         normalized_exact_timestamp = self._normalize_exact_timestamp(exact_timestamp)
@@ -475,18 +477,23 @@ class RedisBrokerCore:
         if normalized_exact_timestamp is not None:
             encoded = encode_id(normalized_exact_timestamp)
             return [encoded] if self._client.zscore(zset, encoded) is not None else []
-        return [
-            str(encoded)
-            for encoded in response_list(
-                self._client.zrangebylex(
+        if order == "newest":
+            raw_ids = self._client.zrevrangebylex(
+                zset,
+                max_bound(before_timestamp),
+                min_bound(after_timestamp),
+                start=offset,
+                num=limit,
+            )
+        else:
+            raw_ids = self._client.zrangebylex(
                     zset,
                     min_bound(after_timestamp),
                     max_bound(before_timestamp),
                     start=offset,
                     num=limit,
                 )
-            )
-        ]
+        return [str(encoded) for encoded in response_list(raw_ids)]
 
     def _peek_rows(
         self,
@@ -498,6 +505,7 @@ class RedisBrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         include_claimed: bool = False,
+        order: SelectionOrder = "oldest",
     ) -> list[tuple[str, int]]:
         if not include_claimed:
             ids = self._zrange_pending(
@@ -507,6 +515,7 @@ class RedisBrokerCore:
                 exact_timestamp=exact_timestamp,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
+                order=order,
             )
         else:
             # Union of the pending and claimed ZSETs. Encoded IDs are
@@ -525,9 +534,12 @@ class RedisBrokerCore:
                         after_timestamp=after_timestamp,
                         before_timestamp=before_timestamp,
                         state=state,
+                        order=order,
                     )
                 )
-            ids = sorted(merged)[offset : offset + limit]
+            ids = sorted(merged, reverse=order == "newest")[
+                offset : offset + limit
+            ]
         if not ids:
             return []
         bodies = response_list(self._client.hmget(self._key("bodies"), ids))
@@ -545,6 +557,7 @@ class RedisBrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        order: SelectionOrder = "oldest",
     ) -> list[tuple[str, int]]:
         self._maybe_recover_stale_batches()
         normalized_exact_timestamp = self._normalize_exact_timestamp(exact_timestamp)
@@ -576,6 +589,7 @@ class RedisBrokerCore:
                         str(limit),
                         minb,
                         maxb,
+                        order,
                     )
                 )
             except redis.RedisError as exc:
@@ -583,7 +597,10 @@ class RedisBrokerCore:
             rows, cursor = self._rows_and_cursor_from_flat(flat)
             if rows or not cursor:
                 break
-            minb = f"({cursor}"
+            if order == "newest":
+                maxb = f"({cursor}"
+            else:
+                minb = f"({cursor}"
         self._record_maintenance_activity(len(rows))
         return rows
 
@@ -597,6 +614,7 @@ class RedisBrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: SelectionOrder = "oldest",
     ) -> list[tuple[str, int]]:
         self._maybe_recover_stale_batches()
         normalized_exact_timestamp = self._normalize_exact_timestamp(exact_timestamp)
@@ -635,6 +653,7 @@ class RedisBrokerCore:
                         if normalized_exact_timestamp is not None
                         else "",
                         "1" if require_unclaimed else "0",
+                        order,
                     )
                 )
             except redis.RedisError as exc:
@@ -642,7 +661,10 @@ class RedisBrokerCore:
             rows, cursor = self._rows_and_cursor_from_flat(flat)
             if rows or not cursor:
                 break
-            minb = f"({cursor}"
+            if order == "newest":
+                maxb = f"({cursor}"
+            else:
+                minb = f"({cursor}"
         if rows:
             self._publish(target_queue)
         self._record_maintenance_activity(len(rows))
@@ -654,10 +676,17 @@ class RedisBrokerCore:
         *,
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
+        order: str = "oldest",
     ) -> tuple[str, int] | str | None:
         self._validate_queue_name(queue)
         self._assert_no_reentrant_mutation_during_batch("claim operation")
-        rows = self._claim_rows(queue, limit=1, exact_timestamp=exact_timestamp)
+        validated_order = validate_selection_order(order)
+        rows = self._claim_rows(
+            queue,
+            limit=1,
+            exact_timestamp=exact_timestamp,
+            order=validated_order,
+        )
         if not rows:
             return None
         return rows[0] if with_timestamps else rows[0][0]
@@ -671,7 +700,9 @@ class RedisBrokerCore:
         delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]:
+        validated_order = validate_selection_order(order)
         validate_delivery_guarantee(delivery_guarantee)
         if limit < 1:
             raise ValueError("limit must be at least 1")
@@ -682,6 +713,7 @@ class RedisBrokerCore:
             limit=limit,
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
+            order=validated_order,
         )
         return rows if with_timestamps else [body for body, _ in rows]
 
@@ -896,13 +928,16 @@ class RedisBrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> tuple[str, int] | str | None:
         self._validate_queue_name(queue)
+        validated_order = validate_selection_order(order)
         rows = self._peek_rows(
             queue,
             limit=1,
             exact_timestamp=exact_timestamp,
             include_claimed=include_claimed,
+            order=validated_order,
         )
         if not rows:
             return None
@@ -920,6 +955,7 @@ class RedisBrokerCore:
             after_timestamp: int | None = None,
             before_timestamp: int | None = None,
             include_claimed: bool = False,
+            order: str = "oldest",
         ) -> list[tuple[str, int]]: ...
 
         @overload
@@ -932,6 +968,7 @@ class RedisBrokerCore:
             after_timestamp: int | None = None,
             before_timestamp: int | None = None,
             include_claimed: bool = False,
+            order: str = "oldest",
         ) -> list[str]: ...
 
         @overload
@@ -944,6 +981,7 @@ class RedisBrokerCore:
             after_timestamp: int | None = None,
             before_timestamp: int | None = None,
             include_claimed: bool = False,
+            order: str = "oldest",
         ) -> list[tuple[str, int]] | list[str]: ...
 
     def peek_many(
@@ -955,7 +993,9 @@ class RedisBrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]:
+        validated_order = validate_selection_order(order)
         if limit < 1:
             raise ValueError("limit must be at least 1")
         self._validate_queue_name(queue)
@@ -965,6 +1005,7 @@ class RedisBrokerCore:
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
             include_claimed=include_claimed,
+            order=validated_order,
         )
         return rows if with_timestamps else [body for body, _ in rows]
 
@@ -1008,7 +1049,9 @@ class RedisBrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = True,
+        order: str = "oldest",
     ) -> tuple[str, int] | str | None:
+        validated_order = validate_selection_order(order)
         if source_queue == target_queue:
             raise ValueError("Source and target queues cannot be the same")
         self._validate_queue_name(source_queue)
@@ -1020,6 +1063,7 @@ class RedisBrokerCore:
             limit=1,
             exact_timestamp=exact_timestamp,
             require_unclaimed=require_unclaimed,
+            order=validated_order,
         )
         if not rows:
             return None
@@ -1036,7 +1080,9 @@ class RedisBrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]:
+        validated_order = validate_selection_order(order)
         validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
             raise ValueError("Source and target queues cannot be the same")
@@ -1052,6 +1098,7 @@ class RedisBrokerCore:
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
             require_unclaimed=require_unclaimed,
+            order=validated_order,
         )
         return rows if with_timestamps else [body for body, _ in rows]
 

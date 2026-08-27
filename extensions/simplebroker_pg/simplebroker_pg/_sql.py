@@ -336,6 +336,7 @@ def build_retrieve_query(
     """Build a Postgres retrieve query and its parameter tuple."""
     where_conditions, params = _build_where_clause(spec)
     where_clause = " AND ".join(where_conditions)
+    order_direction = "ASC" if spec.order == "oldest" else "DESC"
 
     if operation == "peek":
         return (
@@ -343,7 +344,7 @@ def build_retrieve_query(
             SELECT body, ts
             FROM messages
             WHERE {where_clause}
-            ORDER BY order_id
+            ORDER BY order_id {order_direction}
             LIMIT ?
             OFFSET ?
             """,
@@ -357,7 +358,7 @@ def build_retrieve_query(
                 SELECT order_id
                 FROM messages
                 WHERE {where_clause}
-                ORDER BY order_id
+                ORDER BY order_id {order_direction}
                 LIMIT ?
                 FOR UPDATE
             ),
@@ -372,7 +373,7 @@ def build_retrieve_query(
             FROM updated
             JOIN selected
               ON selected.order_id = updated.order_id
-            ORDER BY selected.order_id
+            ORDER BY selected.order_id {order_direction}
             """,
             tuple(params + [spec.limit]),
         )
@@ -389,7 +390,7 @@ def build_retrieve_query(
                 SELECT order_id
                 FROM messages
                 WHERE {where_clause}
-                ORDER BY order_id
+                ORDER BY order_id {order_direction}
                 LIMIT ?
                 FOR UPDATE
             ),
@@ -414,7 +415,7 @@ def build_retrieve_query(
               ON selected.order_id = updated.order_id
             LEFT JOIN notified
               ON TRUE
-            ORDER BY selected.order_id
+            ORDER BY selected.order_id {order_direction}
             """,
             tuple([spec.target_queue] + params + [spec.limit]),
         )

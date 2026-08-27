@@ -129,7 +129,7 @@ def test_connection_stats_is_postgres_only_without_widening_core_protocol() -> N
     ]
     assert not hasattr(Queue, "get_connection_stats")
     assert "_run_backend_probe" not in BrokerConnection.__dict__
-    assert BACKEND_API_VERSION == 7
+    assert BACKEND_API_VERSION == 8
 
 
 def test_connection_stats_accepts_conservative_overcount_and_returns_fresh_dict() -> (

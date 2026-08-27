@@ -378,7 +378,7 @@ class RedisBackendPlugin:
     """SimpleBroker backend plugin for Valkey/Redis."""
 
     name = "redis"
-    backend_api_version = 7
+    backend_api_version = 8
     schema_version = REDIS_SCHEMA_VERSION
     sql = None
     is_direct_backend = True

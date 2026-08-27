@@ -215,17 +215,24 @@ local queue = ARGV[1]
 local limit = tonumber(ARGV[2])
 local minb = ARGV[3]
 local maxb = ARGV[4]
+local newest = ARGV[5] == 'newest'
 local out = {}
 local moved = 0
 local cursor = ''
 local scan_minb = minb
+local scan_maxb = maxb
 local window_size = limit * 16
 -- Each invocation examines at most 16 windows (256 * limit candidates), so
 -- reserved prefixes cannot create an unbounded Lua event-loop stall. The
 -- caller resumes after cursor. A concurrently released id behind cursor is
 -- intentionally left for the next public operation.
 for window = 1, 16 do
-  local ids = redis.call('ZRANGEBYLEX', pending, scan_minb, maxb, 'LIMIT', 0, window_size)
+  local ids = {}
+  if newest then
+    ids = redis.call('ZREVRANGEBYLEX', pending, scan_maxb, minb, 'LIMIT', 0, window_size)
+  else
+    ids = redis.call('ZRANGEBYLEX', pending, scan_minb, maxb, 'LIMIT', 0, window_size)
+  end
   if #ids == 0 then
     cursor = ''
     break
@@ -250,7 +257,11 @@ for window = 1, 16 do
     cursor = ''
     break
   end
-  scan_minb = '(' .. cursor
+  if newest then
+    scan_maxb = '(' .. cursor
+  else
+    scan_minb = '(' .. cursor
+  end
 end
 if redis.call('ZCARD', pending) == 0 and redis.call('ZCARD', claimed) == 0 and redis.call('ZCARD', reserved) == 0 then
   redis.call('SREM', queues, queue)
@@ -275,10 +286,12 @@ local minb = ARGV[4]
 local maxb = ARGV[5]
 local exact_id = ARGV[6]
 local require_unclaimed = ARGV[7] == '1'
+local newest = ARGV[8] == 'newest'
 local out = {}
 local moved = 0
 local cursor = ''
 local scan_minb = minb
+local scan_maxb = maxb
 local window_size = limit * 16
 -- Bounded to 16 windows per invocation; Python resumes after cursor. A
 -- concurrently released id behind cursor waits for the next public operation.
@@ -287,7 +300,11 @@ for window = 1, 16 do
   if exact_id ~= '' then
     ids = {exact_id}
   else
-    ids = redis.call('ZRANGEBYLEX', source_pending, scan_minb, maxb, 'LIMIT', 0, window_size)
+    if newest then
+      ids = redis.call('ZREVRANGEBYLEX', source_pending, scan_maxb, minb, 'LIMIT', 0, window_size)
+    else
+      ids = redis.call('ZRANGEBYLEX', source_pending, scan_minb, maxb, 'LIMIT', 0, window_size)
+    end
   end
   if #ids == 0 then
     cursor = ''
@@ -320,7 +337,11 @@ for window = 1, 16 do
     cursor = ''
     break
   end
-  scan_minb = '(' .. cursor
+  if newest then
+    scan_maxb = '(' .. cursor
+  else
+    scan_minb = '(' .. cursor
+  end
 end
 if redis.call('ZCARD', source_pending) == 0 and redis.call('ZCARD', source_claimed) == 0 and redis.call('ZCARD', source_reserved) == 0 then
   redis.call('SREM', queues, source_queue)

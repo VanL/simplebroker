@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import re
 from pathlib import Path
 
-from simplebroker import Queue
+import pytest
+
+from simplebroker import Queue, commands
 from simplebroker._constants import EXIT_SUCCESS
 
 from .conftest import run_cli
@@ -40,6 +43,16 @@ AFFECTED_EVIDENCE = {
         "tests/test_watcher.py": {
             "TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint",
             "TestQueueWatcher::test_explicit_zero_after_timestamp_excludes_legacy_zero",
+        },
+    },
+    "SB-SELECT-5": {
+        "tests/test_timestamp_selection_contract_sb_select.py": {
+            "test_bounded_peek_orders_by_public_message_id",
+            "test_bounded_one_and_many_order_matrix",
+            "test_invalid_or_unbounded_order_fails_before_target_acquisition",
+            "test_generator_signatures_do_not_expose_order",
+            "test_direct_command_accepts_normalized_newest_order",
+            "test_direct_command_rejects_newest_all_before_target_resolution",
         },
     },
 }
@@ -176,6 +189,151 @@ def test_strict_open_bounds_on_queue_api(queue_factory) -> None:
         with_timestamps=True,
     )
     assert [ts for _, ts in before_mid] == [ids[0]]
+
+
+def test_bounded_peek_orders_by_public_message_id(queue_factory) -> None:
+    """[SB-SELECT-5] Bounded selection uses public IDs in either direction."""
+    q = queue_factory("select_order")
+    q.insert_messages(
+        [
+            ("inserted-first", 300),
+            ("inserted-second", 100),
+            ("inserted-third", 200),
+        ]
+    )
+
+    assert q.peek_one(with_timestamps=True) == ("inserted-second", 100)
+    assert q.peek_one(order="newest", with_timestamps=True) == (
+        "inserted-first",
+        300,
+    )
+
+
+def _insert_out_of_order(queue: Queue, *, base: int = 0) -> None:
+    queue.insert_messages(
+        [
+            ("id-300", base + 300),
+            ("id-100", base + 100),
+            ("id-200", base + 200),
+        ]
+    )
+
+
+def test_bounded_one_and_many_order_matrix(queue_factory) -> None:
+    peek = queue_factory("select_peek_matrix")
+    _insert_out_of_order(peek)
+    assert [ts for _, ts in peek.peek_many(2, with_timestamps=True)] == [100, 200]
+    assert [
+        ts
+        for _, ts in peek.peek_many(
+            2,
+            with_timestamps=True,
+            order="newest",
+        )
+    ] == [300, 200]
+    assert peek.peek(
+        after_timestamp=100,
+        before_timestamp=300,
+        with_timestamps=True,
+        order="newest",
+    ) == ("id-200", 200)
+    assert peek.peek_one(
+        exact_timestamp=200,
+        with_timestamps=True,
+        order="newest",
+    ) == ("id-200", 200)
+
+    read_one = queue_factory("select_read_one")
+    _insert_out_of_order(read_one, base=1_000)
+    assert read_one.read_one(order="newest", with_timestamps=True) == (
+        "id-300",
+        1_300,
+    )
+
+    read_many = queue_factory("select_read_many")
+    _insert_out_of_order(read_many, base=2_000)
+    assert [
+        ts
+        for _, ts in read_many.read_many(
+            2,
+            with_timestamps=True,
+            order="newest",
+        )
+    ] == [2_300, 2_200]
+
+    move_one = queue_factory("select_move_one")
+    _insert_out_of_order(move_one, base=3_000)
+    assert move_one.move_one(
+        "select_move_one_dest",
+        order="newest",
+        with_timestamps=True,
+    ) == ("id-300", 3_300)
+
+    move_many = queue_factory("select_move_many")
+    _insert_out_of_order(move_many, base=4_000)
+    assert [
+        ts
+        for _, ts in move_many.move_many(
+            "select_move_many_dest",
+            2,
+            with_timestamps=True,
+            order="newest",
+        )
+    ] == [4_300, 4_200]
+
+
+def test_invalid_or_unbounded_order_fails_before_target_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = Queue("select_pre_target", db_path="must-not-open.db")
+
+    def fail_acquisition(*args, **kwargs):
+        raise AssertionError("invalid order reached target acquisition")
+
+    monkeypatch.setattr(Queue, "get_connection", fail_acquisition)
+    for operation in (queue.read_one, queue.peek_one):
+        with pytest.raises(ValueError, match="'oldest'.*'newest'"):
+            operation(order="NEWEST")
+    with pytest.raises(ValueError, match="'oldest'.*'newest'"):
+        queue.move_one("destination", order="NEWEST")
+    for operation in (queue.read, queue.peek):
+        with pytest.raises(ValueError, match="all_messages"):
+            operation(all_messages=True, order="newest")
+    with pytest.raises(ValueError, match="all_messages"):
+        queue.move("destination", all_messages=True, order="newest")
+
+
+def test_generator_signatures_do_not_expose_order() -> None:
+    for method in (Queue.read_generator, Queue.peek_generator, Queue.move_generator):
+        assert "order" not in inspect.signature(method).parameters
+
+
+def test_direct_command_accepts_normalized_newest_order(
+    workdir: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db = workdir / "direct-order.db"
+    with Queue("q", db_path=str(db)) as queue:
+        _insert_out_of_order(queue)
+
+    assert commands.cmd_peek(str(db), "q", order="newest") == EXIT_SUCCESS
+    assert capsys.readouterr().out == "id-300\n"
+
+
+def test_direct_command_rejects_newest_all_before_target_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_resolution(*args, **kwargs):
+        raise AssertionError("invalid order reached target resolution")
+
+    monkeypatch.setattr(commands, "_resolve_alias_name", fail_resolution)
+    for command, args in (
+        (commands.cmd_read, ("must-not-open.db", "q")),
+        (commands.cmd_peek, ("must-not-open.db", "q")),
+        (commands.cmd_move, ("must-not-open.db", "q", "dest")),
+    ):
+        with pytest.raises(ValueError, match="all_messages"):
+            command(*args, all_messages=True, order="newest")
 
 
 def test_move_behind_lower_bound_is_invisible_to_filter(queue_factory) -> None:

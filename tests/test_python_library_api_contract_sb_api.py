@@ -270,13 +270,15 @@ def test_api_command_layer_and_advanced_language() -> None:
     assert "SDK" in advanced or "sdk" in advanced.lower()
 
 
-def test_api_owned_runner_lifecycle_and_backend_v7_contract() -> None:
+def test_api_owned_runner_lifecycle_and_backend_v8_contract() -> None:
     """[SB-API-11] identifier and version tokens; behaviors owned by the
     runner-lifecycle and timestamp-advance suites in the verification
     row."""
     advanced = " ".join(_section("SB-API-11").split()).lower()
     assert "backend api v6" in advanced
     assert "backend api v7" in advanced
+    assert "backend api v8" in advanced
+    assert "selection order" in advanced
     assert "advance_last_timestamp(timestamp)" in advanced
     assert "linearization point" in advanced
     assert "runner remains reusable" in advanced

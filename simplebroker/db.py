@@ -103,6 +103,7 @@ from ._runner import (
     lease_runner_thread_connection,
     release_runner_thread_connection,
 )
+from ._selection import SelectionOrder, validate_selection_order
 from ._sidecar import SidecarSession
 from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import BrokerTarget
@@ -2091,6 +2092,7 @@ class BrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: str = "oldest",
     ) -> RetrieveQuerySpec:
         """Build the backend-neutral retrieve-query specification."""
         normalized_exact_timestamp = (
@@ -2111,6 +2113,7 @@ class BrokerCore:
             before_timestamp=before_timestamp,
             require_unclaimed=require_unclaimed,
             target_queue=target_queue,
+            order=validate_selection_order(order),
         )
 
     def _execute_peek_operation(
@@ -2141,28 +2144,26 @@ class BrokerCore:
     def _normalize_retrieve_rows(
         self,
         rows: Iterable[tuple[Any, ...]],
+        *,
+        order: SelectionOrder,
     ) -> list[tuple[str, int]]:
-        """Restore FIFO for built-in SQLite's unordered ``RETURNING`` rows."""
+        """Restore logical ID order for SQLite's unordered ``RETURNING`` rows."""
         rows_list = rows if isinstance(rows, list) else list(rows)
         if self._sql is not sqlite_backend_plugin.sql:
             return cast(list[tuple[str, int]], rows_list)
 
-        keyed_rows: list[tuple[int, str, int]] = []
+        keyed_rows: list[tuple[str, int]] = []
         for row in rows_list:
             try:
-                storage_id, body, timestamp = row
+                body, timestamp = row
             except (TypeError, ValueError) as exc:
                 raise TypeError(
                     "Built-in SQLite retrieve query returned an invalid row shape"
                 ) from exc
-            if not isinstance(storage_id, int) or isinstance(storage_id, bool):
-                raise TypeError(
-                    "Built-in SQLite retrieve query returned an invalid storage id"
-                )
-            keyed_rows.append((storage_id, body, timestamp))
+            keyed_rows.append((body, timestamp))
 
-        keyed_rows.sort(key=lambda row: row[0])
-        return [(body, timestamp) for _storage_id, body, timestamp in keyed_rows]
+        keyed_rows.sort(key=lambda row: row[1], reverse=order == "newest")
+        return keyed_rows
 
     def _execute_transactional_operation(
         self,
@@ -2170,6 +2171,8 @@ class BrokerCore:
         operation: Literal["claim", "move"],
         query: str,
         params: tuple[object, ...],
+        *,
+        order: SelectionOrder = "oldest",
     ) -> list[tuple[str, int]]:
         """Execute a claim or move operation with transaction.
 
@@ -2191,7 +2194,7 @@ class BrokerCore:
                     queue=queue,
                 )
                 results = self._runner.run(query, params, fetch=True)
-                results_list = self._normalize_retrieve_rows(results)
+                results_list = self._normalize_retrieve_rows(results, order=order)
 
                 if results_list:
                     # Commit BEFORE returning for exactly-once semantics
@@ -2260,7 +2263,10 @@ class BrokerCore:
                     queue=queue,
                 )
                 results = self._runner.run(query, params, fetch=True)
-                results_list = self._normalize_retrieve_rows(results)
+                results_list = self._normalize_retrieve_rows(
+                    results,
+                    order="oldest",
+                )
                 if not results_list:
                     self._runner.rollback()
                     transaction_open = False
@@ -2370,6 +2376,7 @@ class BrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: str = "oldest",
     ) -> list[tuple[str, int]]:
         """Unified retrieval with operation-specific behavior.
 
@@ -2413,6 +2420,7 @@ class BrokerCore:
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
             require_unclaimed=require_unclaimed,
+            order=order,
         )
         query, params = self._sql.build_retrieve_query(operation, spec)
 
@@ -2422,7 +2430,7 @@ class BrokerCore:
         else:
             # claim or move operations need transaction
             results = self._execute_transactional_operation(
-                queue, operation, query, params
+                queue, operation, query, params, order=spec.order
             )
             self._record_maintenance_activity(len(results))
             return results
@@ -2433,6 +2441,7 @@ class BrokerCore:
         *,
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
+        order: str = "oldest",
     ) -> tuple[str, int] | str | None:
         """Claim and return exactly one message from a queue.
 
@@ -2457,6 +2466,7 @@ class BrokerCore:
             operation="claim",
             limit=1,
             exact_timestamp=exact_timestamp,
+            order=order,
         )
         if not results:
             return None
@@ -2474,6 +2484,7 @@ class BrokerCore:
         delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]:
         """Claim and return multiple messages from a queue.
 
@@ -2507,6 +2518,7 @@ class BrokerCore:
             limit=limit,
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
+            order=order,
         )
 
         if with_timestamps:
@@ -2595,6 +2607,7 @@ class BrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> tuple[str, int] | str | None:
         """Peek at exactly one message from a queue without claiming it.
 
@@ -2625,6 +2638,7 @@ class BrokerCore:
             limit=1,
             exact_timestamp=exact_timestamp,
             require_unclaimed=not include_claimed,
+            order=order,
         )
         if not results:
             return None
@@ -2642,6 +2656,7 @@ class BrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]:
         """Peek at multiple messages from a queue without claiming them.
 
@@ -2677,6 +2692,7 @@ class BrokerCore:
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
             require_unclaimed=not include_claimed,
+            order=order,
         )
 
         if with_timestamps:
@@ -2759,6 +2775,7 @@ class BrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = True,
+        order: str = "oldest",
     ) -> tuple[str, int] | str | None:
         """Move exactly one message from source queue to target queue.
 
@@ -2791,6 +2808,7 @@ class BrokerCore:
             limit=1,
             exact_timestamp=exact_timestamp,
             require_unclaimed=require_unclaimed,
+            order=order,
         )
         if not results:
             return None
@@ -2810,6 +2828,7 @@ class BrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]:
         """Move multiple messages from source queue to target queue.
 
@@ -2851,6 +2870,7 @@ class BrokerCore:
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
             require_unclaimed=require_unclaimed,
+            order=order,
         )
 
         if with_timestamps:

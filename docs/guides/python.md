@@ -111,6 +111,27 @@ q.peek_many(10, include_claimed=True)  # pending + claimed, in message-ID order
 Claimed rows are deletion-pending — vacuum may remove them at any time — so
 `include_claimed` is an inspection tool, not delivery state.
 
+Bounded operations can instead select the highest eligible public message ID
+first:
+
+```python
+from simplebroker import Queue
+
+with Queue("jobs") as jobs:
+    jobs.write("first")
+    jobs.write("second")
+    newest = jobs.read_one(order="newest")
+    recent = jobs.peek_many(limit=10, order="newest")
+    moved = jobs.move_one("archive", order="newest")
+```
+
+`order` is available on one-message and bounded-many read, peek, and move
+operations. It is not accepted by generator, all-messages, stream, or watch
+forms. The default and the only alternative are `"oldest"` and `"newest"`.
+Both names refer to integer public message-ID order, not physical insertion
+order or wall-clock chronology. See `[SB-SELECT-5]` in
+`docs/specs/14-timestamp-selection.md`.
+
 Whole-broker backup and migration mirror the CLI:
 
 ```python
@@ -161,6 +182,8 @@ must be between 1 and 1000. By default only pending messages are searched; pass
 `include_claimed=True` to include claimed-but-not-vacuumed messages. This API
 can scan every message in the selected queue, so keep it out of hot request
 paths and prefer exact message IDs when possible.
+Results are always limited in ascending public message-ID order;
+`find_message_ids()` has no newest-order control.
 
 ## Serializing message IDs in application JSON
 

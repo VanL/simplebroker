@@ -167,7 +167,7 @@ INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)
 RETRIEVE_PEEK = """
 SELECT body, ts FROM messages
 WHERE {where_clause}
-ORDER BY id
+ORDER BY ts {order_direction}
 LIMIT ? OFFSET ?
 """
 
@@ -175,26 +175,26 @@ LIMIT ? OFFSET ?
 RETRIEVE_CLAIM = """
 UPDATE messages
 SET claimed = 1
-WHERE id IN (
-    SELECT id FROM messages
+WHERE ts IN (
+    SELECT ts FROM messages
     WHERE {where_clause}
-    ORDER BY id
+    ORDER BY ts {order_direction}
     LIMIT ?
 )
-RETURNING id, body, ts
+RETURNING body, ts
 """
 
 # Move operation - change queue
 RETRIEVE_MOVE = """
 UPDATE messages
 SET queue = ?
-WHERE id IN (
-    SELECT id FROM messages
+WHERE ts IN (
+    SELECT ts FROM messages
     WHERE {where_clause}
-    ORDER BY id
+    ORDER BY ts {order_direction}
     LIMIT ?
 )
-RETURNING id, body, ts
+RETURNING body, ts
 """
 
 # Check for pending messages
@@ -643,22 +643,32 @@ def build_retrieve_query(
     """Build a SQLite retrieve query and its parameter tuple."""
     where_conditions, params = _build_where_clause(spec)
     where_clause = " AND ".join(where_conditions)
+    order_direction = "ASC" if spec.order == "oldest" else "DESC"
 
     if operation == "peek":
         return (
-            RETRIEVE_PEEK.format(where_clause=where_clause),
+            RETRIEVE_PEEK.format(
+                where_clause=where_clause,
+                order_direction=order_direction,
+            ),
             tuple(params + [spec.limit, spec.offset]),
         )
     if operation == "claim":
         return (
-            RETRIEVE_CLAIM.format(where_clause=where_clause),
+            RETRIEVE_CLAIM.format(
+                where_clause=where_clause,
+                order_direction=order_direction,
+            ),
             tuple(params + [spec.limit]),
         )
     if operation == "move":
         if spec.target_queue is None:
             raise ValueError("Move retrieve query requires target_queue")
         return (
-            RETRIEVE_MOVE.format(where_clause=where_clause),
+            RETRIEVE_MOVE.format(
+                where_clause=where_clause,
+                order_direction=order_direction,
+            ),
             tuple([spec.target_queue] + params + [spec.limit]),
         )
     raise ValueError(f"Invalid operation: {operation}")

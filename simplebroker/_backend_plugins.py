@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .metadata import QueueRenameResult, QueueStats
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
-BACKEND_API_VERSION: Final[int] = 7
+BACKEND_API_VERSION: Final[int] = 8
 DEFAULT_BACKEND_NAME = "sqlite"
 FIRST_PARTY_BACKEND_PACKAGES: Final[dict[str, str]] = {
     "postgres": "simplebroker-pg",
@@ -279,6 +279,7 @@ class BrokerConnection(Protocol):
         *,
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
+        order: str = "oldest",
     ) -> tuple[str, int] | str | None: ...
 
     def claim_many(
@@ -290,6 +291,7 @@ class BrokerConnection(Protocol):
         delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]: ...
 
     def claim_generator(
@@ -312,6 +314,7 @@ class BrokerConnection(Protocol):
         exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> tuple[str, int] | str | None: ...
 
     def peek_many(
@@ -323,6 +326,7 @@ class BrokerConnection(Protocol):
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         include_claimed: bool = False,
+        order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]: ...
 
     def peek_generator(
@@ -345,6 +349,7 @@ class BrokerConnection(Protocol):
         exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = True,
+        order: str = "oldest",
     ) -> tuple[str, int] | str | None: ...
 
     def move_many(
@@ -358,6 +363,7 @@ class BrokerConnection(Protocol):
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
+        order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]: ...
 
     def move_generator(

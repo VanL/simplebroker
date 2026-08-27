@@ -79,6 +79,12 @@ Normative library surfaces: `docs/specs/16-python-library-api.md`
 | `--vacuum` | reclaim claimed rows (`[SB-OPS-6]`) |
 | `--cleanup` | destructively delete backend target state (`[SB-OPS-7]`); no Python `Queue` equivalent |
 
+Bounded Python read, peek, and move one/many calls accept
+`order="oldest"` (default) or `order="newest"`. These mean ascending or
+descending integer public message ID. Generators, `all_messages=True`, stream,
+and watch remain ascending-only and expose no reverse-order control
+(`[SB-SELECT-5]`).
+
 Normative residual ops: `docs/specs/17-ops.md` `[SB-OPS-1]`–`[SB-OPS-7]`.
 
 ## Exit codes and I/O (CLI)

@@ -104,6 +104,20 @@ translates those failures to diagnostics and exit `1`.
 Underscore-prefixed modules are implementation details and may change.
 Specifications: `docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-13]`).
 
+```python
+from simplebroker import Queue
+
+with Queue("jobs") as queue:
+    oldest = queue.peek_one()
+    newest = queue.peek_one(order="newest")
+    recent = queue.peek_many(limit=10, order="newest")
+```
+
+Bounded read, peek, and move operations select the lowest public message ID
+first by default. `order="newest"` selects highest ID first. The option is not
+available on generators or `all_messages=True`; see
+[`SB-SELECT-5`](docs/specs/14-timestamp-selection.md#cross-backend-retrieval-order-sb-select-5).
+
 ## Project Specifications and Agent Instructions
 
 Exact product behavior is owned by the canonical specs in `docs/specs/` 
