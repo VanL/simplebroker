@@ -1511,6 +1511,27 @@ Possession answers:
   DOM-15, plan-context, and diff checks passed. Task 8 will record the final
   all-suite rerun and the PostgreSQL slice commit SHA.
 
+### 2026-08-27 Task 5 Redis/Valkey bounded newest slice
+
+- Bounded pending selection uses `ZREVRANGEBYLEX` for newest while default and
+  every generator batch remain ascending. Claim and move Lua scripts carry the
+  normalized direction, return selected rows in that direction, and resume a
+  descending bounded scan with an exclusive upper cursor. Peek with
+  `include_claimed=True` merges both state sets before applying the requested
+  direction and slice.
+- Real Valkey 7.2 tests use out-of-order exact IDs for read/peek/move one and
+  many, strict bounds, ascending live traversal, claimed/pending merge, and
+  concurrent newest claims. Claim and move each cross more than the Lua
+  invocation's 256-candidate limit-one scan budget through 300 reserved higher
+  IDs and still select the lower eligible ID on the resumed call.
+- `uv run bin/pytest-redis --fast` passed the shared release subset with 1502
+  passed and 17 backend/platform skips in 43.08 seconds. After correcting a
+  test that had reused Redis's namespace-global IDs across queues, the full
+  real extension suite passed with 288 passed and one opt-in diagnostic skip
+  in 3.36 seconds. Focused Ruff and the [SB-SELECT-5] executable manifest gate
+  passed. Task 8 will record the Redis slice commit SHA and final all-suite
+  rerun.
+
 Later tasks append command, date, commit/artifact SHA, backend/service version,
 observed result, and residual risk for each gate. Do not replace evidence with
 “tests pass.”

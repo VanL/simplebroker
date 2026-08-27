@@ -50,6 +50,12 @@ AFFECTED_EVIDENCE = {
             "test_postgres_retrieve_queries_order_and_address_by_public_id",
             "test_real_postgres_bounded_pending_selection_uses_timestamp_index",
         },
+        "extensions/simplebroker_redis/tests/test_redis_message_id_order.py": {
+            "test_redis_one_many_bounds_and_live_order_use_public_ids",
+            "test_redis_newest_include_claimed_merges_both_states",
+            "test_redis_newest_lua_resumes_below_reserved_windows",
+            "test_redis_concurrent_newest_claims_select_distinct_highest_ids",
+        },
         "tests/test_sqlite_message_id_returning_order.py": {
             "test_claim_many_normalizes_sqlite_returning_rows_by_public_id",
             "test_claim_generator_uses_ascending_ids_when_returning_rows_are_reversed",

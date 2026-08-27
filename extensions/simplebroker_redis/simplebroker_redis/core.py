@@ -487,12 +487,12 @@ class RedisBrokerCore:
             )
         else:
             raw_ids = self._client.zrangebylex(
-                    zset,
-                    min_bound(after_timestamp),
-                    max_bound(before_timestamp),
-                    start=offset,
-                    num=limit,
-                )
+                zset,
+                min_bound(after_timestamp),
+                max_bound(before_timestamp),
+                start=offset,
+                num=limit,
+            )
         return [str(encoded) for encoded in response_list(raw_ids)]
 
     def _peek_rows(
@@ -537,9 +537,7 @@ class RedisBrokerCore:
                         order=order,
                     )
                 )
-            ids = sorted(merged, reverse=order == "newest")[
-                offset : offset + limit
-            ]
+            ids = sorted(merged, reverse=order == "newest")[offset : offset + limit]
         if not ids:
             return []
         bodies = response_list(self._client.hmget(self._key("bodies"), ids))

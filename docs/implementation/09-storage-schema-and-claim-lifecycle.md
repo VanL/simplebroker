@@ -160,6 +160,15 @@ requested direction because SQLite does not specify DML `RETURNING` order.
 Ascending generators use the same public-ID normalization. This is logical
 order rather than engine order and is part of backend API v8.
 
+Redis realizes the same finite order over its fixed-width encoded ID members.
+Oldest uses `ZRANGEBYLEX`; newest uses `ZREVRANGEBYLEX` with reversed open
+bounds. Claim and move Lua scripts return rows in selection order. If reserved
+members fill the script's bounded scan budget, newest continuation resumes
+below the last scanned member with an exclusive upper bound. Pending and
+claimed peek results are merged and sliced in the requested direction only
+after both state sets have applied the same bounds. Generator batches retain
+their ascending cursor and expose no reverse control.
+
 **Message Lifecycle:**
 1. **Write Phase**: Message inserted with unique timestamp
 2. **Claim Phase**: Read marks message as "claimed" (fast, logical delete)
