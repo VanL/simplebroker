@@ -1481,6 +1481,36 @@ Possession answers:
   `git diff --check` passed. The async pooled SQLite example was migrated to
   the v6 schema and contains no runtime reference to the retired key.
 
+### 2026-08-27 Task 4 PostgreSQL v6 slice
+
+- Fresh PostgreSQL schema v6 uses `ts BIGINT PRIMARY KEY`, has no `order_id`,
+  and owns no message-order sequence. Runtime and maintenance SQL, prepared
+  query classification, finite selection, mutation joins, and outer result
+  order use `ts` only. Both ascending and descending bounded pending plans use
+  `idx_messages_pending_queue_ts` under the real planner probe.
+- The literal v5 fixture migrates under a transaction-scoped advisory lock and
+  `ACCESS EXCLUSIVE` message-table lock. It rereads live metadata after the
+  advisory lock, drops `order_id` with `RESTRICT`, promotes the existing `ts`
+  unique index to the primary key, creates the canonical access paths, checks
+  the resulting semantic shape, and writes version 6 last. Healthy v6 startup
+  emits no DDL; a missing owned required index is repaired only after a failed
+  semantic shape check.
+- Real PostgreSQL 18 tests cover direct/direct, two-project-config/one-schema,
+  and project/direct concurrent v5 startup. Both contenders complete while
+  only the under-lock v5 observer can execute destructive DDL. Injected
+  migration failure restores v5 metadata, column, sequence, rows, and
+  independent sidecar state; a fresh runner then acquires the released
+  advisory lock and completes migration. A dependency on retired `order_id`
+  fails under `RESTRICT` without mutating the v5 target.
+- The full shared release subset under PostgreSQL passed with 1509 passed and
+  10 platform/backend skips in 62.62 seconds. After the final startup repair,
+  the final full extension suite passed with 309 passed and 7 documented
+  opt-in skips in 3.36 seconds, including the topology expansion and
+  advisory-release recovery probes. Focused Ruff, PostgreSQL mypy,
+  contract-manifest, doc-path,
+  DOM-15, plan-context, and diff checks passed. Task 8 will record the final
+  all-suite rerun and the PostgreSQL slice commit SHA.
+
 Later tasks append command, date, commit/artifact SHA, backend/service version,
 observed result, and residual risk for each gate. Do not replace evidence with
 “tests pass.”

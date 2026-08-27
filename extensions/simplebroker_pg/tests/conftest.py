@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import psycopg
 import pytest
+from psycopg import sql
 from simplebroker_pg import PostgresRunner, get_backend_plugin
 
 from simplebroker._backend_plugins import BackendPlugin
+from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker.db import BrokerCore
 
 TEST_DSN = os.environ.get("SIMPLEBROKER_PG_TEST_DSN")
@@ -75,3 +77,57 @@ def raw_pg_conn(pg_dsn: str) -> Iterator[psycopg.Connection[Any]]:
     """Return an autocommit raw psycopg connection for schema setup helpers."""
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         yield conn
+
+
+@pytest.fixture
+def create_pg_v5_schema(
+    raw_pg_conn: psycopg.Connection[Any],
+) -> Callable[[str], None]:
+    """Return a literal last-release schema factory independent of current DDL."""
+
+    def create(schema: str) -> None:
+        with raw_pg_conn.cursor() as cur:
+            cur.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+            cur.execute(
+                sql.SQL(
+                    """
+                    CREATE TABLE {schema}.messages (
+                        order_id BIGSERIAL PRIMARY KEY,
+                        queue TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        ts BIGINT NOT NULL,
+                        claimed BOOLEAN NOT NULL DEFAULT FALSE
+                    );
+                    CREATE UNIQUE INDEX idx_messages_ts_unique
+                        ON {schema}.messages (ts);
+                    CREATE INDEX idx_messages_queue_order
+                        ON {schema}.messages (queue, order_id);
+                    CREATE INDEX idx_messages_unclaimed
+                        ON {schema}.messages (queue, order_id)
+                        WHERE claimed = FALSE;
+                    CREATE INDEX idx_messages_queue_ts_order_unclaimed
+                        ON {schema}.messages (queue, ts, order_id)
+                        WHERE claimed = FALSE;
+                    CREATE TABLE {schema}.meta (
+                        singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+                        magic TEXT NOT NULL,
+                        schema_version BIGINT NOT NULL,
+                        last_ts BIGINT NOT NULL,
+                        alias_version BIGINT NOT NULL
+                    );
+                    INSERT INTO {schema}.meta
+                        (singleton, magic, schema_version, last_ts, alias_version)
+                    VALUES (TRUE, {magic}, 5, 300, 0);
+                    CREATE TABLE {schema}.aliases (
+                        alias TEXT PRIMARY KEY,
+                        target TEXT NOT NULL
+                    );
+                    CREATE INDEX idx_aliases_target ON {schema}.aliases (target);
+                    """
+                ).format(
+                    schema=sql.Identifier(schema),
+                    magic=sql.Literal(SIMPLEBROKER_MAGIC),
+                )
+            )
+
+    return create

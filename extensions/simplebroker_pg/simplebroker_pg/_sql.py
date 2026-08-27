@@ -249,11 +249,11 @@ UPDATE_LAST_TS = "UPDATE meta SET last_ts = ? WHERE singleton = TRUE"
 DELETE_CLAIMED_BATCH_COUNT = """
 WITH deleted AS (
     DELETE FROM messages
-    WHERE order_id IN (
-        SELECT order_id
+    WHERE ts IN (
+        SELECT ts
         FROM messages
         WHERE claimed = TRUE
-        ORDER BY order_id
+        ORDER BY ts
         LIMIT ?
     )
     RETURNING 1
@@ -324,7 +324,7 @@ def build_find_message_ids_query(
         SELECT ts
         FROM messages
         WHERE {where_clause}
-        ORDER BY order_id
+        ORDER BY ts
         LIMIT ?
         """
 
@@ -344,7 +344,7 @@ def build_retrieve_query(
             SELECT body, ts
             FROM messages
             WHERE {where_clause}
-            ORDER BY order_id {order_direction}
+            ORDER BY ts {order_direction}
             LIMIT ?
             OFFSET ?
             """,
@@ -355,10 +355,10 @@ def build_retrieve_query(
         return (
             f"""
             WITH selected AS MATERIALIZED (
-                SELECT order_id
+                SELECT ts
                 FROM messages
                 WHERE {where_clause}
-                ORDER BY order_id {order_direction}
+                ORDER BY ts {order_direction}
                 LIMIT ?
                 FOR UPDATE
             ),
@@ -366,14 +366,14 @@ def build_retrieve_query(
                 UPDATE messages AS m
                 SET claimed = TRUE
                 FROM selected
-                WHERE m.order_id = selected.order_id
-                RETURNING m.order_id, m.body, m.ts
+                WHERE m.ts = selected.ts
+                RETURNING m.body, m.ts
             )
             SELECT updated.body, updated.ts
             FROM updated
             JOIN selected
-              ON selected.order_id = updated.order_id
-            ORDER BY selected.order_id {order_direction}
+              ON selected.ts = updated.ts
+            ORDER BY selected.ts {order_direction}
             """,
             tuple(params + [spec.limit]),
         )
@@ -387,10 +387,10 @@ def build_retrieve_query(
                 SELECT ? AS queue_name
             ),
             selected AS MATERIALIZED (
-                SELECT order_id
+                SELECT ts
                 FROM messages
                 WHERE {where_clause}
-                ORDER BY order_id {order_direction}
+                ORDER BY ts {order_direction}
                 LIMIT ?
                 FOR UPDATE
             ),
@@ -398,8 +398,8 @@ def build_retrieve_query(
                 UPDATE messages AS m
                 SET queue = (SELECT queue_name FROM target_queue)
                 FROM selected
-                WHERE m.order_id = selected.order_id
-                RETURNING m.order_id, m.body, m.ts
+                WHERE m.ts = selected.ts
+                RETURNING m.body, m.ts
             ),
             notified AS (
                 SELECT pg_notify(
@@ -412,10 +412,10 @@ def build_retrieve_query(
             SELECT updated.body, updated.ts
             FROM updated
             JOIN selected
-              ON selected.order_id = updated.order_id
+              ON selected.ts = updated.ts
             LEFT JOIN notified
               ON TRUE
-            ORDER BY selected.order_id {order_direction}
+            ORDER BY selected.ts {order_direction}
             """,
             tuple([spec.target_queue] + params + [spec.limit]),
         )

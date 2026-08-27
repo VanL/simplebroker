@@ -1,7 +1,5 @@
 """Comprehensive tests for Queue API to ensure all methods are covered."""
 
-from types import GeneratorType
-
 import pytest
 
 from simplebroker import Queue
@@ -804,32 +802,30 @@ class TestQueueHighLevelMethods:
 
     @pytest.mark.parametrize("operation", ["read", "peek", "move"])
     @pytest.mark.parametrize("outcome", ["hit", "exhausted"])
-    def test_range_filtered_one_item_closes_owned_generator(
+    def test_range_filtered_one_item_uses_bounded_many_not_generator(
         self, tmp_path, monkeypatch, operation, outcome
     ):
-        """One-item filtered read/peek/move close the real generator.
-
-        Collapsed from four structurally identical tests and extended to
-        cover move (plan Tasks 5.4/7.7 — move previously had only a
-        fake-generator owner; the move case must survive any future
-        collapse).
-        """
+        """One-item filtered operations use bounded batch selection."""
         q = Queue("test", db_path=str(tmp_path / "broker.db"), persistent=True)
         try:
             cutoff = q.write("message1")
             if outcome == "hit":
                 q.write("message2")
-            generator_attr = f"{operation}_generator"
-            original_factory = getattr(q, generator_attr)
-            created_generators: list[GeneratorType] = []
+            many_attr = f"{operation}_many"
+            original_many = getattr(q, many_attr)
+            calls: list[tuple[tuple, dict]] = []
 
-            def capture_generator(*args, **kwargs):
-                generator = original_factory(*args, **kwargs)
-                assert isinstance(generator, GeneratorType)
-                created_generators.append(generator)
-                return generator
+            def capture_many(*args, **kwargs):
+                calls.append((args, kwargs))
+                return original_many(*args, **kwargs)
 
-            monkeypatch.setattr(q, generator_attr, capture_generator)
+            def fail_generator(*args, **kwargs):
+                raise AssertionError(
+                    "range-filtered single calls must not use a generator"
+                )
+
+            monkeypatch.setattr(q, many_attr, capture_many)
+            monkeypatch.setattr(q, f"{operation}_generator", fail_generator)
 
             after = 0 if outcome == "hit" else cutoff
             if operation == "read":
@@ -848,8 +844,9 @@ class TestQueueHighLevelMethods:
                 else:
                     assert moved is None
 
-            assert len(created_generators) == 1
-            assert created_generators[0].gi_frame is None
+            assert len(calls) == 1
+            limit_index = 1 if operation == "move" else 0
+            assert calls[0][0][limit_index] == 1
         finally:
             q.close()
 

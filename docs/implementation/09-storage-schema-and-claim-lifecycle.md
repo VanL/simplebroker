@@ -220,6 +220,42 @@ status publication remains an atomic replace through an exclusively created
 temporary file, so that new generation uses the umask active for that
 publication.
 
+## PostgreSQL schema migration and public-ID storage
+
+PostgreSQL schema v6 uses the same public-key shape as SQLite: `messages.ts`
+is the primary key, and the broker-owned table has no `order_id` column or
+owned sequence. Fresh setup creates that shape directly. A v5 upgrade takes a
+transaction-scoped advisory lock derived from the database-local namespace and
+managed schema name, then bypasses cached setup state and rereads
+`meta.schema_version` on the same connection. This database lock is the
+correctness boundary for direct targets and for distinct project configs that
+name one schema. The outer `.broker.toml.lock` PhaseLock still serializes one
+project's startup, but cannot establish target identity across those cases.
+
+The v5 migration then takes `ACCESS EXCLUSIVE` on `messages`, removes only the
+owned legacy indexes, drops `order_id` with `RESTRICT`, promotes the existing
+unique `ts` index to the primary key, and installs the canonical `(queue, ts)`
+access paths. It publishes version 6 last in that transaction. `RESTRICT`
+makes a sidecar dependency on the retired private column fail without schema
+or metadata mutation; migration never uses `CASCADE`. Independent sidecar
+tables, views over the public `ts` key, indexes, foreign keys, rows, and
+sequences are outside the rewritten object and remain unchanged.
+
+A waiter takes the same advisory lock and makes its decision from live
+metadata. If it sees v6, it refreshes its runner cache and does not replay v5
+DDL. Healthy current startup performs only the semantic shape read. If an
+owned required access index is missing, setup attempts to recreate the two
+canonical owned indexes and validates again; an incompatible primary key or
+conflicting index still fails closed. Projection-based admission may overlook
+extra reserved-table columns, but this does not make such modifications
+supported or give them a migration-preservation contract.
+
+PostgreSQL bounded read, peek, move, maintenance, and query classification use
+`ts` only. The retrieval CTE orders the finite eligible set by `ts ASC` for
+oldest or `ts DESC` for newest, and the outer result repeats that logical
+order. The implementation never treats PostgreSQL `RETURNING` order as a
+contract.
+
 ## PostgreSQL vacuum session ownership
 
 PostgreSQL vacuum uses a session advisory lock because deletion batches commit

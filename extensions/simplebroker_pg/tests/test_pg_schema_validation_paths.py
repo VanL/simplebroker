@@ -10,7 +10,8 @@ from simplebroker_pg import schema as pg_schema
 from simplebroker_pg import validation as pg_validation
 from simplebroker_pg.plugin import PostgresBackendPlugin, verify_env
 from simplebroker_pg.schema import (
-    CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX,
+    CREATE_PENDING_QUEUE_TS_INDEX,
+    CREATE_QUEUE_TS_INDEX,
     CREATE_TS_UNIQUE_INDEX,
     create_schema_if_needed,
     migrate_schema,
@@ -34,9 +35,13 @@ pytestmark = [pytest.mark.pg_only]
 class RecordingRunner:
     """Small SQLRunner test double for schema migration control flow."""
 
-    def __init__(self) -> None:
+    schema = "broker_data"
+
+    def __init__(self, *, live_version: int = 1) -> None:
         self.statements: list[str] = []
         self.events: list[str] = []
+        self.live_version = live_version
+        self.cached_state: object | None = None
 
     def run(
         self,
@@ -47,6 +52,11 @@ class RecordingRunner:
     ) -> list[tuple[Any, ...]]:
         del params, fetch
         self.statements.append(sql)
+        normalized = " ".join(sql.split()).lower()
+        if "select magic, schema_version, last_ts, alias_version" in normalized:
+            return [(SIMPLEBROKER_MAGIC, self.live_version, 0, 0)]
+        if "postgres_v6_shape" in normalized:
+            return [(True,)]
         return []
 
     def begin_immediate(self) -> None:
@@ -60,6 +70,12 @@ class RecordingRunner:
 
     def close(self) -> None:
         return None
+
+    def prime_meta_cache(self, state: object) -> None:
+        self.cached_state = state
+
+    def invalidate_meta_cache(self) -> None:
+        self.cached_state = None
 
     def setup(self, phase: SetupPhase) -> None:
         del phase
@@ -126,12 +142,14 @@ def test_migrate_schema_applies_all_postgres_migrations_in_one_transaction() -> 
     assert "ADD COLUMN IF NOT EXISTS claimed" in joined
     assert CREATE_TS_UNIQUE_INDEX in runner.statements
     assert "CREATE TABLE IF NOT EXISTS aliases" in joined
-    assert "idx_messages_queue_ts_order_unclaimed" in joined
+    assert "DROP COLUMN order_id RESTRICT" in joined
+    assert "idx_messages_queue_ts" in joined
+    assert "idx_messages_pending_queue_ts" in joined
     assert versions == [PostgresBackendPlugin.schema_version]
 
 
-def test_migrate_schema_from_previous_version_only_adds_latest_index() -> None:
-    runner = RecordingRunner()
+def test_migrate_schema_from_previous_version_rebuilds_v6_layout() -> None:
+    runner = RecordingRunner(live_version=PostgresBackendPlugin.schema_version - 1)
     versions: list[int] = []
 
     migrate_schema(
@@ -141,12 +159,15 @@ def test_migrate_schema_from_previous_version_only_adds_latest_index() -> None:
     )
 
     assert runner.events == ["begin", "commit"]
-    assert runner.statements == [CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX]
+    joined = "\n".join(runner.statements)
+    assert "DROP COLUMN order_id RESTRICT" in joined
+    assert CREATE_QUEUE_TS_INDEX in runner.statements
+    assert CREATE_PENDING_QUEUE_TS_INDEX in runner.statements
     assert versions == [PostgresBackendPlugin.schema_version]
 
 
-def test_current_schema_index_repair_rolls_back_on_failure() -> None:
-    class FailingRunner(RecordingRunner):
+def test_current_schema_shape_mismatch_repairs_indexes_then_rolls_back() -> None:
+    class InvalidShapeRunner(RecordingRunner):
         def run(
             self,
             sql: str,
@@ -154,13 +175,16 @@ def test_current_schema_index_repair_rolls_back_on_failure() -> None:
             *,
             fetch: bool = False,
         ) -> list[tuple[Any, ...]]:
-            if sql == CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX:
-                raise RuntimeError("index repair failed")
+            if "postgres_v6_shape" in sql:
+                self.statements.append(sql)
+                return [(False,)]
             return super().run(sql, params, fetch=fetch)
 
-    runner = FailingRunner()
+    runner = InvalidShapeRunner(live_version=PostgresBackendPlugin.schema_version)
 
-    with pytest.raises(RuntimeError, match="index repair failed"):
+    with pytest.raises(
+        RuntimeError, match="requires ts as the sole message primary key"
+    ):
         migrate_schema(
             runner,
             current_version=PostgresBackendPlugin.schema_version,
@@ -168,6 +192,8 @@ def test_current_schema_index_repair_rolls_back_on_failure() -> None:
         )
 
     assert runner.events == ["begin", "rollback"]
+    assert CREATE_QUEUE_TS_INDEX in runner.statements
+    assert CREATE_PENDING_QUEUE_TS_INDEX in runner.statements
 
 
 def test_legacy_unique_index_failure_is_explained_and_rolled_back() -> None:
@@ -304,7 +330,7 @@ def test_inspect_schema_keeps_an_older_owned_shape_out_of_partial_state(
     monkeypatch.setattr(
         pg_validation, "inspect_schema", lambda *args, **kwargs: inspection
     )
-    with pytest.raises(DatabaseError, match="older than current version 5"):
+    with pytest.raises(DatabaseError, match="older than current version 6"):
         validate_target("postgresql://example/test")
     validate_target(
         "postgresql://example/test",

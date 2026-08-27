@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -155,19 +156,10 @@ def test_owned_older_postgres_schema_reaches_migration(
     pg_dsn: str,
     pg_plugin: BackendPlugin,
     raw_pg_conn: psycopg.Connection[Any],
+    create_pg_v5_schema: Callable[[str], None],
 ) -> None:
     schema = f"older_{uuid.uuid4().hex[:12]}"
-    pg_plugin.initialize_target(
-        pg_dsn,
-        backend_options={"schema": schema},
-    )
-    with raw_pg_conn.cursor() as cur:
-        cur.execute(
-            sql.SQL("UPDATE {}.meta SET schema_version = 3").format(
-                sql.Identifier(schema)
-            )
-        )
-        cur.execute(sql.SQL("DROP TABLE {}.aliases").format(sql.Identifier(schema)))
+    create_pg_v5_schema(schema)
 
     try:
         pg_plugin.initialize_target(
@@ -193,6 +185,7 @@ def test_project_phase_marker_does_not_hide_older_postgres_schema(
     pg_plugin: BackendPlugin,
     raw_pg_conn: psycopg.Connection[Any],
     tmp_path: Path,
+    create_pg_v5_schema: Callable[[str], None],
 ) -> None:
     schema = f"older_marker_{uuid.uuid4().hex[:12]}"
     config_path = tmp_path / ".broker.toml"
@@ -210,11 +203,9 @@ def test_project_phase_marker_does_not_hide_older_postgres_schema(
         _initialize_project_backend_target(target, config={})
         with raw_pg_conn.cursor() as cur:
             cur.execute(
-                sql.SQL("UPDATE {}.meta SET schema_version = 3").format(
-                    sql.Identifier(schema)
-                )
+                sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
             )
-            cur.execute(sql.SQL("DROP TABLE {}.aliases").format(sql.Identifier(schema)))
+        create_pg_v5_schema(schema)
 
         _initialize_project_backend_target(target, config={})
 

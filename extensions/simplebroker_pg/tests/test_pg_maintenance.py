@@ -588,7 +588,7 @@ def test_delete_from_queues_postgres_before_timestamp_is_strict(
 
     rows = list(
         pg_runner.run(
-            "SELECT queue, body FROM messages ORDER BY order_id",
+            "SELECT queue, body FROM messages ORDER BY ts",
             fetch=True,
         )
     )

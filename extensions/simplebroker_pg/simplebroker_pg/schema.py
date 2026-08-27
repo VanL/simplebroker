@@ -9,6 +9,7 @@ from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import IntegrityError, OperationalError
 
 from ._constants import POSTGRES_SCHEMA_VERSION
+from ._identifiers import stable_lock_key
 from .runner import PostgresRunner, RunnerMetaState
 from .validation import quote_ident
 
@@ -17,10 +18,9 @@ if TYPE_CHECKING:
 
 CREATE_MESSAGES_TABLE = """
 CREATE TABLE IF NOT EXISTS messages (
-    order_id BIGSERIAL PRIMARY KEY,
     queue TEXT NOT NULL,
     body TEXT NOT NULL,
-    ts BIGINT NOT NULL,
+    ts BIGINT PRIMARY KEY,
     claimed BOOLEAN NOT NULL DEFAULT FALSE
 )
 """
@@ -42,20 +42,14 @@ CREATE TABLE IF NOT EXISTS aliases (
 )
 """
 
-CREATE_QUEUE_ORDER_INDEX = """
-CREATE INDEX IF NOT EXISTS idx_messages_queue_order
-ON messages (queue, order_id)
+CREATE_QUEUE_TS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_messages_queue_ts
+ON messages (queue, ts)
 """
 
-CREATE_UNCLAIMED_INDEX = """
-CREATE INDEX IF NOT EXISTS idx_messages_unclaimed
-ON messages (queue, order_id)
-WHERE claimed = FALSE
-"""
-
-CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX = """
-CREATE INDEX IF NOT EXISTS idx_messages_queue_ts_order_unclaimed
-ON messages (queue, ts, order_id)
+CREATE_PENDING_QUEUE_TS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_messages_pending_queue_ts
+ON messages (queue, ts)
 WHERE claimed = FALSE
 """
 
@@ -83,6 +77,88 @@ SELECT magic, schema_version, last_ts, alias_version
 FROM meta
 WHERE singleton = TRUE
   AND NOT EXISTS (SELECT 1 FROM inserted)
+"""
+
+SCHEMA_SETUP_LOCK = "SELECT pg_advisory_xact_lock(?)"
+
+POSTGRES_V6_SHAPE_SQL = """
+/* postgres_v6_shape */
+SELECT
+    NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'messages'
+          AND column_name = 'order_id'
+    )
+    AND EXISTS (
+        SELECT 1
+        FROM pg_constraint AS constraint_row
+        JOIN pg_class AS message_table
+          ON message_table.oid = constraint_row.conrelid
+        JOIN pg_namespace AS message_schema
+          ON message_schema.oid = message_table.relnamespace
+        WHERE message_schema.nspname = current_schema()
+          AND message_table.relname = 'messages'
+          AND constraint_row.contype = 'p'
+          AND (
+              SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+              FROM unnest(constraint_row.conkey)
+                   WITH ORDINALITY AS key_row(attnum, ordinality)
+              JOIN pg_attribute AS attribute_row
+                ON attribute_row.attrelid = message_table.oid
+               AND attribute_row.attnum = key_row.attnum
+          ) = ARRAY['ts']::name[]
+    )
+    AND EXISTS (
+        SELECT 1
+        FROM pg_index AS index_row
+        JOIN pg_class AS message_table
+          ON message_table.oid = index_row.indrelid
+        JOIN pg_class AS access_index
+          ON access_index.oid = index_row.indexrelid
+        JOIN pg_namespace AS message_schema
+          ON message_schema.oid = message_table.relnamespace
+        WHERE message_schema.nspname = current_schema()
+          AND message_table.relname = 'messages'
+          AND access_index.relname = 'idx_messages_queue_ts'
+          AND index_row.indpred IS NULL
+          AND (
+              SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+              FROM unnest(index_row.indkey)
+                   WITH ORDINALITY AS key_row(attnum, ordinality)
+              JOIN pg_attribute AS attribute_row
+                ON attribute_row.attrelid = message_table.oid
+               AND attribute_row.attnum = key_row.attnum
+          ) = ARRAY['queue', 'ts']::name[]
+    )
+    AND EXISTS (
+        SELECT 1
+        FROM pg_index AS index_row
+        JOIN pg_class AS message_table
+          ON message_table.oid = index_row.indrelid
+        JOIN pg_class AS access_index
+          ON access_index.oid = index_row.indexrelid
+        JOIN pg_namespace AS message_schema
+          ON message_schema.oid = message_table.relnamespace
+        WHERE message_schema.nspname = current_schema()
+          AND message_table.relname = 'messages'
+          AND access_index.relname = 'idx_messages_pending_queue_ts'
+          AND regexp_replace(
+              pg_get_expr(index_row.indpred, index_row.indrelid),
+              '[()[:space:]]',
+              '',
+              'g'
+          ) = 'claimed=false'
+          AND (
+              SELECT array_agg(attribute_row.attname ORDER BY key_row.ordinality)
+              FROM unnest(index_row.indkey)
+                   WITH ORDINALITY AS key_row(attnum, ordinality)
+              JOIN pg_attribute AS attribute_row
+                ON attribute_row.attrelid = message_table.oid
+               AND attribute_row.attnum = key_row.attnum
+          ) = ARRAY['queue', 'ts']::name[]
+    )
 """
 
 
@@ -121,6 +197,70 @@ def _read_existing_meta_state(runner: SQLRunner) -> RunnerMetaState | None:
     )
 
 
+def _read_meta_state_if_present(runner: SQLRunner) -> RunnerMetaState | None:
+    """Read metadata without aborting an active transaction when meta is absent."""
+    schema = getattr(runner, "schema", None)
+    if not isinstance(schema, str) or not schema:
+        raise RuntimeError("Postgres schema setup requires a schema-aware runner")
+    rows = list(
+        runner.run(
+            "SELECT to_regclass(?)",
+            (f"{quote_ident(schema)}.meta",),
+            fetch=True,
+        )
+    )
+    if not rows or rows[0][0] is None:
+        return None
+    return _read_existing_meta_state(runner)
+
+
+def _prime_meta_state(runner: SQLRunner, state: RunnerMetaState) -> None:
+    prime = getattr(runner, "prime_meta_cache", None)
+    if callable(prime):
+        prime(state)
+
+
+def _invalidate_meta_state(runner: SQLRunner) -> None:
+    invalidate = getattr(runner, "invalidate_meta_cache", None)
+    if callable(invalidate):
+        invalidate()
+
+
+def _schema_setup_lock_key(runner: SQLRunner) -> int:
+    schema = getattr(runner, "schema", None)
+    if not isinstance(schema, str) or not schema:
+        raise RuntimeError("Postgres schema setup requires a schema-aware runner")
+    # PostgreSQL advisory locks are database-local. The database lock namespace
+    # plus this schema-derived key identifies one managed database/schema pair.
+    return stable_lock_key("schema-setup", schema)
+
+
+def _read_live_meta_state(runner: SQLRunner) -> RunnerMetaState:
+    state = _read_existing_meta_state(runner)
+    if state is None:
+        raise RuntimeError("Postgres schema setup found no SimpleBroker metadata row")
+    _prime_meta_state(runner, state)
+    return state
+
+
+def _postgres_v6_shape_is_current(runner: SQLRunner) -> bool:
+    rows = list(runner.run(POSTGRES_V6_SHAPE_SQL, fetch=True))
+    return bool(rows and rows[0][0])
+
+
+def _validate_or_repair_current_v6(runner: SQLRunner) -> None:
+    """Validate v6, repairing only absent canonical owned indexes."""
+    if _postgres_v6_shape_is_current(runner):
+        return
+    runner.run(CREATE_QUEUE_TS_INDEX)
+    runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
+    if not _postgres_v6_shape_is_current(runner):
+        raise RuntimeError(
+            "Postgres schema version 6 requires ts as the sole message "
+            "primary key and the canonical queue/timestamp access paths"
+        )
+
+
 def create_schema_if_needed(runner: SQLRunner, schema: str) -> None:
     """Create the managed schema if it does not exist."""
     runner.run(f"CREATE SCHEMA IF NOT EXISTS {quote_ident(schema)}")
@@ -133,10 +273,8 @@ CREATE SCHEMA IF NOT EXISTS {quoted_schema};
 {CREATE_MESSAGES_TABLE};
 {CREATE_META_TABLE};
 {CREATE_ALIASES_TABLE};
-{CREATE_QUEUE_ORDER_INDEX};
-{CREATE_UNCLAIMED_INDEX};
-{CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX};
-{CREATE_TS_UNIQUE_INDEX};
+{CREATE_QUEUE_TS_INDEX};
+{CREATE_PENDING_QUEUE_TS_INDEX};
 {CREATE_ALIAS_TARGET_INDEX};
 """
 
@@ -157,28 +295,40 @@ def initialize_database(
             runner.prime_meta_cache(existing_state)
             return
 
-    run_with_retry(lambda: runner.run(_bootstrap_schema_sql(schema)))
-    rows = list(
-        run_with_retry(
-            lambda: runner.run(
-                ENSURE_META_ROW,
-                (SIMPLEBROKER_MAGIC, POSTGRES_SCHEMA_VERSION),
-                fetch=True,
-            )
-        )
-    )
+    def initialize_under_lock() -> RunnerMetaState:
+        runner.begin_immediate()
+        try:
+            runner.run(SCHEMA_SETUP_LOCK, (_schema_setup_lock_key(runner),))
+            live_state = _read_meta_state_if_present(runner)
+            if live_state is not None:
+                runner.commit()
+                return live_state
 
-    if rows and isinstance(runner, PostgresRunner):
-        runner.prime_meta_cache(
-            RunnerMetaState(
+            runner.run(_bootstrap_schema_sql(schema))
+            rows = list(
+                runner.run(
+                    ENSURE_META_ROW,
+                    (SIMPLEBROKER_MAGIC, POSTGRES_SCHEMA_VERSION),
+                    fetch=True,
+                )
+            )
+            if not rows:
+                raise RuntimeError("Postgres bootstrap did not publish metadata")
+            state = RunnerMetaState(
                 magic=str(rows[0][0]),
                 schema_version=int(rows[0][1]),
                 last_ts=int(rows[0][2]),
                 alias_version=int(rows[0][3]),
             )
-        )
-    elif isinstance(runner, PostgresRunner):
-        runner.mark_schema_bootstrapped()
+            runner.commit()
+            return state
+        except Exception:
+            runner.rollback()
+            _invalidate_meta_state(runner)
+            raise
+
+    state = run_with_retry(initialize_under_lock)
+    _prime_meta_state(runner, state)
 
 
 def meta_table_exists(runner: SQLRunner) -> bool:
@@ -197,24 +347,6 @@ def meta_table_exists(runner: SQLRunner) -> bool:
     return bool(rows and rows[0][0])
 
 
-def queue_ts_order_unclaimed_index_exists(runner: SQLRunner) -> bool:
-    """Return whether the pending queue/timestamp index exists."""
-    rows = list(
-        runner.run(
-            """
-            SELECT EXISTS(
-                SELECT 1
-                FROM pg_indexes
-                WHERE schemaname = current_schema()
-                  AND indexname = 'idx_messages_queue_ts_order_unclaimed'
-            )
-            """,
-            fetch=True,
-        )
-    )
-    return bool(rows and rows[0][0])
-
-
 def migrate_schema(
     runner: SQLRunner,
     *,
@@ -222,27 +354,29 @@ def migrate_schema(
     write_schema_version: Callable[[int], None],
 ) -> None:
     """Apply any missing Postgres schema migrations in order."""
-    if current_version >= POSTGRES_SCHEMA_VERSION:
-        if queue_ts_order_unclaimed_index_exists(runner):
-            return
-        runner.begin_immediate()
-        try:
-            runner.run(CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX)
-            runner.commit()
-        except Exception:
-            runner.rollback()
-            raise
-        return
-
+    del current_version
     runner.begin_immediate()
     try:
-        if current_version < 2:
+        runner.run(SCHEMA_SETUP_LOCK, (_schema_setup_lock_key(runner),))
+        live_state = _read_live_meta_state(runner)
+        live_version = live_state.schema_version
+        if live_version > POSTGRES_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Postgres schema version {live_version} is newer than supported "
+                f"version {POSTGRES_SCHEMA_VERSION}"
+            )
+
+        if live_version >= POSTGRES_SCHEMA_VERSION:
+            _validate_or_repair_current_v6(runner)
+            runner.commit()
+            return
+
+        if live_version < 2:
             runner.run(
                 "ALTER TABLE messages "
                 "ADD COLUMN IF NOT EXISTS claimed BOOLEAN NOT NULL DEFAULT FALSE"
             )
-            runner.run(CREATE_UNCLAIMED_INDEX)
-        if current_version < 3:
+        if live_version < 3:
             try:
                 runner.run(CREATE_TS_UNIQUE_INDEX)
             except IntegrityError as exc:
@@ -250,13 +384,27 @@ def migrate_schema(
                     "Cannot add unique constraint on timestamp column: duplicate "
                     "timestamps exist in the database."
                 ) from exc
-        if current_version < 4:
+        if live_version < 4:
             runner.run(CREATE_ALIASES_TABLE)
             runner.run(CREATE_ALIAS_TARGET_INDEX)
-        runner.run(CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX)
+
+        runner.run("LOCK TABLE messages IN ACCESS EXCLUSIVE MODE")
+        runner.run("DROP INDEX IF EXISTS idx_messages_queue_order")
+        runner.run("DROP INDEX IF EXISTS idx_messages_unclaimed")
+        runner.run("DROP INDEX IF EXISTS idx_messages_queue_ts_order_unclaimed")
+        runner.run("ALTER TABLE messages DROP COLUMN order_id RESTRICT")
+        runner.run(
+            "ALTER TABLE messages ADD CONSTRAINT messages_pkey "
+            "PRIMARY KEY USING INDEX idx_messages_ts_unique"
+        )
+        runner.run(CREATE_QUEUE_TS_INDEX)
+        runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
+        if not _postgres_v6_shape_is_current(runner):
+            raise RuntimeError("Postgres schema v6 migration produced an invalid shape")
 
         write_schema_version(POSTGRES_SCHEMA_VERSION)
         runner.commit()
     except Exception:
         runner.rollback()
+        _invalidate_meta_state(runner)
         raise

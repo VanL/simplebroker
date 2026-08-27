@@ -181,7 +181,7 @@ def _should_prepare(sql: str) -> bool:
     if normalized.startswith("WITH inserted AS ( INSERT INTO messages"):
         return True
     if (
-        normalized.startswith("WITH selected AS MATERIALIZED ( SELECT order_id")
+        normalized.startswith("WITH selected AS MATERIALIZED ( SELECT ts")
         and "UPDATE messages AS m SET claimed = TRUE" in normalized
     ):
         return True

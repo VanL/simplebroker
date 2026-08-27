@@ -12,7 +12,7 @@ from simplebroker.db import BrokerCore
 pytestmark = [pytest.mark.pg_only]
 
 
-def _queue_ts_order_unclaimed_index_exists(pg_runner: PostgresRunner) -> bool:
+def _pending_queue_ts_index_exists(pg_runner: PostgresRunner) -> bool:
     rows = list(
         pg_runner.run(
             """
@@ -20,7 +20,7 @@ def _queue_ts_order_unclaimed_index_exists(pg_runner: PostgresRunner) -> bool:
                 SELECT 1
                 FROM pg_indexes
                 WHERE schemaname = current_schema()
-                  AND indexname = 'idx_messages_queue_ts_order_unclaimed'
+                  AND indexname = 'idx_messages_pending_queue_ts'
             )
             """,
             fetch=True,
@@ -63,10 +63,10 @@ def test_postgres_current_schema_recreates_missing_pending_timestamp_index(
     del pg_core
     versions: list[int] = []
 
-    assert _queue_ts_order_unclaimed_index_exists(pg_runner) is True
+    assert _pending_queue_ts_index_exists(pg_runner) is True
 
-    pg_runner.run("DROP INDEX IF EXISTS idx_messages_queue_ts_order_unclaimed")
-    assert _queue_ts_order_unclaimed_index_exists(pg_runner) is False
+    pg_runner.run("DROP INDEX IF EXISTS idx_messages_pending_queue_ts")
+    assert _pending_queue_ts_index_exists(pg_runner) is False
 
     pg_plugin.migrate_schema(
         pg_runner,
@@ -75,4 +75,4 @@ def test_postgres_current_schema_recreates_missing_pending_timestamp_index(
     )
 
     assert versions == []
-    assert _queue_ts_order_unclaimed_index_exists(pg_runner) is True
+    assert _pending_queue_ts_index_exists(pg_runner) is True

@@ -25,6 +25,10 @@ pytestmark = [pytest.mark.shared]
 
 FIRING_TESTS = {
     "SB-ID-1": {
+        "extensions/simplebroker_pg/tests/test_pg_message_id_order.py": {
+            "test_postgres_v6_fresh_schema_uses_public_id_as_only_key",
+            "test_real_postgres_v5_migration_preserves_rows_and_sidecars",
+        },
         "tests/test_sqlite_message_id_returning_order.py": {
             "test_claim_many_normalizes_sqlite_returning_rows_by_public_id",
             "test_claim_generator_uses_ascending_ids_when_returning_rows_are_reversed",

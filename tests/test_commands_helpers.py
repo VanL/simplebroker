@@ -106,9 +106,10 @@ class TestProcessQueueFetch:
             return self._fd
 
     def test_exact_timestamp_path_json_output(self, capsys):
-        def fetch_one(*, exact_timestamp, with_timestamps):
+        def fetch_one(*, exact_timestamp, with_timestamps, order):
             assert exact_timestamp == 42
             assert with_timestamps is True
+            assert order == "oldest"
             return ("hello", 111)
 
         def fetch_generator(**_kwargs) -> Iterator[str]:  # pragma: no cover - unused
@@ -116,6 +117,7 @@ class TestProcessQueueFetch:
 
         rc = _process_queue_fetch(
             fetch_one=fetch_one,
+            fetch_many=lambda *_args, **_kwargs: [],
             fetch_generator=fetch_generator,
             exact_timestamp=42,
             all_messages=False,
@@ -123,6 +125,7 @@ class TestProcessQueueFetch:
             before_timestamp=None,
             json_output=True,
             show_timestamps=False,
+            order="oldest",
         )
 
         assert rc == EXIT_SUCCESS
@@ -144,6 +147,7 @@ class TestProcessQueueFetch:
 
         rc = _process_queue_fetch(
             fetch_one=fetch_one,
+            fetch_many=lambda *_args, **_kwargs: [],
             fetch_generator=fetch_generator,
             exact_timestamp=None,
             all_messages=True,
@@ -151,6 +155,7 @@ class TestProcessQueueFetch:
             before_timestamp=None,
             json_output=False,
             show_timestamps=False,
+            order="oldest",
         )
 
         captured = capsys.readouterr()
@@ -174,6 +179,7 @@ class TestProcessQueueFetch:
 
         rc = _process_queue_fetch(
             fetch_one=fetch_one,
+            fetch_many=lambda *_args, **_kwargs: [],
             fetch_generator=fetch_generator,
             exact_timestamp=None,
             all_messages=True,
@@ -181,6 +187,7 @@ class TestProcessQueueFetch:
             before_timestamp=None,
             json_output=False,
             show_timestamps=False,
+            order="oldest",
         )
 
         assert rc == EXIT_SUCCESS
@@ -201,6 +208,7 @@ class TestProcessQueueFetch:
 
         rc = _process_queue_fetch(
             fetch_one=fetch_one,
+            fetch_many=lambda *_args, **_kwargs: [],
             fetch_generator=fetch_generator,
             exact_timestamp=None,
             all_messages=True,
@@ -208,6 +216,7 @@ class TestProcessQueueFetch:
             before_timestamp=None,
             json_output=False,
             show_timestamps=False,
+            order="oldest",
         )
 
         assert rc == EXIT_SUCCESS
@@ -229,6 +238,7 @@ class TestProcessQueueFetch:
         with pytest.raises(OSError, match="invalid parameter"):
             _process_queue_fetch(
                 fetch_one=fetch_one,
+                fetch_many=lambda *_args, **_kwargs: [],
                 fetch_generator=fetch_generator,
                 exact_timestamp=None,
                 all_messages=True,
@@ -236,6 +246,7 @@ class TestProcessQueueFetch:
                 before_timestamp=None,
                 json_output=False,
                 show_timestamps=False,
+                order="oldest",
             )
 
     def test_all_messages_does_not_swallow_posix_einval(
@@ -254,6 +265,7 @@ class TestProcessQueueFetch:
         with pytest.raises(OSError, match="invalid argument"):
             _process_queue_fetch(
                 fetch_one=fetch_one,
+                fetch_many=lambda *_args, **_kwargs: [],
                 fetch_generator=fetch_generator,
                 exact_timestamp=None,
                 all_messages=True,
@@ -261,6 +273,7 @@ class TestProcessQueueFetch:
                 before_timestamp=None,
                 json_output=False,
                 show_timestamps=False,
+                order="oldest",
             )
 
     def test_all_messages_does_not_swallow_unrelated_output_error(
@@ -278,6 +291,7 @@ class TestProcessQueueFetch:
         with pytest.raises(OSError, match="unrelated output failure"):
             _process_queue_fetch(
                 fetch_one=fetch_one,
+                fetch_many=lambda *_args, **_kwargs: [],
                 fetch_generator=fetch_generator,
                 exact_timestamp=None,
                 all_messages=True,
@@ -285,6 +299,7 @@ class TestProcessQueueFetch:
                 before_timestamp=None,
                 json_output=False,
                 show_timestamps=False,
+                order="oldest",
             )
 
     @pytest.mark.parametrize(
@@ -307,10 +322,14 @@ class TestProcessQueueFetch:
 
             return rows()
 
+        def fetch_many(*_args, **_kwargs):
+            raise OSError(errno.EPIPE, "backend transport failed")
+
         monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
         with pytest.raises(OSError, match="backend transport failed"):
             _process_queue_fetch(
                 fetch_one=fetch_one,
+                fetch_many=fetch_many,
                 fetch_generator=fetch_generator,
                 exact_timestamp=None,
                 all_messages=all_messages,
@@ -318,6 +337,7 @@ class TestProcessQueueFetch:
                 before_timestamp=None,
                 json_output=False,
                 show_timestamps=False,
+                order="oldest",
             )
 
     def test_dump_does_not_treat_backend_epipe_as_stdout_closure(
@@ -364,6 +384,7 @@ class TestProcessQueueFetch:
         with pytest.raises(OSError, match="stderr warning failed"):
             _process_queue_fetch(
                 fetch_one=fetch_one,
+                fetch_many=lambda *_args, **_kwargs: [],
                 fetch_generator=fetch_generator,
                 exact_timestamp=None,
                 all_messages=True,
@@ -371,6 +392,7 @@ class TestProcessQueueFetch:
                 before_timestamp=None,
                 json_output=False,
                 show_timestamps=False,
+                order="oldest",
             )
 
     def test_all_messages_stays_clean_when_stdout_redirect_fails(
@@ -389,6 +411,7 @@ class TestProcessQueueFetch:
         try:
             rc = _process_queue_fetch(
                 fetch_one=fetch_one,
+                fetch_many=lambda *_args, **_kwargs: [],
                 fetch_generator=fetch_generator,
                 exact_timestamp=None,
                 all_messages=True,
@@ -396,6 +419,7 @@ class TestProcessQueueFetch:
                 before_timestamp=None,
                 json_output=False,
                 show_timestamps=False,
+                order="oldest",
             )
             replacement = commands.sys.stdout
             assert replacement is not closed_stdout
@@ -411,14 +435,27 @@ class TestProcessQueueFetch:
         def fetch_one(**_kwargs):  # pragma: no cover - unused
             return None
 
-        def fetch_generator(*, with_timestamps, after_timestamp, before_timestamp):
+        def fetch_many(
+            limit,
+            *,
+            with_timestamps,
+            after_timestamp,
+            before_timestamp,
+            order,
+        ):
+            assert limit == 1
             assert after_timestamp == 99
             assert before_timestamp is None
             assert with_timestamps is True
-            return iter([("c", 3)])
+            assert order == "oldest"
+            return [("c", 3)]
+
+        def fetch_generator(**_kwargs):  # pragma: no cover - unused
+            return iter([])
 
         rc = _process_queue_fetch(
             fetch_one=fetch_one,
+            fetch_many=fetch_many,
             fetch_generator=fetch_generator,
             exact_timestamp=None,
             all_messages=False,
@@ -426,6 +463,7 @@ class TestProcessQueueFetch:
             before_timestamp=None,
             json_output=False,
             show_timestamps=True,
+            order="oldest",
         )
 
         captured = capsys.readouterr()
@@ -436,14 +474,27 @@ class TestProcessQueueFetch:
         def fetch_one(**_kwargs):  # pragma: no cover - unused
             return None
 
-        def fetch_generator(*, with_timestamps, after_timestamp, before_timestamp):
+        def fetch_many(
+            limit,
+            *,
+            with_timestamps,
+            after_timestamp,
+            before_timestamp,
+            order,
+        ):
+            assert limit == 1
             assert after_timestamp is None
             assert before_timestamp == 123
             assert with_timestamps is True
-            return iter([("d", 4)])
+            assert order == "oldest"
+            return [("d", 4)]
+
+        def fetch_generator(**_kwargs):  # pragma: no cover - unused
+            return iter([])
 
         rc = _process_queue_fetch(
             fetch_one=fetch_one,
+            fetch_many=fetch_many,
             fetch_generator=fetch_generator,
             exact_timestamp=None,
             all_messages=False,
@@ -451,6 +502,7 @@ class TestProcessQueueFetch:
             before_timestamp=123,
             json_output=False,
             show_timestamps=True,
+            order="oldest",
         )
 
         captured = capsys.readouterr()
@@ -458,9 +510,10 @@ class TestProcessQueueFetch:
         assert captured.out.strip().startswith("4\t")
 
     def test_single_fetch_plain_output(self, capsys):
-        def fetch_one(*, exact_timestamp=None, with_timestamps=False):
+        def fetch_one(*, exact_timestamp=None, with_timestamps=False, order="oldest"):
             assert exact_timestamp is None
             assert with_timestamps is False
+            assert order == "oldest"
             return "plain"
 
         def fetch_generator(**_kwargs):  # pragma: no cover - unused
@@ -468,6 +521,7 @@ class TestProcessQueueFetch:
 
         rc = _process_queue_fetch(
             fetch_one=fetch_one,
+            fetch_many=lambda *_args, **_kwargs: [],
             fetch_generator=fetch_generator,
             exact_timestamp=None,
             all_messages=False,
@@ -475,6 +529,7 @@ class TestProcessQueueFetch:
             before_timestamp=None,
             json_output=False,
             show_timestamps=False,
+            order="oldest",
         )
 
         assert rc == EXIT_SUCCESS
