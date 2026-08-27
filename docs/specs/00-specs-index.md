@@ -25,8 +25,8 @@ Product section authority: `product-section-registry.md`.
    forms, high-water/cache, move preservation when the registry marks
    canonical)
 5. `14-timestamp-selection.md` — `[SB-SELECT-*]` (strict open bounds
-   as filters; late older ids; watch progress when the registry marks
-   canonical)
+   as filters; late older ids; ascending/default and descending/newest
+   cross-backend order; watch progress when the registry marks canonical)
 6. `15-persistence-io.md` — `[SB-IO-*]` (dump/load format, filters,
    fresh load, claimed-row inspection when the registry marks canonical)
 7. `16-python-library-api.md` — `[SB-API-*]` (public package root, `ext`,

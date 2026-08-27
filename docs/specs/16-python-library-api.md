@@ -225,6 +225,17 @@ Public typing uses overloads to narrow calls made with literal flag values and
 retains a full union for an unknown runtime `bool`; overloads do not create a
 second implementation path.
 
+`Queue.read`, `Queue.peek`, and `Queue.move` accept keyword-only
+`order: str = "oldest"` when they return one message or a bounded materialized
+result. Their `*_one` and `*_many` forms accept the same keyword. The only
+non-default value is `"newest"`; invalid values raise `ValueError` before a
+broker target is acquired or mutated. A high-level call with
+`all_messages=True` accepts only the default and rejects `"newest"` before
+target acquisition. `*_generator`, `stream_messages`, and watcher forms do not
+accept `order`. `find_message_ids()` remains an ascending-only administrative
+search: it returns matching IDs in ascending integer public message-ID order
+and does not accept `order`.
+
 The `all_messages=True` views of `Queue.read()`, `Queue.peek()`, and
 `Queue.move()` return `CloseableIterator[...]`; an unknown runtime `bool`
 includes that closeable iterator in the existing scalar/tuple/iterator union.
@@ -412,6 +423,15 @@ application tables:
 Sidecar schema and application tables are the embedder’s product, not
 SimpleBroker queue semantics.
 
+SQL schema migration may rewrite only SimpleBroker-owned tables, indexes,
+constraints, and sequence state. Successful and failed migration leaves each
+caller-owned sidecar table definition, row, index, constraint, and sequence
+state unchanged. `RESERVED_TABLE_NAMES` and broker-owned `idx_*` indexes are
+not sidecars: caller changes to those owned objects are unsupported and have no
+migration-preservation promise. A sidecar dependency on a removed private
+broker column must make migration fail without mutation; migration never uses
+`CASCADE` to erase caller-owned state.
+
 Sidecar SQL without parameters is passed through unchanged. PostgreSQL
 parameterized sidecar SQL adapts qmark placeholders only outside quoted,
 commented, and dollar-quoted text; `??` denotes one literal question mark.
@@ -517,6 +537,10 @@ Queue/broker construction, and operation execution. Repeated programmatic
 calls may therefore observe intentional environment changes between calls,
 while no call observes a change after its snapshot is created. Existing
 config-independent early-validation paths remain config-independent.
+
+Direct command functions for bounded read, peek, and move accept the same
+normalized `order` string. The CLI adapter maps `--newest` to `"newest"` and
+otherwise passes `"oldest"`; it does not implement ordering independently.
 
 Process-signal translation remains at the CLI wrapper. Ordinary direct
 `cmd_*` functions are not required to catch an arbitrary `KeyboardInterrupt`
@@ -650,6 +674,17 @@ timestamp bounds. Its accepted and rejected spellings are the three grammars in
 parameters already accept integer message IDs do not reparse those integers as
 strings.
 
+Backend API v8 adds the validated selection order to claim, peek, and move
+one/many operations. First-party plugins declare v8 exactly. SQL backend
+storage schema v6 has one supported canonical SimpleBroker-owned layout, where
+`ts` is the primary key and no private surrogate exists; the v6 migration
+rebuilds older layouts into it without mutating caller-owned sidecars.
+PostgreSQL migration is serialized by a database advisory lock and makes its
+version decision from a live under-lock metadata read. A database with a
+schema version newer than a client supports is rejected during cold admission,
+before any message-table operation. Already-admitted old clients are outside
+that guarantee; operators must quiesce all clients for the one-way migration.
+
 _Implementation mapping_:
 - `simplebroker/ext.py` and its re-export sources
 - `simplebroker/db.py`, `simplebroker/_runner.py`, `simplebroker/_phaselock.py`
@@ -666,7 +701,7 @@ this table does not redefine claim, id, or filter rules.
 | `Queue.write` / exact-insert helpers | `write` / `cmd_write` | `[SB-ID-*]` |
 | `Queue.read*` | `read` / `cmd_read` | `[SB-DELIVERY-*]`, `[SB-SELECT-*]` |
 | `Queue.peek*` | `peek` / `cmd_peek` | `[SB-DELIVERY-4]`, `[SB-SELECT-*]` |
-| `Queue.move*` | `move` / `cmd_move` | `[SB-DELIVERY-3]`, `[SB-ID-*]` |
+| `Queue.move*` | `move` / `cmd_move` | `[SB-DELIVERY-3]`, `[SB-ID-*]`, `[SB-SELECT-*]` |
 | `Queue.delete*` | `delete` / `cmd_delete` | `[SB-OPS-3]`; claim lifecycle `[SB-DELIVERY-*]` |
 | Broadcast APIs | `broadcast` / `cmd_broadcast` | `[SB-BCAST-*]` |
 | `QueueWatcher` / move watcher / ext bases | `watch` / `cmd_watch` | `[SB-DELIVERY-2]` |
@@ -772,6 +807,9 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+  — owns bounded order, sidecar-safe SQL schema v6, backend API v8, and
+  cross-surface parity
 - active: [2026-08-25-postgres-connection-pressure-inspection-plan](../plans/2026-08-25-postgres-connection-pressure-inspection-plan.md)
   — PostgreSQL-only zero-setup connection pressure through the Queue's normal
   connection lifecycle

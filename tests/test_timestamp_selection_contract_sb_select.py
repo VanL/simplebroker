@@ -98,8 +98,8 @@ def _test_nodes(relative_path: str) -> set[str]:
 def test_select_clause_inventory_and_authority() -> None:
     text = SPEC.read_text(encoding="utf-8")
     codes = re.findall(r"^## .+ \[SB-SELECT-(\d+)\]$", text, re.MULTILINE)
-    assert codes == ["1", "2", "3", "4"]
-    for number in codes:
+    assert codes == ["1", "2", "3", "4", "5"]
+    for number in ("1", "2", "3", "4"):
         assert f"[SB-SELECT-{number}]" in text
         assert f"| [SB-SELECT-{number}] |" in text
 
@@ -107,7 +107,7 @@ def test_select_clause_inventory_and_authority() -> None:
     assert "14-timestamp-selection.md" in registry
     assert "`canonical-spec`" in registry
     assert "[SB-SELECT-1]" in registry
-    assert "[SB-SELECT-4]" in registry
+    assert "[SB-SELECT-5]" in registry
     assert "[SB-CLI-5]" in registry
 
     assert "14-timestamp-selection.md" in SPEC_INDEX.read_text(encoding="utf-8")

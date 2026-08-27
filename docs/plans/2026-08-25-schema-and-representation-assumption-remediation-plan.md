@@ -1242,3 +1242,13 @@ staging or worktree state.
       verification, and post-release signals are explicit.
 - [x] No plan section, abstraction, or gate survives merely as ceremony; each
       addresses a named risk or repository requirement.
+
+## 2026-08-27 Message-ID Order Supersession
+
+The active
+`2026-08-27-message-id-order-and-newest-selection-plan.md` supersedes this
+plan's storage-order FIFO invariant and its rationale for sorting by a private
+SQL row ID. Default retrieval is now specified as ascending public message ID,
+and SQL schema v6 removes the private surrogate. The original deliverable that
+retrieve results never depend on engine `RETURNING` order remains fully in
+force: explicit normalization by `ts` is the stronger logical-order rule.

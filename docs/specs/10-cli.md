@@ -338,7 +338,25 @@ _Verification_:
 - `tests/test_cli_main.py::test_invalid_timestamp_never_observes_target`
 - `tests/test_cli_contract_sb_cli.py::test_sb_cli_5_exact_evidence_manifest`
 
+## Newest-first bounded selection [SB-CLI-6]
+
+`simplebroker read`, `peek`, and `move` accept `--newest` as CLI sugar for the
+Python selection value `order="newest"`. With no flag, they use `oldest`.
+`--after` and `--before` filter the eligible set before descending selection.
+`-m` may be combined with `--newest`, although exact selection has at most one
+result. `--newest` and `--all` are mutually exclusive and fail before target
+acquisition or mutation with the ordinary invalid-argument diagnostic: text
+mode exits `1`; JSON mode emits the [SB-CLI-4] error object with
+`error="INVALID_ARGUMENT"` and exits `1`.
+
+`--newest` is a registered option token under [SB-CLI-3]. A write or broadcast
+body that begins with that literal must use the existing `--` escape boundary.
+Watch, stream, and generator surfaces do not acquire a corresponding flag.
+
 ## Related Plans
+
+- active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+  — owns [SB-CLI-6], registered-token behavior, and the CLI/Python parity proof
 
 - active: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
   — consumer-based path admission and representation-assumption corrections

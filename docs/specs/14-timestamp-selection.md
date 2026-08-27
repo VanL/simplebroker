@@ -2,15 +2,18 @@
 
 Status: Active
 
-Owner: SimpleBroker ordered-selection surface (read/peek/move filters and
-watcher lower bounds). Exact message-id identity remains with `[SB-ID-*]`.
-Delivery claim/peek/move outcomes remain with `[SB-DELIVERY-*]`. CLI
-string-to-integer bound parsing for non-exact forms is `[SB-CLI-5]`.
+Owner: SimpleBroker ordered-selection surface: read, peek, and move bounds,
+cross-backend result order, and watcher lower bounds. Exact message-ID identity
+remains with `[SB-ID-*]`. Delivery claim/peek/move outcomes remain with
+`[SB-DELIVERY-*]`. CLI string-to-integer bound parsing for non-exact forms is
+`[SB-CLI-5]`.
 
-Boundary: integer lower/upper bounds on message id for selection, the filter
-nature of those bounds, and consequences when ids arrive later with values
-below a bound already used as a filter. Cross-backend result **order** is not
-owned here. Exact single-id targeting (`-m` / `message_id`) is `[SB-ID-4]`.
+Boundary: integer lower/upper bounds on message ID, the order of eligible
+bounded results, the filter nature of bounds, and consequences when IDs arrive
+later with values below a bound already used as a filter. Exact single-ID
+targeting (`-m` / `message_id`) is `[SB-ID-4]`. Generator and live traversal
+lifecycle remain with `[SB-API-*]` and `[SB-DELIVERY-*]`; this section fixes
+their default order but does not add reverse live traversal.
 
 ## Integer predicates [SB-SELECT-1]
 
@@ -74,6 +77,34 @@ Consume-mode watch that starts with an `after_timestamp` uses that value as a
 lower bound filter on eligibility; it does not change claim semantics
 (`[SB-DELIVERY-1]`).
 
+## Cross-backend retrieval order [SB-SELECT-5]
+
+After queue, claim-state, exact-ID, and open-bound predicates determine the
+eligible set, `read`, `peek`, and `move` order eligible messages by the integer
+public message ID. `oldest` means ascending ID and is the default; `newest`
+means descending ID. Selection and the sequence returned by a bounded-many
+operation use the same order on SQLite, PostgreSQL, and Redis. No operation may
+depend on database-engine row order or SQL `RETURNING` order.
+
+Ordinary generated writes retain insertion-order behavior because generated
+IDs are monotone. Exact insertion, load/import, or ID-preserving move may add a
+lower ID later; the lower ID is then selected earlier under `oldest`. `oldest`
+and `newest` therefore describe public-ID order, not general insertion time or
+wall-clock chronology.
+
+Python one-message and bounded-many read/peek/move forms accept the closed
+string choice `order="oldest" | "newest"`; any other value raises `ValueError`
+before target acquisition or mutation. High-level forms accept the choice only
+when `all_messages=False`; a non-default order with `all_messages=True` raises
+the same pre-target error. Exact single-ID selection accepts either value but
+has at most one observable result. Open `after_timestamp` and
+`before_timestamp` bounds filter first and order the remaining set.
+
+Generator, all-messages, stream, and watch forms expose only `oldest` and do
+not accept a reverse-order control. Their traversal is ascending public message
+ID. Reverse live traversal requires a separate cursor and concurrency contract
+and is not implied by bounded `newest` selection.
+
 ## Implementation mapping
 
 - Bound application on retrieve paths: `simplebroker/db.py`,
@@ -92,6 +123,9 @@ lower bound filter on eligibility; it does not change claim semantics
 | [SB-SELECT-4] | `tests/test_timestamp_selection_contract_sb_select.py::test_select_watch_progress`; `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`, `tests/test_watcher.py::TestQueueWatcher::test_explicit_zero_after_timestamp_excludes_legacy_zero`; `[SB-DELIVERY-2]` |
 
 ## Related Plans
+
+- active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+  — owns [SB-SELECT-5], bounded newest selection, and its cross-backend proof
 
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
   see the ledger in `docs/plans/README.md`
