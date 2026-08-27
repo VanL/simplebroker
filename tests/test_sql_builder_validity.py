@@ -1,11 +1,4 @@
-"""The legacy SQL builders must emit executable SQLite.
-
-These builders are consumed by examples/async_pooled_broker.py, which sits
-outside every CI gate (ruff, mypy, pytest all exclude examples/) --
-build_move_by_timestamp_query shipped invalid SQL (RETURNING ... ORDER BY)
-without anything noticing.  Executing each builder's output here pins
-validity inside the gated suite.
-"""
+"""Runtime SQLite builders used by the advanced async example are executable."""
 
 import sqlite3
 
@@ -57,8 +50,6 @@ def test_build_claim_batch_query_executes(conn):
 
 
 def test_build_move_by_timestamp_query_executes(conn):
-    """RED pre-fix: the generated SQL places ORDER BY after RETURNING,
-    which SQLite rejects with a syntax error."""
     rows = conn.execute(
         build_move_by_timestamp_query(["ts = ?", "queue = ?"]),
         ("dest", 1, "src"),

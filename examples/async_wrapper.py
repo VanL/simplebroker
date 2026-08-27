@@ -38,7 +38,6 @@ from simplebroker import (
     target_for_directory,
 )
 from simplebroker.ext import BrokerConnection
-from simplebroker.watcher import logger_handler
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +45,11 @@ logger = logging.getLogger(__name__)
 
 # Type variables for generic decorator
 T = TypeVar("T")
+
+
+def log_message(message: str, timestamp: int) -> None:
+    """Example application handler using ordinary public callback arguments."""
+    logger.info("Received at %s: %s", timestamp, message)
 
 
 def run_in_executor(func: Callable[..., T]) -> Callable[..., asyncio.Future[T]]:
@@ -181,19 +185,17 @@ class AsyncBroker:
             q.write(message)
 
     @run_in_executor
-    def pop(self, queue: str) -> str | None:
+    def pop(self, queue: str, *, order: str = "oldest") -> str | None:
         """Pop a message from a queue (runs in thread pool)."""
         with self.client.queue(queue) as q:
-            # read() removes and returns the oldest message
-            result = q.read()
+            result = q.read_one(order=order)
         return result if isinstance(result, str) else None
 
     @run_in_executor
-    def peek(self, queue: str) -> str | None:
+    def peek(self, queue: str, *, order: str = "oldest") -> str | None:
         """Peek at the next message without removing it."""
         with self.client.queue(queue) as q:
-            # peek() returns the oldest message without removing it
-            result = q.peek()
+            result = q.peek_one(order=order)
         return result if isinstance(result, str) else None
 
     @run_in_executor
@@ -246,43 +248,35 @@ class AsyncBroker:
         return stop_event
 
     async def stream_messages(
-        self, queue: str, batch_size: int = 10
+        self,
+        queue: str,
     ) -> AsyncGenerator[tuple[str, int], None]:
         """
-        Async generator to stream messages from a queue.
+        Consume one message for each active generator iteration.
+
+        The synchronous read commits its claim before this coroutine yields.
+        Cancellation while that one read is running can therefore consume that
+        current row, but this wrapper never claims a hidden prefetched batch.
 
         Yields:
             tuple of (message, timestamp) for each message
         """
 
         while True:
-            # Fetch a batch of messages in thread pool
-            messages = await self._fetch_batch(queue, batch_size)
-
-            if not messages:
+            message = await self._read_one_with_timestamp(queue)
+            if message is None:
                 # No messages available, wait a bit
                 await asyncio.sleep(0.1)
                 continue
 
-            # Yield messages one by one
-            for msg, ts in messages:
-                yield msg, ts
+            yield message
 
     @run_in_executor
-    def _fetch_batch(self, queue: str, batch_size: int) -> list[tuple[str, int]]:
-        """Fetch a batch of messages (runs in thread pool)."""
-        messages = []
-
-        # Read messages one by one up to batch_size
+    def _read_one_with_timestamp(self, queue: str) -> tuple[str, int] | None:
+        """Consume one timestamped message in the worker pool."""
         with self.client.queue(queue) as q:
-            for _ in range(batch_size):
-                result = q.read(with_timestamps=True)
-                if result is None:
-                    break
-                if isinstance(result, tuple):
-                    messages.append(result)
-
-        return messages
+            result = q.read_one(with_timestamps=True)
+        return result if isinstance(result, tuple) else None
 
 
 async def example_producer(broker: AsyncBroker) -> None:
@@ -309,8 +303,7 @@ async def example_watcher(broker: AsyncBroker) -> None:
 
     def handler(msg: str, ts: int) -> None:
         """Handler runs in thread pool."""
-        # Use logger_handler for consistent logging plus our custom logic
-        logger_handler(msg, ts)
+        log_message(msg, ts)
         processed.append(msg)
 
     # Start watching

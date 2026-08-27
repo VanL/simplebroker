@@ -2,13 +2,18 @@
 
 import asyncio
 import sqlite3
-from contextlib import closing
+from collections.abc import Mapping
+from contextlib import AbstractContextManager, closing
 from pathlib import Path
+from typing import Any
 
+import async_pooled_broker as pooled_module
+import pytest
 from async_pooled_broker import AsyncQueue, async_broker
 
-from simplebroker import Queue
+from simplebroker import Queue, open_broker
 from simplebroker._constants import SIMPLEBROKER_MAGIC
+from simplebroker.ext import BrokerConnection
 
 
 def _initialize_through_public_example_api(db_path: Path) -> None:
@@ -104,6 +109,48 @@ def _create_literal_v5_database(db_path: Path) -> None:
         connection.commit()
 
 
+def _seed_sidecar(db_path: Path) -> None:
+    with closing(sqlite3.connect(db_path)) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE task_monitor (
+                task_key TEXT PRIMARY KEY,
+                state TEXT NOT NULL
+            );
+            CREATE INDEX task_monitor_state_idx ON task_monitor(state);
+            INSERT INTO task_monitor (task_key, state) VALUES ('task-1', 'ready');
+            """
+        )
+        connection.commit()
+
+
+def _sidecar_snapshot(
+    db_path: Path,
+) -> tuple[
+    tuple[tuple[str, str], ...],
+    tuple[str, ...],
+    tuple[tuple[str, str], ...],
+]:
+    with closing(sqlite3.connect(db_path)) as connection:
+        definitions = connection.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE name IN ('task_monitor', 'task_monitor_state_idx') "
+            "ORDER BY name"
+        ).fetchall()
+        rows = connection.execute(
+            "SELECT task_key, state FROM task_monitor ORDER BY task_key"
+        ).fetchall()
+        indexed_columns = connection.execute(
+            "SELECT name FROM pragma_index_info('task_monitor_state_idx') "
+            "ORDER BY seqno"
+        ).fetchall()
+    return (
+        tuple((str(name), str(sql)) for name, sql in definitions),
+        tuple(str(name) for (name,) in indexed_columns),
+        tuple((str(key), str(state)) for key, state in rows),
+    )
+
+
 def test_async_example_ensures_complete_v6_schema_on_fresh_and_stamped_db(
     tmp_path: Path,
 ) -> None:
@@ -145,6 +192,182 @@ def test_async_example_migrates_literal_v5_to_canonical_sync_v6(
         assert queue.peek_one(exact_timestamp=100) == "before migration"
     finally:
         queue.close()
+
+
+def test_async_context_uses_canonical_setup_and_preserves_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "literal-v5-sidecar.db"
+    _create_literal_v5_database(db_path)
+    _seed_sidecar(db_path)
+    expected_sidecar = _sidecar_snapshot(db_path)
+
+    setup_configs: list[object] = []
+    runtime_configs: list[object] = []
+    real_open_broker = open_broker
+
+    def traced_open_broker(
+        target: str,
+        *,
+        config: Mapping[str, Any],
+    ) -> AbstractContextManager[BrokerConnection]:
+        setup_configs.append(config)
+        return real_open_broker(target, config=config)
+
+    class TracedRunner(pooled_module.PooledAsyncSQLiteRunner):
+        def __init__(
+            self,
+            *args: Any,
+            config: Mapping[str, Any],
+            **kwargs: Any,
+        ) -> None:
+            runtime_configs.append(config)
+            super().__init__(*args, config=config, **kwargs)
+
+    monkeypatch.setattr(
+        pooled_module,
+        "open_broker",
+        traced_open_broker,
+        raising=False,
+    )
+    monkeypatch.setattr(pooled_module, "PooledAsyncSQLiteRunner", TracedRunner)
+
+    async def open_twice() -> None:
+        for _ in range(2):
+            async with async_broker(
+                str(db_path),
+                config={"BROKER_BUSY_TIMEOUT": 4321},
+            ):
+                pass
+
+    asyncio.run(open_twice())
+
+    assert len(setup_configs) == 2
+    assert len(runtime_configs) == 2
+    assert all(
+        setup_config is runtime_config
+        for setup_config, runtime_config in zip(
+            setup_configs,
+            runtime_configs,
+            strict=True,
+        )
+    )
+    assert _sidecar_snapshot(db_path) == expected_sidecar
+    assert _schema_state(db_path)[0] == 6
+
+
+def test_async_setup_failure_does_not_construct_pool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "future-schema.db"
+    queue = Queue("jobs", db_path=str(db_path))
+    try:
+        queue.write("initialize")
+    finally:
+        queue.close()
+    with closing(sqlite3.connect(db_path)) as connection:
+        connection.execute("UPDATE meta SET value = 999 WHERE key = 'schema_version'")
+        connection.commit()
+
+    pool_constructed = False
+
+    class PoolMustNotBeConstructed:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            nonlocal pool_constructed
+            pool_constructed = True
+
+    monkeypatch.setattr(
+        pooled_module,
+        "SQLiteConnectionPool",
+        PoolMustNotBeConstructed,
+    )
+
+    async def open_incompatible_target() -> None:
+        async with async_broker(str(db_path)):
+            pass
+
+    with pytest.raises(RuntimeError, match="newer than supported"):
+        asyncio.run(open_incompatible_target())
+    assert not pool_constructed
+
+
+def test_generated_ids_follow_commit_order_under_forced_interleaving(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "commit-order.db"
+
+    async def exercise() -> tuple[list[str], list[str]]:
+        async with async_broker(str(db_path), max_connections=2) as broker:
+            await broker._ensure_initialized()
+            real_execute = broker._execute_with_retry
+            first_write_reached_boundary = asyncio.Event()
+            release_first_write = asyncio.Event()
+            first_task: asyncio.Task[None] | None = None
+
+            async def barrier_execute(
+                operation: Any,
+                **kwargs: Any,
+            ) -> Any:
+                if asyncio.current_task() is first_task:
+                    first_write_reached_boundary.set()
+                    await release_first_write.wait()
+                return await real_execute(operation, **kwargs)
+
+            broker._execute_with_retry = barrier_execute  # type: ignore[method-assign]
+            completion_order: list[str] = []
+
+            async def write(label: str) -> None:
+                await broker.write("jobs", label)
+                completion_order.append(label)
+
+            first_task = asyncio.create_task(write("first-started"))
+            await first_write_reached_boundary.wait()
+            second_task = asyncio.create_task(write("second-started"))
+            await second_task
+            release_first_write.set()
+            await first_task
+
+        queue = Queue("jobs", db_path=str(db_path))
+        try:
+            public_id_order = queue.peek_many(10)
+        finally:
+            queue.close()
+        return completion_order, public_id_order
+
+    completion_order, public_id_order = asyncio.run(exercise())
+    assert completion_order == ["second-started", "first-started"]
+    assert public_id_order == completion_order
+
+
+def test_claim_batch_normalizes_reversed_opaque_runner_records(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "row-order.db"
+
+    async def exercise() -> list[str]:
+        async with async_broker(str(db_path), max_connections=2) as broker:
+            queue = AsyncQueue("jobs", broker)
+            await queue.write("one")
+            await queue.write("two")
+            await queue.write("three")
+
+            real_run = broker._runner.run
+
+            async def reversing_run(
+                sql: str,
+                params: tuple[Any, ...] = (),
+                *,
+                fetch: bool = False,
+            ) -> list[tuple[Any, ...]]:
+                records = await real_run(sql, params, fetch=fetch)
+                return list(reversed(records)) if len(records) > 1 else records
+
+            broker._runner.run = reversing_run  # type: ignore[method-assign]
+            return [message async for message in queue.stream(commit_interval=3)]
+
+    assert asyncio.run(exercise()) == ["one", "two", "three"]
 
 
 def test_async_example_documents_only_canonical_sync_modes() -> None:

@@ -40,7 +40,7 @@ except ImportError:
         "Install with: pip install aiosqlite aiosqlitepool"
     ) from None
 
-from simplebroker import resolve_config
+from simplebroker import ResolvedConfig, open_broker, snapshot_config
 
 # ADVANCED: Import SimpleBroker internals for low-level SQLite compatibility.
 # Standard applications should use Queue, QueueWatcher, or async_wrapper.py.
@@ -52,53 +52,16 @@ from simplebroker._constants import (
     SIMPLEBROKER_MAGIC,
 )
 from simplebroker._sql import (
-    ALTER_MESSAGES_ADD_CLAIMED as SQL_ALTER_MESSAGES_ADD_CLAIMED,
-)
-from simplebroker._sql import (
-    ALTER_MESSAGES_RENAME_V5 as SQL_ALTER_MESSAGES_RENAME_V5,
-)
-from simplebroker._sql import (
-    ALTER_MESSAGES_V6_RENAME_CURRENT as SQL_ALTER_MESSAGES_V6_RENAME_CURRENT,
-)
-from simplebroker._sql import (
-    CHECK_CLAIMED_COLUMN as SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED,
-)
-from simplebroker._sql import (
-    CREATE_ALIAS_TARGET_INDEX as SQL_CREATE_IDX_QUEUE_ALIASES_TARGET,
-)
-from simplebroker._sql import (
-    CREATE_ALIASES_TABLE as SQL_CREATE_TABLE_QUEUE_ALIASES,
-)
-from simplebroker._sql import (
-    CREATE_MESSAGES_TABLE as SQL_CREATE_TABLE_MESSAGES,
-)
-from simplebroker._sql import (
-    CREATE_META_TABLE as SQL_CREATE_TABLE_META,
-)
-from simplebroker._sql import (
-    CREATE_PENDING_QUEUE_TS_INDEX as SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS,
-)
-from simplebroker._sql import (
-    CREATE_QUEUE_TS_INDEX as SQL_CREATE_IDX_MESSAGES_QUEUE_TS,
-)
-from simplebroker._sql import (
-    CREATE_TS_UNIQUE_INDEX as SQL_CREATE_IDX_MESSAGES_TS_UNIQUE,
-)
-from simplebroker._sql import (
     DELETE_ALL_MESSAGES as SQL_DELETE_ALL_MESSAGES,
 )
 from simplebroker._sql import (
     DELETE_QUEUE_MESSAGES as SQL_DELETE_MESSAGES_BY_QUEUE,
 )
-from simplebroker._sql import DROP_MESSAGES_V5 as SQL_DROP_MESSAGES_V5
 from simplebroker._sql import (
     GET_DISTINCT_QUEUES as SQL_SELECT_DISTINCT_QUEUES,
 )
 from simplebroker._sql import (
     GET_QUEUE_STATS as SQL_SELECT_QUEUES_STATS,
-)
-from simplebroker._sql import (
-    INSERT_ALIAS_VERSION_META as SQL_INSERT_ALIAS_VERSION_META,
 )
 from simplebroker._sql import (
     INSERT_MESSAGE as SQL_INSERT_MESSAGE,
@@ -108,7 +71,6 @@ from simplebroker._sql import (
     build_claim_single_query,
     build_move_by_timestamp_query,
     build_peek_query,
-    create_messages_table_sql,
 )
 from simplebroker.ext import (
     DataError,
@@ -118,6 +80,12 @@ from simplebroker.ext import (
 )
 
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
+
+
+def _setup_canonical_broker(db_path: str, config: ResolvedConfig) -> None:
+    """Run production SQLite admission and migration before async pool use."""
+    with open_broker(db_path, config=config):
+        pass
 
 
 def _validate_queue_name(queue: str) -> str | None:
@@ -178,7 +146,7 @@ class PooledAsyncSQLiteRunner:
         self.db_path = db_path
         self.pool_size = pool_size
         self.max_connections = max_connections
-        self._config = resolve_config(config)
+        self._config = snapshot_config(config)
         self._pool: SQLiteConnectionPool | None = None
         self._transaction_conn: contextvars.ContextVar[aiosqlite.Connection | None] = (
             contextvars.ContextVar("transaction_conn", default=None)
@@ -421,7 +389,7 @@ class AsyncBrokerCore:
         config: Mapping[str, Any] | None = None,
     ):
         self._runner = runner
-        self._config = resolve_config(config)
+        self._config = snapshot_config(config)
         self._lock = asyncio.Lock()
         self._timestamp_gen: AsyncTimestampGenerator | None = None
         self._write_count = 0
@@ -430,295 +398,46 @@ class AsyncBrokerCore:
         self._initialized = False
 
     async def _ensure_initialized(self) -> None:
-        """Ensure database is initialized."""
-        if not self._initialized:
-            await self._setup_database()
-            await self._verify_database_magic()
-            await self._ensure_schema_v2()
-            await self._ensure_schema_v3()
-            await self._ensure_schema_v4()
-            await self._ensure_schema_v5()
-            await self._ensure_schema_v6()
+        """Verify the canonically prepared database once per async core."""
+        if self._initialized:
+            return
+        async with self._lock:
+            if self._initialized:
+                return
+            await self._verify_compatible_schema_locked()
             self._timestamp_gen = AsyncTimestampGenerator(self._runner)
             self._initialized = True
 
-    async def _setup_database(self) -> None:
-        """Set up database with optimized settings and schema."""
-        async with self._lock:
-            # Create tables
-            await self._execute_with_retry(
-                lambda: self._runner.run(SQL_CREATE_TABLE_MESSAGES)
+    async def _verify_compatible_schema_locked(self) -> None:
+        """Report incompatible canonical state without repairing it."""
+        rows = await self._runner.run(
+            "SELECT value FROM meta WHERE key = 'magic'",
+            fetch=True,
+        )
+        if not rows or rows[0][0] != SIMPLEBROKER_MAGIC:
+            found = rows[0][0] if rows else None
+            raise RuntimeError(
+                "Database magic string mismatch. "
+                f"Expected '{SIMPLEBROKER_MAGIC}', found '{found}'"
             )
 
-            # Create optimized index
-            await self._execute_with_retry(
-                lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS)
-            )
-
-            # Create partial index for unclaimed messages
-            rows = await self._execute_with_retry(
-                lambda: self._runner.run(
-                    SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True
-                )
-            )
-            if rows and rows[0][0] > 0:
-                await self._execute_with_retry(
-                    lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
-                )
-
-            # Create meta table
-            await self._execute_with_retry(
-                lambda: self._runner.run(SQL_CREATE_TABLE_META)
-            )
-            await self._execute_with_retry(
-                lambda: self._runner.run(
-                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('last_ts', 0)"
-                )
-            )
-            await self._execute_with_retry(
-                lambda: self._runner.run(SQL_CREATE_TABLE_QUEUE_ALIASES)
-            )
-            await self._execute_with_retry(
-                lambda: self._runner.run(SQL_CREATE_IDX_QUEUE_ALIASES_TARGET)
-            )
-            await self._execute_with_retry(
-                lambda: self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
-            )
-
-            # Insert magic string and schema version
-            await self._execute_with_retry(
-                lambda: self._runner.run(
-                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('magic', ?)",
-                    (SIMPLEBROKER_MAGIC,),
-                )
-            )
-            await self._execute_with_retry(
-                lambda: self._runner.run(
-                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
-                    (SCHEMA_VERSION,),
-                )
-            )
-
-            await self._execute_with_retry(self._runner.commit)
-
-    async def _read_schema_version_locked(self) -> int:
         rows = await self._runner.run(
             "SELECT value FROM meta WHERE key = 'schema_version'",
             fetch=True,
         )
-        return int(rows[0][0]) if rows and rows[0][0] is not None else 1
-
-    async def _write_schema_version_locked(self, version: int) -> None:
-        await self._runner.run(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (version,),
-        )
-
-    async def _verify_database_magic(self) -> None:
-        """Verify database magic string and schema version."""
-        async with self._lock:
-            try:
-                # Check if meta table exists
-                rows = await self._runner.run(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='meta'",
-                    fetch=True,
-                )
-                if not rows or rows[0][0] == 0:
-                    return
-
-                # Check magic string
-                rows = await self._runner.run(
-                    "SELECT value FROM meta WHERE key = 'magic'", fetch=True
-                )
-                if rows and rows[0][0] != SIMPLEBROKER_MAGIC:
-                    raise RuntimeError(
-                        f"Database magic string mismatch. Expected '{SIMPLEBROKER_MAGIC}', "
-                        f"found '{rows[0][0]}'"
-                    )
-
-                # Check schema version
-                rows = await self._runner.run(
-                    "SELECT value FROM meta WHERE key = 'schema_version'", fetch=True
-                )
-                if rows and rows[0][0] > SCHEMA_VERSION:
-                    raise RuntimeError(
-                        f"Database schema version {rows[0][0]} is newer than supported version "
-                        f"{SCHEMA_VERSION}"
-                    )
-            except OperationalError:
-                pass
-
-    async def _ensure_schema_v2(self) -> None:
-        """Migrate to schema with claimed column."""
-        async with self._lock:
-            current_version = await self._read_schema_version_locked()
-            rows = await self._runner.run(
-                SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True
+        version = int(rows[0][0]) if rows else 0
+        if version != SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Async example requires schema version {SCHEMA_VERSION}; "
+                f"found {version}. Run canonical SimpleBroker setup first."
             )
-            if rows and rows[0][0] > 0:
-                if current_version < 2:
-                    await self._runner.begin_immediate()
-                    try:
-                        await self._write_schema_version_locked(2)
-                        await self._runner.commit()
-                    except Exception:
-                        await self._runner.rollback()
-                        raise
-                return
 
-            try:
-                await self._runner.begin_immediate()
-                await self._runner.run(SQL_ALTER_MESSAGES_ADD_CLAIMED)
-                await self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
-                if current_version < 2:
-                    await self._write_schema_version_locked(2)
-                await self._runner.commit()
-            except Exception as e:
-                await self._runner.rollback()
-                if "duplicate column name" not in str(e):
-                    raise
-
-    async def _ensure_schema_v3(self) -> None:
-        """Add unique constraint to timestamp column."""
-        async with self._lock:
-            current_version = await self._read_schema_version_locked()
-            rows = await self._runner.run(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_messages_ts_unique'",
-                fetch=True,
+        rows = await self._runner.run("PRAGMA table_info(messages)", fetch=True)
+        columns = {str(row[1]) for row in rows}
+        if columns != {"queue", "body", "ts", "claimed"}:
+            raise RuntimeError(
+                "Async example requires the canonical public-message-ID schema"
             )
-            if rows and rows[0][0] > 0:
-                if current_version < 3:
-                    await self._runner.begin_immediate()
-                    try:
-                        await self._write_schema_version_locked(3)
-                        await self._runner.commit()
-                    except Exception:
-                        await self._runner.rollback()
-                        raise
-                return
-
-            try:
-                await self._runner.begin_immediate()
-                await self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
-                if current_version < 3:
-                    await self._write_schema_version_locked(3)
-                await self._runner.commit()
-            except IntegrityError as e:
-                await self._runner.rollback()
-                if "UNIQUE constraint failed" in str(e):
-                    raise RuntimeError(
-                        "Cannot add unique constraint on timestamp column: "
-                        "duplicate timestamps exist"
-                    ) from e
-                raise
-            except Exception as e:
-                await self._runner.rollback()
-                if "already exists" not in str(e):
-                    raise
-
-    async def _ensure_schema_v4(self) -> None:
-        """Ensure schema v4 objects used by queue aliases exist."""
-        async with self._lock:
-            current_version = await self._read_schema_version_locked()
-            try:
-                await self._runner.begin_immediate()
-                await self._runner.run(SQL_CREATE_TABLE_QUEUE_ALIASES)
-                await self._runner.run(SQL_CREATE_IDX_QUEUE_ALIASES_TARGET)
-                await self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
-                if current_version < 4:
-                    await self._write_schema_version_locked(4)
-                await self._runner.commit()
-            except Exception:
-                await self._runner.rollback()
-                raise
-
-    async def _ensure_schema_v5(self) -> None:
-        """Ensure schema v5's pending queue/timestamp index exists."""
-        async with self._lock:
-            current_version = await self._read_schema_version_locked()
-            try:
-                await self._runner.begin_immediate()
-                await self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
-                if current_version < 5:
-                    await self._write_schema_version_locked(5)
-                await self._runner.commit()
-            except Exception:
-                await self._runner.rollback()
-                raise
-
-    async def _ensure_schema_v6(self) -> None:
-        """Retire the private row key and make public message ID the row key."""
-        async with self._lock:
-            current_version = await self._read_schema_version_locked()
-            foreign_keys_enabled = False
-            legacy_alter_table_enabled = False
-            if current_version < 6:
-                rows = await self._runner.run("PRAGMA foreign_keys", fetch=True)
-                foreign_keys_enabled = bool(rows[0][0])
-                rows = await self._runner.run("PRAGMA legacy_alter_table", fetch=True)
-                legacy_alter_table_enabled = bool(rows[0][0])
-                if foreign_keys_enabled:
-                    await self._runner.run("PRAGMA foreign_keys = OFF")
-                if not legacy_alter_table_enabled:
-                    await self._runner.run("PRAGMA legacy_alter_table = ON")
-            try:
-                await self._runner.begin_immediate()
-                if current_version < 6:
-                    await self._runner.run(
-                        create_messages_table_sql(
-                            "simplebroker_messages_v6",
-                            if_not_exists=False,
-                        )
-                    )
-                    await self._runner.run(
-                        "INSERT INTO simplebroker_messages_v6 "
-                        "(queue, body, ts, claimed) "
-                        "SELECT queue, body, ts, claimed FROM messages"
-                    )
-                    await self._runner.run(SQL_ALTER_MESSAGES_RENAME_V5)
-                    await self._runner.run(SQL_ALTER_MESSAGES_V6_RENAME_CURRENT)
-                    await self._runner.run(SQL_DROP_MESSAGES_V5)
-                    await self._write_schema_version_locked(6)
-                else:
-                    rows = await self._runner.run(
-                        "PRAGMA table_info(messages)", fetch=True
-                    )
-                    shape = tuple(
-                        (
-                            str(row[1]),
-                            str(row[2]).upper(),
-                            int(row[3]),
-                            row[4],
-                            int(row[5]),
-                        )
-                        for row in rows
-                    )
-                    expected_shape = (
-                        ("queue", "TEXT", 1, None, 0),
-                        ("body", "TEXT", 1, None, 0),
-                        ("ts", "INTEGER", 1, None, 1),
-                        ("claimed", "INTEGER", 0, "0", 0),
-                    )
-                    if shape != expected_shape:
-                        raise RuntimeError(
-                            "SQLite schema version 6 requires public message ID "
-                            "as the sole row key in the canonical message shape"
-                        )
-                await self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS)
-                await self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
-                await self._runner.commit()
-            except Exception:
-                await self._runner.rollback()
-                raise
-            finally:
-                if current_version < 6:
-                    try:
-                        if not legacy_alter_table_enabled:
-                            await self._runner.run("PRAGMA legacy_alter_table = OFF")
-                    finally:
-                        if foreign_keys_enabled:
-                            await self._runner.run("PRAGMA foreign_keys = ON")
 
     async def _execute_with_retry(
         self,
@@ -759,14 +478,10 @@ class AsyncBrokerCore:
                 f"({self._max_message_size} bytes)"
             )
 
-        # Generate timestamp outside transaction
-        if self._timestamp_gen is None:
-            raise RuntimeError("Timestamp generator not initialized")
-        timestamp = await self._timestamp_gen.generate()
-
-        # Write with retry
+        # Allocate and insert under the same immediate transaction so public ID
+        # order follows commit order even when writers interleave.
         await self._execute_with_retry(
-            lambda: self._do_write_transaction(queue, message, timestamp)
+            lambda: self._do_write_transaction(queue, message)
         )
 
         # Check if vacuum needed
@@ -777,13 +492,14 @@ class AsyncBrokerCore:
                 if await self._should_vacuum():
                     await self._vacuum_claimed_messages()
 
-    async def _do_write_transaction(
-        self, queue: str, message: str, timestamp: int
-    ) -> None:
+    async def _do_write_transaction(self, queue: str, message: str) -> None:
         """Core write transaction logic."""
         async with self._lock:
             await self._runner.begin_immediate()
             try:
+                if self._timestamp_gen is None:
+                    raise RuntimeError("Timestamp generator not initialized")
+                timestamp = await self._timestamp_gen.generate()
                 await self._runner.run(
                     SQL_INSERT_MESSAGE,
                     (queue, message, timestamp),
@@ -874,6 +590,7 @@ class AsyncBrokerCore:
                     if not batch_messages:
                         await self._runner.rollback()
                         return
+                    batch_messages.sort(key=lambda record: int(record[1]))
                 except Exception:
                     await self._runner.rollback()
                     raise
@@ -1251,7 +968,26 @@ async def async_broker(
     config: Mapping[str, Any] | None = None,
 ) -> AsyncIterator[AsyncBrokerCore]:
     """Context manager for async broker with connection pooling."""
-    resolved_config = resolve_config(config)
+    resolved_config = snapshot_config(config)
+    setup_task = asyncio.create_task(
+        asyncio.to_thread(
+            _setup_canonical_broker,
+            db_path,
+            resolved_config,
+        )
+    )
+    try:
+        await asyncio.shield(setup_task)
+    except asyncio.CancelledError as cancelled:
+        await asyncio.wait((setup_task,))
+        setup_error = setup_task.exception()
+        if setup_error is not None:
+            cancelled.add_note(
+                "Canonical setup also failed while async initialization "
+                f"was being cancelled: {setup_error}"
+            )
+        raise
+
     runner = PooledAsyncSQLiteRunner(
         db_path,
         pool_size,

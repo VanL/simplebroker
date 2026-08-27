@@ -11,6 +11,7 @@ Key classes:
 
 This example shows:
 - Basic queue operations
+- Bounded oldest/newest selection by public message ID
 - Error handling patterns
 - Custom watchers and processors
 - Integration patterns
@@ -76,6 +77,39 @@ def timestamp_usage(db_path: Path) -> None:
         result = q.read(all_messages=True)
         remaining = list(result) if result else []
         print(f"Remaining messages: {remaining}")
+
+
+def selection_order_usage(db_path: Path) -> None:
+    """Demonstrate bounded selection by public ID rather than insertion order."""
+    print("\n=== Oldest and Newest Selection ===")
+
+    with Queue("selection_order", db_path=str(db_path)) as queue:
+        queue.insert_messages(
+            [
+                ("inserted-first", 300),
+                ("inserted-second", 100),
+                ("inserted-third", 200),
+            ]
+        )
+
+        selections = (
+            ("Default oldest peek", queue.peek_one(with_timestamps=True)),
+            (
+                "Explicit newest peek",
+                queue.peek_one(with_timestamps=True, order="newest"),
+            ),
+            (
+                "Explicit newest read",
+                queue.read_one(with_timestamps=True, order="newest"),
+            ),
+            ("Default oldest read", queue.read_one(with_timestamps=True)),
+        )
+        for label, selected in selections:
+            if selected is None:
+                print(f"{label}: no message")
+                continue
+            body, message_id = selected
+            print(f"{label}: id={message_id}, body={body}")
 
 
 def error_handling_pattern(db_path: Path) -> None:
@@ -250,73 +284,12 @@ def custom_watcher_example(db_path: Path) -> None:
     print(f"\nProcessing stats: {json.dumps(stats, indent=2)}")
 
 
-def checkpoint_processing(db_path: Path) -> None:
-    """Checkpoint-based processing for resumable workflows."""
-    print("\n=== Checkpoint Processing ===")
-
-    checkpoint_file = db_path.with_suffix(".checkpoint")
-
-    def load_checkpoint() -> int:
-        """Load last processed timestamp."""
-        try:
-            with open(checkpoint_file) as f:
-                return int(f.read().strip())
-        except FileNotFoundError:
-            return 0
-
-    def save_checkpoint(timestamp: int) -> None:
-        """Save checkpoint timestamp."""
-        with open(checkpoint_file, "w") as f:
-            f.write(str(timestamp))
-
-    def process_batch() -> None:
-        """Process messages in batches with checkpointing."""
-        checkpoint = load_checkpoint()
-        logger.info(f"Starting from checkpoint: {checkpoint}")
-
-        with Queue("batch_tasks", db_path=str(db_path)) as q:
-            # Get all messages (checkpoint filtering would need to be done at DB level)
-            result = q.read(all_messages=True)
-            messages = list(result) if result else []
-
-            if not messages:
-                logger.info("No new messages to process")
-                return
-
-            logger.info(f"Processing {len(messages)} messages")
-
-            for i, message in enumerate(messages):
-                try:
-                    # Process message
-                    logger.info(f"Processing: {message}")
-                    time.sleep(0.1)  # Simulate work
-
-                    # Update checkpoint after successful processing
-                    # Using index as a simple timestamp substitute
-                    save_checkpoint(i)
-                except OSError as e:
-                    logger.error(f"Failed to process message at index {i}: {e}")
-                    # Stop processing batch on error
-                    break
-
-            logger.info(f"Batch complete. Last checkpoint: {load_checkpoint()}")
-
-    # Example usage
-    with Queue("batch_tasks", db_path=str(db_path)) as q:
-        # Add some messages
-        for i in range(5):
-            q.write(f"Batch task {i + 1}")
-
-    # Process in batches (can be interrupted and resumed)
-    process_batch()
-
-
 if __name__ == "__main__":
     # Run all examples against an isolated temporary database.
     with TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "python_api_demo.db"
         basic_usage(path)
         timestamp_usage(path)
+        selection_order_usage(path)
         error_handling_pattern(path)
         custom_watcher_example(path)
-        checkpoint_processing(path)

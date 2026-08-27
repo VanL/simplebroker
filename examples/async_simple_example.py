@@ -14,6 +14,10 @@ This example demonstrates common use cases for the custom async SimpleBroker:
 - Error handling
 - Graceful shutdown
 
+This advanced subset traverses live queues in oldest public-ID order only.
+Reading claims a row before application processing begins. Cancellation or
+processing failure does not put that original row back into pending state.
+
 Requirements:
     pip install aiosqlite aiosqlitepool
 
@@ -46,12 +50,13 @@ async def producer(queue: AsyncQueue, producer_id: int, count: int = 10) -> None
 async def worker(
     queue: AsyncQueue, worker_id: int, shutdown_event: asyncio.Event
 ) -> None:
-    """Simulate a worker that processes items from the queue."""
+    """Consume oldest-first; each row is claimed before this worker processes it."""
     processed = 0
 
     while not shutdown_event.is_set():
         try:
-            # Try to get a message with a timeout
+            # This oldest-only read claims before returning. Timeout or later
+            # processing failure does not automatically restore the original.
             msg = await asyncio.wait_for(queue.read(), timeout=1.0)
 
             if msg:
@@ -193,7 +198,7 @@ async def simple_example() -> None:
 
 
 async def batch_processing_example() -> None:
-    """Example showing batch processing for better performance."""
+    """Show oldest-only batch streaming with claim-before-processing delivery."""
     print("\n=== Batch Processing Example ===")
 
     async with async_broker("batch.db") as broker:
