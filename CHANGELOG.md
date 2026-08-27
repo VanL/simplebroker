@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-08-27
+
 ### Changed
 
 - Read, peek, and move now use ascending public message ID as their uniform
@@ -19,15 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fresh SQLite and PostgreSQL targets no longer contain private `id` or
   `order_id` message columns. Opening an owned schema-v5 target with the v8
   package set transactionally rebuilds the reserved broker schema, removes the
-  legacy surrogate, and publishes SQL schema version 6. Older clients then
-  reject the target cleanly during cold admission. This is a downtime cutover,
-  not a rolling upgrade: stop every v7 client and sidecar transaction, take a
-  whole-target backup, install the coherent v8 core and extension set, migrate
-  and verify once, then restart only v8 clients. PostgreSQL takes an `ACCESS
-  EXCLUSIVE` migration lock plus a transaction advisory lock. Caller-owned
-  sidecar tables and state are preserved; changes inside reserved broker
-  objects are unsupported. Backend API v8 requires matching first-party
-  extension releases.
+  legacy surrogate, and publishes SQL schema version 6. Schema v6 is
+  incompatible with v7 clients. Normal cold opens reject it at the version
+  gate, but the injected-runner path in `simplebroker-pg` 3.10.0 may instead
+  report a missing `order_id` column. This is a downtime cutover, not a rolling
+  upgrade: stop every v7 client and sidecar transaction, take a whole-target
+  backup, install SimpleBroker 8.0.0 with `simplebroker-pg` 4.0.0 and/or
+  `simplebroker-redis` 4.0.0, migrate and verify once, then restart only v8
+  clients. PostgreSQL takes an `ACCESS EXCLUSIVE` migration lock plus a
+  transaction advisory lock. Caller-owned sidecar tables and state are
+  preserved; changes inside reserved broker objects are unsupported. Backend
+  API v8 requires the matching first-party extension releases.
 
 ## [7.5.1] - 2026-08-26
 
