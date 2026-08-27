@@ -1596,14 +1596,16 @@ observed result, and residual risk for each gate. Do not replace evidence with
 
 ### 2026-08-27 Task 7 artifact, rollback, and downstream evidence
 
-- One coherent local wheel set was built from `50f5c858` into
-  `/tmp/simplebroker-v8-artifacts.79yZIB`. The recorded manifest is:
+- The final coherent local wheel set was rebuilt from the artifact-bearing
+  code commit `0823c2c` into
+  `/var/folders/m_/2tncpj593tj8s_jdbdhj8g5m0000gn/T/simplebroker-v8-final.XXXXXX.x31cKIUOrc`.
+  The recorded manifest is:
   `simplebroker-8.0.0-py3-none-any.whl`
-  `24056667381174b435219b27e3edb49cd56e6579c824bb4a13b88d386cbc992d`;
+  `f793b93fe68d3ee01c500b7ae765d1c7604e233a27a59fc524ad4516ba55062a`;
   `simplebroker_pg-4.0.0-py3-none-any.whl`
   `ce76c5ad2c41e8193b3eaa3bdb9e80073a48a588f22188b0b43c16ff99c5d0ce`;
   `simplebroker_redis-4.0.0-py3-none-any.whl`
-  `a9ef68e1fbf6509eb67154d70de6d2f7f176362e7626047c446b9c1c51f45d5e`.
+  `3fe8f3afb2bc619c8fe4826676f47e7ba83268e6744e3c821882c65ea1cddcdf`.
   An isolated no-project import resolved all three modules from uv's artifact
   environment, outside this source checkout. `./bin/packaging-smoke` then
   passed wheel/sdist construction, Python 3.11 clean installs, first-party
@@ -1640,12 +1642,18 @@ observed result, and residual risk for each gate. Do not replace evidence with
   quiescence is mandatory rather than a mixed-version compatibility claim.
 - A disposable Weft worktree at the recorded Task 0 SHA
   `33e1ab767046e6a7e22904d5198840b174552798` resolved all three absolute wheel
-  paths. The ordinary artifact suite finished with 4305 passed, 5 skipped, and
-  the two pipeline exact-ID order failures recorded in the Deviation Log.
-  Both exact tests pass when the same worktree overlays core 7.5.1. The full
-  PostgreSQL wrapper retained the intended artifacts and stopped under its
-  `-x` policy on the same pipeline-order assertion; no separate PostgreSQL
-  compatibility failure preceded it.
+  paths. The exact final-wheel ordinary suite finished with 4304 passed, 5
+  skipped, and 3 failures. Two were the pipeline exact-ID order failures in
+  the Deviation Log. The third was the five-second
+  `test_pause_resume_control_flow` reactor timeout; its immediate isolated
+  rerun passed and it did not reproduce in the earlier full artifact run, so
+  it is retained as a downstream timing flake rather than hidden. Both exact
+  pipeline tests pass when the same worktree overlays core 7.5.1. The full
+  PostgreSQL wrapper retained the first coherent artifacts and stopped under
+  its `-x` policy on the same pipeline-order assertion; no separate PostgreSQL
+  compatibility failure preceded it. The wrapper's final-wheel targeted
+  possession run passed all three version/path tests inside its inner
+  `--with simplebroker-pg[dev]` process.
 - No package, tag, or repository publication was attempted. The plan's second
   disposable worktree against exact published versions remains unavailable
   until the owner explicitly authorizes and completes the three serial
@@ -1654,8 +1662,8 @@ observed result, and residual risk for each gate. Do not replace evidence with
 
 ### 2026-08-27 Task 8 pre-closure verification
 
-- `uv run pytest` passed with 3263 tests and 18 documented platform, opt-in,
-  and dual-service skips in 49.20 seconds.
+- `uv run pytest` passed from the final code state with 3263 tests and 18
+  documented platform, opt-in, and dual-service skips in 50.52 seconds.
 - `uv run --frozen --no-sync ./bin/pytest-pg` passed against PostgreSQL 18:
   1526 shared tests with 11 skips in 62.19 seconds, then 309 extension tests
   with 7 opt-in skips in 4.77 seconds.
