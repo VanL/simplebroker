@@ -141,7 +141,7 @@ def verify_timestamp_monotonicity(db: BrokerDB, queue: str) -> list[int]:
     with db._lock:
         rows = list(
             db._runner.run(
-                "SELECT ts FROM messages WHERE queue = ? ORDER BY id",
+                "SELECT ts FROM messages WHERE queue = ? ORDER BY ts",
                 (queue,),
                 fetch=True,
             )

@@ -479,9 +479,9 @@ def test_timestamp_lookup_performance(workdir: Path) -> None:
             plan_rows = conn.execute(
                 """
                 EXPLAIN QUERY PLAN
-                SELECT id FROM messages
+                SELECT ts FROM messages
                 WHERE ts = ? AND queue = ? AND claimed = 0
-                ORDER BY id
+                ORDER BY ts
                 LIMIT ?
                 """,
                 (timestamp_samples[0][1], "perf_queue", 1),
@@ -489,7 +489,7 @@ def test_timestamp_lookup_performance(workdir: Path) -> None:
         finally:
             conn.close()
         query_plan = " | ".join(str(row[-1]) for row in plan_rows)
-        assert "ts=?" in query_plan
+        assert "ts=?" in query_plan or "USING INTEGER PRIMARY KEY" in query_plan
         assert "SCAN messages" not in query_plan
 
         # Warm the persistent queue path before timing.

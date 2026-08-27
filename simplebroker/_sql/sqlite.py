@@ -15,10 +15,9 @@ from ._query_spec import RetrieveOperation, RetrieveQuerySpec
 # Messages table - main table for storing messages
 CREATE_MESSAGES_TABLE = """
 CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
     queue TEXT NOT NULL,
     body TEXT NOT NULL,
-    ts INTEGER NOT NULL UNIQUE,
+    ts INTEGER PRIMARY KEY,
     claimed INTEGER DEFAULT 0
 )
 """
@@ -69,22 +68,10 @@ DELETE FROM queue_aliases WHERE alias = ?
 # INDEX CREATION
 # ============================================================================
 
-# Composite covering index for efficient queue operations
-# This single index serves all our query patterns efficiently:
-# - WHERE queue = ? (uses first column)
-# - WHERE queue = ? AND ts > ? (uses first two columns)
-# - WHERE queue = ? ORDER BY id (uses first column + sorts by id)
-# - WHERE queue = ? AND ts > ? ORDER BY id LIMIT ? (uses all three)
-CREATE_QUEUE_TS_ID_INDEX = """
-CREATE INDEX IF NOT EXISTS idx_messages_queue_ts_id
-ON messages(queue, ts, id)
-"""
-
-# Partial index for unclaimed messages - speeds up read operations
-CREATE_UNCLAIMED_INDEX = """
-CREATE INDEX IF NOT EXISTS idx_messages_unclaimed
-ON messages(queue, claimed, id)
-WHERE claimed = 0
+# Queue/timestamp index for bounded selection including claimed rows.
+CREATE_QUEUE_TS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_messages_queue_ts
+ON messages(queue, ts)
 """
 
 # Partial queue/timestamp index for newest pending timestamp lookups.
@@ -243,13 +230,8 @@ DELETE FROM simplebroker_delete_message_ids
 
 DELETE_STAGED_MESSAGE_IDS = """
 DELETE FROM messages
-WHERE id IN (
-    SELECT m.id
-    FROM messages AS m
-    JOIN simplebroker_delete_message_ids AS d
-      ON d.ts = m.ts
-    WHERE m.queue = ?
-)
+WHERE queue = ?
+AND ts IN (SELECT ts FROM simplebroker_delete_message_ids)
 """
 
 CREATE_TEMP_DELETE_QUEUE_NAMES = """
@@ -294,9 +276,10 @@ WHERE target = ?
 # Delete claimed messages in batches (for vacuum)
 DELETE_CLAIMED_BATCH = """
 DELETE FROM messages
-WHERE id IN (
-    SELECT id FROM messages
+WHERE ts IN (
+    SELECT ts FROM messages
     WHERE claimed = 1
+    ORDER BY ts
     LIMIT ?
 )
 """
@@ -516,7 +499,7 @@ def build_peek_query(where_conditions: list[str]) -> str:
     return f"""
         SELECT body, ts FROM messages
         WHERE {where_clause}
-        ORDER BY id
+        ORDER BY ts
         LIMIT ? OFFSET ?
         """
 
@@ -527,10 +510,10 @@ def build_claim_single_query(where_conditions: list[str]) -> str:
     return f"""
         UPDATE messages
         SET claimed = 1
-        WHERE id IN (
-            SELECT id FROM messages
+        WHERE ts IN (
+            SELECT ts FROM messages
             WHERE {where_clause}
-            ORDER BY id
+            ORDER BY ts
             LIMIT 1
         )
         RETURNING body, ts
@@ -543,28 +526,28 @@ def build_claim_batch_query(where_conditions: list[str]) -> str:
     return f"""
         UPDATE messages
         SET claimed = 1
-        WHERE id IN (
-            SELECT id FROM messages
+        WHERE ts IN (
+            SELECT ts FROM messages
             WHERE {where_clause}
-            ORDER BY id
+            ORDER BY ts
             LIMIT ?
         )
         RETURNING body, ts
         """
 
 
-def build_move_by_id_query(where_conditions: list[str]) -> str:
-    """Build UPDATE query for moving message by ID."""
+def build_move_by_timestamp_query(where_conditions: list[str]) -> str:
+    """Build UPDATE query for moving messages selected by public ID."""
     where_clause = " AND ".join(where_conditions)
     return f"""
         UPDATE messages
         SET queue = ?
-        WHERE id IN (
-            SELECT id FROM messages
+        WHERE ts IN (
+            SELECT ts FROM messages
             WHERE {where_clause}
-            ORDER BY id
+            ORDER BY ts
         )
-        RETURNING id, body, ts
+        RETURNING body, ts
         """
 
 
@@ -609,7 +592,7 @@ def build_find_message_ids_query(
         SELECT ts
         FROM messages
         WHERE {where_clause}
-        ORDER BY id
+        ORDER BY ts
         LIMIT ?
         """
 

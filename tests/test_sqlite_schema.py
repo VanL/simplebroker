@@ -15,6 +15,7 @@ from simplebroker._backends.sqlite.schema import (
     ensure_schema_v3,
     ensure_schema_v4,
     ensure_schema_v5,
+    ensure_schema_v6,
     initialize_database,
     messages_has_claimed_column,
     meta_table_exists,
@@ -149,6 +150,86 @@ def _create_v1_messages_table(db_path: Path) -> None:
         conn.commit()
 
 
+def _create_v5_database(db_path: Path) -> None:
+    """Create the literal last-release layout without importing current DDL."""
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue TEXT NOT NULL,
+                body TEXT NOT NULL,
+                ts INTEGER NOT NULL UNIQUE,
+                claimed INTEGER DEFAULT 0
+            );
+            CREATE TABLE meta (
+                key TEXT PRIMARY KEY,
+                value INTEGER NOT NULL
+            );
+            CREATE TABLE queue_aliases (
+                alias TEXT PRIMARY KEY,
+                target TEXT NOT NULL
+            );
+            CREATE INDEX idx_queue_aliases_target ON queue_aliases(target);
+            CREATE INDEX idx_messages_queue_ts_id ON messages(queue, ts, id);
+            CREATE INDEX idx_messages_unclaimed
+                ON messages(queue, claimed, id) WHERE claimed = 0;
+            CREATE INDEX idx_messages_pending_queue_ts
+                ON messages(queue, ts) WHERE claimed = 0;
+            CREATE TABLE sidecar_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                value TEXT NOT NULL
+            );
+            CREATE INDEX sidecar_jobs_value ON sidecar_jobs(value);
+            CREATE TABLE sidecar_message_refs (
+                message_ts INTEGER NOT NULL REFERENCES messages(ts),
+                note TEXT NOT NULL
+            );
+            CREATE INDEX sidecar_message_refs_ts
+                ON sidecar_message_refs(message_ts);
+            CREATE VIEW sidecar_message_ts AS SELECT ts FROM messages;
+            """
+        )
+        conn.executemany(
+            "INSERT INTO meta (key, value) VALUES (?, ?)",
+            [
+                ("last_ts", 300),
+                ("magic", SIMPLEBROKER_MAGIC),
+                ("schema_version", 5),
+                ("alias_version", 0),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO messages (queue, body, ts, claimed) VALUES (?, ?, ?, ?)",
+            [
+                ("q", "id-300", 300, 0),
+                ("q", "id-100", 100, 1),
+                ("q", "id-200", 200, 0),
+            ],
+        )
+        conn.execute("INSERT INTO sidecar_jobs (value) VALUES ('keep')")
+        conn.execute(
+            "INSERT INTO sidecar_message_refs (message_ts, note) "
+            "VALUES (200, 'keep-ref')"
+        )
+        conn.commit()
+
+
+def _owned_message_shape(conn: sqlite3.Connection) -> tuple[object, ...]:
+    columns = conn.execute("PRAGMA table_info('messages')").fetchall()
+    indexes = conn.execute(
+        "SELECT name, \"unique\", partial FROM pragma_index_list('messages') "
+        "ORDER BY name"
+    ).fetchall()
+    index_columns = {
+        name: conn.execute(
+            "SELECT name FROM pragma_index_info(?) ORDER BY seqno", (name,)
+        ).fetchall()
+        for name, _unique, _partial in indexes
+    }
+    return columns, indexes, index_columns
+
+
 def test_initialize_database_bootstraps_core_schema_and_metadata(
     tmp_path: Path,
 ) -> None:
@@ -173,6 +254,264 @@ def test_initialize_database_bootstraps_core_schema_and_metadata(
             )
         )
         assert aliases == [("queue_aliases",)]
+    finally:
+        runner.close()
+
+
+def test_fresh_schema_has_public_id_as_only_message_key(tmp_path: Path) -> None:
+    db_path = tmp_path / "fresh-v6.db"
+    runner = _runner(db_path)
+    try:
+        initialize_database(runner, run_with_retry=_run_direct)
+        columns = list(runner.run("PRAGMA table_info('messages')", fetch=True))
+        assert [row[1] for row in columns] == ["queue", "body", "ts", "claimed"]
+        assert [(row[1], row[5]) for row in columns if row[5]] == [("ts", 1)]
+    finally:
+        runner.close()
+
+
+def test_schema_v6_rebuild_preserves_sidecar_and_matches_fresh_shape(
+    tmp_path: Path,
+) -> None:
+    migrated_path = tmp_path / "migrated.db"
+    fresh_path = tmp_path / "fresh.db"
+    _create_v5_database(migrated_path)
+
+    with closing(sqlite3.connect(migrated_path)) as before:
+        sidecar_before = {
+            "definition": before.execute(
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs'"
+            ).fetchone(),
+            "index": before.execute(
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs_value'"
+            ).fetchone(),
+            "rows": before.execute("SELECT * FROM sidecar_jobs").fetchall(),
+            "sequence": before.execute(
+                "SELECT name, seq FROM sqlite_sequence WHERE name='sidecar_jobs'"
+            ).fetchall(),
+            "ref_definition": before.execute(
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs'"
+            ).fetchone(),
+            "ref_index": before.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE name='sidecar_message_refs_ts'"
+            ).fetchone(),
+            "ref_rows": before.execute(
+                "SELECT * FROM sidecar_message_refs"
+            ).fetchall(),
+            "view_definition": before.execute(
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_ts'"
+            ).fetchone(),
+        }
+
+    from simplebroker.db import BrokerDB
+
+    with BrokerDB(str(migrated_path)) as broker:
+        assert broker.peek_many("q", 10) == [("id-200", 200), ("id-300", 300)]
+    with BrokerDB(str(fresh_path)):
+        pass
+
+    with (
+        closing(sqlite3.connect(migrated_path)) as migrated,
+        closing(sqlite3.connect(fresh_path)) as fresh,
+    ):
+        assert _owned_message_shape(migrated) == _owned_message_shape(fresh)
+        assert migrated.execute(
+            "SELECT queue, body, ts, claimed FROM messages ORDER BY ts"
+        ).fetchall() == [
+            ("q", "id-100", 100, 1),
+            ("q", "id-200", 200, 0),
+            ("q", "id-300", 300, 0),
+        ]
+        assert migrated.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone() == (6,)
+        sidecar_after = {
+            "definition": migrated.execute(
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs'"
+            ).fetchone(),
+            "index": migrated.execute(
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_jobs_value'"
+            ).fetchone(),
+            "rows": migrated.execute("SELECT * FROM sidecar_jobs").fetchall(),
+            "sequence": migrated.execute(
+                "SELECT name, seq FROM sqlite_sequence WHERE name='sidecar_jobs'"
+            ).fetchall(),
+            "ref_definition": migrated.execute(
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs'"
+            ).fetchone(),
+            "ref_index": migrated.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE name='sidecar_message_refs_ts'"
+            ).fetchone(),
+            "ref_rows": migrated.execute(
+                "SELECT * FROM sidecar_message_refs"
+            ).fetchall(),
+            "view_definition": migrated.execute(
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_ts'"
+            ).fetchone(),
+        }
+        assert sidecar_after == sidecar_before
+        assert migrated.execute(
+            "SELECT ts FROM sidecar_message_ts ORDER BY ts"
+        ).fetchall() == [(100,), (200,), (300,)]
+        assert migrated.execute(
+            "SELECT name FROM sqlite_sequence WHERE name='messages'"
+        ).fetchall() == []
+
+
+@pytest.mark.parametrize(
+    "failure_marker",
+    [
+        "INSERT INTO simplebroker_messages_v6",
+        "ALTER TABLE simplebroker_messages_v6",
+    ],
+)
+def test_schema_v6_failure_rolls_back_owned_and_sidecar_state(
+    tmp_path: Path,
+    failure_marker: str,
+) -> None:
+    db_path = tmp_path / f"failure-{failure_marker.split()[0].lower()}.db"
+    _create_v5_database(db_path)
+    runner = _runner(db_path)
+    failing = _FailOnceRunner(
+        runner,
+        failure_marker,
+        OperationalError("database or disk is full"),
+    )
+    before = db_path.read_bytes()
+
+    try:
+        with pytest.raises(OperationalError, match="disk is full"):
+            ensure_schema_v6(
+                failing,
+                current_version=5,
+                write_schema_version=lambda version: runner.run(
+                    "UPDATE meta SET value=? WHERE key='schema_version'",
+                    (version,),
+                ),
+            )
+        assert runner.get_connection().in_transaction is False
+    finally:
+        runner.close()
+
+    assert db_path.read_bytes() == before
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone() == (5,)
+        assert conn.execute("SELECT * FROM sidecar_jobs").fetchall() == [(1, "keep")]
+        assert conn.execute("SELECT * FROM sidecar_message_refs").fetchall() == [
+            (200, "keep-ref")
+        ]
+        assert conn.execute(
+            "SELECT name FROM pragma_table_info('messages') WHERE name='id'"
+        ).fetchall() == [("id",)]
+
+
+def test_schema_v6_rejects_sidecar_dependency_on_removed_id_without_mutation(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "dependent-sidecar.db"
+    _create_v5_database(db_path)
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("CREATE VIEW sidecar_message_ids AS SELECT id FROM messages")
+        conn.commit()
+        before = {
+            "schema": conn.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+            ).fetchall(),
+            "meta": conn.execute("SELECT * FROM meta ORDER BY key").fetchall(),
+            "messages": conn.execute(
+                "SELECT id, queue, body, ts, claimed FROM messages ORDER BY id"
+            ).fetchall(),
+            "sidecar": conn.execute("SELECT * FROM sidecar_jobs").fetchall(),
+        }
+
+    from simplebroker.db import BrokerDB
+
+    with pytest.raises(RuntimeError, match="removed messages.id"):
+        BrokerDB(str(db_path))
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        after = {
+            "schema": conn.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+            ).fetchall(),
+            "meta": conn.execute("SELECT * FROM meta ORDER BY key").fetchall(),
+            "messages": conn.execute(
+                "SELECT id, queue, body, ts, claimed FROM messages ORDER BY id"
+            ).fetchall(),
+            "sidecar": conn.execute("SELECT * FROM sidecar_jobs").fetchall(),
+        }
+    assert after == before
+
+
+def test_schema_v6_preserves_public_id_foreign_key_and_pragma_state(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "public-id-reference.db"
+    _create_v5_database(db_path)
+    runner = _runner(db_path)
+    try:
+        runner.run("PRAGMA foreign_keys = ON")
+        assert list(runner.run("PRAGMA foreign_keys", fetch=True)) == [(1,)]
+        assert list(runner.run("PRAGMA legacy_alter_table", fetch=True)) == [(0,)]
+
+        ensure_schema_v6(
+            runner,
+            current_version=5,
+            write_schema_version=lambda version: runner.run(
+                "UPDATE meta SET value=? WHERE key='schema_version'",
+                (version,),
+            ),
+        )
+
+        assert list(runner.run("PRAGMA foreign_keys", fetch=True)) == [(1,)]
+        assert list(runner.run("PRAGMA legacy_alter_table", fetch=True)) == [(0,)]
+        assert list(runner.run("PRAGMA foreign_key_check", fetch=True)) == []
+        assert list(
+            runner.run("SELECT * FROM sidecar_message_refs", fetch=True)
+        ) == [(200, "keep-ref")]
+    finally:
+        runner.close()
+
+
+def test_schema_v6_failure_restores_foreign_key_pragma(tmp_path: Path) -> None:
+    db_path = tmp_path / "public-id-reference-failure.db"
+    _create_v5_database(db_path)
+    runner = _runner(db_path)
+    failing = _FailOnceRunner(
+        runner,
+        "ALTER TABLE simplebroker_messages_v6",
+        OperationalError("injected migration failure"),
+    )
+    try:
+        runner.run("PRAGMA foreign_keys = ON")
+
+        with pytest.raises(OperationalError, match="injected migration failure"):
+            ensure_schema_v6(
+                failing,
+                current_version=5,
+                write_schema_version=lambda version: runner.run(
+                    "UPDATE meta SET value=? WHERE key='schema_version'",
+                    (version,),
+                ),
+            )
+
+        assert list(runner.run("PRAGMA foreign_keys", fetch=True)) == [(1,)]
+        assert list(runner.run("PRAGMA legacy_alter_table", fetch=True)) == [(0,)]
+        assert list(runner.run("PRAGMA foreign_key_check", fetch=True)) == []
+        assert list(
+            runner.run("SELECT * FROM sidecar_message_refs", fetch=True)
+        ) == [(200, "keep-ref")]
+        assert list(
+            runner.run(
+                "SELECT value FROM meta WHERE key='schema_version'", fetch=True
+            )
+        ) == [(5,)]
     finally:
         runner.close()
 
@@ -206,7 +545,8 @@ def test_fresh_schema_uses_existing_unique_constraint_without_redundant_index(
             if columns == ["ts"]:
                 unique_ts_indexes.append(name)
 
-        assert unique_ts_indexes == ["sqlite_autoindex_messages_1"]
+        assert unique_ts_indexes == []
+        assert ts_unique_index_exists(runner) is True
     finally:
         runner.close()
 
@@ -344,7 +684,7 @@ def test_initialize_database_rolls_back_bootstrap_errors(tmp_path: Path) -> None
         runner.close()
 
 
-def test_migrate_schema_applies_v2_v3_v4_and_v5_in_order(tmp_path: Path) -> None:
+def test_migrate_schema_applies_v2_through_v6_in_order(tmp_path: Path) -> None:
     db_path = tmp_path / "old.db"
     _create_v1_messages_table(db_path)
     runner = _runner(db_path)
@@ -356,7 +696,7 @@ def test_migrate_schema_applies_v2_v3_v4_and_v5_in_order(tmp_path: Path) -> None
             write_schema_version=versions.append,
         )
 
-        assert versions == [2, 3, 4, 5]
+        assert versions == [2, 3, 4, 5, 6]
         assert messages_has_claimed_column(runner) is True
         assert ts_unique_index_exists(runner) is True
         assert pending_queue_ts_index_exists(runner) is True
@@ -391,7 +731,7 @@ def test_migrate_schema_v4_to_v5_creates_pending_queue_ts_index(
             write_schema_version=versions.append,
         )
 
-        assert versions == [5]
+        assert versions == [5, 6]
         assert pending_queue_ts_index_exists(runner) is True
     finally:
         runner.close()
@@ -426,8 +766,9 @@ def test_ensure_schema_v5_backfills_pending_queue_ts_index_idempotently(
         runner.close()
 
 
-def test_latest_pending_timestamp_query_uses_pending_queue_ts_index(
-    tmp_path: Path,
+@pytest.mark.parametrize("direction", ["ASC", "DESC"])
+def test_bounded_pending_selection_uses_queue_ts_index(
+    tmp_path: Path, direction: str
 ) -> None:
     runner = _runner(tmp_path / "broker.db")
     try:
@@ -435,12 +776,12 @@ def test_latest_pending_timestamp_query_uses_pending_queue_ts_index(
 
         rows = list(
             runner.run(
-                """
+                f"""
                 EXPLAIN QUERY PLAN
                 SELECT ts
                 FROM messages
                 WHERE queue = ? AND claimed = 0
-                ORDER BY ts DESC
+                ORDER BY ts {direction}
                 LIMIT 1
                 """,
                 ("jobs",),
@@ -454,7 +795,7 @@ def test_latest_pending_timestamp_query_uses_pending_queue_ts_index(
         runner.close()
 
 
-def test_ensure_schema_v2_adds_claimed_column_and_partial_index(
+def test_ensure_schema_v2_adds_claimed_column(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "v1.db"
@@ -474,7 +815,7 @@ def test_ensure_schema_v2_adds_claimed_column_and_partial_index(
                 "AND name='idx_messages_unclaimed'",
                 fetch=True,
             )
-        ) == [("idx_messages_unclaimed",)]
+        ) == []
     finally:
         runner.close()
 

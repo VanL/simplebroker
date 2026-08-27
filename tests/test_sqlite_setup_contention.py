@@ -422,7 +422,7 @@ def test_mixed_version_lock_paths_setup_is_idempotent_safe(
     try:
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         stored_pairs = conn.execute(
-            "SELECT body, ts FROM messages WHERE queue = ? ORDER BY id",
+            "SELECT body, ts FROM messages WHERE queue = ? ORDER BY ts",
             ("mixed_version",),
         ).fetchall()
         # claimed=0 only: read() claims rows (deletion-pending until vacuum),

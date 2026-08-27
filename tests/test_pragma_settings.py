@@ -68,14 +68,14 @@ def test_default_pragma_settings(tmp_path: Path) -> None:
         # Check that composite index exists
         result = _rows(
             db._runner.run(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'",
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts'",
                 fetch=True,
             )
         )
         assert len(result) > 0
 
         # Check that old indexes don't exist
-        for old_index in ["idx_messages_queue_ts", "idx_queue_id", "idx_queue_ts"]:
+        for old_index in ["idx_queue_id", "idx_queue_ts"]:
             result = _rows(
                 db._runner.run(
                     "SELECT name FROM sqlite_master WHERE type='index' AND name=?",
@@ -293,19 +293,19 @@ def test_index_migration_from_old_database(tmp_path: Path) -> None:
 
     # Now open with BrokerDB - should remove old indexes and create new one
     with BrokerDB(str(db_path)) as db:
-        # Check that old indexes are gone
+        # Check that the obsolete id index is gone.
         result = _rows(
             db._runner.run(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_queue_ts', 'idx_queue_id')",
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_queue_id'",
                 fetch=True,
             )
         )
         assert len(result) == 0
 
-        # Check that new composite index exists
+        # Check that the canonical public-ID index exists.
         result = _rows(
             db._runner.run(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'",
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts'",
                 fetch=True,
             )
         )

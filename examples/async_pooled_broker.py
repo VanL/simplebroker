@@ -70,13 +70,10 @@ from simplebroker._sql import (
     CREATE_PENDING_QUEUE_TS_INDEX as SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS,
 )
 from simplebroker._sql import (
-    CREATE_QUEUE_TS_ID_INDEX as SQL_CREATE_IDX_MESSAGES_QUEUE_TS_ID,
+    CREATE_QUEUE_TS_INDEX as SQL_CREATE_IDX_MESSAGES_QUEUE_TS,
 )
 from simplebroker._sql import (
     CREATE_TS_UNIQUE_INDEX as SQL_CREATE_IDX_MESSAGES_TS_UNIQUE,
-)
-from simplebroker._sql import (
-    CREATE_UNCLAIMED_INDEX as SQL_CREATE_IDX_MESSAGES_UNCLAIMED,
 )
 from simplebroker._sql import (
     DELETE_ALL_MESSAGES as SQL_DELETE_ALL_MESSAGES,
@@ -88,7 +85,7 @@ from simplebroker._sql import (
     DROP_OLD_INDEXES,
     build_claim_batch_query,
     build_claim_single_query,
-    build_move_by_id_query,
+    build_move_by_timestamp_query,
     build_peek_query,
 )
 from simplebroker._sql import (
@@ -431,6 +428,7 @@ class AsyncBrokerCore:
             await self._ensure_schema_v3()
             await self._ensure_schema_v4()
             await self._ensure_schema_v5()
+            await self._ensure_schema_v6()
             self._timestamp_gen = AsyncTimestampGenerator(self._runner)
             self._initialized = True
 
@@ -450,7 +448,7 @@ class AsyncBrokerCore:
 
             # Create optimized index
             await self._execute_with_retry(
-                lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS_ID)
+                lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS)
             )
 
             # Create partial index for unclaimed messages
@@ -461,7 +459,9 @@ class AsyncBrokerCore:
             )
             if rows and rows[0][0] > 0:
                 await self._execute_with_retry(
-                    lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
+                    lambda: self._runner.run(
+                        SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS
+                    )
                 )
 
             # Create meta table
@@ -570,7 +570,7 @@ class AsyncBrokerCore:
                 await self._runner.run(
                     "ALTER TABLE messages ADD COLUMN claimed INTEGER DEFAULT 0"
                 )
-                await self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
+                await self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
                 if current_version < 2:
                     await self._write_schema_version_locked(2)
                 await self._runner.commit()
@@ -646,6 +646,84 @@ class AsyncBrokerCore:
             except Exception:
                 await self._runner.rollback()
                 raise
+
+    async def _ensure_schema_v6(self) -> None:
+        """Retire the private row key and make public message ID the row key."""
+        async with self._lock:
+            current_version = await self._read_schema_version_locked()
+            foreign_keys_enabled = False
+            legacy_alter_table_enabled = False
+            if current_version < 6:
+                rows = await self._runner.run("PRAGMA foreign_keys", fetch=True)
+                foreign_keys_enabled = bool(rows[0][0])
+                rows = await self._runner.run(
+                    "PRAGMA legacy_alter_table", fetch=True
+                )
+                legacy_alter_table_enabled = bool(rows[0][0])
+                if foreign_keys_enabled:
+                    await self._runner.run("PRAGMA foreign_keys = OFF")
+                if not legacy_alter_table_enabled:
+                    await self._runner.run("PRAGMA legacy_alter_table = ON")
+            try:
+                await self._runner.begin_immediate()
+                if current_version < 6:
+                    await self._runner.run(
+                        """
+                        CREATE TABLE simplebroker_messages_v6 (
+                            queue TEXT NOT NULL,
+                            body TEXT NOT NULL,
+                            ts INTEGER PRIMARY KEY,
+                            claimed INTEGER DEFAULT 0
+                        )
+                        """
+                    )
+                    await self._runner.run(
+                        "INSERT INTO simplebroker_messages_v6 "
+                        "(queue, body, ts, claimed) "
+                        "SELECT queue, body, ts, claimed FROM messages"
+                    )
+                    await self._runner.run(
+                        "ALTER TABLE messages RENAME TO simplebroker_messages_v5"
+                    )
+                    await self._runner.run(
+                        "ALTER TABLE simplebroker_messages_v6 RENAME TO messages"
+                    )
+                    await self._runner.run("DROP TABLE simplebroker_messages_v5")
+                    await self._write_schema_version_locked(6)
+                else:
+                    rows = await self._runner.run(
+                        "PRAGMA table_info(messages)", fetch=True
+                    )
+                    columns = tuple(str(row[1]) for row in rows)
+                    primary_keys = tuple(str(row[1]) for row in rows if row[5])
+                    if columns != ("queue", "body", "ts", "claimed") or (
+                        primary_keys != ("ts",)
+                    ):
+                        raise RuntimeError(
+                            "SQLite schema version 6 requires public message ID "
+                            "as the sole row key"
+                        )
+                await self._runner.run("DROP INDEX IF EXISTS idx_messages_ts_unique")
+                await self._runner.run("DROP INDEX IF EXISTS idx_messages_unclaimed")
+                await self._runner.run(
+                    "DROP INDEX IF EXISTS idx_messages_queue_ts_id"
+                )
+                await self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS)
+                await self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
+                await self._runner.commit()
+            except Exception:
+                await self._runner.rollback()
+                raise
+            finally:
+                if current_version < 6:
+                    try:
+                        if not legacy_alter_table_enabled:
+                            await self._runner.run(
+                                "PRAGMA legacy_alter_table = OFF"
+                            )
+                    finally:
+                        if foreign_keys_enabled:
+                            await self._runner.run("PRAGMA foreign_keys = ON")
 
     async def _execute_with_retry(
         self,
@@ -978,15 +1056,15 @@ class AsyncBrokerCore:
 
                 try:
                     if message_id is not None:
-                        # Move by ID
-                        where_conditions = ["id = ?", "queue = ?"]
+                        # Public message ID is the timestamp.
+                        where_conditions = ["ts = ?", "queue = ?"]
                         params = [message_id, source_queue]
 
                         if require_unclaimed:
                             where_conditions.append("claimed = 0")
 
                         rows = await self._runner.run(
-                            build_move_by_id_query(where_conditions),
+                            build_move_by_timestamp_query(where_conditions),
                             (dest_queue, *params),
                             fetch=True,
                         )
@@ -996,13 +1074,13 @@ class AsyncBrokerCore:
                             """
                             UPDATE messages
                             SET queue = ?, claimed = 0
-                            WHERE id IN (
-                                SELECT id FROM messages
+                            WHERE ts IN (
+                                SELECT ts FROM messages
                                 WHERE queue = ? AND claimed = 0
-                                ORDER BY id
+                                ORDER BY ts
                                 LIMIT 1
                             )
-                            RETURNING id, body, ts
+                            RETURNING body, ts
                             """,
                             (dest_queue, source_queue),
                             fetch=True,
@@ -1012,9 +1090,9 @@ class AsyncBrokerCore:
                         await self._runner.commit()
                         message = rows[0]
                         return {
-                            "id": int(message[0]),
-                            "body": str(message[1]),
-                            "ts": int(message[2]),
+                            "id": int(message[1]),
+                            "body": str(message[0]),
+                            "ts": int(message[1]),
                         }
                     else:
                         await self._runner.rollback()
@@ -1071,9 +1149,10 @@ class AsyncBrokerCore:
                     # Delete batch
                     await self._runner.run(
                         """DELETE FROM messages
-                           WHERE id IN (
-                               SELECT id FROM messages
+                           WHERE ts IN (
+                               SELECT ts FROM messages
                                WHERE claimed = 1
+                               ORDER BY ts
                                LIMIT ?
                            )""",
                         (batch_size,),

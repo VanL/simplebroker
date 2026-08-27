@@ -14,17 +14,16 @@ SimpleBroker uses a single SQLite database with Write-Ahead Logging (WAL) enable
 
 ```sql
 CREATE TABLE messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,  -- Ensures strict FIFO ordering
     queue TEXT NOT NULL,
     body TEXT NOT NULL,
-    ts INTEGER NOT NULL UNIQUE,            -- Unique hybrid timestamp serves as message ID
+    ts INTEGER PRIMARY KEY,                -- Public message ID and sole row key
     claimed INTEGER DEFAULT 0              -- For read optimization
 );
 ```
 
 **Key design decisions:**
-- The `id` column guarantees global FIFO ordering across all processes
-- The `ts` column serves as the public message identifier with uniqueness enforced
+- The `ts` column is both the public message identifier and physical row key
+- Explicit `ORDER BY ts` gives every bounded operation one cross-backend order
 - WAL mode enables concurrent readers and writers
 - Claim-based deletion separates the consume commit from later physical cleanup,
   avoiding deletion work on the read handoff path
@@ -75,9 +74,21 @@ equivalent named index satisfies v3 regardless of physical order. If the owned
 name `idx_messages_ts_unique` is occupied by a conflicting definition and no
 equivalent rule exists, setup fails without dropping it.
 
+Schema v6 is a one-way rebuild of the broker-owned `messages` table. It copies
+`queue`, `body`, `ts`, and `claimed`, verifies the row count, replaces the v5
+table, recreates only the canonical `(queue, ts)` indexes, checks foreign-key
+integrity, and publishes version 6 last in the same transaction. The rebuild
+temporarily disables connection-level foreign-key enforcement when needed and
+restores the prior setting on success or failure. Caller-owned tables, indexes,
+rows, sequence entries, and references to the supported `messages.ts` key stay
+unchanged. A view, trigger, or foreign key that depends on retired
+`messages.id` fails before mutation. Additions inside reserved broker objects
+are unsupported; sidecars are objects outside those reserved tables and
+indexes.
+
 ## Schema completion proof
 
-The path-level `schema-v5` marker is a coordination cache, not live schema
+The path-level schema marker is a coordination cache, not live schema
 proof. After the existing idempotent setup, migration, and repair routine
 succeeds, SimpleBroker records a proof-algorithm version and the current SQLite
 schema cookie in `meta`, then publishes the marker. A marker skips the slow path
@@ -140,13 +151,14 @@ families retain clean stop `0`. For `write` and `rename`, mutation commit
 precedes result rendering. Output failure does not roll the mutation back, so
 the diagnostic directs callers to inspect state before retrying.
 
-**FIFO Ordering:** Messages are read in write order for a queue, regardless of
-which process wrote them. SQLite selects by autoincrement `id`, includes that
-private key in claim/move `RETURNING`, and one shared core helper sorts and
-strips it before either materialized return or generator yield. This avoids
-depending on SQLite's unspecified `RETURNING` order without changing the public
-row shape or backend API v7. PostgreSQL keeps its ordered two-column query and
-Redis keeps its direct-core ordering.
+**Public-ID ordering:** Bounded read, peek, and move select by `ts`. The default
+direction is ascending; an explicit newest request is descending. Ordinary
+generated writes therefore remain FIFO-like, but an exact insertion of a lower
+public ID is deliberately returned earlier by the default order. SQLite claim
+and move SQL returns `(body, ts)` and shared core code sorts those rows in the
+requested direction because SQLite does not specify DML `RETURNING` order.
+Ascending generators use the same public-ID normalization. This is logical
+order rather than engine order and is part of backend API v8.
 
 **Message Lifecycle:**
 1. **Write Phase**: Message inserted with unique timestamp
@@ -294,9 +306,11 @@ Promoted to: none
 
 ## Related Plans
 
-- active: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
+- completed: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
   — single-connection admission, factual migration receipts, schema-proof
-  caching, semantic timestamp uniqueness, and SQLite FIFO normalization
+  caching, semantic timestamp uniqueness, and engine-order independence
+- active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+  — public-ID order, bounded newest selection, and surrogate-free SQL schemas
 - active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
   — PostgreSQL vacuum session discard after uncertain unlock
 - completed: 2026-08-24-comprehensive-review-findings-remediation-plan —

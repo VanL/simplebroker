@@ -51,7 +51,7 @@ def test_messages_marked_as_claimed_not_deleted(workdir: Path):
 
     # Check claimed messages
     cursor.execute(
-        "SELECT body, claimed FROM messages WHERE queue = 'test_queue' ORDER BY id"
+        "SELECT body, claimed FROM messages WHERE queue = 'test_queue' ORDER BY ts"
     )
     all_messages = cursor.fetchall()
 
@@ -402,10 +402,11 @@ def test_schema_migration_idempotent(workdir: Path):
 
     # Check indexes
     cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE '%claimed%'"
+        "SELECT sql FROM sqlite_master WHERE type='index' "
+        "AND name='idx_messages_pending_queue_ts'"
     )
-    indexes = [row[0] for row in cursor.fetchall()]
-    assert any("claimed" in idx for idx in indexes)  # Should have partial index
+    index_sql = cursor.fetchone()[0]
+    assert "WHERE claimed = 0" in index_sql
 
     # Verify all messages are intact
     cursor.execute("SELECT COUNT(*) FROM messages")

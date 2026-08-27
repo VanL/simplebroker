@@ -1,4 +1,4 @@
-"""SQLite FIFO behavior when ``RETURNING`` rows arrive out of order."""
+"""SQLite public-ID order when ``RETURNING`` rows arrive out of order."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class _ReversingReturningRunner(SQLiteRunner):
 def test_equivalent_sqlite_plugin_instance_uses_the_builtin_row_contract(
     tmp_path: Path,
 ) -> None:
-    """FIFO normalization must not depend on one plugin object's identity."""
+    """ID normalization must not depend on one plugin object's identity."""
     runner = _ReversingReturningRunner(str(tmp_path / "fresh-plugin.db"))
     broker = BrokerCore(runner, backend_plugin=cast(Any, SQLiteBackendPlugin()))
     try:
@@ -46,18 +46,24 @@ def test_equivalent_sqlite_plugin_instance_uses_the_builtin_row_contract(
         )
 
         assert broker.claim_many("jobs", 2) == [
-            ("inserted-first", 300),
             ("inserted-second", 100),
+            ("inserted-first", 300),
         ]
     finally:
         broker.close()
         runner.close()
 
 
-def test_claim_many_uses_storage_fifo_when_sqlite_returning_rows_are_reversed(
+@pytest.mark.parametrize(
+    ("order", "expected_ids"),
+    [("oldest", [100, 200, 300]), ("newest", [300, 200, 100])],
+)
+def test_claim_many_normalizes_sqlite_returning_rows_by_public_id(
     tmp_path: Path,
+    order: str,
+    expected_ids: list[int],
 ) -> None:
-    """Materialized claims follow insertion order, not raw or timestamp order."""
+    """Materialized claims ignore raw engine return order in both directions."""
     runner = _ReversingReturningRunner(str(tmp_path / "claim-many.db"))
     broker = BrokerCore(runner)
     try:
@@ -69,17 +75,14 @@ def test_claim_many_uses_storage_fifo_when_sqlite_returning_rows_are_reversed(
             ]
         )
 
-        assert broker.claim_many("jobs", 3) == [
-            ("inserted-first", 300),
-            ("inserted-second", 100),
-            ("inserted-third", 200),
-        ]
+        rows = broker.claim_many("jobs", 3, order=order)
+        assert [timestamp for _body, timestamp in rows] == expected_ids
     finally:
         broker.close()
         runner.close()
 
 
-def test_claim_generator_uses_storage_fifo_when_sqlite_returning_rows_are_reversed(
+def test_claim_generator_uses_ascending_ids_when_returning_rows_are_reversed(
     tmp_path: Path,
 ) -> None:
     """Transactional claim batches normalize before yielding public rows."""
@@ -101,19 +104,25 @@ def test_claim_generator_uses_storage_fifo_when_sqlite_returning_rows_are_revers
                 batch_size=3,
             )
         ) == [
-            ("inserted-first", 300),
             ("inserted-second", 100),
             ("inserted-third", 200),
+            ("inserted-first", 300),
         ]
     finally:
         broker.close()
         runner.close()
 
 
-def test_move_many_uses_storage_fifo_when_sqlite_returning_rows_are_reversed(
+@pytest.mark.parametrize(
+    ("order", "expected_ids"),
+    [("oldest", [100, 200, 300]), ("newest", [300, 200, 100])],
+)
+def test_move_many_normalizes_sqlite_returning_rows_by_public_id(
     tmp_path: Path,
+    order: str,
+    expected_ids: list[int],
 ) -> None:
-    """Materialized moves return source insertion order."""
+    """Materialized moves expose the selected public-ID direction."""
     runner = _ReversingReturningRunner(str(tmp_path / "move-many.db"))
     broker = BrokerCore(runner)
     try:
@@ -125,17 +134,14 @@ def test_move_many_uses_storage_fifo_when_sqlite_returning_rows_are_reversed(
             ]
         )
 
-        assert broker.move_many("source", "destination", 3) == [
-            ("inserted-first", 300),
-            ("inserted-second", 100),
-            ("inserted-third", 200),
-        ]
+        rows = broker.move_many("source", "destination", 3, order=order)
+        assert [timestamp for _body, timestamp in rows] == expected_ids
     finally:
         broker.close()
         runner.close()
 
 
-def test_move_generator_uses_storage_fifo_when_sqlite_returning_rows_are_reversed(
+def test_move_generator_uses_ascending_ids_when_returning_rows_are_reversed(
     tmp_path: Path,
 ) -> None:
     """Transactional move batches normalize before yielding public rows."""
@@ -158,9 +164,9 @@ def test_move_generator_uses_storage_fifo_when_sqlite_returning_rows_are_reverse
                 batch_size=3,
             )
         ) == [
-            ("inserted-first", 300),
             ("inserted-second", 100),
             ("inserted-third", 200),
+            ("inserted-first", 300),
         ]
     finally:
         broker.close()

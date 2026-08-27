@@ -174,9 +174,10 @@ def test_concurrent_schema_migration(workdir: Path) -> None:
     columns = {row[1] for row in cursor.fetchall()}
     assert "claimed" in columns
 
-    # Check partial index exists
+    # Check canonical partial pending-selection index exists
     cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE '%unclaimed%'",
+        "SELECT name FROM sqlite_master "
+        "WHERE type='index' AND name='idx_messages_pending_queue_ts'",
     )
     indexes = cursor.fetchall()
     assert len(indexes) == 1

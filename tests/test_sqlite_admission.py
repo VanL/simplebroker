@@ -366,8 +366,8 @@ def test_unversioned_legacy_database_advances_through_completed_migrations(
             "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'claimed'"
         ).fetchone() == (1,)
         assert connection.execute(
-            "SELECT COUNT(*) FROM pragma_index_list('messages') WHERE \"unique\" = 1"
-        ).fetchone() == (1,)
+            "SELECT name, pk FROM pragma_table_info('messages') WHERE pk > 0"
+        ).fetchall() == [("ts", 1)]
 
 
 @pytest.mark.parametrize("marker_mode", ["xattr", "fallback"])
@@ -418,10 +418,10 @@ def test_schema_marker_with_changed_schema_cookie_runs_repair_once(
     with BrokerDB(str(db_path)):
         pass
     if marker_mode == "xattr":
-        assert (db_path, "user.simplebroker.schema-v5") in xattrs
+        assert (db_path, f"user.simplebroker.schema-v{SCHEMA_VERSION}") in xattrs
 
     with closing(sqlite3.connect(db_path)) as connection:
-        connection.execute("DROP INDEX idx_messages_ts_unique")
+        connection.execute("DROP INDEX idx_messages_pending_queue_ts")
         connection.commit()
 
     real_migrate = sqlite_plugin_module.migrate_schema
@@ -441,19 +441,10 @@ def test_schema_marker_with_changed_schema_cookie_runs_repair_once(
     assert migrations == [SCHEMA_VERSION]
 
     with closing(sqlite3.connect(db_path)) as connection:
-        indexes = connection.execute(
-            "SELECT name, \"unique\", partial FROM pragma_index_list('messages')"
-        ).fetchall()
-        assert any(
-            unique == 1
-            and partial == 0
-            and connection.execute(
-                "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
-                (name,),
-            ).fetchall()
-            == [("ts",)]
-            for name, unique, partial in indexes
-        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM pragma_index_list('messages') "
+            "WHERE name='idx_messages_pending_queue_ts'"
+        ).fetchone() == (1,)
 
 
 def test_schema_snapshot_cannot_mix_cookie_and_proof_across_external_ddl(
@@ -488,13 +479,13 @@ def test_schema_snapshot_cannot_mix_cookie_and_proof_across_external_ddl(
             if not ddl_ran and normalized == "pragma schema_version":
                 cursor = super().execute(sql, parameters)
                 with closing(real_connect(db_path)) as external:
-                    external.execute("DROP INDEX idx_messages_ts_unique")
+                    external.execute("DROP INDEX idx_messages_pending_queue_ts")
                     external.commit()
                 ddl_ran = True
                 return cursor
             if not ddl_ran and "from pragma_schema_version" in normalized:
                 with closing(real_connect(db_path)) as external:
-                    external.execute("DROP INDEX idx_messages_ts_unique")
+                    external.execute("DROP INDEX idx_messages_pending_queue_ts")
                     external.commit()
                 ddl_ran = True
             return super().execute(sql, parameters)
@@ -509,19 +500,10 @@ def test_schema_snapshot_cannot_mix_cookie_and_proof_across_external_ddl(
 
     assert ddl_ran
     with closing(real_connect(db_path)) as connection:
-        indexes = connection.execute(
-            "SELECT name, \"unique\", partial FROM pragma_index_list('messages')"
-        ).fetchall()
-        assert any(
-            unique == 1
-            and partial == 0
-            and connection.execute(
-                "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
-                (name,),
-            ).fetchall()
-            == [("ts",)]
-            for name, unique, partial in indexes
-        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM pragma_index_list('messages') "
+            "WHERE name='idx_messages_pending_queue_ts'"
+        ).fetchone() == (1,)
 
 
 def test_missing_database_proof_causes_one_slow_open_then_returns_to_fast_path(

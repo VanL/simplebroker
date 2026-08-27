@@ -25,6 +25,12 @@ pytestmark = [pytest.mark.shared]
 
 FIRING_TESTS = {
     "SB-ID-1": {
+        "tests/test_sqlite_message_id_returning_order.py": {
+            "test_claim_many_normalizes_sqlite_returning_rows_by_public_id",
+            "test_claim_generator_uses_ascending_ids_when_returning_rows_are_reversed",
+            "test_move_many_normalizes_sqlite_returning_rows_by_public_id",
+            "test_move_generator_uses_ascending_ids_when_returning_rows_are_reversed",
+        },
         "tests/test_core_persistence_transition_tables.py": {
             "test_timestamp_generator_fires_transition_table",
         },

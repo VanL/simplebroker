@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -17,9 +18,8 @@ from ..._sql import (
     CREATE_MESSAGES_TABLE,
     CREATE_META_TABLE,
     CREATE_PENDING_QUEUE_TS_INDEX,
-    CREATE_QUEUE_TS_ID_INDEX,
+    CREATE_QUEUE_TS_INDEX,
     CREATE_TS_UNIQUE_INDEX,
-    CREATE_UNCLAIMED_INDEX,
     DROP_OLD_INDEXES,
     INIT_LAST_TS,
     INSERT_ALIAS_VERSION_META,
@@ -76,13 +76,12 @@ def initialize_database(
 
             run_with_retry(drop_index)
 
-        run_with_retry(lambda: runner.run(CREATE_QUEUE_TS_ID_INDEX))
+        run_with_retry(lambda: runner.run(CREATE_QUEUE_TS_INDEX))
 
         has_claimed_column = bool(
             run_with_retry(lambda: messages_has_claimed_column(runner))
         )
         if has_claimed_column:
-            run_with_retry(lambda: runner.run(CREATE_UNCLAIMED_INDEX))
             run_with_retry(lambda: runner.run(CREATE_PENDING_QUEUE_TS_INDEX))
 
         run_with_retry(lambda: runner.run(CREATE_META_TABLE))
@@ -121,6 +120,15 @@ def migrate_schema(
     write_schema_version: Callable[[int], None],
 ) -> None:
     """Apply any missing SQLite schema migrations in order."""
+    if current_version == 5:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
+        dependencies = _legacy_id_sidecar_dependencies(runner)
+        if dependencies:
+            names = ", ".join(dependencies)
+            raise RuntimeError(
+                "Cannot migrate SQLite schema v5 because caller-owned objects "
+                "depend on broker-owned messages during its rebuild; removed "
+                f"messages.id is not preserved: {names}"
+            )
     effective_version = current_version
     ensure_schema_v2(
         runner,
@@ -141,6 +149,12 @@ def migrate_schema(
     )
     effective_version = max(effective_version, 4)
     ensure_schema_v5(
+        runner,
+        current_version=effective_version,
+        write_schema_version=write_schema_version,
+    )
+    effective_version = max(effective_version, 5)
+    ensure_schema_v6(
         runner,
         current_version=effective_version,
         write_schema_version=write_schema_version,
@@ -178,7 +192,14 @@ def _timestamp_unique_index_state(runner: SQLRunner) -> tuple[bool, bool]:
         if columns == ["ts"]:
             semantic_index_names.add(index_name)
 
-    has_semantic_index = bool(semantic_index_names)
+    primary_key_columns = [
+        (str(name), str(column_type).upper(), int(primary_key_position))
+        for _cid, name, column_type, _not_null, _default, primary_key_position
+        in runner.run("PRAGMA table_info('messages')", fetch=True)
+        if int(primary_key_position) > 0
+    ]
+    has_integer_primary_key = primary_key_columns == [("ts", "INTEGER", 1)]
+    has_semantic_index = bool(semantic_index_names) or has_integer_primary_key
     return (
         has_semantic_index,
         owned_name_exists and "idx_messages_ts_unique" not in semantic_index_names,
@@ -232,8 +253,6 @@ def ensure_schema_v2(
             raise RuntimeError(
                 "Failed to ensure messages.claimed column during schema migration"
             )
-
-        runner.run(CREATE_UNCLAIMED_INDEX)
 
         if current_version < 2:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
             write_schema_version(2)
@@ -335,7 +354,7 @@ def ensure_schema_v5(
         try:
             for drop_sql in DROP_OLD_INDEXES:
                 runner.run(drop_sql)
-            runner.run(CREATE_QUEUE_TS_ID_INDEX)
+            runner.run(CREATE_QUEUE_TS_INDEX)
             runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
             runner.commit()
         except Exception:
@@ -350,10 +369,244 @@ def ensure_schema_v5(
         runner.begin_immediate()
         for drop_sql in DROP_OLD_INDEXES:
             runner.run(drop_sql)
-        runner.run(CREATE_QUEUE_TS_ID_INDEX)
+        runner.run(CREATE_QUEUE_TS_INDEX)
         runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
         write_schema_version(5)
         runner.commit()
     except Exception:
         runner.rollback()
         raise
+
+
+_CANONICAL_V6_COLUMNS = ("queue", "body", "ts", "claimed")
+_LEGACY_ID_REFERENCE = re.compile(
+    r"(?:\bmessages\b\s*\.\s*[`\"\[]?id\b|"
+    r"\breferences\s+[`\"\[]?messages[`\"\]]?\s*\(\s*[`\"\[]?id\b|"
+    r"\bselect\b.*?\bid\b.*?\bfrom\s+[`\"\[]?messages\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _messages_v6_shape_is_current(runner: SQLRunner) -> bool:
+    rows = list(runner.run("PRAGMA table_info('messages')", fetch=True))
+    columns = tuple(str(row[1]) for row in rows)
+    expected_columns = (
+        ("queue", "TEXT", 1, None, 0),
+        ("body", "TEXT", 1, None, 0),
+        ("ts", "INTEGER", 0, None, 1),
+        ("claimed", "INTEGER", 0, "0", 0),
+    )
+    column_shape = tuple(
+        (str(row[1]), str(row[2]).upper(), int(row[3]), row[4], int(row[5]))
+        for row in rows
+    )
+    if columns != _CANONICAL_V6_COLUMNS or column_shape != expected_columns:
+        return False
+
+    indexes = list(
+        runner.run(
+            "SELECT name, \"unique\", partial FROM pragma_index_list('messages') "
+            "ORDER BY name",
+            fetch=True,
+        )
+    )
+    if indexes != [
+        ("idx_messages_pending_queue_ts", 0, 1),
+        ("idx_messages_queue_ts", 0, 0),
+    ]:
+        return False
+    for index_name, _unique, _partial in indexes:
+        index_columns = [
+            str(row[0])
+            for row in runner.run(
+                "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
+                (index_name,),
+                fetch=True,
+            )
+        ]
+        if index_columns != ["queue", "ts"]:
+            return False
+    triggers = list(
+        runner.run(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='trigger' AND tbl_name='messages'",
+            fetch=True,
+        )
+    )
+    return not triggers
+
+
+def _legacy_id_sidecar_dependencies(runner: SQLRunner) -> list[str]:
+    """Find caller-owned objects that name the private v5 ``messages.id``."""
+    dependencies: set[str] = set()
+    objects = list(
+        runner.run(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master "
+            "WHERE sql IS NOT NULL ORDER BY type, name",
+            fetch=True,
+        )
+    )
+    for object_type, name, table_name, sql in objects:
+        object_name = str(name)
+        owning_table = str(table_name)
+        if object_name.startswith("sqlite_"):
+            continue
+        if owning_table == "messages" or object_name in {
+            "messages",
+            "meta",
+            "queue_aliases",
+        }:
+            continue
+        definition = str(sql)
+        if _LEGACY_ID_REFERENCE.search(definition):
+            dependencies.add(f"{object_type} {object_name}")
+
+        if str(object_type) != "table":
+            continue
+        quoted_name = object_name.replace("'", "''")
+        for foreign_key in runner.run(
+            f"PRAGMA foreign_key_list('{quoted_name}')",
+            fetch=True,
+        ):
+            referenced_table = str(foreign_key[2])
+            referenced_column = str(foreign_key[4])
+            if referenced_table == "messages" and referenced_column != "ts":
+                dependencies.add(
+                    f"table {object_name} (foreign key to messages."
+                    f"{referenced_column or '<primary-key>'})"
+                )
+    return sorted(dependencies)
+
+
+def _verify_foreign_keys_after_v6_rebuild(runner: SQLRunner) -> None:
+    violations = list(runner.run("PRAGMA foreign_key_check", fetch=True))
+    if violations:
+        raise RuntimeError(
+            "SQLite schema v6 migration produced foreign-key violations: "
+            f"{violations}"
+        )
+
+
+def _prepare_v6_rebuild_pragmas(runner: SQLRunner) -> tuple[bool, bool]:
+    foreign_keys_enabled = bool(
+        next(iter(runner.run("PRAGMA foreign_keys", fetch=True)))[0]
+    )
+    legacy_alter_table_enabled = bool(
+        next(iter(runner.run("PRAGMA legacy_alter_table", fetch=True)))[0]
+    )
+    if foreign_keys_enabled:
+        runner.run("PRAGMA foreign_keys = OFF")
+    if not legacy_alter_table_enabled:
+        runner.run("PRAGMA legacy_alter_table = ON")
+    return foreign_keys_enabled, legacy_alter_table_enabled
+
+
+def _restore_v6_rebuild_pragmas(
+    runner: SQLRunner,
+    *,
+    foreign_keys_enabled: bool,
+    legacy_alter_table_enabled: bool,
+) -> None:
+    try:
+        if not legacy_alter_table_enabled:
+            runner.run("PRAGMA legacy_alter_table = OFF")
+    finally:
+        if foreign_keys_enabled:
+            runner.run("PRAGMA foreign_keys = ON")
+
+
+def ensure_schema_v6(
+    runner: SQLRunner,
+    *,
+    current_version: int,
+    write_schema_version: Callable[[int], None],
+) -> None:
+    """Install SQLite schema v6 with public message ID as the sole row key."""
+    if current_version < 5:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
+        return
+
+    if current_version >= 6:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
+        runner.begin_immediate()
+        try:
+            runner.run(CREATE_QUEUE_TS_INDEX)
+            runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
+            if not _messages_v6_shape_is_current(runner):
+                raise RuntimeError(
+                    "SQLite schema version 6 requires messages columns "
+                    "(queue, body, ts, claimed), ts as the primary key, and "
+                    "only the canonical message indexes"
+                )
+            runner.commit()
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                runner.rollback()
+            raise
+        return
+
+    foreign_keys_enabled, legacy_alter_table_enabled = _prepare_v6_rebuild_pragmas(
+        runner
+    )
+    try:
+        runner.begin_immediate()
+        dependencies = _legacy_id_sidecar_dependencies(runner)
+        if dependencies:
+            names = ", ".join(dependencies)
+            raise RuntimeError(
+                "Cannot migrate SQLite schema v5 because caller-owned objects "
+                "depend on broker-owned messages during its rebuild; removed "
+                f"messages.id is not preserved: {names}"
+            )
+
+        runner.run(
+            """
+            CREATE TABLE simplebroker_messages_v6 (
+                queue TEXT NOT NULL,
+                body TEXT NOT NULL,
+                ts INTEGER PRIMARY KEY,
+                claimed INTEGER DEFAULT 0
+            )
+            """
+        )
+        runner.run(
+            "INSERT INTO simplebroker_messages_v6 (queue, body, ts, claimed) "
+            "SELECT queue, body, ts, claimed FROM messages"
+        )
+        source_count = int(
+            next(iter(runner.run("SELECT COUNT(*) FROM messages", fetch=True)))[0]
+        )
+        copied_count = int(
+            next(
+                iter(
+                    runner.run(
+                        "SELECT COUNT(*) FROM simplebroker_messages_v6",
+                        fetch=True,
+                    )
+                )
+            )[0]
+        )
+        if source_count != copied_count:
+            raise RuntimeError(
+                "SQLite schema v6 migration row-count verification failed: "
+                f"source={source_count}, copied={copied_count}"
+            )
+
+        runner.run("ALTER TABLE messages RENAME TO simplebroker_messages_v5")
+        runner.run("ALTER TABLE simplebroker_messages_v6 RENAME TO messages")
+        runner.run("DROP TABLE simplebroker_messages_v5")
+        runner.run(CREATE_QUEUE_TS_INDEX)
+        runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
+        if not _messages_v6_shape_is_current(runner):
+            raise RuntimeError("SQLite schema v6 migration produced an invalid shape")
+        _verify_foreign_keys_after_v6_rebuild(runner)
+        write_schema_version(6)
+        runner.commit()
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            runner.rollback()
+        raise
+    finally:
+        _restore_v6_rebuild_pragmas(
+            runner,
+            foreign_keys_enabled=foreign_keys_enabled,
+            legacy_alter_table_enabled=legacy_alter_table_enabled,
+        )

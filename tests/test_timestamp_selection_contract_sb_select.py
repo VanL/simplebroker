@@ -46,6 +46,12 @@ AFFECTED_EVIDENCE = {
         },
     },
     "SB-SELECT-5": {
+        "tests/test_sqlite_message_id_returning_order.py": {
+            "test_claim_many_normalizes_sqlite_returning_rows_by_public_id",
+            "test_claim_generator_uses_ascending_ids_when_returning_rows_are_reversed",
+            "test_move_many_normalizes_sqlite_returning_rows_by_public_id",
+            "test_move_generator_uses_ascending_ids_when_returning_rows_are_reversed",
+        },
         "tests/test_timestamp_selection_contract_sb_select.py": {
             "test_bounded_peek_orders_by_public_message_id",
             "test_bounded_one_and_many_order_matrix",

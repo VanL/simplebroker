@@ -363,11 +363,15 @@ class TestInitCommand:
             # Check messages table schema
             cursor = conn.execute("PRAGMA table_info(messages)")
             columns = {row[1]: row[2] for row in cursor.fetchall()}
-            assert "id" in columns
-            assert "queue" in columns
-            assert "body" in columns
-            assert "ts" in columns
-            assert "claimed" in columns
+            assert columns == {
+                "queue": "TEXT",
+                "body": "TEXT",
+                "ts": "INTEGER",
+                "claimed": "INTEGER",
+            }
+            table_info = conn.execute("PRAGMA table_info(messages)").fetchall()
+            primary_keys = {row[1] for row in table_info if row[5]}
+            assert primary_keys == {"ts"}
 
             # Check meta table has required entries
             cursor = conn.execute("SELECT key, value FROM meta")

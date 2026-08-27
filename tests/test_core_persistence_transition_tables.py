@@ -240,7 +240,7 @@ def test_sqlite_schema_fires_transition_table(
                 current_version=1,
                 write_schema_version=versions.append,
             )
-            assert versions == [2, 3, 4, 5]
+            assert versions == [2, 3, 4, 5, 6]
             return
 
         with pytest.raises(RuntimeError, match="duplicate timestamps"):

@@ -1458,6 +1458,29 @@ Possession answers:
   extension `4.0.0`; publication remains forbidden until the ordered Task 7
   gates and explicit owner authorization.
 
+### 2026-08-27 Task 3 SQLite v6 slice
+
+- Fresh SQLite databases use `ts INTEGER PRIMARY KEY` with no private `id`, no
+  message sequence row, and only the canonical general and pending
+  `(queue, ts)` indexes. Runtime retrieval, exact delete, claimed cleanup,
+  admin lookup, and move SQL address rows by `ts`.
+- The literal v5 fixture rebuilds in one transaction and verifies row-count
+  equality before publishing schema version 6. Success and injected
+  disk-full/rename failures preserve caller tables, rows, indexes, foreign
+  keys to `messages.ts`, and unrelated `sqlite_sequence` entries. Both paths
+  restore the caller's prior `PRAGMA foreign_keys` setting. Dependencies on
+  removed `messages.id` fail before mutation.
+- `uv run pytest -m sqlite_only -q --tb=short` passed the full SQLite marker
+  matrix with six documented environment/platform skips. Focused schema,
+  forced-reverse-`RETURNING`, [SB-ID-1], [SB-SELECT-5], and [SB-DELIVERY-3]
+  evidence passed. The query-plan probe covers both `ORDER BY ts ASC` and
+  `DESC` and observes `idx_messages_pending_queue_ts`.
+- `uv run ruff check .`, the SQLite/core mypy gate, Ruff suppression-registry
+  regeneration/check, `python3 bin/check-dom15-fixtures`,
+  `bin/check-plan-context`, `python3 bin/check-doc-paths`, and
+  `git diff --check` passed. The async pooled SQLite example was migrated to
+  the v6 schema and contains no runtime reference to the retired key.
+
 Later tasks append command, date, commit/artifact SHA, backend/service version,
 observed result, and residual risk for each gate. Do not replace evidence with
 “tests pass.”
