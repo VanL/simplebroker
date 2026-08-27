@@ -9,6 +9,7 @@ import time
 import uuid
 import warnings
 import weakref
+from collections import deque
 from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from fnmatch import fnmatchcase
@@ -1502,40 +1503,53 @@ class RedisBrokerCore:
         if include_claimed:
             source_keys.append(self._qkey(queue, "claimed"))
         source_bounds = {key: min_bound(after_timestamp) for key in source_keys}
+        source_buffers = {key: deque[str]() for key in source_keys}
         exhausted: set[str] = set()
         maxb = max_bound(before_timestamp)
         reserved_key = self._qkey(queue, "reserved")
         matches: list[int] = []
 
-        while len(matches) < limit and len(exhausted) < len(source_keys):
-            candidate_ids: set[str] = set()
-            for source_key in source_keys:
-                if source_key in exhausted:
-                    continue
-                ids = [
-                    str(encoded)
-                    for encoded in response_list(
-                        self._client.zrangebylex(
-                            source_key,
-                            source_bounds[source_key],
-                            maxb,
-                            start=0,
-                            num=BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE,
-                        )
+        def refill(source_key: str) -> None:
+            buffer = source_buffers[source_key]
+            if buffer or source_key in exhausted:
+                return
+            ids = [
+                str(encoded)
+                for encoded in response_list(
+                    self._client.zrangebylex(
+                        source_key,
+                        source_bounds[source_key],
+                        maxb,
+                        start=0,
+                        num=BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE,
                     )
-                ]
-                if not ids:
-                    exhausted.add(source_key)
-                    continue
-                source_bounds[source_key] = f"({ids[-1]}"
-                candidate_ids.update(ids)
-                if len(ids) < BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE:
-                    exhausted.add(source_key)
+                )
+            ]
+            if not ids:
+                exhausted.add(source_key)
+                return
+            source_bounds[source_key] = f"({ids[-1]}"
+            buffer.extend(ids)
+            if len(ids) < BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE:
+                exhausted.add(source_key)
 
-            if not candidate_ids:
-                continue
+        while len(matches) < limit:
+            ordered_ids: list[str] = []
+            while len(ordered_ids) < BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE:
+                for source_key in source_keys:
+                    refill(source_key)
+                heads = [buffer[0] for buffer in source_buffers.values() if buffer]
+                if not heads:
+                    break
+                next_id = min(heads)
+                ordered_ids.append(next_id)
+                for buffer in source_buffers.values():
+                    if buffer and buffer[0] == next_id:
+                        buffer.popleft()
 
-            ordered_ids = sorted(candidate_ids)
+            if not ordered_ids:
+                break
+
             bodies = response_list(self._client.hmget(self._keys.bodies, ordered_ids))
             with self._client.pipeline(transaction=False) as pipe:
                 for encoded in ordered_ids:

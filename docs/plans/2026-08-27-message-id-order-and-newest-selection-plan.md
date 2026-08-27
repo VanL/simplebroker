@@ -1613,7 +1613,7 @@ observed result, and residual risk for each gate. Do not replace evidence with
   variables are absent, rejects partial configuration, asserts all three
   metadata versions and imports when active, and rejects module paths below
   this source root. Its byte-identical Weft copy had SHA-256
-  `f2a5abb709090e43ef1168e0c4c933eed5995845983459769b37883eb5e22fd1`.
+  `cc9194eb385fde55db07c022cbcfc31d29b09899d1815774e67efabee888ea87`.
   The probe's three tests passed under Weft's own conftest boundary. The real
   PostgreSQL wrapper's inner `--with simplebroker-pg[dev]` process also passed
   all three, proving it retained core 8.0.0, PG 4.0.0, and Redis 4.0.0 rather
@@ -1651,6 +1651,42 @@ observed result, and residual risk for each gate. Do not replace evidence with
   until the owner explicitly authorizes and completes the three serial
   publications. Task 7 and the plan remain active because the two deviations
   above must be resolved before publication.
+
+### 2026-08-27 Task 8 pre-closure verification
+
+- `uv run pytest` passed with 3263 tests and 18 documented platform, opt-in,
+  and dual-service skips in 49.20 seconds.
+- `uv run --frozen --no-sync ./bin/pytest-pg` passed against PostgreSQL 18:
+  1526 shared tests with 11 skips in 62.19 seconds, then 309 extension tests
+  with 7 opt-in skips in 4.77 seconds.
+- `uv run --frozen --no-sync ./bin/pytest-redis` passed against Valkey 7.2:
+  1519 shared tests with 18 skips in 43.57 seconds, then 294 extension tests
+  with one opt-in skip in 3.57 seconds. The extension count includes the
+  independent review corrections below.
+- Repository-wide Ruff lint and format checks passed. Source mypy passed 66
+  files; the explicit core-test mypy sweep passed 209 files. DOM-15 fixtures,
+  plan-context, doc-path, packaging smoke, and diff checks passed.
+- This is pre-closure evidence, not a completion claim. The plan status and
+  index row remain active until the injected-runner admission promise and the
+  Weft exact-ID ordering dependency in the Deviation Log are resolved. The
+  final independent review is recorded separately after this verification.
+
+#### Implementation independent review
+
+The final implementation review found two Redis defects after the first green
+matrix. Both were fixed and independently re-reviewed:
+
+| Finding | Disposition and firing evidence |
+|---------|---------------------------------|
+| `move(..., require_unclaimed=False)` scanned only pending IDs for non-exact selection, so a claimed ID could be globally older or newer than the selected pending ID. | Fixed by directionally merging bounded pending and claimed lexicographic scans inside the atomic Lua operation before reservations and the public limit are applied. One/many oldest/newest mixed-state tests and a descending continuation test with 300 reserved pending IDs plus a claimed fallback now fire against real Valkey. |
+| `find_message_ids(include_claimed=True)` merged whole 500-ID pages, so pending IDs 1 through 600 plus claimed ID 1000 could emit 1000 before IDs 501 through 600. | Fixed with per-state lookahead buffers and a streaming global-minimum merge. A real-Valkey test requests 550 results from that exact distribution and proves IDs 1 through 550 are returned. |
+
+Focused re-review found no remaining Redis blocker: exact-ID behavior,
+claimed-state preservation, exclusive cursors, bounds, reservations, limits,
+missing bodies, and single-state operation remained sound. The focused
+real-Valkey module passed 11 tests; the full evidence is the 1519/294 matrix
+above. The overall plan verdict remains blocked only by the two compatibility
+deviations, not by an unresolved implementation-review defect.
 
 ## Independent Plan Review
 

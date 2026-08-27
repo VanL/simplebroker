@@ -87,10 +87,89 @@ def test_redis_newest_include_claimed_merges_both_states(
         core.close()
 
 
-@pytest.mark.parametrize("operation", ["claim", "move"])
+@pytest.mark.parametrize(
+    ("order", "claimed_id", "expected_id"),
+    [("oldest", 100, 100), ("newest", 300, 300)],
+)
+def test_redis_move_one_orders_pending_and_claimed_candidates_together(
+    redis_runner: RedisRunner,
+    order: Literal["oldest", "newest"],
+    claimed_id: int,
+    expected_id: int,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        _insert_exact(core, "source", [100, 200, 300])
+        assert core.claim_one("source", exact_timestamp=claimed_id) == (
+            f"id-{claimed_id}",
+            claimed_id,
+        )
+
+        assert core.move_one(
+            "source",
+            "target",
+            require_unclaimed=False,
+            order=order,
+        ) == (f"id-{expected_id}", expected_id)
+    finally:
+        core.close()
+
+
+@pytest.mark.parametrize(
+    ("order", "expected_ids"),
+    [
+        ("oldest", [100, 200, 300]),
+        ("newest", [400, 300, 200]),
+    ],
+)
+def test_redis_move_many_orders_pending_and_claimed_candidates_together(
+    redis_runner: RedisRunner,
+    order: Literal["oldest", "newest"],
+    expected_ids: list[int],
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        _insert_exact(core, "source", [100, 200, 300, 400])
+        for claimed_id in (100, 300):
+            assert core.claim_one("source", exact_timestamp=claimed_id) == (
+                f"id-{claimed_id}",
+                claimed_id,
+            )
+
+        moved = core.move_many(
+            "source",
+            "target",
+            3,
+            require_unclaimed=False,
+            order=order,
+        )
+        assert [timestamp for _body, timestamp in moved] == expected_ids
+    finally:
+        core.close()
+
+
+def test_redis_find_claimed_merge_stays_ascending_across_scan_chunks(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        _insert_exact(core, "jobs", [*range(1, 601), 1000])
+        assert core.claim_one("jobs", exact_timestamp=1000) == ("id-1000", 1000)
+
+        assert core.find_message_ids(
+            "jobs",
+            body_contains="id-",
+            limit=550,
+            include_claimed=True,
+        ) == list(range(1, 551))
+    finally:
+        core.close()
+
+
+@pytest.mark.parametrize("operation", ["claim", "move", "move_claimed"])
 def test_redis_newest_lua_resumes_below_reserved_windows(
     redis_runner: RedisRunner,
-    operation: Literal["claim", "move"],
+    operation: Literal["claim", "move", "move_claimed"],
 ) -> None:
     core = RedisBrokerCore(redis_runner)
     token = ""
@@ -100,6 +179,8 @@ def test_redis_newest_lua_resumes_below_reserved_windows(
         # returns a cursor. Reserve 300 higher IDs while leaving ID 1 eligible
         # so descending continuation must use an exclusive upper bound.
         _insert_exact(core, "jobs", [1, *range(1000, 1300)])
+        if operation == "move_claimed":
+            assert core.claim_one("jobs", exact_timestamp=1) == ("id-1", 1)
         token, reserved_rows = core._begin_batch(
             "jobs",
             batch_size=300,
@@ -112,11 +193,18 @@ def test_redis_newest_lua_resumes_below_reserved_windows(
 
         if operation == "claim":
             assert core.claim_one("jobs", order="newest") == ("id-1", 1)
-        else:
+        elif operation == "move":
             assert core.move_one("jobs", "archive", order="newest") == (
                 "id-1",
                 1,
             )
+        else:
+            assert core.move_one(
+                "jobs",
+                "archive",
+                require_unclaimed=False,
+                order="newest",
+            ) == ("id-1", 1)
     finally:
         if token:
             core._rollback_batch("jobs", token, reserved_rows)

@@ -293,6 +293,44 @@ local cursor = ''
 local scan_minb = minb
 local scan_maxb = maxb
 local window_size = limit * 16
+local function scan_ids(key)
+  if newest then
+    return redis.call('ZREVRANGEBYLEX', key, scan_maxb, minb, 'LIMIT', 0, window_size)
+  end
+  return redis.call('ZRANGEBYLEX', key, scan_minb, maxb, 'LIMIT', 0, window_size)
+end
+local function scan_eligible_ids()
+  local pending_ids = scan_ids(source_pending)
+  if require_unclaimed then return pending_ids end
+  local claimed_ids = scan_ids(source_claimed)
+  local ids = {}
+  local pending_index = 1
+  local claimed_index = 1
+  while #ids < window_size do
+    local pending_id = pending_ids[pending_index]
+    local claimed_id = claimed_ids[claimed_index]
+    if pending_id == nil and claimed_id == nil then break end
+    local selected_id
+    if pending_id ~= nil and pending_id == claimed_id then
+      selected_id = pending_id
+      pending_index = pending_index + 1
+      claimed_index = claimed_index + 1
+    elseif claimed_id == nil or (
+      pending_id ~= nil and (
+        (newest and pending_id > claimed_id) or
+        ((not newest) and pending_id < claimed_id)
+      )
+    ) then
+      selected_id = pending_id
+      pending_index = pending_index + 1
+    else
+      selected_id = claimed_id
+      claimed_index = claimed_index + 1
+    end
+    table.insert(ids, selected_id)
+  end
+  return ids
+end
 -- Bounded to 16 windows per invocation; Python resumes after cursor. A
 -- concurrently released id behind cursor waits for the next public operation.
 for window = 1, 16 do
@@ -300,11 +338,7 @@ for window = 1, 16 do
   if exact_id ~= '' then
     ids = {exact_id}
   else
-    if newest then
-      ids = redis.call('ZREVRANGEBYLEX', source_pending, scan_maxb, minb, 'LIMIT', 0, window_size)
-    else
-      ids = redis.call('ZRANGEBYLEX', source_pending, scan_minb, maxb, 'LIMIT', 0, window_size)
-    end
+    ids = scan_eligible_ids()
   end
   if #ids == 0 then
     cursor = ''
