@@ -38,6 +38,13 @@ def _run_direct(operation):
     return operation()
 
 
+def _write_schema_version(runner: SQLiteRunner, version: int) -> None:
+    runner.run(
+        "UPDATE meta SET value=? WHERE key='schema_version'",
+        (version,),
+    )
+
+
 class _FailOnceRunner:
     """Delegate to a real runner while failing one named SQL operation."""
 
@@ -293,12 +300,9 @@ def test_schema_v6_rebuild_preserves_sidecar_and_matches_fresh_shape(
                 "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs'"
             ).fetchone(),
             "ref_index": before.execute(
-                "SELECT sql FROM sqlite_master "
-                "WHERE name='sidecar_message_refs_ts'"
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs_ts'"
             ).fetchone(),
-            "ref_rows": before.execute(
-                "SELECT * FROM sidecar_message_refs"
-            ).fetchall(),
+            "ref_rows": before.execute("SELECT * FROM sidecar_message_refs").fetchall(),
             "view_definition": before.execute(
                 "SELECT sql FROM sqlite_master WHERE name='sidecar_message_ts'"
             ).fetchone(),
@@ -341,8 +345,7 @@ def test_schema_v6_rebuild_preserves_sidecar_and_matches_fresh_shape(
                 "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs'"
             ).fetchone(),
             "ref_index": migrated.execute(
-                "SELECT sql FROM sqlite_master "
-                "WHERE name='sidecar_message_refs_ts'"
+                "SELECT sql FROM sqlite_master WHERE name='sidecar_message_refs_ts'"
             ).fetchone(),
             "ref_rows": migrated.execute(
                 "SELECT * FROM sidecar_message_refs"
@@ -355,9 +358,12 @@ def test_schema_v6_rebuild_preserves_sidecar_and_matches_fresh_shape(
         assert migrated.execute(
             "SELECT ts FROM sidecar_message_ts ORDER BY ts"
         ).fetchall() == [(100,), (200,), (300,)]
-        assert migrated.execute(
-            "SELECT name FROM sqlite_sequence WHERE name='messages'"
-        ).fetchall() == []
+        assert (
+            migrated.execute(
+                "SELECT name FROM sqlite_sequence WHERE name='messages'"
+            ).fetchall()
+            == []
+        )
 
 
 @pytest.mark.parametrize(
@@ -386,9 +392,8 @@ def test_schema_v6_failure_rolls_back_owned_and_sidecar_state(
             ensure_schema_v6(
                 failing,
                 current_version=5,
-                write_schema_version=lambda version: runner.run(
-                    "UPDATE meta SET value=? WHERE key='schema_version'",
-                    (version,),
+                write_schema_version=lambda version: _write_schema_version(
+                    runner, version
                 ),
             )
         assert runner.get_connection().in_transaction is False
@@ -463,18 +468,15 @@ def test_schema_v6_preserves_public_id_foreign_key_and_pragma_state(
         ensure_schema_v6(
             runner,
             current_version=5,
-            write_schema_version=lambda version: runner.run(
-                "UPDATE meta SET value=? WHERE key='schema_version'",
-                (version,),
-            ),
+            write_schema_version=lambda version: _write_schema_version(runner, version),
         )
 
         assert list(runner.run("PRAGMA foreign_keys", fetch=True)) == [(1,)]
         assert list(runner.run("PRAGMA legacy_alter_table", fetch=True)) == [(0,)]
         assert list(runner.run("PRAGMA foreign_key_check", fetch=True)) == []
-        assert list(
-            runner.run("SELECT * FROM sidecar_message_refs", fetch=True)
-        ) == [(200, "keep-ref")]
+        assert list(runner.run("SELECT * FROM sidecar_message_refs", fetch=True)) == [
+            (200, "keep-ref")
+        ]
     finally:
         runner.close()
 
@@ -495,22 +497,19 @@ def test_schema_v6_failure_restores_foreign_key_pragma(tmp_path: Path) -> None:
             ensure_schema_v6(
                 failing,
                 current_version=5,
-                write_schema_version=lambda version: runner.run(
-                    "UPDATE meta SET value=? WHERE key='schema_version'",
-                    (version,),
+                write_schema_version=lambda version: _write_schema_version(
+                    runner, version
                 ),
             )
 
         assert list(runner.run("PRAGMA foreign_keys", fetch=True)) == [(1,)]
         assert list(runner.run("PRAGMA legacy_alter_table", fetch=True)) == [(0,)]
         assert list(runner.run("PRAGMA foreign_key_check", fetch=True)) == []
+        assert list(runner.run("SELECT * FROM sidecar_message_refs", fetch=True)) == [
+            (200, "keep-ref")
+        ]
         assert list(
-            runner.run("SELECT * FROM sidecar_message_refs", fetch=True)
-        ) == [(200, "keep-ref")]
-        assert list(
-            runner.run(
-                "SELECT value FROM meta WHERE key='schema_version'", fetch=True
-            )
+            runner.run("SELECT value FROM meta WHERE key='schema_version'", fetch=True)
         ) == [(5,)]
     finally:
         runner.close()
@@ -809,13 +808,16 @@ def test_ensure_schema_v2_adds_claimed_column(
 
         assert versions == [2]
         assert messages_has_claimed_column(runner) is True
-        assert list(
-            runner.run(
-                "SELECT name FROM sqlite_master WHERE type='index' "
-                "AND name='idx_messages_unclaimed'",
-                fetch=True,
+        assert (
+            list(
+                runner.run(
+                    "SELECT name FROM sqlite_master WHERE type='index' "
+                    "AND name='idx_messages_unclaimed'",
+                    fetch=True,
+                )
             )
-        ) == []
+            == []
+        )
     finally:
         runner.close()
 

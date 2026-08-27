@@ -218,4 +218,4 @@ def test_generator_order_fixture_is_rejected_by_mypy() -> None:
     assert result.returncode == 1
     assert result.stderr == ""
     assert result.stdout.count("error:") >= 3
-    assert result.stdout.count("Unexpected keyword argument \"order\"") == 3
+    assert result.stdout.count('Unexpected keyword argument "order"') == 3

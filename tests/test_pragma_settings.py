@@ -68,7 +68,7 @@ def test_default_pragma_settings(tmp_path: Path) -> None:
         # Check that composite index exists
         result = _rows(
             db._runner.run(
-                    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts'",
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts'",
                 fetch=True,
             )
         )
@@ -296,7 +296,7 @@ def test_index_migration_from_old_database(tmp_path: Path) -> None:
         # Check that the obsolete id index is gone.
         result = _rows(
             db._runner.run(
-                    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_queue_id'",
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_queue_id'",
                 fetch=True,
             )
         )
@@ -305,7 +305,7 @@ def test_index_migration_from_old_database(tmp_path: Path) -> None:
         # Check that the canonical public-ID index exists.
         result = _rows(
             db._runner.run(
-                    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts'",
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts'",
                 fetch=True,
             )
         )

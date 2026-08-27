@@ -459,9 +459,7 @@ class AsyncBrokerCore:
             )
             if rows and rows[0][0] > 0:
                 await self._execute_with_retry(
-                    lambda: self._runner.run(
-                        SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS
-                    )
+                    lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
                 )
 
             # Create meta table
@@ -656,9 +654,7 @@ class AsyncBrokerCore:
             if current_version < 6:
                 rows = await self._runner.run("PRAGMA foreign_keys", fetch=True)
                 foreign_keys_enabled = bool(rows[0][0])
-                rows = await self._runner.run(
-                    "PRAGMA legacy_alter_table", fetch=True
-                )
+                rows = await self._runner.run("PRAGMA legacy_alter_table", fetch=True)
                 legacy_alter_table_enabled = bool(rows[0][0])
                 if foreign_keys_enabled:
                     await self._runner.run("PRAGMA foreign_keys = OFF")
@@ -705,9 +701,7 @@ class AsyncBrokerCore:
                         )
                 await self._runner.run("DROP INDEX IF EXISTS idx_messages_ts_unique")
                 await self._runner.run("DROP INDEX IF EXISTS idx_messages_unclaimed")
-                await self._runner.run(
-                    "DROP INDEX IF EXISTS idx_messages_queue_ts_id"
-                )
+                await self._runner.run("DROP INDEX IF EXISTS idx_messages_queue_ts_id")
                 await self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS)
                 await self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
                 await self._runner.commit()
@@ -718,9 +712,7 @@ class AsyncBrokerCore:
                 if current_version < 6:
                     try:
                         if not legacy_alter_table_enabled:
-                            await self._runner.run(
-                                "PRAGMA legacy_alter_table = OFF"
-                            )
+                            await self._runner.run("PRAGMA legacy_alter_table = OFF")
                     finally:
                         if foreign_keys_enabled:
                             await self._runner.run("PRAGMA foreign_keys = ON")

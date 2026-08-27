@@ -75,7 +75,7 @@ def test_claim_many_normalizes_sqlite_returning_rows_by_public_id(
             ]
         )
 
-        rows = broker.claim_many("jobs", 3, order=order)
+        rows = cast(list[tuple[str, int]], broker.claim_many("jobs", 3, order=order))
         assert [timestamp for _body, timestamp in rows] == expected_ids
     finally:
         broker.close()
@@ -134,7 +134,10 @@ def test_move_many_normalizes_sqlite_returning_rows_by_public_id(
             ]
         )
 
-        rows = broker.move_many("source", "destination", 3, order=order)
+        rows = cast(
+            list[tuple[str, int]],
+            broker.move_many("source", "destination", 3, order=order),
+        )
         assert [timestamp for _body, timestamp in rows] == expected_ids
     finally:
         broker.close()

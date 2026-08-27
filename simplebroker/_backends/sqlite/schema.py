@@ -194,8 +194,9 @@ def _timestamp_unique_index_state(runner: SQLRunner) -> tuple[bool, bool]:
 
     primary_key_columns = [
         (str(name), str(column_type).upper(), int(primary_key_position))
-        for _cid, name, column_type, _not_null, _default, primary_key_position
-        in runner.run("PRAGMA table_info('messages')", fetch=True)
+        for _cid, name, column_type, _not_null, _default, primary_key_position in runner.run(
+            "PRAGMA table_info('messages')", fetch=True
+        )
         if int(primary_key_position) > 0
     ]
     has_integer_primary_key = primary_key_columns == [("ts", "INTEGER", 1)]
@@ -482,8 +483,7 @@ def _verify_foreign_keys_after_v6_rebuild(runner: SQLRunner) -> None:
     violations = list(runner.run("PRAGMA foreign_key_check", fetch=True))
     if violations:
         raise RuntimeError(
-            "SQLite schema v6 migration produced foreign-key violations: "
-            f"{violations}"
+            f"SQLite schema v6 migration produced foreign-key violations: {violations}"
         )
 
 

@@ -22,7 +22,9 @@ _EXPECTED_ENVIRONMENT = (
 def _read_expectations(environment: Mapping[str, str]) -> dict[str, str] | None:
     """Return complete artifact expectations or reject a partial contract."""
 
-    present = {key: environment[key] for key in _EXPECTED_ENVIRONMENT if key in environment}
+    present = {
+        key: environment[key] for key in _EXPECTED_ENVIRONMENT if key in environment
+    }
     if not present:
         return None
 
@@ -41,15 +43,18 @@ def test_weft_process_uses_expected_simplebroker_artifacts() -> None:
     if expected is None:
         pytest.skip("artifact expectations are not active in the ordinary source suite")
 
-    assert importlib.metadata.version("simplebroker") == expected[
-        "SIMPLEBROKER_EXPECTED_CORE_VERSION"
-    ]
-    assert importlib.metadata.version("simplebroker-pg") == expected[
-        "SIMPLEBROKER_EXPECTED_PG_VERSION"
-    ]
-    assert importlib.metadata.version("simplebroker-redis") == expected[
-        "SIMPLEBROKER_EXPECTED_REDIS_VERSION"
-    ]
+    assert (
+        importlib.metadata.version("simplebroker")
+        == expected["SIMPLEBROKER_EXPECTED_CORE_VERSION"]
+    )
+    assert (
+        importlib.metadata.version("simplebroker-pg")
+        == expected["SIMPLEBROKER_EXPECTED_PG_VERSION"]
+    )
+    assert (
+        importlib.metadata.version("simplebroker-redis")
+        == expected["SIMPLEBROKER_EXPECTED_REDIS_VERSION"]
+    )
 
     import simplebroker_pg
     import simplebroker_redis

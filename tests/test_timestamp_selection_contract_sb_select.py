@@ -307,14 +307,14 @@ def test_invalid_or_unbounded_order_fails_before_target_acquisition(
         raise AssertionError("invalid order reached target acquisition")
 
     monkeypatch.setattr(Queue, "get_connection", fail_acquisition)
-    for operation in (queue.read_one, queue.peek_one):
+    for one_operation in (queue.read_one, queue.peek_one):
         with pytest.raises(ValueError, match="'oldest'.*'newest'"):
-            operation(order="NEWEST")
+            one_operation(order="NEWEST")
     with pytest.raises(ValueError, match="'oldest'.*'newest'"):
         queue.move_one("destination", order="NEWEST")
-    for operation in (queue.read, queue.peek):
+    for high_level_operation in (queue.read, queue.peek):
         with pytest.raises(ValueError, match="all_messages"):
-            operation(all_messages=True, order="newest")
+            high_level_operation(all_messages=True, order="newest")
     with pytest.raises(ValueError, match="all_messages"):
         queue.move("destination", all_messages=True, order="newest")
 
