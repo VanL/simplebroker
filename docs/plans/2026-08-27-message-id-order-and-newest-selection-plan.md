@@ -1368,6 +1368,8 @@ This plan is complete only when:
 
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
+| [SB-API-11], acceptance 7 | Every previous-client PostgreSQL cold open rejects v6 at the metadata-version gate before legacy column use. | The published v7.5.1/PG 3.10.0 `BrokerTarget` path rejects fresh and upgraded v6 cleanly and without mutation. The documented injected `Queue(..., runner=PostgresRunner(...))` path wraps the runner; v7's extension then misses its concrete-runner metadata fast path and parses legacy bootstrap DDL against `order_id` before core performs its version check. It fails with `column "order_id" does not exist`. | The previous artifacts are immutable. PostgreSQL resolves the missing column even when an index of the legacy name already exists, so a surrogate-free v6 target cannot repair that path with an index-name sentinel. Satisfying the unconditional promise requires retaining an `order_id`-compatible column, patching and releasing the old line first, or narrowing the promise. | No contract change has been selected. The no-surrogate implementation remains intact and plan completion is blocked on this owner choice. |
+| Task 0 inventory, Task 7 Weft gate | Weft has no production dependency on insertion order for exact-ID rows and its suites pass the v8 artifacts unchanged. | Pipeline child TIDs are allocated stage-then-edge but exact-ID spawn rows are submitted edge-then-stage. Ascending public-ID retrieval therefore changes the observed internal spawn order. The two pipeline-order tests pass with core 7.5.1 and fail with core 8.0.0 on both SQLite and PostgreSQL artifact runs. | The static Task 0 inventory saw exact insertion but incorrectly assumed the generated IDs were monotone in submission order. SimpleBroker is behaving according to the promoted [SB-SELECT-5] contract. | Keep the SimpleBroker contract. Weft should allocate edge and stage TIDs in dependency/submission order (or otherwise stop relying on exact-ID insertion order) in a separately governed downstream change. |
 
 Empty at authoring time. Any implementation change to supported surfaces,
 schema-version strategy, accepted layouts, order vocabulary, generator
@@ -1591,6 +1593,64 @@ two-choice conflict is an instance of principles 7 and 8 already covered.
 Later tasks append command, date, commit/artifact SHA, backend/service version,
 observed result, and residual risk for each gate. Do not replace evidence with
 “tests pass.”
+
+### 2026-08-27 Task 7 artifact, rollback, and downstream evidence
+
+- One coherent local wheel set was built from `50f5c858` into
+  `/tmp/simplebroker-v8-artifacts.79yZIB`. The recorded manifest is:
+  `simplebroker-8.0.0-py3-none-any.whl`
+  `24056667381174b435219b27e3edb49cd56e6579c824bb4a13b88d386cbc992d`;
+  `simplebroker_pg-4.0.0-py3-none-any.whl`
+  `ce76c5ad2c41e8193b3eaa3bdb9e80073a48a588f22188b0b43c16ff99c5d0ce`;
+  `simplebroker_redis-4.0.0-py3-none-any.whl`
+  `a9ef68e1fbf6509eb67154d70de6d2f7f176362e7626047c446b9c1c51f45d5e`.
+  An isolated no-project import resolved all three modules from uv's artifact
+  environment, outside this source checkout. `./bin/packaging-smoke` then
+  passed wheel/sdist construction, Python 3.11 clean installs, first-party
+  backend discovery, and root package behavior.
+- `tests/compatibility/test_weft_artifact_versions.py` owns the downstream
+  child-process possession check. It skips only when all four expectation
+  variables are absent, rejects partial configuration, asserts all three
+  metadata versions and imports when active, and rejects module paths below
+  this source root. Its byte-identical Weft copy had SHA-256
+  `f2a5abb709090e43ef1168e0c4c933eed5995845983459769b37883eb5e22fd1`.
+  The probe's three tests passed under Weft's own conftest boundary. The real
+  PostgreSQL wrapper's inner `--with simplebroker-pg[dev]` process also passed
+  all three, proving it retained core 8.0.0, PG 4.0.0, and Redis 4.0.0 rather
+  than resolving a published older extension.
+- Real previous-artifact probes used core 7.5.1 and PG 3.10.0. SQLite rejected
+  fresh and upgraded v6 on first access with the newer-schema-version
+  diagnostic, no missing-column text, and a byte-identical database after the
+  upgraded-target attempt. PostgreSQL `BrokerTarget` rejected fresh and
+  upgraded v6 with the same diagnostic; a before/after logical snapshot proved
+  no metadata, message, alias, claim, queue, or sidecar mutation. The injected
+  runner exception described in the Deviation Log is a release blocker under
+  the current unconditional acceptance text.
+- The SQLite rollback drill quiesced a real v5 target, copied the whole file,
+  migrated it with the core wheel, and verified ascending broker rows plus
+  unchanged sidecar DDL, data, index, and `sqlite_sequence` state. Restoring
+  the v5 file let core 7.5.1 reopen it with version 5, the surrogate column,
+  original order, and the same sidecar sequence. The PostgreSQL drill used a
+  PostgreSQL 18 custom-format whole-schema dump (SHA-256
+  `94ffd78743cb17449d33ea82dd5632436c6bb1f513a27a661f378655b720104a`),
+  migrated under v8, verified sidecar DDL/data/index/sequence state, dropped
+  only the disposable test schema, restored the dump, and reopened it with the
+  old package pair. Already-admitted v7 handles across each migration failed
+  respectively on `id` and `order_id`, which is the intended proof that
+  quiescence is mandatory rather than a mixed-version compatibility claim.
+- A disposable Weft worktree at the recorded Task 0 SHA
+  `33e1ab767046e6a7e22904d5198840b174552798` resolved all three absolute wheel
+  paths. The ordinary artifact suite finished with 4305 passed, 5 skipped, and
+  the two pipeline exact-ID order failures recorded in the Deviation Log.
+  Both exact tests pass when the same worktree overlays core 7.5.1. The full
+  PostgreSQL wrapper retained the intended artifacts and stopped under its
+  `-x` policy on the same pipeline-order assertion; no separate PostgreSQL
+  compatibility failure preceded it.
+- No package, tag, or repository publication was attempted. The plan's second
+  disposable worktree against exact published versions remains unavailable
+  until the owner explicitly authorizes and completes the three serial
+  publications. Task 7 and the plan remain active because the two deviations
+  above must be resolved before publication.
 
 ## Independent Plan Review
 
