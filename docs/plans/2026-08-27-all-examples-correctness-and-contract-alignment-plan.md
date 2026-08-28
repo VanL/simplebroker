@@ -1,6 +1,6 @@
 # All Examples Correctness and Contract Alignment Plan
 
-Status: active
+Status: completed
 Class: 4. This changes published runnable examples and their failure semantics,
 including async startup, concurrency, destructive streaming, restart behavior,
 and shell mutation paths. It does not revise the SimpleBroker product contract.
@@ -1111,8 +1111,8 @@ database.
 
 ### 2026-08-27 Task 7 full verification and closure evidence
 
-The final example-tree gate passes 136 tests. The required external example
-matrix passes 160 tests. The full repository suite passes 3,330 tests with 18
+The final example-tree gate passes 140 tests. The required external example
+matrix passes 165 tests. The full repository suite passes 3,335 tests with 18
 expected skips: platform-specific Windows/PostgreSQL cases, opt-in diagnostic
 and direct cross-backend probes, the source-suite artifact placeholder, and two
 ephemeral variants owned by their subprocess probe. No skip was added by this

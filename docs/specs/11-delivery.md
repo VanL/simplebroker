@@ -283,7 +283,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- active: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
+- completed: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
   — aligns async, watcher, reactor, and worker examples with claim boundaries
 - completed: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
   — established engine-order independence; its private storage-FIFO rule is

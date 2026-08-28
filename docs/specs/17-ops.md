@@ -285,7 +285,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- active: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
+- completed: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
   — repairs example stats, rename, exact delete, and queue mutation handling
 - active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
   — delete no-match result parity and PostgreSQL uncertain-unlock session discard
