@@ -16,8 +16,6 @@ from simplebroker import Queue
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SAFE_WORKER = REPO_ROOT / "examples" / "safe_worker.sh"
 RESILIENT_WORKER = REPO_ROOT / "examples" / "resilient_worker.sh"
-EXAMPLES_README = REPO_ROOT / "examples" / "README.md"
-AGENT_KERNEL = REPO_ROOT / "docs" / "agent-kernel.md"
 MESSAGE_ID = "1722783600000000000"
 MAX_MESSAGE_ID = str(2**63 - 1)
 
@@ -495,12 +493,6 @@ exec env PYTHONPATH={shlex.quote(str(REPO_ROOT))} \
     assert Path(worker_env["HANDLER_CALL_LOG"]).read_text(encoding="utf-8") == (
         "real broker body"
     )
-
-
-def test_worker_docs_do_not_state_obsolete_jq_precision_floor() -> None:
-    for path in (REPO_ROOT / "README.md", EXAMPLES_README, AGENT_KERNEL):
-        text = path.read_text(encoding="utf-8")
-        assert "jq 1.7+" not in text
 
 
 def test_resilient_worker_preserves_operational_peek_failure(

@@ -29,6 +29,8 @@ import asyncio
 import random
 import signal
 import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 # ADVANCED: Import the custom async implementation
 # Note: This uses the advanced SQLite-specific async_pooled_broker example.
@@ -98,7 +100,7 @@ async def monitor(broker: AsyncBrokerCore, shutdown_event: asyncio.Event) -> Non
             break
 
 
-async def main() -> None:
+async def main(db_path: str) -> None:
     """Main application demonstrating async queue patterns."""
     print("SimpleBroker Async Example")
     print("==========================")
@@ -118,7 +120,7 @@ async def main() -> None:
         loop.add_signal_handler(sig, signal_handler)
 
     # Use the async broker with connection pooling
-    async with async_broker("work_queue.db", pool_size=10) as broker:
+    async with async_broker(db_path, pool_size=10) as broker:
         # Create work queue
         work_queue = AsyncQueue("work", broker)
 
@@ -176,12 +178,12 @@ async def main() -> None:
             print(f"\nFound {retry_count} messages that need retry")
 
 
-async def simple_example() -> None:
+async def simple_example(db_path: str) -> None:
     """Very simple example for getting started."""
     print("\n=== Simple Async Example ===")
 
     # Create a broker and queue
-    async with async_broker("simple.db") as broker:
+    async with async_broker(db_path) as broker:
         queue = AsyncQueue("my_queue", broker)
 
         # Write some messages
@@ -197,11 +199,11 @@ async def simple_example() -> None:
             print(f"Got message: {msg}")
 
 
-async def batch_processing_example() -> None:
+async def batch_processing_example(db_path: str) -> None:
     """Show oldest-only batch streaming with claim-before-processing delivery."""
     print("\n=== Batch Processing Example ===")
 
-    async with async_broker("batch.db") as broker:
+    async with async_broker(db_path) as broker:
         queue = AsyncQueue("batch_queue", broker)
 
         # Write many messages
@@ -213,8 +215,8 @@ async def batch_processing_example() -> None:
         print("\nProcessing in batches of 10...")
         count = 0
 
-        # Using commit_interval=10 for better performance
-        # This provides at-least-once delivery semantics
+        # A larger interval holds one write transaction across these yields.
+        # Closing before commit rolls the batch back and can expose bodies again.
         async for _msg in queue.stream(commit_interval=10):
             count += 1
             if count % 10 == 0:
@@ -227,9 +229,11 @@ if __name__ == "__main__":
     # Run different examples
     choice = sys.argv[1] if len(sys.argv) > 1 else "main"
 
-    if choice == "simple":
-        asyncio.run(simple_example())
-    elif choice == "batch":
-        asyncio.run(batch_processing_example())
-    else:
-        asyncio.run(main())
+    with TemporaryDirectory(prefix="simplebroker-async-") as tmpdir:
+        example_db = str(Path(tmpdir) / "example.db")
+        if choice == "simple":
+            asyncio.run(simple_example(example_db))
+        elif choice == "batch":
+            asyncio.run(batch_processing_example(example_db))
+        else:
+            asyncio.run(main(example_db))

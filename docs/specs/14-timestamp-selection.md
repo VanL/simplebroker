@@ -125,6 +125,8 @@ and is not implied by bounded `newest` selection.
 
 ## Related Plans
 
+- active: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
+  — demonstrates bounded newest selection and complete oldest-only live scans
 - active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
   — owns [SB-SELECT-5], bounded newest selection, and its cross-backend proof
 

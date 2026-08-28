@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transaction advisory lock. Caller-owned sidecar tables and state are
   preserved; changes inside reserved broker objects are unsupported. Backend
   API v8 requires the matching first-party extension releases.
+- Repaired and reclassified the shipped examples for the v8 contracts. The
+  recommended async wrapper now avoids hidden destructive prefetch and exposes
+  bounded newest selection; the advanced async example delegates schema setup
+  to the canonical open path; retained-history reactor discovery no longer uses
+  a high-water checkpoint as a permanent filter; watcher and shell examples
+  state and preserve their actual failure boundaries; and runnable Python demos
+  use disposable targets. These are example and documentation guarantees, not
+  additional core API or schema behavior beyond the changes above.
 
 ## [7.5.1] - 2026-08-26
 

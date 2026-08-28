@@ -29,6 +29,8 @@ import re
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Protocol, cast
 
 try:
@@ -1001,11 +1003,11 @@ async def async_broker(
         await broker.close()
 
 
-async def example_basic() -> None:
+async def example_basic(db_path: str) -> None:
     """Basic usage example."""
     print("=== Basic Async Queue Example ===")
 
-    async with async_broker("async_example.db") as broker:
+    async with async_broker(db_path) as broker:
         queue = AsyncQueue("tasks", broker)
 
         # Write some messages
@@ -1025,11 +1027,11 @@ async def example_basic() -> None:
         print(f"\nQueue size: {await queue.size()}")
 
 
-async def example_concurrent() -> None:
+async def example_concurrent(db_path: str) -> None:
     """High-concurrency example with multiple producers and consumers."""
     print("\n=== Concurrent Producers/Consumers Example ===")
 
-    async with async_broker("async_example.db", pool_size=20) as broker:
+    async with async_broker(db_path, pool_size=20) as broker:
         queue = AsyncQueue("concurrent", broker)
 
         # Producer coroutine
@@ -1072,11 +1074,11 @@ async def example_concurrent() -> None:
         print(f"Throughput: {500 / elapsed:.0f} messages/second")
 
 
-async def example_streaming() -> None:
+async def example_streaming(db_path: str) -> None:
     """Streaming example with batch processing."""
     print("\n=== Streaming Example ===")
 
-    async with async_broker("async_example.db") as broker:
+    async with async_broker(db_path) as broker:
         queue = AsyncQueue("stream", broker)
 
         # Write many messages
@@ -1099,11 +1101,11 @@ async def example_streaming() -> None:
         print(f"Throughput: {count / elapsed:.0f} messages/second")
 
 
-async def example_multiple_queues() -> None:
+async def example_multiple_queues(db_path: str) -> None:
     """Example with multiple queues and priorities."""
     print("\n=== Multiple Queues Example ===")
 
-    async with async_broker("async_example.db") as broker:
+    async with async_broker(db_path) as broker:
         # Create queues with different priorities
         high = AsyncQueue("high_priority", broker)
         medium = AsyncQueue("medium_priority", broker)
@@ -1150,11 +1152,11 @@ async def example_multiple_queues() -> None:
         print(f"\nTotal processed: {total_processed}")
 
 
-async def example_resilience() -> None:
+async def example_resilience(db_path: str) -> None:
     """Example showing error handling and resilience."""
     print("\n=== Resilience Example ===")
 
-    async with async_broker("async_example.db") as broker:
+    async with async_broker(db_path) as broker:
         queue = AsyncQueue("resilient", broker)
 
         # Simulate message processing with potential failures
@@ -1203,7 +1205,7 @@ async def example_resilience() -> None:
             print(f"  - {msg}")
 
 
-async def benchmark() -> None:
+async def benchmark(db_path: str) -> None:
     """Performance benchmark."""
     print("\n=== Performance Benchmark ===")
 
@@ -1212,7 +1214,7 @@ async def benchmark() -> None:
         print(f"\nTesting with pool_size={pool_size}")
 
         async with async_broker(
-            "benchmark.db",
+            db_path,
             pool_size=pool_size,
             max_connections=pool_size * 2,
         ) as broker:
@@ -1270,7 +1272,7 @@ async def benchmark() -> None:
             )
 
 
-async def main() -> None:
+async def main(db_path: str) -> None:
     """Run all examples."""
     examples = [
         example_basic,
@@ -1282,7 +1284,7 @@ async def main() -> None:
     ]
 
     for example in examples:
-        await example()
+        await example(db_path)
         print("\n" + "=" * 60 + "\n")
 
 
@@ -1292,5 +1294,6 @@ if __name__ == "__main__":
     print("This example requires: pip install aiosqlite aiosqlitepool")
     print()
 
-    # Run all examples
-    asyncio.run(main())
+    # Run all examples against one disposable target.
+    with TemporaryDirectory(prefix="simplebroker-async-pool-") as tmpdir:
+        asyncio.run(main(str(Path(tmpdir) / "example.db")))

@@ -1,248 +1,165 @@
-# ADVANCED: Async SQLite Queue with Connection Pooling
+# Async Examples
 
-**NOTE: This documentation covers the ADVANCED async_pooled_broker.py example which uses
-internal SQLite APIs to build a custom async implementation. Most users should use:**
-- **async_wrapper.py** - Simpler async wrapper around the standard Queue API (RECOMMENDED)
-- **python_api.py** - Standard synchronous API examples
+SimpleBroker's supported API is synchronous. This directory shows two distinct
+ways to use it from asyncio code. They do not have the same stability boundary.
 
-This directory contains a SQLite-specific async queue implementation using `aiosqlite` and `aiosqlitepool`.
-It shares the built-in SQLite schema and core queue semantics, but it is not a backend plugin and it does not implement the synchronous `SQLRunner` extension contract.
+## Recommended: wrap the public API
 
-## Features
+[`async_wrapper.py`](async_wrapper.py) runs ordinary public `Queue`,
+`QueueWatcher`, and `open_broker` calls in a thread pool. It has no dependency
+beyond SimpleBroker and the Python standard library. It can use any backend
+supported by the public target resolver.
 
-- **Full async/await support** - Native asyncio implementation
-- **Connection pooling** - High-performance connection pool for concurrent operations
-- **SQLite schema compatibility** - Creates the current SimpleBroker SQLite schema, including alias metadata
-- **Core queue operations** - Timestamps, transactions, moves, broadcast, and vacuum
-- **High throughput** - Optimized for concurrent producers and consumers
+```python
+from pathlib import Path
 
-## Installation
+from examples.async_wrapper import AsyncBroker
+
+
+async def consume_one(root: Path) -> str | None:
+    async with AsyncBroker.from_root(root) as broker:
+        await broker.push("tasks", "build")
+        return await broker.pop("tasks", order="newest")
+```
+
+`pop()` and `peek()` accept the public bounded `order="oldest"` default and
+`order="newest"` alternative. `stream_messages()` is deliberately
+oldest-only. It starts one destructive synchronous read per active iterator
+step; it does not prefetch a hidden batch.
+
+A synchronous read commits its claim before the async generator yields. If the
+awaiting coroutine is cancelled while that one executor call is running, that
+current row may still become claimed before cancellation is reported. Later
+rows are not consumed by that iteration. Likewise, breaking after one yielded
+message leaves later rows pending.
+
+Run the recommended demo from the repository root:
 
 ```bash
-uv add aiosqlite aiosqlitepool
+uv run python examples/async_wrapper.py
 ```
 
-## Quick Start
+It uses a temporary SQLite target and closes its watchers and executor.
 
-```python
-import asyncio
-from async_pooled_broker import AsyncQueue, async_broker
+## Advanced: pooled SQLite implementation
 
+[`async_pooled_broker.py`](async_pooled_broker.py) is an advanced,
+SQLite-specific example. It imports private SimpleBroker SQL and constants to
+build a separate async queue core with `aiosqlite` and `aiosqlitepool`. It is
+not a backend plugin, does not implement the synchronous `SQLRunner` extension
+contract, and may need changes when SimpleBroker internals change.
 
-async def main():
-    # Create broker with connection pool
-    async with async_broker("myqueue.db", pool_size=10) as broker:
-        queue = AsyncQueue("tasks", broker)
+In this repository, select the development extra when running it:
 
-        # Write messages
-        await queue.write("Task 1")
-        await queue.write("Task 2")
-
-        # Read messages
-        while msg := await queue.read():
-            print(f"Processing: {msg}")
-
-
-asyncio.run(main())
+```bash
+uv run --extra dev python examples/async_simple_example.py simple
 ```
 
-## Architecture
+For an application consuming the source outside this repository, install
+`aiosqlite>=0.22.1` and `aiosqlitepool>=1.0.0` in the application environment.
 
-### AsyncBrokerCore
+### Setup ownership
 
-An async SQLite queue core for the example:
+The async implementation owns no schema DDL. `async_broker(...)` snapshots
+configuration once, invokes the public synchronous `open_broker(...)` path in a
+worker thread, waits for canonical admission and migration to finish, and only
+then constructs the async pool. The production SQLite setup path owns the
+cross-process phase lock. Runtime async connections perform a read-only schema
+compatibility check and reject an incompatible target.
 
-- `write()` - Add messages to queues
-- `read()` - Read and remove messages  
-- `stream_read()` - Stream messages efficiently
-- `list_queues()` - list queue names
-- `get_queue_stats()` - list queues with counts
-- `move()` - Move messages between queues
-- `broadcast()` - Send to all queues
-- `vacuum()` - Clean up claimed messages
+Cancelling async context entry does not stop the setup worker thread. The
+context waits for that worker to finish and close before propagating
+cancellation, and it does not construct the pool afterward.
 
-### PooledAsyncSQLiteRunner
+Do not share a live pool across a process fork. Each process should enter its
+own `async_broker(...)` context after process creation. Concurrent processes
+still rely on SQLite and SimpleBroker's canonical setup/locking rules, not an
+in-process `asyncio.Lock`.
 
-High-performance SQLite runner with connection pooling:
+### Selection and delivery
 
-- Configurable pool size (default: 10)
-- Thread-safe connection management
-- Automatic connection recycling
-- Transaction support with dedicated connections
+This advanced subset traverses live queues in ascending public message-ID order
+only. It does not expose the bounded `order="newest"` option. Use the public
+wrapper when that supported surface is required.
 
-### AsyncQueue
+Ordinary `read()` and `stream(commit_interval=1)` operations commit a claim
+before yielding a message. Application failure or cancellation after that
+point does not restore the original pending row. A retry or dead-letter write
+therefore creates a new message with a new public ID; it is not a move or
+restoration of the consumed row.
 
-High-level queue interface for common operations:
+With `commit_interval > 1`, the example marks a bounded batch inside one open
+write transaction and yields the batch before committing it. Closing or
+failing the iterator before commit rolls that batch back, which can expose
+already-processed bodies again. It also holds the write transaction across
+application processing. This is an advanced throughput tradeoff, not a
+blanket delivery guarantee. Keep the interval at `1` unless the application
+has measured the benefit and is prepared for replay and lock duration.
 
-```python
-queue = AsyncQueue("my_queue", broker)
-await queue.write("message")
-msg = await queue.read()
-async for msg in queue.stream():
-    process(msg)
+### Surface shown by the advanced core
+
+- `AsyncQueue.write()`, `read()`, `read_all()`, `stream()`, `size()`, and
+  `move_to()`
+- queue listing and pending/total statistics
+- move, broadcast, delete, and vacuum operations
+- one fixed-size async SQLite connection pool
+
+It does not reproduce every public `Queue`, watcher, command, backend, or
+configuration behavior. In particular, the async core's API should not be used
+as a substitute contract for SimpleBroker itself.
+
+### Configuration
+
+The example samples the normal `BROKER_*` configuration once at context entry.
+The most relevant SQLite controls are:
+
+- `BROKER_BUSY_TIMEOUT`
+- `BROKER_CACHE_MB`
+- `BROKER_SYNC_MODE`
+- `BROKER_WAL_AUTOCHECKPOINT`
+- `BROKER_AUTO_VACUUM`
+- `BROKER_AUTO_VACUUM_INTERVAL`
+- `BROKER_VACUUM_THRESHOLD`
+- `BROKER_VACUUM_BATCH_SIZE`
+- `BROKER_MAX_MESSAGE_SIZE`
+
+The canonical forms and limits belong to the
+[`configuration guide`](../docs/guides/configuration.md), not this example.
+
+Run the smaller advanced demonstration from the repository root:
+
+```bash
+uv run --extra dev python examples/async_simple_example.py simple
+uv run --extra dev python examples/async_simple_example.py batch
 ```
+
+[`async_simple_example.py`](async_simple_example.py) calls out
+claim-before-processing and oldest-only traversal in its source. Its retry and
+dead-letter branches write replacement messages because the source rows were
+already consumed.
 
 ## Performance
 
-Pooling avoids opening a new database connection for every operation, but the
-result depends on workload, pool size, concurrency, backend, and durability
-settings. The repository's [`bin/benchmark.py`](../bin/benchmark.py) measures
-the synchronous CLI and `Queue` surfaces; it does not validate async throughput
-or latency. Profile this example under the deployment's actual concurrency and
-backend before choosing pool or worker counts.
+Pooling avoids opening a connection for every operation, but throughput and
+latency depend on the workload, pool size, transaction duration, SQLite
+settings, and storage. The repository's [`bin/benchmark.py`](../bin/benchmark.py)
+measures the supported synchronous CLI and `Queue` surfaces. It does not
+validate this advanced async implementation. Profile the exact application
+workload before choosing the advanced path or a pool size.
 
-## Examples
+## Executable evidence
 
-### Basic Worker Pattern
-
-```python
-async def worker(queue: AsyncQueue, worker_id: int):
-    while True:
-        msg = await queue.read()
-        if msg is None:
-            await asyncio.sleep(0.1)
-            continue
-
-        # Process message
-        print(f"Worker {worker_id}: {msg}")
-        await process_message(msg)
-
-
-# Run multiple workers
-workers = [worker(queue, i) for i in range(5)]
-await asyncio.gather(*workers)
-```
-
-### Batch Processing
-
-For maximum throughput, use batch commits:
-
-```python
-# Process with at-least-once delivery
-async for msg in queue.stream(commit_interval=50):
-    await process(msg)
-    # Messages committed in batches of 50
-```
-
-### Priority Queues
-
-```python
-high = AsyncQueue("high_priority", broker)
-medium = AsyncQueue("medium_priority", broker)
-low = AsyncQueue("low_priority", broker)
-
-# Process by priority
-while True:
-    if msg := await high.read():
-        await process_high(msg)
-    elif msg := await medium.read():
-        await process_medium(msg)
-    elif msg := await low.read():
-        await process_low(msg)
-    else:
-        await asyncio.sleep(0.1)
-```
-
-### Error Handling
-
-```python
-async def resilient_worker(queue: AsyncQueue, dlq: AsyncQueue):
-    while True:
-        msg = await queue.read()
-        if msg is None:
-            continue
-            
-        try:
-            await process(msg)
-        except ProcessingError:
-            # Move to dead letter queue
-            await dlq.write(f"FAILED:{msg}")
-        except Exception as e:
-            # Retry later
-            await queue.write(f"RETRY:{msg}")
-```
-
-## Configuration
-
-Environment variables:
-
-- `BROKER_BUSY_TIMEOUT` - SQLite busy timeout (default: 5000ms)
-- `BROKER_CACHE_MB` - Cache size in MB (default: 10)
-- `BROKER_SYNC_MODE` - Sync mode: FULL, NORMAL, or OFF (default: FULL)
-- `BROKER_AUTO_VACUUM` - Enable auto vacuum (default: 1)
-- `BROKER_AUTO_VACUUM_INTERVAL` - Vacuum check interval (default: 100)
-- `BROKER_VACUUM_THRESHOLD` - Vacuum threshold (default: 10%); string and
-  environment values are percentages, while typed numeric values in `[0, 1]`
-  are ratios. See the canonical
-  [configuration guide](../docs/guides/configuration.md#environment-variables).
-- `BROKER_MAX_MESSAGE_SIZE` - Max message size in bytes (default: 10MB)
-
-## Running Examples
+From the repository root:
 
 ```bash
-# Run main worker example
-python async_simple_example.py
-
-# Run simple example
-python async_simple_example.py simple
-
-# Run batch processing example  
-python async_simple_example.py batch
-
-# Run comprehensive examples with benchmarks
-python async_pooled_broker.py
+uv run --extra dev pytest -n0 \
+  examples/test_async_pooled_broker.py \
+  tests/test_example_async_stream_transitions.py \
+  tests/test_sql_builder_validity.py
 ```
 
-## Differences from Sync Version
-
-1. **All methods are async** - Use `await` for all operations
-2. **Connection pooling** - Better concurrency than thread-local connections
-3. **AsyncIterator** - Use `async for` with streaming
-4. **No fork safety needed** - Asyncio is single-process
-5. **Explicit initialization** - Database setup happens on first use
-
-## Best Practices
-
-1. **Use connection pooling** - Set pool size based on concurrent operations
-2. **Batch when possible** - Use `commit_interval > 1` for bulk operations
-3. **Handle timeouts** - Use `asyncio.wait_for()` to avoid blocking
-4. **Graceful shutdown** - Use events to coordinate shutdown
-5. **Monitor performance** - Track queue sizes and processing rates
-
-## Integration with Existing Code
-
-### Recommended Approach: Use async_wrapper.py
-
-For most users, the simpler async_wrapper.py provides async functionality while using the standard API:
-
-```python
-# Standard sync code
-from simplebroker import Queue
-
-with Queue("tasks") as q:
-    q.write("sync message")
-
-# Async wrapper (RECOMMENDED)
-from async_wrapper import AsyncBroker
-
-async with AsyncBroker("broker.db") as broker:
-    msg = await broker.pop("tasks")  # Gets "sync message"
-```
-
-### Advanced Approach: Custom async SQLite implementation
-
-The custom async_pooled_broker implementation can also coexist with the sync version:
-
-```python
-# Custom async code (ADVANCED - uses internal APIs)
-from async_pooled_broker import AsyncQueue, async_broker
-
-async with async_broker("broker.db") as broker:
-    queue = AsyncQueue("tasks", broker)
-    msg = await queue.read()  # Gets "sync message"
-```
-
-Both implementations use the same SQLite database schema. The pooled async example covers core queue operations, not every public SimpleBroker API surface.
-
-**WARNING**: The async_pooled_broker uses internal SQLite APIs that may change between versions.
-Use async_wrapper.py for the supported multi-backend async path.
+These tests exercise canonical startup and migration, caller-sidecar
+preservation, commit-order ID allocation, returned-row order normalization,
+recommended-wrapper bounded order, and early stream exit. They test observed
+behavior without treating raw database tuple layout or engine return order as
+a contract.

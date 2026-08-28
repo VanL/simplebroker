@@ -1,321 +1,165 @@
 # SimpleBroker Examples
 
-This directory contains examples for using SimpleBroker, from basic usage to advanced extensions.
+Run these examples from the repository root. Each example has a support level:
 
-## Quick Start - Recommended Examples
+- **Recommended** uses the public SimpleBroker API and is the best starting
+  point for application code.
+- **Reference pattern** is tested example code with a deliberately narrow
+  design. Adapt it to your failure, concurrency, retention, and monitoring
+  needs.
+- **Advanced/internal** uses implementation details that may change between
+  SimpleBroker releases.
+- **Standalone utility** is independent sample code, not part of the
+  SimpleBroker API or storage contract.
 
-**For most users, start with these examples:**
+The examples prove the behavior stated here. They are not complete deployment
+templates.
 
-1. **[python_api.py](python_api.py)** - Standard Python API usage (RECOMMENDED STARTING POINT)
-   - Uses the public `Queue` and `QueueWatcher` classes
-   - Shows all common operations and patterns
-   - Production-ready code examples
+## Start Here
 
-2. **[async_wrapper.py](async_wrapper.py)** - Simple async wrapper (RECOMMENDED FOR ASYNC)
-   - Wraps the standard Queue API for async/await usage
-   - Uses thread pool executor for compatibility
-   - No external dependencies beyond asyncio
+| Example | Level | What it shows |
+|---|---|---|
+| [`python_api.py`](python_api.py) | Recommended | Public `Queue` and `QueueWatcher` usage, exact message IDs, and bounded oldest/newest selection. |
+| [`async_wrapper.py`](async_wrapper.py) | Recommended | A standard-library async adapter over public APIs, including bounded `pop(..., order="newest")` and `peek(..., order="newest")`. |
 
-## Advanced Examples
+Default retrieval order is ascending public message ID. Ordinary generated
+writes therefore remain FIFO-like. An exact insertion, load, or ID-preserving
+move can add an older ID later, and that lower ID is then selected first.
+`order="newest"` applies only to bounded read, peek, and move operations. Live
+generator and watcher traversal remains oldest-only.
 
-These examples show how to extend SimpleBroker using internal APIs or the extensibility API:
+Both recommended consume examples claim a message before application
+processing. A handler exception or coroutine cancellation does not put the
+original row back into pending state. Build retries, dead-letter handling, and
+idempotency as explicit application behavior.
 
-## ⚠️ Important Disclaimer
+## Python Reference Patterns
 
-**These examples are for demonstration purposes only.** They intentionally omit some robustness checks, error handling, and production-level features to maintain clarity and educational focus. 
+| Example | Level | Boundary |
+|---|---|---|
+| [`simple_watcher_example.py`](simple_watcher_example.py) | Reference pattern | Local print, JSON, and logging handlers with public watcher imports. Consume-mode handler failure leaves the row claimed. |
+| [`multi_queue_watcher.py`](multi_queue_watcher.py) | Reference pattern | One watcher selecting among several queues while preserving a structured `BrokerTarget`. |
+| [`multi_queue_patterns.py`](multi_queue_patterns.py) | Reference pattern | Round-robin, weighted, and per-queue handler policies. They choose the next queue; they do not change claim-before-handler delivery. |
+| [`reference_reactor.py`](reference_reactor.py) | Reference pattern | A single-owner reactor with application sidecars, complete retained-history discovery, durable seen state, and at-least-once output replay. |
 
-**Before using any code from these examples in production:**
-- Add comprehensive error handling and recovery mechanisms
-- Implement proper input validation and sanitization
-- Add monitoring, logging, and alerting capabilities
-- Test thoroughly under your specific workload conditions
-- Consider security implications for your environment
+See [`MULTI_QUEUE_README.md`](MULTI_QUEUE_README.md) for the multi-queue and
+reactor boundaries. The reactor retains source rows and may rescan retained
+history, so a long-running application needs its own retention or compaction
+policy.
 
-## Standalone Utilities
+## Shell Reference Patterns
 
-### [sqlite_connect.py](sqlite_connect.py) - SQLite Connection Utilities
+These scripts require the `broker` command and `jq`. Run them from the
+repository root. The three menu examples accept an optional numeric selector;
+when omitted, they prompt for one:
 
-**[sqlite_connect.py](sqlite_connect.py)** extracts SQLite connection management patterns from SimpleBroker into a standalone module. It provides thread-safe connection handling, path validation, and database setup utilities that can be used in other projects.
-
-Features include thread-local connections, fork safety detection, cross-platform file locking, path security validation, and WAL mode setup. The module includes comprehensive error handling and retry logic for database contention.
-
-**[test_sqlite_connect.py](test_sqlite_connect.py)** contains the test suite for the utility.
-
-## Security Considerations
-
-When working with message queues:
-- Messages can contain untrusted data including newlines and shell metacharacters
-- Always use `--json` output with proper JSON parsing (e.g., `jq`) in shell scripts
-- Validate and sanitize all message content before processing
-- Never use `eval` or similar dynamic execution on message content
-- Implement proper access controls and authentication where needed
-
-## Examples
-
-### Bash Scripts
-
-The three menu demonstrations accept an optional numeric menu selector as
-their first argument and prompt for it only when omitted. For example:
+The scripts use normal target discovery for their working directory. From the
+repository root, isolate the demonstration target in a disposable directory
+and expose this checkout's `broker` executable:
 
 ```bash
-./dead_letter_queue.sh 3
-./queue_migration.sh 3
-./work_stealing.sh 8
+repo_root=$PWD
+example_root=$(mktemp -d)
+(cd "$example_root" && PATH="$repo_root/.venv/bin:$PATH" \
+  bash "$repo_root/examples/dead_letter_queue.sh" 6)
+(cd "$example_root" && PATH="$repo_root/.venv/bin:$PATH" \
+  bash "$repo_root/examples/queue_migration.sh" 3)
+(cd "$example_root" && PATH="$repo_root/.venv/bin:$PATH" \
+  bash "$repo_root/examples/work_stealing.sh" 8)
 ```
 
-Queue-migration choices still prompt for their source, destination, and other
-choice-specific values. An invalid selector exits nonzero.
+The migration selector prompts for source, destination, and cutoff. The DLQ
+selector adds fixed demonstration messages, and the work-stealing selector
+deletes and recreates fixed demonstration queues. This is why an isolated
+target is required. The temporary directory is intentionally left for
+inspection; remove it when finished. Some other menu choices are long-running
+workers or monitors and run until interrupted.
 
-- **[safe_worker.sh](safe_worker.sh)** - Single-consumer one-message peek-and-acknowledge loop
-  - Validates SimpleBroker JSON message IDs as exact 19-digit strings
-  - Set `PROCESS_TASK` to one executable command or path; the message is streamed to its standard input
-  - One `broker peek --json` per message; delete by exact ID only after success
-  - Exit on processing, acknowledgement, parse, or broker failure; only broker exit `2` means idle
-  - Preserve trailing newlines; reject NUL payloads because Bash variables cannot represent NUL
-  - Not safe under concurrent workers; use move-to-inflight instead (see `docs/agent-kernel.md`)
+| Example | Level | Boundary |
+|---|---|---|
+| [`safe_worker.sh`](safe_worker.sh) | Reference pattern | A single-consumer, one-message peek/process/delete loop. Set `PROCESS_TASK` to one executable command or path; the body is streamed to its standard input. |
+| [`resilient_worker.sh`](resilient_worker.sh) | Reference pattern | The same single-consumer shape plus an atomic informational checkpoint. The checkpoint is not a resume filter because a lower ID can arrive later. Set `PROCESS_EVENT` to replace the demo handler. |
+| [`dead_letter_queue.sh`](dead_letter_queue.sh) | Reference pattern | Dead-letter and retry selections with validated JSON state and fail-closed replacement/delete transitions. |
+| [`queue_migration.sh`](queue_migration.sh) | Reference pattern | Rename, filtered and bounded migration, transforms, and pending-only dump/load export. |
+| [`work_stealing.sh`](work_stealing.sh) | Reference pattern | Demonstrations of queue selection and redistribution using validated pending counts. |
 
-- **[resilient_worker.sh](resilient_worker.sh)** - Single-consumer peek-and-ack sketch with an informational progress checkpoint
-  - One `peek` per message (not `peek --all` + delete-in-loop)
-  - Never uses the checkpoint as a `--after` filter; older IDs can arrive later through exact insertion or move
-  - Explicit `-f` database path (`BROKER_DB` or first arg)
-  - Optional `PROCESS_EVENT` executable reads the message from standard input; otherwise uses the demonstration handler
-  - Atomic, validated checkpoint file updates; operational broker errors are fatal
-  - Processing and acknowledgement failures stop the worker for later retry; not safe under concurrent workers
-  - For concurrent job reservation see `docs/agent-kernel.md` (move-to-inflight)
+The two worker loops are single-consumer patterns. They are not concurrent job
+reservation. For concurrent workers, use the move-to-inflight recipe in
+[`docs/agent-kernel.md`](../docs/agent-kernel.md). Shell exit status `2` means
+idle or no match only for commands that document that result; parse errors and
+other broker failures are fatal.
 
-- **[dead_letter_queue.sh](dead_letter_queue.sh)** - Dead letter queue patterns for handling failures
-  - Simple DLQ with retry mechanisms
-  - Retry tracking with configurable limits
-  - Time-based retry delays with exponential backoff
-  - Snapshots and validates the complete retry scan before exact-ID mutation
-  - Treats replacement-write then old-delete failure as an at-least-once duplicate risk
-  - Queue monitoring and alerting patterns
+The migration export is a portable snapshot of pending broker messages and
+their public IDs. Restore it with `broker load`. It intentionally excludes
+claimed rows and live application sidecar tables, so it is not a whole-target
+backup.
 
-- **[queue_migration.sh](queue_migration.sh)** - Message migration between queues
-  - Simple queue renaming
-  - Filtered migrations based on content
-  - Time-based migration of messages strictly older than the selected cutoff
-  - Safe transformation during migration (no eval)
-  - Queue splitting and merging patterns
+## Extension and Advanced Examples
 
-- **[work_stealing.sh](work_stealing.sh)** - Load balancing and work distribution
-  - Round-robin distribution
-  - Load-based task assignment
-  - Work stealing between workers
-  - Priority-based distribution
-  - Multi-worker simulation with monitoring
+| Example | Level | Boundary |
+|---|---|---|
+| [`logging_runner.py`](logging_runner.py) | Advanced public extension | Wraps the public `SQLRunner`/`SQLiteRunner` extension surface to log calls. The injected runner remains caller-owned. |
+| [`async_pooled_broker.py`](async_pooled_broker.py) | Advanced/internal | A SQLite-only async core using internal SQL builders. Canonical synchronous setup owns schema creation and migration; async runtime verifies the schema and performs no DDL. Live traversal is oldest-only. |
+| [`async_simple_example.py`](async_simple_example.py) | Advanced/internal | Worker and streaming demonstrations for the pooled SQLite example. Reads claim before processing. Retry and DLQ writes create new messages because the original has already been consumed. |
+| [`example_extension_implementation.md`](example_extension_implementation.md) | Guide | Classifies the extension examples and links to their executable source and tests. It is not a copied implementation skeleton. |
 
-### Python Examples
+The pooled examples require optional dependencies at the point of use:
 
-#### Standard API (Recommended)
-
-- **[python_api.py](python_api.py)** - Comprehensive examples using the standard Python API
-  - Basic queue operations with `Queue` class (write, read, peek, move, delete)
-  - Error handling patterns with retry logic
-  - Custom watcher implementation with `QueueWatcher`
-  - Uses package-root `format_message_id` for a broker ID in application-owned JSON
-  - Checkpoint-based processing
-  - Thread-safe cleanup examples
-  - **START HERE for Python usage**
-
-- **[simple_watcher_example.py](simple_watcher_example.py)** - Default handlers demonstration
-  - Shows `simple_print_handler`, `json_print_handler`, and `logger_handler`
-  - Examples of building custom handlers using defaults as building blocks
-  - Good introduction to watcher patterns before diving into python_api.py
-
-- **[multi_queue_watcher.py](multi_queue_watcher.py)** - Multi-queue processing with fairness
-  - Complete `MultiQueueWatcher` implementation for monitoring multiple queues
-  - Single-thread, shared-database design for efficiency
-  - Round-robin fairness prevents queue starvation
-  - Per-queue handlers with fallback to default
-  - See **[MULTI_QUEUE_README.md](MULTI_QUEUE_README.md)** for detailed documentation
-
-- **[reference_reactor.py](reference_reactor.py)** - Sidecar-aware single-writer reactor reference
-  - Layers a reusable `BaseReactor` on top of the example `MultiQueueWatcher`
-  - Shows `Reactor` as one concrete sidecar/checkpoint/output policy
-  - Uses Python `queue.Queue` to pass broker-free work/results between threads
-  - Keeps reactor-owned SimpleBroker handles and sidecar writes on the reactor thread
-  - Demonstrates input checkpoints, result replay, audit sidecars, and control lanes
-  - Formats broker IDs at reactor-owned JSON envelope boundaries
-  - Treats input, output, and control effects as at-least-once across restart
-  - Relies on SimpleBroker for SQLite multi-process contention; reactor transactions stay short
-  - Treats control replies as at-least-once and requires retention/compaction for long-running use
-  - Covered by `uv run pytest -n0 examples/tests`
-
-- **[multi_queue_patterns.py](multi_queue_patterns.py)** - Advanced multi-queue usage patterns
-  - Priority queue simulation
-  - Load balancing across worker queues
-  - Queue-specific error handling strategies
-  - Monitoring and metrics collection
-  - Dynamic queue management patterns
-
-- **[async_wrapper.py](async_wrapper.py)** - Async wrapper around standard API
-  - Simple async/await interface using thread pool
-  - Works with standard `Queue` and `QueueWatcher` classes
-  - No external dependencies
-  - **USE THIS for async applications**
-
-#### Advanced Extensions
-
-- **[logging_runner.py](logging_runner.py)** - Custom SQLRunner extension (ADVANCED)
-  - Shows how to wrap the default SQLiteRunner
-  - Demonstrates the SQLRunner protocol implementation
-  - For users who need custom database middleware
-
-### Advanced Extensions
-
-See **[example_extension_implementation.md](example_extension_implementation.md)** for comprehensive examples including:
-
-- **Daemon Mode Runner** - Background thread processing with auto-stop
-- **Async SQLite Runner** - SQLite-specific async implementation with aiosqlite
-- **Connection Pool Runner** - High-concurrency optimization
-- **Testing with Mock Runner** - Comprehensive mock runner for unit tests
-- **Complete Async Queue** - Advanced async queue patterns
-
-### Custom Async Implementation (Advanced)
-
-**WARNING: These examples use internal APIs and are for advanced users only.**
-**For standard async usage, use [async_wrapper.py](async_wrapper.py) instead.**
-
-- **[async_pooled_broker.py](async_pooled_broker.py)** - Custom async SQLite implementation (ADVANCED)
-  - Uses internal SimpleBroker SQLite APIs to build a custom async queue core
-  - Requires aiosqlite and aiosqlitepool
-  - Shares the current SQLite schema, including alias metadata
-  - Connection pooling for optimal concurrency
-  - **Only use if async_wrapper.py doesn't meet your needs**
-  
-- **[async_simple_example.py](async_simple_example.py)** - Examples using the custom async implementation
-  - Uses the advanced async_pooled_broker
-  - Worker pattern with async/await
-  - Batch processing examples
-  - **Consider async_wrapper.py first**
-
-- **[ASYNC_README.md](ASYNC_README.md)** - Documentation for custom async implementation
-  - Covers the advanced async_pooled_broker approach
-  - Installation and setup for custom implementation
-  - Performance benchmarks
-  - **Most users should use async_wrapper.py instead**
-
-## Running the Examples
-
-1. Basic logging example:
-   ```bash
-   python examples/logging_runner.py
-   ```
-
-2. High-performance async examples:
-   ```bash
-   # Install dependencies
-   uv add aiosqlite aiosqlitepool
-   
-   # Run comprehensive async examples with benchmarks
-   python examples/async_pooled_broker.py
-   
-   # Run simple async worker example
-   python examples/async_simple_example.py
-   
-   # Run batch processing example
-   python examples/async_simple_example.py batch
-   ```
-
-3. For advanced examples, copy the code from `example_extension_implementation.md` and adapt as needed.
-
-## Using SimpleBroker - Standard Approach
-
-For most users, use the standard API:
-
-```python
-# Standard synchronous usage
-from simplebroker import Queue, QueueWatcher
-
-with Queue("myqueue") as q:
-    q.write("Hello, World!")
-    msg = q.read()
-    print(msg)
-
-# For watching queues
-watcher = QueueWatcher(
-    db=".broker.db", queue="myqueue", handler=lambda msg, ts: print(f"Got: {msg}")
-)
-watcher.run_in_thread()
+```bash
+uv run --extra dev python examples/async_simple_example.py simple
 ```
 
-For async applications, use the async wrapper:
+Outside this checkout, install `aiosqlite>=0.22.1` and
+`aiosqlitepool>=1.0.0` in the application environment before running the
+advanced source.
 
-```python
-from async_wrapper import AsyncBroker
+The advanced pool is not a SimpleBroker backend plugin and does not implement
+the synchronous `SQLRunner` contract. It samples configuration once, waits for
+the public `open_broker(...)` path to finish canonical SQLite admission and
+migration, then opens its pool. Do not copy its private imports into ordinary
+applications. See [`ASYNC_README.md`](ASYNC_README.md) for its delivery and
+cancellation boundaries.
 
-async with AsyncBroker("broker.db") as broker:
-    await broker.push("myqueue", "Hello async!")
-    msg = await broker.pop("myqueue")
+Run the logging example without optional dependencies:
+
+```bash
+uv run python examples/logging_runner.py
 ```
 
-## Creating Your Own Extension (Advanced)
+It uses a temporary database and removes it on exit.
 
-Only create custom extensions if the standard API doesn't meet your needs.
+## Standalone SQLite Utility
 
-To create a custom runner:
+[`sqlite_connect.py`](sqlite_connect.py) is a **standalone utility** that
+demonstrates SQLite connection management, path validation, locking, retry, and
+WAL setup. It is not SimpleBroker's SQLite backend and does not define or
+migrate the broker schema. Its executable test suite is
+[`test_sqlite_connect.py`](test_sqlite_connect.py):
 
-1. Import the necessary components:
-   ```python
-   from simplebroker.ext import SQLRunner, OperationalError, IntegrityError
-   ```
+```bash
+uv run --extra dev pytest -n0 examples/test_sqlite_connect.py
+```
 
-2. Implement the SQLRunner protocol:
-   ```python
-   from simplebroker.ext import SetupPhase
+## Running and Verifying Examples
 
+All commands in this catalog start at the repository root:
 
-   class MyRunner(SQLRunner):
-       def run(self, sql, params=(), *, fetch=False):
-           # Your implementation
-           pass
+```bash
+uv run python examples/python_api.py
+uv run python examples/async_wrapper.py
+uv run python examples/simple_watcher_example.py
+uv run python examples/multi_queue_patterns.py
+uv run --extra dev pytest -n0 examples
+```
 
-       def begin_immediate(self):
-           # Start transaction
-           pass
+The runnable Python demos use temporary broker targets. The menu shell examples
+mutate their isolated working-directory target as described above.
 
-       def commit(self):
-           # Commit transaction
-           pass
+## Security Notes
 
-       def rollback(self):
-           # Rollback transaction
-           pass
-
-       def close(self):
-           # Cleanup
-           pass
-
-       def setup(self, phase: SetupPhase):
-           # Optional backend setup hook
-           pass
-
-       def is_setup_complete(self, phase: SetupPhase) -> bool:
-           return True
-   ```
-
-3. Use with the Queue API:
-   ```python
-   from simplebroker import Queue
-   
-   runner = MyRunner(config)
-   try:
-       with Queue("myqueue", runner=runner) as q:
-           q.write("Hello from custom runner!")
-   finally:
-       runner.close()
-   ```
-
-   The injected runner is caller-owned. `Queue.close()` cleans up queue state
-   but does not close the supplied runner for you.
-
-## Important Notes
-
-- All extensions MUST use `TimestampGenerator` for timestamp consistency
-- Raise `OperationalError` for retryable conditions (locks, busy database)
-- Raise `IntegrityError` for constraint violations
-- Be thread-safe if used in multi-threaded contexts
-- Be fork-safe (detect and recreate connections after fork)
-
-See the extensibility specification for complete details.
+Messages can contain untrusted text, including newlines and shell
+metacharacters. In shell code, request `--json`, parse with `jq` or another JSON
+parser, validate exact message-ID strings before passing them back to the CLI,
+and quote every expansion. Never use `eval` on message bodies. Apply the access
+control, secret handling, resource limits, and observability required by your
+deployment.

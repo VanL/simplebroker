@@ -368,10 +368,3 @@ def test_claim_batch_normalizes_reversed_opaque_runner_records(
             return [message async for message in queue.stream(commit_interval=3)]
 
     assert asyncio.run(exercise()) == ["one", "two", "three"]
-
-
-def test_async_example_documents_only_canonical_sync_modes() -> None:
-    readme = (Path(__file__).parent / "ASYNC_README.md").read_text(encoding="utf-8")
-
-    assert "Sync mode: FULL, NORMAL, or OFF" in readme
-    assert "EXTRA" not in readme

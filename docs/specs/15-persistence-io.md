@@ -150,6 +150,8 @@ claim delivery semantics (`[SB-DELIVERY-1]`).
 
 ## Related Plans
 
+- active: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
+  — replaces an ad hoc copy recipe with pending-only dump/load guidance
 - active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
   — invocation-owned `cmd_load` clock-skew presentation
 - retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9`; see the

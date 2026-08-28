@@ -1043,6 +1043,71 @@ exit `2`, exposes mutually exclusive `all` and `recent` retry modes, labels
 merge counts as observations, and exercises those branches. Re-review found
 only the invalid-pattern status and stale evidence counts; both were corrected.
 
+### 2026-08-27 Task 6 catalog and unchanged-example revalidation
+
+The example catalog now assigns each family a support level and states the
+actual boundary at the point of use: bounded newest selection versus
+oldest-only live traversal, claim-before-processing delivery, pending-only
+dump/load export, and the advanced pooled implementation's private/internal
+status. `ASYNC_README.md` now distinguishes the supported executor wrapper
+from the SQLite-only pooled core, identifies canonical synchronous setup as the
+schema owner, and describes setup cancellation, one-read stream cancellation,
+and `commit_interval > 1` transaction/replay mechanics without promising an
+application delivery guarantee.
+
+The former 1,300-line copied extension implementation is now a short map to the
+three executable source examples and their tests. It contains no code copy or
+DDL. The Python guide's async and reactor sections were brought into line with
+the repaired examples, and the agent kernel now routes readers through the
+support-level catalog. Inspection found no stale example restatement in the
+root README, so it remains unchanged. The CHANGELOG records this as an example
+and documentation guarantee rather than new core behavior.
+
+`logging_runner.py` retains its public `SQLRunner` wrapper and caller-owned
+lifecycle, but its runnable demo now uses a temporary target. The advanced
+pooled and simple async entry points were also found to violate the plan-wide
+temporary-target invariant; their demo functions now receive one entry-point
+target and `__main__` supplies a temporary database. This does not change the
+async core. The batch demo's old blanket at-least-once comment was replaced
+with the actual open-transaction and rollback/replay boundary.
+
+Real smoke runs of `logging_runner.py`, `python_api.py`, `async_wrapper.py`,
+`simple_watcher_example.py`, `multi_queue_patterns.py`, and both documented
+`async_simple_example.py` modes completed from the repository root without
+changing the repository database-artifact set. Relative-link validation over
+the root, guide, kernel, and example Markdown files passed, as did
+`bin/check-doc-paths`. The focused nested-test command states the `examples`
+import path explicitly so it works from the repository root without changing
+the release type-check boundary.
+
+The standalone SQLite utility plus its external smoke gate and the unchanged
+worker/shell suites pass 186 tests. The full `examples` tree passes 136 tests;
+the combined Task 6 behavior set passes 218 tests. The example type gate passes
+all 16 concrete files. Ruff, format, and `git diff --check` pass. Three tests
+that matched README prose or an obsolete literal string were removed: they did
+not establish runtime correctness and conflicted with the plan's behavior-first
+test rule. Their owning runtime paths remain covered by the behavior suites.
+
+Inventory reconciliation: Tasks 1-2 cover the pooled, recommended Python, and
+async source/test rows; Task 3 covers the reactor source and two test rows;
+Task 4 covers the watcher/pattern source, documentation, and transition row;
+Task 5 covers all five shell source rows and both external shell gates; this
+task covers the remaining catalog and guide rows, the logging runner,
+standalone SQLite source/test pair, and final smoke revalidation. No inventory
+row is left without a recorded disposition or green gate.
+
+Independent Task 6 review found three initial gaps. A package-qualified nested
+test import passed pytest but failed the release mypy gate; the source retains
+its top-level example imports and the documented focused command now supplies
+`PYTHONPATH=examples`, so both gates pass without a suppression. The shell
+catalog now runs fixed-name mutations only in a `mktemp` working-directory
+target and warns that worker/monitor choices may be long-running. Finally, all
+seven cited canonical specs now backlink this plan. Re-review found one stale
+selector description: the catalog now uses the finite DLQ setup selector and
+accurately identifies which menu prompts. The exact isolated DLQ and
+work-stealing setup commands were smoke-tested and created no repository-local
+database.
+
 ## Independent Plan Review
 
 Independent review completed 2026-08-27 by the repository's `plan_review`

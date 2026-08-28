@@ -197,6 +197,8 @@ message identity and delivery state with only the queue binding updated.
 
 ## Related Plans
 
+- active: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
+  — aligns exact-ID examples, replay checks, shell bounds, and portable export
 - completed: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
   — established engine-order independence; its private storage-FIFO rule is
   superseded by [SB-SELECT-5] and the active message-ID order plan

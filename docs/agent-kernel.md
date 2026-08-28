@@ -60,8 +60,9 @@ modules.
 Normative library surfaces: `docs/specs/16-python-library-api.md`
 `[SB-API-1]`–`[SB-API-13]`.
 
-**Examples (use):** `examples/python_api.py`. For shell job workers, prefer the
-**move-to-inflight** recipe in this file.
+**Examples (use):** start with `examples/python_api.py`; the support levels and
+async boundaries are cataloged in `examples/README.md`. For shell job workers,
+prefer the **move-to-inflight** recipe in this file.
 
 ## CLI ↔ Python operation map
 

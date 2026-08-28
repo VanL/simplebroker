@@ -817,6 +817,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- active: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
+  — aligns public, async-wrapper, watcher, sidecar, and runner examples
 - active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
   — owns bounded order, sidecar-safe SQL schema v6, backend API v8, and
   cross-surface parity

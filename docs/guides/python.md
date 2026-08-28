@@ -550,8 +550,17 @@ async def main():
 See [`examples/async_wrapper.py`](../../examples/async_wrapper.py) for a complete async wrapper implementation including:
 - Async context manager for proper cleanup
 - Background watcher with asyncio coordination
-- Streaming message consumption
+- Bounded `pop()` and `peek()` with public `order="oldest"` / `"newest"`
+- Oldest-only streaming with one destructive read per iterator step
 - Concurrent queue operations
+
+The wrapper's stream commits the current claim before yielding. Cancellation
+while that one executor read is running may therefore leave that one row
+claimed, but the wrapper does not prefetch or claim later rows. The separate
+[`examples/async_pooled_broker.py`](../../examples/async_pooled_broker.py) is a
+SQLite-only internal example, not the supported async or backend-extension
+surface; see [`examples/ASYNC_README.md`](../../examples/ASYNC_README.md) before
+using it.
 
 ## Cross-queue operations with open_broker
 
@@ -847,20 +856,27 @@ The example layers a reusable `BaseReactor` on
 shows one concrete `Reactor` policy with:
 
 - fixed, pairwise-distinct input, output, and control lanes;
-- peek-plus-sidecar checkpoints for input/control queues;
+- retained peek discovery plus a durable terminal-state ledger for
+  input/control queues;
+- informational maximum checkpoints that do not filter discovery;
 - at-least-once exact-ID output replay through a durable sidecar outbox;
 - broker-free worker payloads and result envelopes; and
 - short sidecar transactions on the reactor thread.
 
 This is not a database lease. SimpleBroker already supports many processes
 using the same SQLite broker database through WAL, short write transactions, and
-retry on contention. The reactor contract is logical: source and control lanes
-are at-least-once because they use peek-plus-checkpoint semantics, so restart
-can re-run uncheckpointed work even with one reactor. Two live reactors watching
-the same lane add another duplicate execution path. Output replay is also
-at-least-once: exact-ID insert handles the normal replay collision, but a crash
-after the outbox write and before the sidecar `output_written` mark can replay
-the output if a downstream consumer already vacuumed the claimed output row.
+retry on contention. Each discovery pass starts at the lowest public message ID
+and uses only pass-local paging. Terminal `reactor_seen` state suppresses
+completed work. This is required because exact insertion, load, or an
+ID-preserving move can add a lower pending ID after a larger checkpoint was
+recorded. A stale `inflight` row is redispatchable after restart;
+`result_recorded`, `output_written`, and `control_processed` are terminal for
+discovery. Two live reactors watching the same lane add another duplicate
+execution path. Output replay is also at-least-once: exact-ID insert handles a
+matching replay collision, while an occupant with a different body raises and
+leaves the pending outbox row unchanged. A crash after the outbox write and
+before the sidecar `output_written` mark can replay the output if a downstream
+consumer already vacuumed the claimed output row.
 Make processors and control commands idempotent, deduplicate downstream by
 output message ID rather than payload, and prefer one logical reactor per
 workstream when duplicate execution or non-idempotent side effects matter.
@@ -876,9 +892,11 @@ keeps the control lane responsive; `STATUS` exposes `pending_output_backlog` and
 `output_backlog_blocked`, and `STOP` still works. A pending control message caps
 output replay to a small budget for that turn rather than starving it entirely.
 The budget bounds rows returned and materialized, not the underlying SQLite scan
-without a supporting index. Constructing `Reactor` is not side-effect-free: it
-creates sidecar schema, loads checkpoints, and starts idle workers. Pending
-outputs replay on the first driven turn.
+without a supporting index. Complete discovery also revisits retained source
+history, so a long-running application needs a retention or compaction policy.
+Constructing `Reactor` is not side-effect-free: it creates its `reactor_*`
+sidecar schema, loads informational checkpoints, and starts idle workers.
+Pending outputs replay on the first driven turn.
 
 Run the focused tests with:
 

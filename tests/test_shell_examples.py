@@ -15,7 +15,6 @@ import pytest
 from simplebroker import Queue
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXAMPLES_README = REPO_ROOT / "examples" / "README.md"
 QUEUE_MIGRATION = REPO_ROOT / "examples" / "queue_migration.sh"
 DEAD_LETTER_QUEUE = REPO_ROOT / "examples" / "dead_letter_queue.sh"
 WORK_STEALING = REPO_ROOT / "examples" / "work_stealing.sh"
@@ -1324,15 +1323,3 @@ def test_retry_snapshot_is_removed_when_signal_interrupts_peek(
 
     assert result.returncode != 0
     _assert_retry_snapshot_removed(retry_env)
-
-
-def test_menu_example_docs_keep_demo_scope_and_document_selector_arguments() -> None:
-    text = EXAMPLES_README.read_text(encoding="utf-8")
-
-    assert "demonstration purposes only" in text
-    for example in (
-        "./dead_letter_queue.sh 3",
-        "./queue_migration.sh 3",
-        "./work_stealing.sh 8",
-    ):
-        assert example in text

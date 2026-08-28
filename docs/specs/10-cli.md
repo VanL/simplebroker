@@ -360,6 +360,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- active: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
+  — repairs shell example status, bound, rename, stats, and failure handling
 - active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
   — owns [SB-CLI-6], registered-token behavior, and the CLI/Python parity proof
 

@@ -13,6 +13,8 @@ to customize database operations. Most users should use the standard Queue API.
 """
 
 from collections.abc import Iterable
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from simplebroker import Queue
@@ -65,26 +67,26 @@ def main() -> None:
     print("SimpleBroker Extension Example")
     print("=" * 50)
 
-    # Create a custom runner
-    runner = LoggingRunner("example.db")
+    with TemporaryDirectory(prefix="simplebroker-logging-") as tmpdir:
+        runner = LoggingRunner(str(Path(tmpdir) / "example.db"))
 
-    # Use it with the Queue API. Injected runners are caller-owned.
-    try:
-        with Queue("demo", runner=runner) as q:
-            print("\nWriting messages...")
-            q.write("Hello from extension!")
-            q.write("This is logged!")
+        # Use it with the Queue API. Injected runners are caller-owned.
+        try:
+            with Queue("demo", runner=runner) as q:
+                print("\nWriting messages...")
+                q.write("Hello from extension!")
+                q.write("This is logged!")
 
-            print("\nReading messages...")
-            print(f"Read: {q.read()}")
-            print(f"Read: {q.read()}")
-    finally:
-        runner.close()
+                print("\nReading messages...")
+                print(f"Read: {q.read()}")
+                print(f"Read: {q.read()}")
+        finally:
+            runner.close()
 
-    print("\nSQL Log:")
-    print("-" * 50)
-    for entry in runner.get_log():
-        print(f"  {entry}")
+        print("\nSQL Log:")
+        print("-" * 50)
+        for entry in runner.get_log():
+            print(f"  {entry}")
 
     print("\nExtension demonstration complete!")
 
