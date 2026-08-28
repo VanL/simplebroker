@@ -9,6 +9,8 @@ import tomllib
 from pathlib import Path, PureWindowsPath
 from typing import cast
 
+import pytest
+
 from bin.ruff_suppression_index import repository_path, run
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -201,6 +203,7 @@ def probe() -> None:
     assert {"BLE001", "B904"} <= codes
 
 
+@pytest.mark.xdist_group(name="mypy_subprocesses")
 def test_public_context_manager_annotations_remain_override_compatible(
     tmp_path: Path,
 ) -> None:

@@ -9,6 +9,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import assert_type
 
+import pytest
+
 from simplebroker import CloseableIterator, MovedMessage, Queue
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -172,6 +174,7 @@ def assert_delete_types(queue: Queue, message_id: int) -> None:
     assert_type(queue.delete(message_id=message_id), bool)
 
 
+@pytest.mark.xdist_group(name="mypy_subprocesses")
 def test_delete_none_fixture_is_rejected_by_mypy() -> None:
     fixture = ROOT / "tests" / "typecheck_fixtures" / "queue_delete_none.py"
     result = subprocess.run(
@@ -191,13 +194,14 @@ def test_delete_none_fixture_is_rejected_by_mypy() -> None:
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 1, result.stderr or result.stdout
     assert result.stderr == ""
     assert result.stdout.count("error:") == 1
     assert "[call-overload]" in result.stdout
     assert "message_id" in result.stdout
 
 
+@pytest.mark.xdist_group(name="mypy_subprocesses")
 def test_generator_order_fixture_is_rejected_by_mypy() -> None:
     fixture = ROOT / "tests" / "typecheck_fixtures" / "queue_generator_order.py"
     result = subprocess.run(
@@ -217,7 +221,7 @@ def test_generator_order_fixture_is_rejected_by_mypy() -> None:
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 1, result.stderr or result.stdout
     assert result.stderr == ""
     assert result.stdout.count("error:") >= 3
     assert result.stdout.count('Unexpected keyword argument "order"') == 3
