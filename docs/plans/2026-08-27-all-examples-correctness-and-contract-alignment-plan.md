@@ -993,6 +993,56 @@ terminal signals now reach BaseWatcher, public synchronous `run()` exposes the
 exact error-handler `ValueError` with the original handler `RuntimeError` as its
 cause, later work remains pending, and target/activity prose is backend-neutral.
 
+### 2026-08-27 Task 5 shell control-flow and migration slice
+
+The initial shell probes failed for the intended contract gaps: none of the
+three menus exposed a validated JSON depth helper; `set -e` aborted the DLQ
+loops on an ordinary empty `peek`; operational peek failures had no explicit
+branch; rename still called `move --all`; a suffixed seconds bound went through
+platform date parsing while a native 19-digit ID gained an invalid `s`; and the
+queue export still copied peek output into an ad hoc restore script.
+
+Each menu now owns a small `queue_depth` helper over `broker stats QUEUE
+--json`. It rejects command failure, missing or nonnumeric `pending`, negative
+counts, and fractional counts. Each one-message peek is status-aware and
+validates the public JSON envelope before mutation. Exit `2` reaches the
+operation's idle or no-match branch; other statuses stop. The repaired
+write/delete paths report the duplicate or retry risk and return before any
+success count. Load balancing never converts a stats error into zero work.
+
+The migration menu now delegates rename to `broker rename`, passes every
+documented bound unchanged, and exports a pending-only native dump with an
+explicit `broker load` instruction. Its output states that claimed rows and
+application sidecars are excluded and describes the pre-export count as an
+observation rather than a transactionally exact dump count.
+
+The black-box fake-broker matrix fires empty, operational-error, malformed
+JSON, missing-field, and replacement-delete transitions. Real CLI tests prove
+that rename preserves pending and claimed state, existing destinations remain
+unchanged, both seconds and native-ID bounds select correctly, JSON stats
+reports pending depth independently of claimed rows, and dump/load preserves
+the pending public ID while excluding a claimed row. The required partial
+mutation shim delegates to a real disposable broker, injects only the selected
+source delete failure after the first transformed write, and proves that the
+original plus later source row remain while exactly one replacement exists.
+These tests assert public bodies, IDs, counts, process status, and CLI argv;
+none depends on a raw tuple field layout or shell source text.
+
+The focused shell and unchanged worker suites pass 142 tests. Bash syntax,
+ShellCheck for all three repaired menus, Ruff for both test modules, and
+`git diff --check` pass. The expanded examples, async-stream, watcher, shell,
+and worker regression set passes 294 tests.
+
+Independent shell review found four initial gaps: dash-prefixed and invalid
+grep patterns were conflated with ordinary no-match; the “selective” retry ran
+after the same function had already drained the DLQ; merge output called a
+racy pre-move observation an exact moved count; and several new direct-move
+and dump-failure branches lacked firing probes. The implementation now uses
+`grep --`, maps invalid pattern syntax to ordinary failure rather than broker
+exit `2`, exposes mutually exclusive `all` and `recent` retry modes, labels
+merge counts as observations, and exercises those branches. Re-review found
+only the invalid-pattern status and stale evidence counts; both were corrected.
+
 ## Independent Plan Review
 
 Independent review completed 2026-08-27 by the repository's `plan_review`

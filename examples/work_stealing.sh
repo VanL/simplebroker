@@ -17,6 +17,58 @@ WORKERS=("worker1" "worker2" "worker3")
 OVERFLOW_QUEUE="overflow"
 MONITOR_INTERVAL=5
 
+# Return the pending depth reported by the stable JSON stats interface.
+queue_depth() {
+    local queue="$1"
+    local stats
+    local status=0
+
+    stats=$(broker stats "$queue" --json) || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "Error: could not read stats for queue '$queue'" >&2
+        return "$status"
+    fi
+
+    local pending
+    if ! pending=$(jq -er '
+        if type == "object" and
+           (.pending | type == "number") and
+           .pending >= 0 and
+           .pending == (.pending | floor)
+        then .pending | floor
+        else error("invalid pending count")
+        end
+    ' <<<"$stats"); then
+        echo "Error: invalid stats for queue '$queue'" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$pending"
+}
+
+# Return one validated JSON message. Exit 2 remains the broker's empty signal.
+peek_one_json() {
+    local queue="$1"
+    local message
+    local status=0
+
+    message=$(broker peek "$queue" --json) || status=$?
+    if [ "$status" -ne 0 ]; then
+        return "$status"
+    fi
+    if ! jq -e '
+        type == "object" and
+        (.message | type == "string") and
+        (.timestamp | type == "string" and
+            test("^[0-9]{19}$") and . <= "9223372036854775807")
+    ' >/dev/null 2>&1 <<<"$message"; then
+        echo "Failed to peek queue '$queue': invalid message JSON" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$message"
+}
+
 # Simple round-robin distribution
 round_robin_distribution() {
     echo "=== Round-Robin Work Distribution ==="
@@ -28,11 +80,16 @@ round_robin_distribution() {
         # Try to move one message to next worker
         local worker="${WORKERS[$worker_index]}"
         
-        if broker move "$OVERFLOW_QUEUE" "${worker}-tasks" 2>/dev/null; then
+        local move_status=0
+        broker move "$OVERFLOW_QUEUE" "${worker}-tasks" 2>/dev/null || move_status=$?
+        if [ "$move_status" -eq 0 ]; then
             echo "Assigned task to $worker"
-        else
+        elif [ "$move_status" -eq 2 ]; then
             # No messages in overflow queue
             sleep 1
+        else
+            echo "Failed to distribute work to '$worker'" >&2
+            return "$move_status"
         fi
         
         # Move to next worker (round-robin)
@@ -52,7 +109,9 @@ load_based_distribution() {
         for worker in "${WORKERS[@]}"; do
             # Get queue size for this worker
             local load
-            load=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
+            if ! load=$(queue_depth "${worker}-tasks"); then
+                return 1
+            fi
             
             if [ "$load" -lt "$min_load" ]; then
                 min_load=$load
@@ -62,10 +121,15 @@ load_based_distribution() {
         
         # Move work to least loaded worker
         if [ -n "$target_worker" ]; then
-            if broker move "$OVERFLOW_QUEUE" "${target_worker}-tasks" 2>/dev/null; then
+            local move_status=0
+            broker move "$OVERFLOW_QUEUE" "${target_worker}-tasks" 2>/dev/null || move_status=$?
+            if [ "$move_status" -eq 0 ]; then
                 echo "Assigned task to $target_worker (load: $min_load)"
-            else
+            elif [ "$move_status" -eq 2 ]; then
                 sleep 1
+            else
+                echo "Failed to distribute work to '$target_worker'" >&2
+                return "$move_status"
             fi
         fi
     done
@@ -82,7 +146,9 @@ work_stealing() {
         
         for worker in "${WORKERS[@]}"; do
             local load
-            load=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
+            if ! load=$(queue_depth "${worker}-tasks"); then
+                return 1
+            fi
             worker_loads[$worker]=$load
             total_work=$((total_work + load))
         done
@@ -109,7 +175,14 @@ work_stealing() {
                             echo "Stealing $steal_count tasks from $worker to $target"
                             
                             for i in $(seq 1 "$steal_count"); do
-                                broker move "${worker}-tasks" "${target}-tasks" 2>/dev/null || break
+                                local move_status=0
+                                broker move "${worker}-tasks" "${target}-tasks" 2>/dev/null || move_status=$?
+                                if [ "$move_status" -eq 2 ]; then
+                                    break
+                                elif [ "$move_status" -ne 0 ]; then
+                                    echo "Failed to steal work from '$worker'" >&2
+                                    return "$move_status"
+                                fi
                             done
                             break
                         fi
@@ -131,7 +204,9 @@ batch_distribution() {
     while true; do
         # Count messages in overflow
         local overflow_count
-        overflow_count=$(broker list | grep "^$OVERFLOW_QUEUE:" | awk '{print $2}' || echo 0)
+        if ! overflow_count=$(queue_depth "$OVERFLOW_QUEUE"); then
+            return 1
+        fi
         
         if [ "$overflow_count" -ge "$batch_size" ]; then
             # Distribute batches to workers
@@ -139,7 +214,14 @@ batch_distribution() {
                 echo "Moving batch of $batch_size to $worker"
                 
                 for i in $(seq 1 "$batch_size"); do
-                    broker move "$OVERFLOW_QUEUE" "${worker}-tasks" 2>/dev/null || break
+                    local move_status=0
+                    broker move "$OVERFLOW_QUEUE" "${worker}-tasks" 2>/dev/null || move_status=$?
+                    if [ "$move_status" -eq 2 ]; then
+                        break
+                    elif [ "$move_status" -ne 0 ]; then
+                        echo "Failed to move batch work to '$worker'" >&2
+                        return "$move_status"
+                    fi
                 done
             done
         else
@@ -162,14 +244,21 @@ priority_distribution() {
         for worker in "${priority_workers[@]}"; do
             # Check if worker has capacity (e.g., less than 5 tasks)
             local load
-            load=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
+            if ! load=$(queue_depth "${worker}-tasks"); then
+                return 1
+            fi
             
             if [ "$load" -lt 5 ]; then
                 # This worker can take more work
-                if broker move "$OVERFLOW_QUEUE" "${worker}-tasks" 2>/dev/null; then
+                local move_status=0
+                broker move "$OVERFLOW_QUEUE" "${worker}-tasks" 2>/dev/null || move_status=$?
+                if [ "$move_status" -eq 0 ]; then
                     echo "Assigned to priority worker: $worker"
                     moved=true
                     break
+                elif [ "$move_status" -ne 2 ]; then
+                    echo "Failed to distribute priority work to '$worker'" >&2
+                    return "$move_status"
                 fi
             fi
         done
@@ -190,8 +279,9 @@ simulate_worker() {
     while true; do
         # Peek at task from worker's queue for safe processing
         local msg_data
-        msg_data=$(broker peek "${worker_name}-tasks" --json 2>/dev/null)
-        if [ -n "$msg_data" ]; then
+        local peek_status=0
+        msg_data=$(peek_one_json "${worker_name}-tasks") || peek_status=$?
+        if [ "$peek_status" -eq 0 ]; then
             local msg
             local timestamp
             msg=$(echo "$msg_data" | jq -r '.message')
@@ -201,14 +291,17 @@ simulate_worker() {
             sleep "$process_time"
             
             # Delete message after processing
-            if broker delete "${worker_name}-tasks" -m "$timestamp" 2>/dev/null; then
-                printf "[%s] Completed: %s\n" "$worker_name" "$msg"
-            else
-                echo "[$worker_name] Warning: Failed to delete message $timestamp" >&2
+            if ! broker delete "${worker_name}-tasks" -m "$timestamp"; then
+                echo "[$worker_name] Failed to delete message $timestamp; it may be processed again" >&2
+                return 1
             fi
-        else
+            printf "[%s] Completed: %s\n" "$worker_name" "$msg"
+        elif [ "$peek_status" -eq 2 ]; then
             # No work available
             sleep 0.5
+        else
+            echo "Failed to peek queue '${worker_name}-tasks'" >&2
+            return "$peek_status"
         fi
     done
 }
@@ -225,15 +318,21 @@ monitor_queues() {
         
         # Show overflow queue
         local overflow
-        overflow=$(broker list | grep "^$OVERFLOW_QUEUE:" | awk '{print $2}' || echo 0)
+        if ! overflow=$(queue_depth "$OVERFLOW_QUEUE"); then
+            return 1
+        fi
         echo "Overflow Queue: $overflow tasks"
         echo
         
         # Show worker queues
         echo "Worker Queues:"
+        local worker_total=0
         for worker in "${WORKERS[@]}"; do
             local count
-            count=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
+            if ! count=$(queue_depth "${worker}-tasks"); then
+                return 1
+            fi
+            worker_total=$((worker_total + count))
             printf "  %-15s %3d tasks" "$worker:" "$count"
             
             # Show load bar
@@ -249,7 +348,7 @@ monitor_queues() {
         done
         
         echo
-        echo "Total tasks: $((overflow + $(broker list | grep -- "-tasks:" | awk '{sum+=$2} END {print sum}' || echo 0)))"
+        echo "Total tasks: $((overflow + worker_total))"
         
         sleep 2
     done

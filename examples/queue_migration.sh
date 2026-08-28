@@ -12,6 +12,58 @@ set -euo pipefail
 command -v jq >/dev/null || { echo "Error: jq is required but not installed"; exit 1; }
 command -v broker >/dev/null || { echo "Error: broker command is required but not found"; exit 1; }
 
+# Return the pending depth reported by the stable JSON stats interface.
+queue_depth() {
+    local queue="$1"
+    local stats
+    local status=0
+
+    stats=$(broker stats "$queue" --json) || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "Error: could not read stats for queue '$queue'" >&2
+        return "$status"
+    fi
+
+    local pending
+    if ! pending=$(jq -er '
+        if type == "object" and
+           (.pending | type == "number") and
+           .pending >= 0 and
+           .pending == (.pending | floor)
+        then .pending | floor
+        else error("invalid pending count")
+        end
+    ' <<<"$stats"); then
+        echo "Error: invalid stats for queue '$queue'" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$pending"
+}
+
+# Return one validated JSON message. Exit 2 remains the broker's empty signal.
+peek_one_json() {
+    local queue="$1"
+    local message
+    local status=0
+
+    message=$(broker peek "$queue" --json) || status=$?
+    if [ "$status" -ne 0 ]; then
+        return "$status"
+    fi
+    if ! jq -e '
+        type == "object" and
+        (.message | type == "string") and
+        (.timestamp | type == "string" and
+            test("^[0-9]{19}$") and . <= "9223372036854775807")
+    ' >/dev/null 2>&1 <<<"$message"; then
+        echo "Failed to peek queue '$queue': invalid message JSON" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$message"
+}
+
 # Simple queue rename
 rename_queue() {
     local old_name="$1"
@@ -19,20 +71,18 @@ rename_queue() {
     
     echo "Renaming queue: $old_name -> $new_name"
     
-    # Move all messages atomically
-    if broker move "$old_name" "$new_name" --all; then
-        echo "Successfully migrated all messages"
-        
-        # Verify old queue is empty
-        local remaining
-        remaining=$(broker list | grep "^$old_name:" | awk '{print $2}' || echo 0)
-        if [ "$remaining" -eq 0 ]; then
-            echo "Migration complete. Old queue is empty."
-        else
-            echo "Warning: $remaining messages remain in old queue"
-        fi
+    # Rename preserves pending and claimed rows. A missing source exits 2;
+    # an existing destination or another operational error exits nonzero.
+    local status=0
+    broker rename "$old_name" "$new_name" || status=$?
+    if [ "$status" -eq 0 ]; then
+        echo "Queue renamed successfully"
+    elif [ "$status" -eq 2 ]; then
+        echo "Source queue '$old_name' does not exist; nothing was renamed" >&2
+        return 2
     else
-        echo "Migration failed or no messages to migrate"
+        echo "Rename failed; the destination may already exist" >&2
+        return "$status"
     fi
 }
 
@@ -46,13 +96,19 @@ filtered_migration() {
     
     local count=0
     local skipped=0
+    local failure_status=0
     
     # Use peek-and-ack pattern with JSON for safety
     while true; do
         # Peek at next message in JSON format
         local msg_data
-        msg_data=$(broker peek "$source" --json 2>/dev/null)
-        if [ -z "$msg_data" ]; then
+        local peek_status=0
+        msg_data=$(peek_one_json "$source") || peek_status=$?
+        if [ "$peek_status" -eq 2 ]; then
+            break
+        elif [ "$peek_status" -ne 0 ]; then
+            echo "Failed to peek queue '$source'" >&2
+            failure_status=$peek_status
             break
         fi
         
@@ -62,29 +118,45 @@ filtered_migration() {
         msg=$(echo "$msg_data" | jq -r '.message')
         timestamp=$(echo "$msg_data" | jq -r '.timestamp')
         
-        # Check if message matches filter
-        if echo "$msg" | grep -q "$filter"; then
+        # Check if message matches filter. `--` keeps a dash-prefixed pattern
+        # from becoming a grep option; status 2 means the pattern itself failed.
+        local filter_status=0
+        grep -q -- "$filter" <<<"$msg" || filter_status=$?
+        if [ "$filter_status" -eq 0 ]; then
             # Move the message atomically by its ID
             if broker move "$source" "$dest" -m "$timestamp" 2>/dev/null; then
                 count=$((count + 1))
             else
-                echo "Warning: Failed to move message $timestamp" >&2
+                echo "Failed to move message $timestamp" >&2
+                failure_status=1
                 break
             fi
-        else
+        elif [ "$filter_status" -eq 1 ]; then
             # Skip this message - move to temp queue
             if broker move "$source" "${source}_temp" -m "$timestamp" 2>/dev/null; then
                 skipped=$((skipped + 1))
             else
-                echo "Warning: Failed to skip message $timestamp" >&2
+                echo "Failed to skip message $timestamp" >&2
+                failure_status=1
                 break
             fi
+        else
+            echo "Invalid filter pattern '$filter'; no later messages were inspected" >&2
+            failure_status=1
+            break
         fi
     done
     
     # Move skipped messages back
     if [ "$skipped" -gt 0 ]; then
-        broker move "${source}_temp" "$source" --all 2>/dev/null || true
+        if ! broker move "${source}_temp" "$source" --all; then
+            echo "Failed to restore skipped messages to '$source'" >&2
+            return 1
+        fi
+    fi
+
+    if [ "$failure_status" -ne 0 ]; then
+        return "$failure_status"
     fi
     
     echo "Migrated $count messages matching filter (skipped $skipped)"
@@ -98,20 +170,18 @@ migrate_by_time() {
     
     echo "Migrating messages older than $cutoff_time"
     
-    # Convert cutoff time to timestamp
-    local cutoff_ts
-    if [[ "$cutoff_time" =~ ^[0-9]+$ ]]; then
-        # Already a timestamp
-        cutoff_ts="$cutoff_time"
+    # The CLI owns bound parsing, including ISO dates, suffixed Unix times,
+    # and exact 19-digit message IDs.
+    local status=0
+    broker move "$source" "$dest" --all --before "$cutoff_time" || status=$?
+    if [ "$status" -eq 2 ]; then
+        echo "No messages matched the bound"
+    elif [ "$status" -ne 0 ]; then
+        echo "Time-based migration failed" >&2
+        return "$status"
     else
-        # Convert date string to Unix timestamp
-        cutoff_ts=$(date -d "$cutoff_time" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "$cutoff_time" +%s)
+        echo "Migration complete"
     fi
-    
-    # Move messages older than cutoff
-    broker move "$source" "$dest" --all --before "${cutoff_ts}s"
-    
-    echo "Migration complete"
 }
 
 # Gradual migration with verification
@@ -130,10 +200,15 @@ gradual_migration() {
         
         local moved=0
         for i in $(seq 1 "$batch_size"); do
-            if broker move "$source" "$dest" 2>/dev/null; then
+            local move_status=0
+            broker move "$source" "$dest" 2>/dev/null || move_status=$?
+            if [ "$move_status" -eq 0 ]; then
                 moved=$((moved + 1))
-            else
+            elif [ "$move_status" -eq 2 ]; then
                 break
+            else
+                echo "Failed to move a batch message" >&2
+                return "$move_status"
             fi
         done
         
@@ -147,7 +222,9 @@ gradual_migration() {
         
         # Verify destination is receiving messages
         local dest_count
-        dest_count=$(broker list | grep "^$dest:" | awk '{print $2}' || echo 0)
+        if ! dest_count=$(queue_depth "$dest"); then
+            return 1
+        fi
         echo "Destination queue size: $dest_count"
         
         # Optional: pause between batches
@@ -172,9 +249,13 @@ split_queue() {
     while true; do
         # Peek at next message in JSON format
         local msg_data
-        msg_data=$(broker peek "$source" --json 2>/dev/null)
-        if [ -z "$msg_data" ]; then
+        local peek_status=0
+        msg_data=$(peek_one_json "$source") || peek_status=$?
+        if [ "$peek_status" -eq 2 ]; then
             break
+        elif [ "$peek_status" -ne 0 ]; then
+            echo "Failed to peek queue '$source'" >&2
+            return "$peek_status"
         fi
         
         # Extract message and timestamp safely
@@ -192,8 +273,8 @@ split_queue() {
             # Move to next destination round-robin
             dest_index=$(( (dest_index + 1) % ${#destinations[@]} ))
         else
-            echo "Warning: Failed to move message $timestamp to $dest" >&2
-            break
+            echo "Failed to move message $timestamp to $dest" >&2
+            return 1
         fi
     done
     
@@ -208,23 +289,30 @@ merge_queues() {
     
     echo "Merging ${#sources[@]} queues into $dest"
     
-    local total=0
+    local total_observed=0
     
     for source in "${sources[@]}"; do
         echo -n "Merging $source... "
         
         # Count messages before move
         local count
-        count=$(broker list | grep "^$source:" | awk '{print $2}' || echo 0)
+        if ! count=$(queue_depth "$source"); then
+            return 1
+        fi
         
         # Move all messages
-        broker move "$source" "$dest" --all
+        local move_status=0
+        broker move "$source" "$dest" --all || move_status=$?
+        if [ "$move_status" -ne 0 ] && ! { [ "$move_status" -eq 2 ] && [ "$count" -eq 0 ]; }; then
+            echo "Failed to merge queue '$source'" >&2
+            return "$move_status"
+        fi
         
-        echo "$count messages"
-        total=$((total + count))
+        echo "$count pending messages observed before merge"
+        total_observed=$((total_observed + count))
     done
     
-    echo "Merged $total messages total"
+    echo "Observed $total_observed pending messages before merging all sources"
 }
 
 # Transform messages during migration
@@ -247,9 +335,13 @@ transform_migration() {
     while true; do
         # Peek at message with JSON format for safety
         local msg_data
-        msg_data=$(broker peek "$source" --json 2>/dev/null)
-        if [ -z "$msg_data" ]; then
+        local peek_status=0
+        msg_data=$(peek_one_json "$source") || peek_status=$?
+        if [ "$peek_status" -eq 2 ]; then
             break
+        elif [ "$peek_status" -ne 0 ]; then
+            echo "Failed to peek queue '$source'" >&2
+            return "$peek_status"
         fi
         
         # Extract message and timestamp
@@ -263,23 +355,27 @@ transform_migration() {
         if ! transformed=$(echo "$msg" | "${transform_args[@]}" 2>/dev/null); then
             echo "Warning: Failed to transform message $timestamp, skipping" >&2
             # Move failed message to error queue
-            broker move "$source" "${source}_transform_errors" -m "$timestamp" 2>/dev/null || true
+            if ! broker move "$source" "${source}_transform_errors" -m "$timestamp"; then
+                echo "Failed to move untransformable message $timestamp" >&2
+                return 1
+            fi
             continue
         fi
         
         # Write transformed message
-        if echo "$transformed" | broker write "$dest" - 2>/dev/null; then
-            # Success - delete the original message
-            broker delete "$source" -m "$timestamp" 2>/dev/null || true
-            count=$((count + 1))
-            
-            # Show progress every 100 messages
-            if [ $((count % 100)) -eq 0 ]; then
-                echo "Processed $count messages..."
-            fi
-        else
+        if ! printf '%s' "$transformed" | broker write "$dest" -; then
             echo "Error: Failed to write transformed message $timestamp" >&2
-            break
+            return 1
+        fi
+        if ! broker delete "$source" -m "$timestamp"; then
+            echo "Failed to delete source message $timestamp after writing its replacement; duplicate/retry risk" >&2
+            return 1
+        fi
+        count=$((count + 1))
+
+        # Show progress every 100 messages
+        if [ $((count % 100)) -eq 0 ]; then
+            echo "Processed $count messages..."
         fi
     done
     
@@ -289,46 +385,22 @@ transform_migration() {
 # Backup queue before migration
 backup_queue() {
     local queue="$1"
-    local backup_file="${2:-${queue}_backup_$(date +%Y%m%d_%H%M%S).txt}"
+    local backup_file="${2:-${queue}_pending_$(date +%Y%m%d_%H%M%S).ndjson}"
     
     echo "Backing up $queue to $backup_file"
     
-    # Export all messages with timestamps
-    broker peek "$queue" --all --json > "$backup_file"
-    
     local count
-    count=$(wc -l < "$backup_file")
-    echo "Backed up $count messages"
-    
-    # Create restore script
-    local restore_script="${backup_file%.txt}_restore.sh"
-    cat > "$restore_script" << 'EOF'
-#!/bin/bash
-# Restore script for queue backup
+    if ! count=$(queue_depth "$queue"); then
+        return 1
+    fi
+    if ! broker dump --include "$queue" > "$backup_file"; then
+        echo "Export failed; '$backup_file' may be incomplete" >&2
+        return 1
+    fi
 
-backup_file="$1"
-queue_name="${2:-restored_queue}"
-
-if [ -z "$backup_file" ]; then
-    echo "Usage: $0 <backup_file> [queue_name]"
-    exit 1
-fi
-
-echo "Restoring from $backup_file to queue $queue_name"
-
-count=0
-while IFS= read -r line; do
-    # Extract message from JSON
-    msg=$(echo "$line" | jq -r '.message')
-    echo "$msg" | broker write "$queue_name" -
-    count=$((count + 1))
-done < "$backup_file"
-
-echo "Restored $count messages"
-EOF
-    
-    chmod +x "$restore_script"
-    echo "Created restore script: $restore_script"
+    echo "Queue reported $count pending messages before export"
+    echo "This portable dump is pending-only; claimed rows and application sidecars are not included."
+    echo "Restore into a fresh target with: broker load < $backup_file"
 }
 
 # Verify migration success
@@ -340,11 +412,15 @@ verify_migration() {
     
     # Check source is empty
     local source_count
-    source_count=$(broker list | grep "^$source:" | awk '{print $2}' || echo 0)
+    if ! source_count=$(queue_depth "$source"); then
+        return 1
+    fi
     
     # Check destination has messages
     local dest_count
-    dest_count=$(broker list | grep "^$dest:" | awk '{print $2}' || echo 0)
+    if ! dest_count=$(queue_depth "$dest"); then
+        return 1
+    fi
     
     echo "Source queue: $source_count messages"
     echo "Destination queue: $dest_count messages"

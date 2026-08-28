@@ -17,6 +17,58 @@ MAX_RETRIES=3
 DLQ_NAME="dlq"
 FAILED_NAME="failed"
 
+# Return the pending depth reported by the stable JSON stats interface.
+queue_depth() {
+    local queue="$1"
+    local stats
+    local status=0
+
+    stats=$(broker stats "$queue" --json) || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "Error: could not read stats for queue '$queue'" >&2
+        return "$status"
+    fi
+
+    local pending
+    if ! pending=$(jq -er '
+        if type == "object" and
+           (.pending | type == "number") and
+           .pending >= 0 and
+           .pending == (.pending | floor)
+        then .pending | floor
+        else error("invalid pending count")
+        end
+    ' <<<"$stats"); then
+        echo "Error: invalid stats for queue '$queue'" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$pending"
+}
+
+# Return one validated JSON message. Exit 2 remains the broker's empty signal.
+peek_one_json() {
+    local queue="$1"
+    local message
+    local status=0
+
+    message=$(broker peek "$queue" --json) || status=$?
+    if [ "$status" -ne 0 ]; then
+        return "$status"
+    fi
+    if ! jq -e '
+        type == "object" and
+        (.message | type == "string") and
+        (.timestamp | type == "string" and
+            test("^[0-9]{19}$") and . <= "9223372036854775807")
+    ' >/dev/null 2>&1 <<<"$message"; then
+        echo "Failed to peek queue '$queue': invalid message JSON" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$message"
+}
+
 # Simple DLQ pattern - move failures to DLQ using peek-and-ack
 simple_dlq_pattern() {
     echo "=== Simple DLQ Pattern ==="
@@ -25,10 +77,14 @@ simple_dlq_pattern() {
     while true; do
         # Peek at next message
         local msg_data
-        msg_data=$(broker peek tasks --json 2>/dev/null)
-        if [ -z "$msg_data" ]; then
+        local peek_status=0
+        msg_data=$(peek_one_json tasks) || peek_status=$?
+        if [ "$peek_status" -eq 2 ]; then
             echo "No more messages to process"
             break
+        elif [ "$peek_status" -ne 0 ]; then
+            echo "Failed to peek queue 'tasks'" >&2
+            return "$peek_status"
         fi
         
         # Extract message and timestamp safely
@@ -45,24 +101,31 @@ simple_dlq_pattern() {
         if grep -qi "error" <<<"$msg"; then
             printf "Failed to process: %s\n" "$msg"
             # Move to DLQ atomically
-            if broker move tasks "$DLQ_NAME" -m "$timestamp" 2>/dev/null; then
-                echo "Moved to DLQ"
-            else
-                echo "Warning: Failed to move message to DLQ" >&2
+            if ! broker move tasks "$DLQ_NAME" -m "$timestamp"; then
+                echo "Failed to move message $timestamp to the DLQ" >&2
+                return 1
             fi
+            echo "Moved to DLQ"
         else
             # Success - delete the message
-            if broker delete tasks -m "$timestamp" 2>/dev/null; then
-                printf "Successfully processed: %s\n" "$msg"
-            else
-                echo "Warning: Failed to delete processed message" >&2
+            if ! broker delete tasks -m "$timestamp"; then
+                echo "Failed to delete processed message $timestamp; it may be processed again" >&2
+                return 1
             fi
+            printf "Successfully processed: %s\n" "$msg"
         fi
     done
     
     echo "Retrying failed messages..."
     # Retry all failed messages
-    broker move "$DLQ_NAME" tasks --all
+    local move_status=0
+    broker move "$DLQ_NAME" tasks --all || move_status=$?
+    if [ "$move_status" -eq 2 ]; then
+        echo "No failed messages to retry"
+    elif [ "$move_status" -ne 0 ]; then
+        echo "Failed to retry messages from '$DLQ_NAME'" >&2
+        return "$move_status"
+    fi
 }
 
 # DLQ with retry tracking using JSON
@@ -72,11 +135,15 @@ dlq_with_retry_count() {
     while true; do
         # Peek at next message
         local msg_data
-        msg_data=$(broker peek tasks --json 2>/dev/null)
-        if [ -z "$msg_data" ]; then
+        local peek_status=0
+        msg_data=$(peek_one_json tasks) || peek_status=$?
+        if [ "$peek_status" -eq 2 ]; then
             # No messages, wait a bit
             sleep 1
             continue
+        elif [ "$peek_status" -ne 0 ]; then
+            echo "Failed to peek queue 'tasks'" >&2
+            return "$peek_status"
         fi
         
         # Extract message and timestamp
@@ -108,19 +175,29 @@ dlq_with_retry_count() {
                 fi
                 
                 # Write new message and delete old one
-                if echo "$new_msg" | broker write tasks - 2>/dev/null; then
-                    broker delete tasks -m "$timestamp" 2>/dev/null || true
-                    echo "Requeued with retry count: $((retry_count + 1))"
+                if ! printf '%s\n' "$new_msg" | broker write tasks -; then
+                    echo "Failed to write replacement for $timestamp; original left in place" >&2
+                    return 1
                 fi
+                if ! broker delete tasks -m "$timestamp"; then
+                    echo "Failed to delete old message $timestamp after writing its replacement; duplicate/retry risk" >&2
+                    return 1
+                fi
+                echo "Requeued with retry count: $((retry_count + 1))"
             else
                 # Move to DLQ after max retries
-                if broker move tasks "$DLQ_NAME" -m "$timestamp" 2>/dev/null; then
-                    echo "Moved to DLQ after $MAX_RETRIES retries"
+                if ! broker move tasks "$DLQ_NAME" -m "$timestamp"; then
+                    echo "Failed to move message $timestamp to the DLQ" >&2
+                    return 1
                 fi
+                echo "Moved to DLQ after $MAX_RETRIES retries"
             fi
         else
             # Success - delete the message
-            broker delete tasks -m "$timestamp" 2>/dev/null || true
+            if ! broker delete tasks -m "$timestamp"; then
+                echo "Failed to delete processed message $timestamp; it may be processed again" >&2
+                return 1
+            fi
         fi
     done
 }
@@ -168,10 +245,14 @@ process_with_delays() {
     while true; do
         # Peek at next message
         local msg_data
-        msg_data=$(broker peek "$queue" --json 2>/dev/null)
-        if [ -z "$msg_data" ]; then
+        local peek_status=0
+        msg_data=$(peek_one_json "$queue") || peek_status=$?
+        if [ "$peek_status" -eq 2 ]; then
             sleep 1
             continue
+        elif [ "$peek_status" -ne 0 ]; then
+            echo "Failed to peek queue '$queue'" >&2
+            return "$peek_status"
         fi
         
         local msg
@@ -190,12 +271,20 @@ process_with_delays() {
                 '{original: $msg, next_retry: $next, attempts: 1}')
             
             # Write to retry queue and delete from main queue
-            if echo "$retry_msg" | broker write retry_queue - 2>/dev/null; then
-                broker delete "$queue" -m "$timestamp" 2>/dev/null || true
+            if ! printf '%s\n' "$retry_msg" | broker write retry_queue -; then
+                echo "Failed to write retry for $timestamp; original left in place" >&2
+                return 1
+            fi
+            if ! broker delete "$queue" -m "$timestamp"; then
+                echo "Failed to delete old message $timestamp after writing its replacement; duplicate/retry risk" >&2
+                return 1
             fi
         else
             # Success - delete the message
-            broker delete "$queue" -m "$timestamp" 2>/dev/null || true
+            if ! broker delete "$queue" -m "$timestamp"; then
+                echo "Failed to delete processed message $timestamp; it may be processed again" >&2
+                return 1
+            fi
         fi
     done
 }
@@ -311,16 +400,32 @@ process_retry_queue() {
 # Batch retry from DLQ with filtering
 batch_retry_dlq() {
     echo "=== Batch Retry from DLQ ==="
-    
-    # Retry all messages from DLQ
-    echo "Moving all messages from DLQ back to main queue..."
-    broker move "$DLQ_NAME" tasks --all
-    
-    # Or selectively retry recent failures only
-    echo "Retrying only recent failures (last hour)..."
-    local one_hour_ago
-    one_hour_ago=$(date -d '1 hour ago' +%s 2>/dev/null || date -v -1H +%s)
-    broker move "$DLQ_NAME" tasks --after "${one_hour_ago}s"
+    local mode="${1:-all}"
+    local move_status=0
+
+    case "$mode" in
+        all)
+            echo "Moving all messages from DLQ back to main queue..."
+            broker move "$DLQ_NAME" tasks --all || move_status=$?
+            ;;
+        recent)
+            echo "Retrying only recent failures (last hour)..."
+            local one_hour_ago
+            one_hour_ago=$(date -d '1 hour ago' +%s 2>/dev/null || date -v -1H +%s)
+            broker move "$DLQ_NAME" tasks --all --after "${one_hour_ago}s" || move_status=$?
+            ;;
+        *)
+            echo "Retry mode must be 'all' or 'recent'" >&2
+            return 1
+            ;;
+    esac
+
+    if [ "$move_status" -eq 2 ]; then
+        echo "No matching DLQ messages to retry"
+    elif [ "$move_status" -ne 0 ]; then
+        echo "Failed to retry messages from '$DLQ_NAME'" >&2
+        return "$move_status"
+    fi
 }
 
 # Monitor DLQ size and alert
@@ -330,7 +435,9 @@ monitor_dlq() {
     while true; do
         # Get DLQ size
         local dlq_size
-        dlq_size=$(broker list --stats | grep "^$DLQ_NAME:" | awk '{print $2}' || echo 0)
+        if ! dlq_size=$(queue_depth "$DLQ_NAME"); then
+            return 1
+        fi
         
         if [ "$dlq_size" -gt 100 ]; then
             echo "WARNING: DLQ size is $dlq_size (threshold: 100)"

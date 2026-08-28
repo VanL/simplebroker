@@ -103,6 +103,813 @@ def _run_menu(
     )
 
 
+def _real_broker_env(tmp_path: Path) -> dict[str, str]:
+    bin_dir = tmp_path / "real-broker-bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "broker",
+        f"""#!/bin/bash
+exec env PYTHONPATH={shlex.quote(str(REPO_ROOT))} \
+    {shlex.quote(sys.executable)} -m simplebroker "$@"
+""",
+    )
+    env = _ShellEnv(os.environ.copy())
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    return env
+
+
+@pytest.fixture
+def shell_control_env(tmp_path: Path) -> dict[str, str]:
+    _require_shell_tools()
+    bin_dir = tmp_path / "shell-control-bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "broker",
+        """#!/bin/bash
+set -u
+printf '%s' "$1" >> "$BROKER_CALL_LOG"
+for argument in "${@:2}"; do
+    printf '\t%s' "$argument" >> "$BROKER_CALL_LOG"
+done
+printf '\n' >> "$BROKER_CALL_LOG"
+
+case "${BROKER_FAKE_MODE}:$1" in
+    simple-empty:peek) exit 2 ;;
+    simple-empty:move) exit 2 ;;
+    empty-then-error:peek)
+        count=0
+        if [ -f "$BROKER_COUNT_FILE" ]; then count=$(cat "$BROKER_COUNT_FILE"); fi
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$BROKER_COUNT_FILE"
+        if [ "$count" -eq 1 ]; then exit 2; fi
+        echo "simulated peek failure" >&2
+        exit 1
+        ;;
+    move-empty-then-error:move)
+        count=0
+        if [ -f "$BROKER_COUNT_FILE" ]; then count=$(cat "$BROKER_COUNT_FILE"); fi
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$BROKER_COUNT_FILE"
+        if [ "$count" -eq 1 ]; then exit 2; fi
+        echo "simulated move failure" >&2
+        exit 1
+        ;;
+    controlled-move:stats) printf '%s\n' "$BROKER_STATS_JSON" ;;
+    controlled-move:move) exit "$BROKER_MOVE_STATUS" ;;
+    stats-valid:stats) printf '%s\n' "$BROKER_STATS_JSON" ;;
+    stats-malformed:stats) printf '%s\n' '{"pending":"unknown"}' ;;
+    stats-missing:stats) printf '%s\n' '{"queue":"jobs","total":0}' ;;
+    stats-error:stats) echo "simulated stats failure" >&2; exit 1 ;;
+    peek-empty:peek) exit 2 ;;
+    peek-error:peek) echo "simulated peek failure" >&2; exit 1 ;;
+    peek-malformed:peek) printf '%s\n' '{"message":7,"timestamp":"1700000000000000000"}' ;;
+    peek-bad-id:peek) printf '%s\n' '{"message":"work","timestamp":"9999999999999999999"}' ;;
+    replacement-delete-error:peek)
+        printf '%s\n' '{"message":"fail","timestamp":"1700000000000000000"}'
+        ;;
+    replacement-delete-error:write) cat >/dev/null ;;
+    replacement-delete-error:delete)
+        echo "simulated source delete failure" >&2
+        exit 1
+        ;;
+    rename:rename) exit 0 ;;
+    bound:move) exit 0 ;;
+    backup:stats) printf '%s\n' '{"queue":"source","pending":2,"claimed":1,"total":3,"exists":true}' ;;
+    backup:dump)
+        printf '%s\n' '{"format":"simplebroker-dump","version":1,"created_at_ns":1,"source_last_ts":1}'
+        exit 0
+        ;;
+    dump-error:stats) printf '%s\n' "$BROKER_STATS_JSON" ;;
+    dump-error:dump) echo 'partial dump'; exit 1 ;;
+    *) echo "unexpected broker call: $*" >&2; exit 99 ;;
+esac
+""",
+    )
+    _write_executable(
+        bin_dir / "sleep",
+        """#!/bin/bash
+exit 0
+""",
+    )
+    env = _ShellEnv(os.environ.copy())
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "BROKER_CALL_LOG": str(tmp_path / "shell-control.log"),
+            "BROKER_COUNT_FILE": str(tmp_path / "shell-control-count"),
+            "BROKER_FAKE_MODE": "stats-valid",
+            "BROKER_MOVE_STATUS": "0",
+            "BROKER_STATS_JSON": (
+                '{"queue":"jobs","pending":7,"claimed":2,"total":9,"exists":true}'
+            ),
+        }
+    )
+    return env
+
+
+def _run_sourced_function(
+    script: Path,
+    tmp_path: Path,
+    env: dict[str, str],
+    function: str,
+    *args: str,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; "$2" "${@:3}"',
+            "shell-example",
+            str(script),
+            function,
+            *args,
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "script",
+    [DEAD_LETTER_QUEUE, QUEUE_MIGRATION, WORK_STEALING],
+)
+def test_queue_depth_uses_validated_json_stats(
+    script: Path,
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "stats-valid"
+
+    result = _run_sourced_function(
+        script, tmp_path, shell_control_env, "queue_depth", "jobs"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "7"
+    assert _log_lines(shell_control_env, "BROKER_CALL_LOG") == ["stats\tjobs\t--json"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_error"),
+    [
+        ("stats-malformed", "invalid stats"),
+        ("stats-missing", "invalid stats"),
+        ("stats-error", "could not read stats"),
+    ],
+)
+@pytest.mark.parametrize(
+    "script",
+    [DEAD_LETTER_QUEUE, QUEUE_MIGRATION, WORK_STEALING],
+)
+def test_queue_depth_fails_instead_of_coercing_bad_stats_to_zero(
+    script: Path,
+    mode: str,
+    expected_error: str,
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = mode
+
+    result = _run_sourced_function(
+        script, tmp_path, shell_control_env, "queue_depth", "jobs"
+    )
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+def test_load_distribution_stops_on_stats_failure(
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "stats-error"
+
+    result = _run_sourced_function(
+        WORK_STEALING,
+        tmp_path,
+        shell_control_env,
+        "load_based_distribution",
+    )
+
+    assert result.returncode != 0
+    assert "could not read stats" in result.stderr
+    assert _log_lines(shell_control_env, "BROKER_CALL_LOG") == [
+        "stats\tworker1-tasks\t--json"
+    ]
+
+
+def test_round_robin_idles_on_no_match_then_stops_on_move_failure(
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "move-empty-then-error"
+
+    result = _run_sourced_function(
+        WORK_STEALING,
+        tmp_path,
+        shell_control_env,
+        "round_robin_distribution",
+    )
+
+    assert result.returncode != 0
+    assert "Failed to distribute work" in result.stderr
+    assert Path(shell_control_env["BROKER_COUNT_FILE"]).read_text().strip() == "2"
+
+
+@pytest.mark.parametrize(
+    ("function", "args"),
+    [
+        ("gradual_migration", ("source", "dest", "1")),
+        ("merge_queues", ("dest", "source")),
+    ],
+)
+@pytest.mark.parametrize("move_status", [1, 2])
+def test_migration_move_loops_distinguish_no_match_from_failure(
+    function: str,
+    args: tuple[str, ...],
+    move_status: int,
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "controlled-move"
+    shell_control_env["BROKER_MOVE_STATUS"] = str(move_status)
+    shell_control_env["BROKER_STATS_JSON"] = (
+        '{"queue":"source","pending":0,"claimed":0,"total":0,"exists":false}'
+    )
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        shell_control_env,
+        function,
+        *args,
+    )
+
+    assert result.returncode == (0 if move_status == 2 else 1)
+
+
+@pytest.mark.parametrize("move_status", [1, 2])
+def test_batch_retry_distinguishes_no_match_from_failure(
+    move_status: int,
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "controlled-move"
+    shell_control_env["BROKER_MOVE_STATUS"] = str(move_status)
+
+    result = _run_sourced_function(
+        DEAD_LETTER_QUEUE,
+        tmp_path,
+        shell_control_env,
+        "batch_retry_dlq",
+        "all",
+    )
+
+    assert result.returncode == (0 if move_status == 2 else 1)
+    if move_status == 2:
+        assert "No matching DLQ messages" in result.stdout
+    else:
+        assert "Failed to retry messages" in result.stderr
+
+
+def test_simple_dlq_treats_empty_as_completion(
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "simple-empty"
+
+    result = _run_sourced_function(
+        DEAD_LETTER_QUEUE,
+        tmp_path,
+        shell_control_env,
+        "simple_dlq_pattern",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "No more messages to process" in result.stdout
+    assert "No failed messages to retry" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("function", "args"),
+    [
+        ("dlq_with_retry_count", ()),
+        ("process_with_delays", ("tasks",)),
+    ],
+)
+def test_continuous_dlq_loops_idle_on_empty_but_stop_on_peek_failure(
+    function: str,
+    args: tuple[str, ...],
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "empty-then-error"
+
+    result = _run_sourced_function(
+        DEAD_LETTER_QUEUE,
+        tmp_path,
+        shell_control_env,
+        function,
+        *args,
+    )
+
+    assert result.returncode != 0
+    assert "Failed to peek" in result.stderr
+    assert Path(shell_control_env["BROKER_COUNT_FILE"]).read_text().strip() == "2"
+
+
+@pytest.mark.parametrize(
+    ("script", "function", "args"),
+    [
+        (DEAD_LETTER_QUEUE, "simple_dlq_pattern", ()),
+        (DEAD_LETTER_QUEUE, "dlq_with_retry_count", ()),
+        (DEAD_LETTER_QUEUE, "process_with_delays", ("tasks",)),
+        (QUEUE_MIGRATION, "filtered_migration", ("source", "dest", "match")),
+        (QUEUE_MIGRATION, "split_queue", ("source", "dest-a", "dest-b")),
+        (
+            QUEUE_MIGRATION,
+            "transform_migration",
+            ("source", "dest", "tr", "a-z", "A-Z"),
+        ),
+        (WORK_STEALING, "simulate_worker", ("worker1", "0")),
+    ],
+)
+@pytest.mark.parametrize("mode", ["peek-malformed", "peek-bad-id"])
+def test_message_loops_reject_malformed_success_output(
+    script: Path,
+    function: str,
+    args: tuple[str, ...],
+    mode: str,
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = mode
+
+    result = _run_sourced_function(
+        script,
+        tmp_path,
+        shell_control_env,
+        function,
+        *args,
+    )
+
+    assert result.returncode != 0
+    assert "invalid message JSON" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("function", "args"),
+    [
+        ("filtered_migration", ("source", "dest", "match")),
+        ("split_queue", ("source", "dest-a", "dest-b")),
+        ("transform_migration", ("source", "dest", "tr", "a-z", "A-Z")),
+    ],
+)
+@pytest.mark.parametrize(
+    ("mode", "expected_status"),
+    [("peek-empty", 0), ("peek-error", 1)],
+)
+def test_migration_peek_loops_distinguish_empty_from_failure(
+    function: str,
+    args: tuple[str, ...],
+    mode: str,
+    expected_status: int,
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = mode
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        shell_control_env,
+        function,
+        *args,
+    )
+
+    assert result.returncode == expected_status
+    if expected_status:
+        assert "Failed to peek" in result.stderr
+
+
+def test_worker_simulator_idles_then_stops_on_peek_failure(
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "empty-then-error"
+
+    result = _run_sourced_function(
+        WORK_STEALING,
+        tmp_path,
+        shell_control_env,
+        "simulate_worker",
+        "worker1",
+        "0",
+    )
+
+    assert result.returncode != 0
+    assert "Failed to peek" in result.stderr
+    assert Path(shell_control_env["BROKER_COUNT_FILE"]).read_text().strip() == "2"
+
+
+@pytest.mark.parametrize(
+    ("function", "args"),
+    [
+        ("dlq_with_retry_count", ()),
+        ("process_with_delays", ("tasks",)),
+    ],
+)
+def test_dlq_replacement_stops_when_source_delete_fails(
+    function: str,
+    args: tuple[str, ...],
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "replacement-delete-error"
+
+    result = _run_sourced_function(
+        DEAD_LETTER_QUEUE,
+        tmp_path,
+        shell_control_env,
+        function,
+        *args,
+    )
+
+    assert result.returncode != 0
+    assert "duplicate/retry risk" in result.stderr
+    assert [
+        line.split("\t", 1)[0]
+        for line in _log_lines(shell_control_env, "BROKER_CALL_LOG")
+    ] == ["peek", "write", "delete"]
+
+
+def test_migration_rename_uses_the_rename_operation(
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "rename"
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        shell_control_env,
+        "rename_queue",
+        "old",
+        "new",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _log_lines(shell_control_env, "BROKER_CALL_LOG") == ["rename\told\tnew"]
+
+
+def test_migration_rename_preserves_pending_and_claimed_state(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    db_path = tmp_path / ".broker.db"
+    with Queue("old", db_path=str(db_path)) as old:
+        old.insert_messages([("claimed", OLD_ID), ("pending", NEW_ID)])
+        assert old.read_one() == "claimed"
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        env,
+        "rename_queue",
+        "old",
+        "new",
+    )
+
+    assert result.returncode == 0, result.stderr
+    with Queue("old", db_path=str(db_path)) as old:
+        assert old.stats().total == 0
+    with Queue("new", db_path=str(db_path)) as new:
+        assert new.stats().pending == 1
+        assert new.stats().claimed == 1
+        assert new.peek_many(
+            limit=10,
+            with_timestamps=False,
+            include_claimed=True,
+        ) == ["claimed", "pending"]
+
+
+def test_migration_rename_reports_missing_source_and_existing_destination(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+
+    missing = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        env,
+        "rename_queue",
+        "missing",
+        "new",
+    )
+
+    assert missing.returncode == 2
+    assert "does not exist" in missing.stderr
+
+    db_path = tmp_path / ".broker.db"
+    with Queue("old", db_path=str(db_path)) as old:
+        old.write("old body")
+    with Queue("new", db_path=str(db_path)) as new:
+        new.write("new body")
+
+    collision = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        env,
+        "rename_queue",
+        "old",
+        "new",
+    )
+
+    assert collision.returncode == 1
+    assert "destination may already exist" in collision.stderr
+    with Queue("old", db_path=str(db_path)) as old:
+        assert old.peek_many(limit=10, with_timestamps=False) == ["old body"]
+    with Queue("new", db_path=str(db_path)) as new:
+        assert new.peek_many(limit=10, with_timestamps=False) == ["new body"]
+
+
+def test_filtered_migration_treats_dash_prefixed_filter_as_pattern(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    db_path = tmp_path / ".broker.db"
+    with Queue("source", db_path=str(db_path)) as source:
+        source.insert_messages([("foo", OLD_ID), ("contains -efoo", NEW_ID)])
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        env,
+        "filtered_migration",
+        "source",
+        "dest",
+        "-efoo",
+    )
+
+    assert result.returncode == 0, result.stderr
+    with Queue("source", db_path=str(db_path)) as source:
+        assert source.peek_many(limit=10, with_timestamps=False) == ["foo"]
+    with Queue("dest", db_path=str(db_path)) as destination:
+        assert destination.peek_many(limit=10, with_timestamps=False) == [
+            "contains -efoo"
+        ]
+
+
+def test_filtered_migration_rejects_invalid_pattern_without_mutation(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    db_path = tmp_path / ".broker.db"
+    with Queue("source", db_path=str(db_path)) as source:
+        source.write("untouched")
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        env,
+        "filtered_migration",
+        "source",
+        "dest",
+        "[",
+    )
+
+    assert result.returncode == 1
+    assert "Invalid filter pattern" in result.stderr
+    with Queue("source", db_path=str(db_path)) as source:
+        assert source.peek_many(limit=10, with_timestamps=False) == ["untouched"]
+    with Queue("dest", db_path=str(db_path)) as destination:
+        assert destination.stats().total == 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_dlq", "expected_tasks"),
+    [
+        ("all", [], ["old failure", "recent failure"]),
+        ("recent", ["old failure"], ["recent failure"]),
+    ],
+)
+def test_batch_retry_modes_select_expected_real_rows(
+    mode: str,
+    expected_dlq: list[str],
+    expected_tasks: list[str],
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    db_path = tmp_path / ".broker.db"
+    with Queue("dlq", db_path=str(db_path)) as dlq:
+        dlq.insert_messages([("old failure", OLD_ID)])
+        dlq.write("recent failure")
+
+    result = _run_sourced_function(
+        DEAD_LETTER_QUEUE,
+        tmp_path,
+        env,
+        "batch_retry_dlq",
+        mode,
+    )
+
+    assert result.returncode == 0, result.stderr
+    with Queue("dlq", db_path=str(db_path)) as dlq:
+        assert dlq.peek_many(limit=10, with_timestamps=False) == expected_dlq
+    with Queue("tasks", db_path=str(db_path)) as tasks:
+        assert tasks.peek_many(limit=10, with_timestamps=False) == expected_tasks
+
+
+@pytest.mark.parametrize("bound", ["1700000000s", "1837025672140161024"])
+def test_migration_bound_reaches_the_cli_unchanged(
+    bound: str,
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "bound"
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        shell_control_env,
+        "migrate_by_time",
+        "source",
+        "dest",
+        bound,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _log_lines(shell_control_env, "BROKER_CALL_LOG") == [
+        f"move\tsource\tdest\t--all\t--before\t{bound}"
+    ]
+
+
+def test_queue_export_uses_pending_only_dump_and_documents_load(
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "backup"
+    backup = tmp_path / "source.ndjson"
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        shell_control_env,
+        "backup_queue",
+        "source",
+        str(backup),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _log_lines(shell_control_env, "BROKER_CALL_LOG") == [
+        "stats\tsource\t--json",
+        "dump\t--include\tsource",
+    ]
+    assert "pending messages" in result.stdout
+    assert "claimed rows and application sidecars are not included" in result.stdout
+    assert f"broker load < {backup}" in result.stdout
+
+
+def test_queue_export_reports_dump_failure(
+    tmp_path: Path,
+    shell_control_env: dict[str, str],
+) -> None:
+    shell_control_env["BROKER_FAKE_MODE"] = "dump-error"
+    backup = tmp_path / "source.ndjson"
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        shell_control_env,
+        "backup_queue",
+        "source",
+        str(backup),
+    )
+
+    assert result.returncode != 0
+    assert "may be incomplete" in result.stderr
+    assert "Restore into a fresh target" not in result.stdout
+
+
+def test_queue_export_round_trip_preserves_pending_ids_and_excludes_claimed(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    source_db = tmp_path / ".broker.db"
+    with Queue("source", db_path=str(source_db)) as source:
+        source.insert_messages([("claimed", OLD_ID), ("pending", NEW_ID)])
+        assert source.read_one() == "claimed"
+
+    backup = tmp_path / "source.ndjson"
+    exported = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        env,
+        "backup_queue",
+        "source",
+        str(backup),
+    )
+
+    assert exported.returncode == 0, exported.stderr
+    records = [json.loads(line) for line in backup.read_text().splitlines()]
+    messages = [record for record in records if record["type"] == "message"]
+    assert [record["body"] for record in messages] == ["pending"]
+    assert [record["id"] for record in messages] == [str(NEW_ID)]
+
+    restored_dir = tmp_path / "restored"
+    restored_dir.mkdir()
+    loaded = subprocess.run(
+        ["broker", "load"],
+        cwd=restored_dir,
+        env=env,
+        input=backup.read_text(),
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert loaded.returncode == 0, loaded.stderr
+    with Queue("source", db_path=str(restored_dir / ".broker.db")) as restored:
+        assert restored.stats().pending == 1
+        assert restored.stats().claimed == 0
+        assert restored.latest_pending_timestamp() == NEW_ID
+        assert restored.peek_many(limit=10, with_timestamps=False) == ["pending"]
+
+
+def test_queue_depth_reads_real_cli_stats(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    with Queue("jobs", db_path=str(tmp_path / ".broker.db")) as jobs:
+        for message in ("one", "two", "three"):
+            jobs.write(message)
+        assert jobs.read_one() == "one"
+
+    result = _run_sourced_function(
+        WORK_STEALING,
+        tmp_path,
+        env,
+        "queue_depth",
+        "jobs",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "2"
+
+
+def test_transform_stops_after_real_write_when_source_delete_fails(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "partial-mutation-bin"
+    bin_dir.mkdir()
+    db_path = tmp_path / "partial.db"
+    _write_executable(
+        bin_dir / "broker",
+        f"""#!/bin/bash
+if [ "$1" = "delete" ] && [ "$2" = "source" ] && [ "$4" = "$BROKER_FAIL_ID" ]; then
+    echo "simulated source delete failure" >&2
+    exit 1
+fi
+exec env PYTHONPATH={shlex.quote(str(REPO_ROOT))} \
+    {shlex.quote(sys.executable)} -m simplebroker -f "$BROKER_REAL_DB" "$@"
+""",
+    )
+    env = _ShellEnv(os.environ.copy())
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "BROKER_REAL_DB": str(db_path),
+            "BROKER_FAIL_ID": str(OLD_ID),
+        }
+    )
+    with Queue("source", db_path=str(db_path)) as source:
+        source.insert_messages([("first", OLD_ID), ("second", NEW_ID)])
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        env,
+        "transform_migration",
+        "source",
+        "dest",
+        "tr",
+        "a-z",
+        "A-Z",
+    )
+
+    assert result.returncode != 0
+    assert "duplicate/retry risk" in result.stderr
+    with Queue("source", db_path=str(db_path)) as source:
+        assert source.peek_many(limit=10, with_timestamps=False) == ["first", "second"]
+    with Queue("dest", db_path=str(db_path)) as destination:
+        assert destination.peek_many(limit=10, with_timestamps=False) == ["FIRST"]
+
+
 @pytest.mark.parametrize(
     ("script", "selector", "expected_call_count"),
     [
@@ -156,41 +963,33 @@ def test_menu_selector_rejects_invalid_argument(
     assert not Path(menu_env["BROKER_CALL_LOG"]).exists()
 
 
+@pytest.mark.parametrize("bound", ["1700000000s", "1700000000000000000"])
 def test_queue_migration_moves_only_messages_older_than_cutoff(
+    bound: str,
     tmp_path: Path,
 ) -> None:
     _require_shell_tools()
-    bin_dir = tmp_path / "real-broker-bin"
-    bin_dir.mkdir()
-    _write_executable(
-        bin_dir / "broker",
-        f"""#!/bin/bash
-exec env PYTHONPATH={shlex.quote(str(REPO_ROOT))} \
-    {shlex.quote(sys.executable)} -m simplebroker "$@"
-""",
-    )
+    env = _real_broker_env(tmp_path)
 
     db_path = tmp_path / ".broker.db"
     with Queue("source", db_path=str(db_path)) as source:
         source.insert_messages([("older", OLD_ID), ("newer", NEW_ID)])
 
-    env = _ShellEnv(os.environ.copy())
-    env["PATH"] = f"{bin_dir}:{env['PATH']}"
     result = _run_menu(
         QUEUE_MIGRATION,
         tmp_path,
         env,
         "3",
-        input_text="source\ndestination\n1700000000\n",
+        input_text=f"source\ndestination\n{bound}\n",
     )
 
     assert result.returncode == 0, result.stderr
     with Queue("source", db_path=str(db_path)) as source:
-        assert list(source.peek_generator(with_timestamps=True)) == [("newer", NEW_ID)]
+        assert source.peek_many(limit=10, with_timestamps=False) == ["newer"]
+        assert source.latest_pending_timestamp() == NEW_ID
     with Queue("destination", db_path=str(db_path)) as destination:
-        assert list(destination.peek_generator(with_timestamps=True)) == [
-            ("older", OLD_ID)
-        ]
+        assert destination.peek_many(limit=10, with_timestamps=False) == ["older"]
+        assert destination.latest_pending_timestamp() == OLD_ID
 
 
 @pytest.fixture
