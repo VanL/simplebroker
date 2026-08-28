@@ -15,6 +15,11 @@ import pytest
 
 from simplebroker import Queue
 
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="published shell examples require a POSIX Bash environment",
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 QUEUE_MIGRATION = REPO_ROOT / "examples" / "queue_migration.sh"
 DEAD_LETTER_QUEUE = REPO_ROOT / "examples" / "dead_letter_queue.sh"
