@@ -490,7 +490,7 @@ main() {
         1) simple_dlq_pattern ;;
         2) dlq_with_retry_count ;;
         3) dlq_with_retry_delays ;;
-        4) batch_retry_dlq ;;
+        4) batch_retry_dlq all ;;
         5) monitor_dlq ;;
         6) setup_demo ;;
         *)
