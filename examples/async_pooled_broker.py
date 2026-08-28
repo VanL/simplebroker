@@ -29,6 +29,7 @@ import re
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Protocol, cast
@@ -134,6 +135,16 @@ class AsyncSQLRunner(Protocol):
         ...
 
 
+@dataclass(slots=True)
+class _TransactionState:
+    """Task ownership plus shared liveness for one pooled transaction."""
+
+    connection: aiosqlite.Connection
+    context: AbstractAsyncContextManager[aiosqlite.Connection]
+    owner: asyncio.Task[Any] | None
+    active: bool = True
+
+
 class PooledAsyncSQLiteRunner:
     """High-performance async SQLite runner with connection pooling."""
 
@@ -150,12 +161,10 @@ class PooledAsyncSQLiteRunner:
         self.max_connections = max_connections
         self._config = snapshot_config(config)
         self._pool: SQLiteConnectionPool | None = None
-        self._transaction_conn: contextvars.ContextVar[aiosqlite.Connection | None] = (
-            contextvars.ContextVar("transaction_conn", default=None)
+        self._transaction_state: contextvars.ContextVar[_TransactionState | None] = (
+            contextvars.ContextVar("transaction_state", default=None)
         )
-        self._transaction_context: contextvars.ContextVar[
-            AbstractAsyncContextManager[aiosqlite.Connection] | None
-        ] = contextvars.ContextVar("transaction_context", default=None)
+        self._active_transaction: _TransactionState | None = None
 
     async def _ensure_pool(self) -> SQLiteConnectionPool:
         """Lazily create the connection pool."""
@@ -239,15 +248,19 @@ class PooledAsyncSQLiteRunner:
         pool = await self._ensure_pool()
 
         # Check if we're in a transaction
-        transaction_conn = self._transaction_conn.get()
-        if transaction_conn is not None:
+        transaction = self._transaction_state.get()
+        if transaction is not None and transaction.active:
+            if transaction.owner is not asyncio.current_task():
+                raise OperationalError("Transaction belongs to another task")
             return await self._run_on_connection(
-                transaction_conn,
+                transaction.connection,
                 sql,
                 params,
                 fetch=fetch,
                 commit=False,
             )
+        if self._active_transaction is not None:
+            raise OperationalError("Another task has an active transaction")
         async with pool.connection() as conn:
             return await self._run_on_connection(
                 conn,
@@ -259,57 +272,100 @@ class PooledAsyncSQLiteRunner:
 
     async def begin_immediate(self) -> None:
         """Start an immediate transaction."""
-        if self._transaction_conn.get() is not None:
+        transaction = self._transaction_state.get()
+        if (transaction is not None and transaction.active) or (
+            self._active_transaction is not None
+        ):
             raise OperationalError("Already in transaction")
 
         pool = await self._ensure_pool()
         # Keep one pooled connection checked out for the transaction lifetime.
         conn_context = pool.connection()
         conn = await conn_context.__aenter__()
-        self._transaction_context.set(conn_context)
-        self._transaction_conn.set(conn)
         try:
             await conn.execute("BEGIN IMMEDIATE")
-        except aiosqlite.OperationalError as e:
-            # Release connection on error
-            await conn_context.__aexit__(None, None, None)
-            self._transaction_conn.set(None)
-            self._transaction_context.set(None)
-            raise OperationalError(str(e)) from e
+        except BaseException as error:
+            cleanup_errors: list[BaseException] = []
+            try:
+                await conn.rollback()
+            except (
+                aiosqlite.Error,
+                RuntimeError,
+                asyncio.CancelledError,
+            ) as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+            try:
+                await conn_context.__aexit__(
+                    type(error),
+                    error,
+                    error.__traceback__,
+                )
+            except (
+                aiosqlite.Error,
+                RuntimeError,
+                asyncio.CancelledError,
+            ) as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+            for cleanup_failure in cleanup_errors:
+                error.add_note(
+                    "Transaction-start cleanup also failed: "
+                    f"{type(cleanup_failure).__name__}: {cleanup_failure}"
+                )
+            if isinstance(error, aiosqlite.OperationalError):
+                raise OperationalError(str(error)) from error
+            raise
+
+        transaction = _TransactionState(
+            connection=conn,
+            context=conn_context,
+            owner=asyncio.current_task(),
+        )
+        self._transaction_state.set(transaction)
+        self._active_transaction = transaction
 
     async def commit(self) -> None:
         """Commit the current transaction."""
-        conn = self._transaction_conn.get()
-        conn_context = self._transaction_context.get()
-        if conn is None or conn_context is None:
+        transaction = self._transaction_state.get()
+        if transaction is None or not transaction.active:
+            transaction = self._active_transaction
+        if transaction is None or not transaction.active:
             return
+        transaction.active = False
 
         try:
-            await conn.commit()
+            await transaction.connection.commit()
         except aiosqlite.OperationalError as e:
             raise OperationalError(str(e)) from e
         finally:
-            # Always release connection back to pool
-            await conn_context.__aexit__(None, None, None)
-            self._transaction_conn.set(None)
-            self._transaction_context.set(None)
+            try:
+                await transaction.context.__aexit__(None, None, None)
+            finally:
+                transaction.active = False
+                self._transaction_state.set(None)
+                if self._active_transaction is transaction:
+                    self._active_transaction = None
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
-        conn = self._transaction_conn.get()
-        conn_context = self._transaction_context.get()
-        if conn is None or conn_context is None:
+        transaction = self._transaction_state.get()
+        if transaction is None or not transaction.active:
+            transaction = self._active_transaction
+        if transaction is None or not transaction.active:
             return
+        transaction.active = False
 
         try:
-            await conn.rollback()
+            await transaction.connection.rollback()
         except aiosqlite.OperationalError as e:
             raise OperationalError(str(e)) from e
         finally:
-            # Always release connection back to pool
-            await conn_context.__aexit__(None, None, None)
-            self._transaction_conn.set(None)
-            self._transaction_context.set(None)
+            try:
+                await transaction.context.__aexit__(None, None, None)
+            finally:
+                transaction.active = False
+                self._transaction_state.set(None)
+                if self._active_transaction is transaction:
+                    self._active_transaction = None
 
     async def close(self) -> None:
         """Close the connection pool."""
@@ -398,6 +454,15 @@ class AsyncBrokerCore:
         self._vacuum_interval = int(self._config["BROKER_AUTO_VACUUM_INTERVAL"])
         self._max_message_size = int(self._config["BROKER_MAX_MESSAGE_SIZE"])
         self._initialized = False
+        self._batch_transaction_open = False
+
+    def _reject_reentrant_batch_operation(self) -> None:
+        """Keep ordinary operations from joining a yielded batch transaction."""
+        if self._batch_transaction_open:
+            raise RuntimeError(
+                "Cannot run another broker operation while a batch stream "
+                "transaction is open; exhaust or close the batch stream first"
+            )
 
     async def _ensure_initialized(self) -> None:
         """Verify the canonically prepared database once per async core."""
@@ -449,6 +514,7 @@ class AsyncBrokerCore:
         retry_delay: float = 0.05,
     ) -> Any:
         """Execute an async operation with retry logic."""
+        self._reject_reentrant_batch_operation()
         for attempt in range(max_retries):
             try:
                 return await operation()
@@ -598,6 +664,7 @@ class AsyncBrokerCore:
                     raise
 
             batch_committed = False
+            self._batch_transaction_open = True
             try:
                 for row in batch_messages:
                     yield row[0]
@@ -608,6 +675,8 @@ class AsyncBrokerCore:
                 if not batch_committed:
                     await self._runner.rollback()
                 raise
+            finally:
+                self._batch_transaction_open = False
 
     async def _stream_one(
         self,
@@ -641,6 +710,7 @@ class AsyncBrokerCore:
         after_timestamp: int | None = None,
     ) -> AsyncIterator[str]:
         """Stream messages from a queue."""
+        self._reject_reentrant_batch_operation()
         await self._ensure_initialized()
         self._validate_queue_name(queue)
 
@@ -881,6 +951,7 @@ class AsyncBrokerCore:
 
     async def vacuum(self) -> None:
         """Manually trigger vacuum of claimed messages."""
+        self._reject_reentrant_batch_operation()
         await self._ensure_initialized()
         await self._vacuum_claimed_messages()
 

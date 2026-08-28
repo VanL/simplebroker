@@ -2,14 +2,15 @@
 
 import asyncio
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import AbstractContextManager, closing
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import aiosqlite
 import async_pooled_broker as pooled_module
 import pytest
-from async_pooled_broker import AsyncQueue, async_broker
+from async_pooled_broker import AsyncQueue, PooledAsyncSQLiteRunner, async_broker
 
 from simplebroker import Queue, open_broker
 from simplebroker._constants import SIMPLEBROKER_MAGIC
@@ -295,6 +296,7 @@ def test_async_setup_failure_does_not_construct_pool(
 
 def test_generated_ids_follow_commit_order_under_forced_interleaving(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "commit-order.db"
 
@@ -315,7 +317,7 @@ def test_generated_ids_follow_commit_order_under_forced_interleaving(
                     await release_first_write.wait()
                 return await real_execute(operation, **kwargs)
 
-            broker._execute_with_retry = barrier_execute  # type: ignore[method-assign]
+            monkeypatch.setattr(broker, "_execute_with_retry", barrier_execute)
             completion_order: list[str] = []
 
             async def write(label: str) -> None:
@@ -343,6 +345,7 @@ def test_generated_ids_follow_commit_order_under_forced_interleaving(
 
 def test_claim_batch_normalizes_reversed_opaque_runner_records(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "row-order.db"
 
@@ -364,7 +367,153 @@ def test_claim_batch_normalizes_reversed_opaque_runner_records(
                 records = await real_run(sql, params, fetch=fetch)
                 return list(reversed(records)) if len(records) > 1 else records
 
-            broker._runner.run = reversing_run  # type: ignore[method-assign]
+            monkeypatch.setattr(broker._runner, "run", reversing_run)
             return [message async for message in queue.stream(commit_interval=3)]
 
     assert asyncio.run(exercise()) == ["one", "two", "three"]
+
+
+def test_open_batch_rejects_reentrant_delete_and_rolls_back(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "reentrant-batch.db"
+
+    async def exercise() -> tuple[str, bool, list[tuple[str, int, int]]]:
+        async with async_broker(str(db_path), max_connections=2) as broker:
+            source = AsyncQueue("source", broker)
+            unrelated = AsyncQueue("unrelated", broker)
+            for body in ("one", "two", "three"):
+                await source.write(body)
+            await unrelated.write("keep")
+
+            stream = cast(
+                AsyncGenerator[str, None],
+                source.stream(commit_interval=3),
+            )
+            first = await anext(stream)
+            rejected = False
+            try:
+                await broker.delete("unrelated")
+            except RuntimeError as exc:
+                rejected = "batch stream" in str(exc)
+            finally:
+                await stream.aclose()
+
+            return first, rejected, await broker.get_queue_stats()
+
+    first, rejected, stats = asyncio.run(exercise())
+    by_queue = {queue: (pending, total) for queue, pending, total in stats}
+    assert first == "one"
+    assert rejected
+    assert by_queue == {"source": (3, 3), "unrelated": (1, 1)}
+
+
+def test_cross_task_batch_close_clears_parent_and_inherited_child_state(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "batch-child-context.db"
+
+    async def exercise() -> tuple[
+        list[tuple[str, int, int]],
+        list[tuple[str, int, int]],
+    ]:
+        async with async_broker(str(db_path), max_connections=2) as broker:
+            source = AsyncQueue("source", broker)
+            for body in ("one", "two", "three"):
+                await source.write(body)
+
+            stream = cast(
+                AsyncGenerator[str, None],
+                source.stream(commit_interval=3),
+            )
+            assert await anext(stream) == "one"
+
+            release_child = asyncio.Event()
+
+            async def inspect_after_close() -> list[tuple[str, int, int]]:
+                await release_child.wait()
+                return await broker.get_queue_stats()
+
+            child = asyncio.create_task(inspect_after_close())
+            await asyncio.create_task(stream.aclose())
+            parent_stats = await broker.get_queue_stats()
+            release_child.set()
+            return parent_stats, await child
+
+    parent_stats, child_stats = asyncio.run(exercise())
+    for stats in (parent_stats, child_stats):
+        assert {queue: (pending, total) for queue, pending, total in stats} == {
+            "source": (3, 3)
+        }
+
+
+def test_task_created_before_batch_can_close_it_and_restore_messages(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "preexisting-closer.db"
+
+    async def exercise() -> list[tuple[str, int, int]]:
+        async with async_broker(str(db_path), max_connections=2) as broker:
+            source = AsyncQueue("source", broker)
+            for body in ("one", "two", "three"):
+                await source.write(body)
+
+            stream = cast(
+                AsyncGenerator[str, None],
+                source.stream(commit_interval=3),
+            )
+            close_batch = asyncio.Event()
+
+            async def close_later() -> None:
+                await close_batch.wait()
+                await stream.aclose()
+
+            closer = asyncio.create_task(close_later())
+            assert await anext(stream) == "one"
+            close_batch.set()
+            await closer
+            return await broker.get_queue_stats()
+
+    stats = asyncio.run(exercise())
+    assert {queue: (pending, total) for queue, pending, total in stats} == {
+        "source": (3, 3)
+    }
+
+
+def test_cancelled_begin_releases_connection_and_allows_next_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "cancelled-begin.db"
+    original_execute = aiosqlite.Connection.execute
+
+    async def exercise() -> None:
+        runner = PooledAsyncSQLiteRunner(str(db_path), max_connections=1)
+        begin_started = asyncio.Event()
+        never_finish = asyncio.Event()
+
+        async def interrupt_begin(
+            connection: aiosqlite.Connection,
+            sql: str,
+            parameters: Any = None,
+        ) -> Any:
+            if sql == "BEGIN IMMEDIATE":
+                begin_started.set()
+                await never_finish.wait()
+            if parameters is None:
+                return await original_execute(connection, sql)
+            return await original_execute(connection, sql, parameters)
+
+        monkeypatch.setattr(aiosqlite.Connection, "execute", interrupt_begin)
+        interrupted = asyncio.create_task(runner.begin_immediate())
+        await begin_started.wait()
+        interrupted.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await interrupted
+
+        monkeypatch.setattr(aiosqlite.Connection, "execute", original_execute)
+        await asyncio.wait_for(runner.begin_immediate(), timeout=2)
+        await runner.rollback()
+        await runner.close()
+
+    asyncio.run(exercise())

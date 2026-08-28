@@ -839,7 +839,8 @@ class names when public behavior and durable state can prove the requirement.
 
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
-| None | None | None | Empty at authoring. | None |
+| None (Task 6 scope) | Point the logging runner at a temporary target. | The logging runner and both advanced async runnable entry points now use temporary targets. | Task 6 smoke inspection found that the advanced entry points violated invariant 15 in the same way as the known logging runner defect. Their queue core and storage behavior are unchanged. | None. Example-only lifecycle correction. |
+| None (test maintenance) | Cheap documentation-drift text checks could remain. | Removed three tests that matched README prose or obsolete literal strings. | The tests did not establish runtime correctness and conflicted with the owner's behavior-first, non-brittle test direction. Their runtime owners remain covered by behavioral suites. | None. No product contract changed. |
 
 Record any changed task, skipped firing probe, new public surface, retained
 private import, or different reactor state rule here before implementation
@@ -1107,6 +1108,55 @@ selector description: the catalog now uses the finite DLQ setup selector and
 accurately identifies which menu prompts. The exact isolated DLQ and
 work-stealing setup commands were smoke-tested and created no repository-local
 database.
+
+### 2026-08-27 Task 7 full verification and closure evidence
+
+The final example-tree gate passes 136 tests. The required external example
+matrix passes 160 tests. The full repository suite passes 3,330 tests with 18
+expected skips: platform-specific Windows/PostgreSQL cases, opt-in diagnostic
+and direct cross-backend probes, the source-suite artifact placeholder, and two
+ephemeral variants owned by their subprocess probe. No skip was added by this
+plan.
+
+Ruff and format checks pass over the example and named external-test surfaces.
+The release helper type-checks all 16 concrete example Python files. ShellCheck
+passes every example shell script. DOM-15 fixtures, plan context, repository
+documentation paths, the Ruff suppression index, and `git diff --check` all
+pass. The final repository scan found no new `.broker.db`, `broker.db`, demo
+database, or display-string-named target.
+
+A cumulative suppression audit initially found two Task 1
+`type: ignore[method-assign]` comments used for deterministic test adapters.
+Both were replaced with pytest's typed monkeypatch API. The two commit-order
+and opaque-row-sequence proofs pass, the 16-file type gate remains green, and
+the complete plan diff now adds no `noqa`, `type: ignore`, skip marker, or
+coverage pragma.
+
+### 2026-08-27 final-review remediation
+
+The whole-diff review found three behavior gaps that the first green matrix did
+not expose. Pooled batch streams could let a nested operation join and commit
+their open transaction; filtered migration used a predictable caller-visible
+scratch queue; and the worker simulator peeked before processing while the
+stealer could still move that row. The repairs now reject other operations
+during a pooled batch, share explicit live transaction state across task
+contexts, roll back correctly from pre-existing or inherited closer tasks,
+and release a connection when `BEGIN IMMEDIATE` is cancelled. Filtered
+migration validates a bounded snapshot and moves matching exact IDs only.
+Worker simulators atomically reserve into private per-worker inflight queues,
+and the real stealer moves pending rows only.
+
+Firing probes cover same-task reentrancy, inherited and pre-existing closer
+tasks, cancellation during `BEGIN`, a preexisting `${source}_temp` queue,
+runtime filter failure, a real work-stealing pass under a paused worker, bad
+reservation output, and failed acknowledgement state. The remediation also
+replaced a Bash-4-only associative array with indexed arrays supported by the
+published Bash boundary, and replaced a setup-menu exact-call-count assertion
+with outcome and command-routing evidence. The affected async and shell matrix
+passes 118 tests; the example tree passes 140 tests. ShellCheck, Ruff, the
+16-file example type gate, formatting, and `git diff --check` pass. Independent
+re-review found no remaining blocker. The final whole-repository rerun remains
+the closure gate.
 
 ## Independent Plan Review
 

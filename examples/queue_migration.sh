@@ -41,6 +41,16 @@ queue_depth() {
     printf '%s\n' "$pending"
 }
 
+# Validate one public JSON message envelope.
+validate_message_json() {
+    jq -e '
+        type == "object" and
+        (.message | type == "string") and
+        (.timestamp | type == "string" and
+            test("^[0-9]{19}$") and . <= "9223372036854775807")
+    ' >/dev/null 2>&1
+}
+
 # Return one validated JSON message. Exit 2 remains the broker's empty signal.
 peek_one_json() {
     local queue="$1"
@@ -51,12 +61,7 @@ peek_one_json() {
     if [ "$status" -ne 0 ]; then
         return "$status"
     fi
-    if ! jq -e '
-        type == "object" and
-        (.message | type == "string") and
-        (.timestamp | type == "string" and
-            test("^[0-9]{19}$") and . <= "9223372036854775807")
-    ' >/dev/null 2>&1 <<<"$message"; then
+    if ! validate_message_json <<<"$message"; then
         echo "Failed to peek queue '$queue': invalid message JSON" >&2
         return 1
     fi
@@ -94,70 +99,60 @@ filtered_migration() {
     
     echo "Migrating messages matching '$filter' from $source to $dest"
     
+    # Compile the pattern before reading or mutating broker state.
+    local filter_status=0
+    grep -q -- "$filter" </dev/null || filter_status=$?
+    if [ "$filter_status" -gt 1 ]; then
+        echo "Invalid filter pattern '$filter'; no messages were inspected" >&2
+        return 1
+    fi
+
+    # Snapshot and validate the complete candidate set before moving exact IDs.
+    # Nonmatching rows never leave the source, so no scratch queue can collide
+    # with caller-owned state.
+    local snapshot
+    local peek_status=0
+    snapshot=$(broker peek "$source" --all --json) || peek_status=$?
+    if [ "$peek_status" -eq 2 ]; then
+        echo "Migrated 0 messages matching filter (skipped 0)"
+        return 0
+    elif [ "$peek_status" -ne 0 ]; then
+        echo "Failed to peek queue '$source'" >&2
+        return "$peek_status"
+    fi
+
+    local msg_data
+    while IFS= read -r msg_data; do
+        if ! validate_message_json <<<"$msg_data"; then
+            echo "Failed to peek queue '$source': invalid message JSON" >&2
+            return 1
+        fi
+    done <<<"$snapshot"
+
     local count=0
     local skipped=0
-    local failure_status=0
-    
-    # Use peek-and-ack pattern with JSON for safety
-    while true; do
-        # Peek at next message in JSON format
-        local msg_data
-        local peek_status=0
-        msg_data=$(peek_one_json "$source") || peek_status=$?
-        if [ "$peek_status" -eq 2 ]; then
-            break
-        elif [ "$peek_status" -ne 0 ]; then
-            echo "Failed to peek queue '$source'" >&2
-            failure_status=$peek_status
-            break
-        fi
-        
-        # Extract message and timestamp safely
+    while IFS= read -r msg_data; do
         local msg
         local timestamp
-        msg=$(echo "$msg_data" | jq -r '.message')
-        timestamp=$(echo "$msg_data" | jq -r '.timestamp')
-        
-        # Check if message matches filter. `--` keeps a dash-prefixed pattern
-        # from becoming a grep option; status 2 means the pattern itself failed.
-        local filter_status=0
-        grep -q -- "$filter" <<<"$msg" || filter_status=$?
-        if [ "$filter_status" -eq 0 ]; then
-            # Move the message atomically by its ID
+        msg=$(jq -r '.message' <<<"$msg_data")
+        timestamp=$(jq -r '.timestamp' <<<"$msg_data")
+
+        local match_status=0
+        grep -q -- "$filter" <<<"$msg" || match_status=$?
+        if [ "$match_status" -eq 0 ]; then
             if broker move "$source" "$dest" -m "$timestamp" 2>/dev/null; then
                 count=$((count + 1))
             else
                 echo "Failed to move message $timestamp" >&2
-                failure_status=1
-                break
+                return 1
             fi
-        elif [ "$filter_status" -eq 1 ]; then
-            # Skip this message - move to temp queue
-            if broker move "$source" "${source}_temp" -m "$timestamp" 2>/dev/null; then
-                skipped=$((skipped + 1))
-            else
-                echo "Failed to skip message $timestamp" >&2
-                failure_status=1
-                break
-            fi
+        elif [ "$match_status" -eq 1 ]; then
+            skipped=$((skipped + 1))
         else
-            echo "Invalid filter pattern '$filter'; no later messages were inspected" >&2
-            failure_status=1
-            break
+            echo "Filter evaluation failed for message $timestamp after $count messages moved" >&2
+            return "$match_status"
         fi
-    done
-    
-    # Move skipped messages back
-    if [ "$skipped" -gt 0 ]; then
-        if ! broker move "${source}_temp" "$source" --all; then
-            echo "Failed to restore skipped messages to '$source'" >&2
-            return 1
-        fi
-    fi
-
-    if [ "$failure_status" -ne 0 ]; then
-        return "$failure_status"
-    fi
+    done <<<"$snapshot"
     
     echo "Migrated $count messages matching filter (skipped $skipped)"
 }

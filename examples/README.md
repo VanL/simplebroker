@@ -81,13 +81,16 @@ workers or monitors and run until interrupted.
 | [`resilient_worker.sh`](resilient_worker.sh) | Reference pattern | The same single-consumer shape plus an atomic informational checkpoint. The checkpoint is not a resume filter because a lower ID can arrive later. Set `PROCESS_EVENT` to replace the demo handler. |
 | [`dead_letter_queue.sh`](dead_letter_queue.sh) | Reference pattern | Dead-letter and retry selections with validated JSON state and fail-closed replacement/delete transitions. |
 | [`queue_migration.sh`](queue_migration.sh) | Reference pattern | Rename, filtered and bounded migration, transforms, and pending-only dump/load export. |
-| [`work_stealing.sh`](work_stealing.sh) | Reference pattern | Demonstrations of queue selection and redistribution using validated pending counts. |
+| [`work_stealing.sh`](work_stealing.sh) | Reference pattern | Demonstrations of queue selection and redistribution using validated pending counts. Worker simulators reserve atomically into a private per-worker inflight queue before processing. |
 
-The two worker loops are single-consumer patterns. They are not concurrent job
-reservation. For concurrent workers, use the move-to-inflight recipe in
-[`docs/agent-kernel.md`](../docs/agent-kernel.md). Shell exit status `2` means
-idle or no match only for commands that document that result; parse errors and
-other broker failures are fatal.
+The safe and resilient worker loops are single-consumer patterns. They are not
+concurrent job reservation. The work-stealing simulator demonstrates the
+move-to-inflight recipe in
+[`docs/agent-kernel.md`](../docs/agent-kernel.md): each worker reserves into
+its own inflight queue before processing, and a crash can leave a reservation
+there for explicit recovery. Shell exit status `2` means idle or no match only
+for commands that document that result; parse errors and other broker failures
+are fatal.
 
 The migration export is a portable snapshot of pending broker messages and
 their public IDs. Restore it with `broker load`. It intentionally excludes

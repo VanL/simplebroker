@@ -217,6 +217,8 @@ async def batch_processing_example(db_path: str) -> None:
 
         # A larger interval holds one write transaction across these yields.
         # Closing before commit rolls the batch back and can expose bodies again.
+        # This broker instance rejects other operations until the iterator is
+        # exhausted or closed.
         async for _msg in queue.stream(commit_interval=10):
             count += 1
             if count % 10 == 0:

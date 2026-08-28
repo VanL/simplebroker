@@ -92,9 +92,11 @@ With `commit_interval > 1`, the example marks a bounded batch inside one open
 write transaction and yields the batch before committing it. Closing or
 failing the iterator before commit rolls that batch back, which can expose
 already-processed bodies again. It also holds the write transaction across
-application processing. This is an advanced throughput tradeoff, not a
-blanket delivery guarantee. Keep the interval at `1` unless the application
-has measured the benefit and is prepared for replay and lock duration.
+application processing. While that transaction is open, the broker instance
+rejects other operations; exhaust or close the batch iterator first.
+This is an advanced throughput tradeoff, not a blanket delivery guarantee.
+Keep the interval at `1` unless the application has measured the benefit and
+is prepared for replay and lock duration.
 
 ### Surface shown by the advanced core
 

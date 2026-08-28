@@ -46,13 +46,15 @@ queue_depth() {
     printf '%s\n' "$pending"
 }
 
-# Return one validated JSON message. Exit 2 remains the broker's empty signal.
-peek_one_json() {
-    local queue="$1"
+# Atomically reserve one message in a worker-owned queue. Exit 2 remains the
+# broker's empty signal.
+move_one_json() {
+    local source="$1"
+    local destination="$2"
     local message
     local status=0
 
-    message=$(broker peek "$queue" --json) || status=$?
+    message=$(broker move "$source" "$destination" --json) || status=$?
     if [ "$status" -ne 0 ]; then
         return "$status"
     fi
@@ -62,7 +64,7 @@ peek_one_json() {
         (.timestamp | type == "string" and
             test("^[0-9]{19}$") and . <= "9223372036854775807")
     ' >/dev/null 2>&1 <<<"$message"; then
-        echo "Failed to peek queue '$queue': invalid message JSON" >&2
+        echo "Reservation from '$source' to '$destination' succeeded but returned invalid message JSON; inspect '$destination'" >&2
         return 1
     fi
 
@@ -142,14 +144,15 @@ work_stealing() {
     while true; do
         # Check each worker's load
         local total_work=0
-        declare -A worker_loads
+        local worker_loads=()
         
-        for worker in "${WORKERS[@]}"; do
+        for worker_index in "${!WORKERS[@]}"; do
+            local worker="${WORKERS[$worker_index]}"
             local load
             if ! load=$(queue_depth "${worker}-tasks"); then
                 return 1
             fi
-            worker_loads[$worker]=$load
+            worker_loads[worker_index]=$load
             total_work=$((total_work + load))
         done
         
@@ -157,17 +160,19 @@ work_stealing() {
         local avg_load=$((total_work / ${#WORKERS[@]}))
         
         # Find overloaded and underloaded workers
-        for worker in "${WORKERS[@]}"; do
-            local load=${worker_loads[$worker]}
+        for worker_index in "${!WORKERS[@]}"; do
+            local worker="${WORKERS[$worker_index]}"
+            local load=${worker_loads[worker_index]}
             
             if [ "$load" -gt $((avg_load + 2)) ]; then
                 # This worker is overloaded, steal some work
                 echo "$worker is overloaded ($load tasks, avg: $avg_load)"
                 
                 # Find an underloaded worker
-                for target in "${WORKERS[@]}"; do
+                for target_index in "${!WORKERS[@]}"; do
+                    local target="${WORKERS[$target_index]}"
                     if [ "$target" != "$worker" ]; then
-                        local target_load=${worker_loads[$target]}
+                        local target_load=${worker_loads[target_index]}
                         
                         if [ "$target_load" -lt "$avg_load" ]; then
                             # Steal some tasks
@@ -277,31 +282,35 @@ simulate_worker() {
     echo "Starting worker: $worker_name (process time: ${process_time}s per task)"
     
     while true; do
-        # Peek at task from worker's queue for safe processing
+        # Reserve atomically. Stealers only inspect the pending task queues, so
+        # they cannot move a row after this worker has started processing it.
+        local inflight_queue="${worker_name}-inflight"
         local msg_data
-        local peek_status=0
-        msg_data=$(peek_one_json "${worker_name}-tasks") || peek_status=$?
-        if [ "$peek_status" -eq 0 ]; then
+        local reserve_status=0
+        msg_data=$(move_one_json "${worker_name}-tasks" "$inflight_queue") || reserve_status=$?
+        if [ "$reserve_status" -eq 0 ]; then
             local msg
             local timestamp
-            msg=$(echo "$msg_data" | jq -r '.message')
-            timestamp=$(echo "$msg_data" | jq -r '.timestamp')
+            msg=$(jq -r '.message' <<<"$msg_data")
+            timestamp=$(jq -r '.timestamp' <<<"$msg_data")
             
             printf "[%s] Processing: %s\n" "$worker_name" "$msg"
             sleep "$process_time"
             
-            # Delete message after processing
-            if ! broker delete "${worker_name}-tasks" -m "$timestamp"; then
-                echo "[$worker_name] Failed to delete message $timestamp; it may be processed again" >&2
+            # Acknowledge the exact reservation after processing. A crash or
+            # delete failure leaves it in the inflight queue for explicit
+            # operator recovery instead of making it available to a stealer.
+            if ! broker delete "$inflight_queue" -m "$timestamp"; then
+                echo "[$worker_name] Could not confirm acknowledgement of message $timestamp; inspect '$inflight_queue' before retrying" >&2
                 return 1
             fi
             printf "[%s] Completed: %s\n" "$worker_name" "$msg"
-        elif [ "$peek_status" -eq 2 ]; then
+        elif [ "$reserve_status" -eq 2 ]; then
             # No work available
             sleep 0.5
         else
-            echo "Failed to peek queue '${worker_name}-tasks'" >&2
-            return "$peek_status"
+            echo "Reservation outcome from '${worker_name}-tasks' to '$inflight_queue' is unconfirmed; inspect both queues" >&2
+            return "$reserve_status"
         fi
     done
 }
@@ -361,6 +370,7 @@ setup_demo() {
     # Clear existing queues
     for worker in "${WORKERS[@]}"; do
         broker delete "${worker}-tasks" 2>/dev/null || true
+        broker delete "${worker}-inflight" 2>/dev/null || true
     done
     broker delete "$OVERFLOW_QUEUE" 2>/dev/null || true
     

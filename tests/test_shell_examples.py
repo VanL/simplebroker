@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -163,6 +164,8 @@ case "${BROKER_FAKE_MODE}:$1" in
     peek-error:peek) echo "simulated peek failure" >&2; exit 1 ;;
     peek-malformed:peek) printf '%s\n' '{"message":7,"timestamp":"1700000000000000000"}' ;;
     peek-bad-id:peek) printf '%s\n' '{"message":"work","timestamp":"9999999999999999999"}' ;;
+    peek-malformed:move) printf '%s\n' '{"message":7,"timestamp":"1700000000000000000"}' ;;
+    peek-bad-id:move) printf '%s\n' '{"message":"work","timestamp":"9999999999999999999"}' ;;
     replacement-delete-error:peek)
         printf '%s\n' '{"message":"fail","timestamp":"1700000000000000000"}'
         ;;
@@ -495,11 +498,11 @@ def test_migration_peek_loops_distinguish_empty_from_failure(
         assert "Failed to peek" in result.stderr
 
 
-def test_worker_simulator_idles_then_stops_on_peek_failure(
+def test_worker_simulator_idles_then_reports_unconfirmed_reservation(
     tmp_path: Path,
     shell_control_env: dict[str, str],
 ) -> None:
-    shell_control_env["BROKER_FAKE_MODE"] = "empty-then-error"
+    shell_control_env["BROKER_FAKE_MODE"] = "move-empty-then-error"
 
     result = _run_sourced_function(
         WORK_STEALING,
@@ -511,7 +514,7 @@ def test_worker_simulator_idles_then_stops_on_peek_failure(
     )
 
     assert result.returncode != 0
-    assert "Failed to peek" in result.stderr
+    assert "Reservation outcome" in result.stderr
     assert Path(shell_control_env["BROKER_COUNT_FILE"]).read_text().strip() == "2"
 
 
@@ -661,6 +664,74 @@ def test_filtered_migration_treats_dash_prefixed_filter_as_pattern(
         assert destination.peek_many(limit=10, with_timestamps=False) == [
             "contains -efoo"
         ]
+
+
+def test_filtered_migration_leaves_preexisting_scratch_named_queue_unchanged(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    db_path = tmp_path / ".broker.db"
+    with Queue("source", db_path=str(db_path)) as source:
+        source.insert_messages([("leave", OLD_ID), ("match", NEW_ID)])
+    with Queue("source_temp", db_path=str(db_path)) as scratch_named:
+        scratch_named.write("foreign")
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        env,
+        "filtered_migration",
+        "source",
+        "dest",
+        "match",
+    )
+
+    assert result.returncode == 0, result.stderr
+    with Queue("source", db_path=str(db_path)) as source:
+        assert source.peek_many(limit=10, with_timestamps=False) == ["leave"]
+    with Queue("dest", db_path=str(db_path)) as destination:
+        assert destination.peek_many(limit=10, with_timestamps=False) == ["match"]
+    with Queue("source_temp", db_path=str(db_path)) as scratch_named:
+        assert scratch_named.peek_many(limit=10, with_timestamps=False) == ["foreign"]
+
+
+def test_filtered_migration_stops_on_runtime_filter_failure(tmp_path: Path) -> None:
+    env = _real_broker_env(tmp_path)
+    grep_count = tmp_path / "grep-count"
+    real_grep = shutil.which("grep")
+    assert real_grep is not None
+    env.update({"GREP_COUNT": str(grep_count), "REAL_GREP": real_grep})
+    _write_executable(
+        tmp_path / "real-broker-bin" / "grep",
+        """#!/bin/bash
+count=0
+if [ -f "$GREP_COUNT" ]; then count=$(cat "$GREP_COUNT"); fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$GREP_COUNT"
+if [ "$count" -eq 1 ]; then exec "$REAL_GREP" "$@"; fi
+exit 2
+""",
+    )
+    db_path = tmp_path / ".broker.db"
+    with Queue("source", db_path=str(db_path)) as source:
+        source.insert_messages([("match", OLD_ID)])
+
+    result = _run_sourced_function(
+        QUEUE_MIGRATION,
+        tmp_path,
+        env,
+        "filtered_migration",
+        "source",
+        "dest",
+        "match",
+    )
+
+    assert result.returncode != 0
+    assert "Filter evaluation failed" in result.stderr
+    with Queue("source", db_path=str(db_path)) as source:
+        assert source.peek_one(with_timestamps=False) == "match"
+    with Queue("dest", db_path=str(db_path)) as destination:
+        assert destination.stats().total == 0
 
 
 def test_filtered_migration_rejects_invalid_pattern_without_mutation(
@@ -861,6 +932,214 @@ def test_queue_depth_reads_real_cli_stats(
     assert result.stdout.strip() == "2"
 
 
+def test_work_stealing_moves_only_pending_rows_while_worker_processes(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    ready = tmp_path / "worker-ready"
+    release = tmp_path / "worker-release"
+    sleep_count = tmp_path / "worker-sleep-count"
+    reservation_count = tmp_path / "worker-reservation-count"
+    env.update(
+        {
+            "WORKER_READY": str(ready),
+            "WORKER_RELEASE": str(release),
+            "WORKER_SLEEP_COUNT": str(sleep_count),
+            "WORKER_RESERVATION_COUNT": str(reservation_count),
+        }
+    )
+    _write_executable(
+        tmp_path / "real-broker-bin" / "sleep",
+        """#!/bin/bash
+count=0
+if [ -f "$WORKER_SLEEP_COUNT" ]; then count=$(cat "$WORKER_SLEEP_COUNT"); fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$WORKER_SLEEP_COUNT"
+if [ "$count" -eq 1 ]; then
+    : > "$WORKER_READY"
+    while [ ! -f "$WORKER_RELEASE" ]; do /bin/sleep 0.01; done
+    exit 0
+fi
+exit 1
+""",
+    )
+
+    db_path = tmp_path / ".broker.db"
+    messages = [("reserved", OLD_ID)] + [
+        (f"pending-{offset}", OLD_ID + offset) for offset in range(1, 8)
+    ]
+    with Queue("worker1-tasks", db_path=str(db_path)) as source:
+        source.insert_messages(messages)
+
+    worker = subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            """source "$1"
+broker() {
+    if [ "$1" = move ] && [ "$2" = worker1-tasks ] && [ "$3" = worker1-inflight ]; then
+        count=0
+        if [ -f "$WORKER_RESERVATION_COUNT" ]; then count=$(cat "$WORKER_RESERVATION_COUNT"); fi
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$WORKER_RESERVATION_COUNT"
+        if [ "$count" -gt 1 ]; then return 1; fi
+    fi
+    command broker "$@"
+}
+simulate_worker worker1 0
+""",
+            "worker-example",
+            str(WORK_STEALING),
+        ],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    while not ready.exists() and time.monotonic() < deadline:
+        if worker.poll() is not None:
+            break
+        time.sleep(0.01)
+
+    try:
+        assert ready.exists(), worker.communicate(timeout=1)
+        steal = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'source "$1"; sleep() { return 7; }; work_stealing',
+                "stealer-example",
+                str(WORK_STEALING),
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert steal.returncode == 7
+        assert "Stealing" in steal.stdout
+        with Queue("worker1-tasks", db_path=str(db_path)) as source:
+            source_bodies = source.peek_many(limit=20, with_timestamps=False)
+        with Queue("worker1-inflight", db_path=str(db_path)) as inflight:
+            assert inflight.peek_one(with_timestamps=False) == "reserved"
+        with Queue("worker2-tasks", db_path=str(db_path)) as destination:
+            stolen_bodies = destination.peek_many(limit=20, with_timestamps=False)
+        assert stolen_bodies
+        assert "reserved" not in stolen_bodies
+        assert set(source_bodies + stolen_bodies) == {
+            body for body, _message_id in messages if body != "reserved"
+        }
+    finally:
+        release.write_text("go\n", encoding="utf-8")
+        stdout, stderr = worker.communicate(timeout=10)
+
+    assert "Completed: reserved" in stdout, stderr
+    with Queue("worker1-tasks", db_path=str(db_path)) as source:
+        source_bodies = source.peek_many(limit=20, with_timestamps=False)
+    with Queue("worker1-inflight", db_path=str(db_path)) as inflight:
+        assert inflight.stats().total == 0
+    with Queue("worker2-tasks", db_path=str(db_path)) as destination:
+        stolen_bodies = destination.peek_many(limit=20, with_timestamps=False)
+    assert set(source_bodies + stolen_bodies) == {
+        body for body, _message_id in messages if body != "reserved"
+    }
+
+
+def test_worker_reports_malformed_reservation_output_with_row_inflight(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    real_broker = tmp_path / "real-broker-bin" / "broker"
+    shim_dir = tmp_path / "malformed-reservation-bin"
+    shim_dir.mkdir()
+    env.update(
+        {
+            "PATH": f"{shim_dir}:{env['PATH']}",
+            "REAL_BROKER": str(real_broker),
+        }
+    )
+    _write_executable(
+        shim_dir / "broker",
+        """#!/bin/bash
+if [ "$1" = move ] && [ "$2" = worker1-tasks ] && [ "$3" = worker1-inflight ]; then
+    "$REAL_BROKER" "$@" >/dev/null || exit $?
+    printf '%s\n' '{"message":7,"timestamp":"1700000000000000000"}'
+    exit 0
+fi
+exec "$REAL_BROKER" "$@"
+""",
+    )
+    db_path = tmp_path / ".broker.db"
+    with Queue("worker1-tasks", db_path=str(db_path)) as source:
+        source.insert_messages([("one job", OLD_ID)])
+
+    result = _run_sourced_function(
+        WORK_STEALING,
+        tmp_path,
+        env,
+        "simulate_worker",
+        "worker1",
+        "0",
+    )
+
+    assert result.returncode != 0
+    assert "succeeded but returned invalid message JSON" in result.stderr
+    assert "inspect 'worker1-inflight'" in result.stderr
+    with Queue("worker1-tasks", db_path=str(db_path)) as source:
+        assert source.stats().pending == 0
+    with Queue("worker1-inflight", db_path=str(db_path)) as inflight:
+        assert inflight.peek_one(with_timestamps=False) == "one job"
+
+
+def test_worker_reports_unconfirmed_acknowledgement_and_preserves_inflight(
+    tmp_path: Path,
+) -> None:
+    env = _real_broker_env(tmp_path)
+    real_broker = tmp_path / "real-broker-bin" / "broker"
+    shim_dir = tmp_path / "failed-ack-bin"
+    shim_dir.mkdir()
+    env.update(
+        {
+            "PATH": f"{shim_dir}:{env['PATH']}",
+            "REAL_BROKER": str(real_broker),
+        }
+    )
+    _write_executable(
+        shim_dir / "broker",
+        """#!/bin/bash
+if [ "$1" = delete ] && [ "$2" = worker1-inflight ]; then
+    echo 'simulated acknowledgement failure' >&2
+    exit 1
+fi
+exec "$REAL_BROKER" "$@"
+""",
+    )
+    db_path = tmp_path / ".broker.db"
+    with Queue("worker1-tasks", db_path=str(db_path)) as source:
+        source.insert_messages([("one job", OLD_ID)])
+
+    result = _run_sourced_function(
+        WORK_STEALING,
+        tmp_path,
+        env,
+        "simulate_worker",
+        "worker1",
+        "0",
+    )
+
+    assert result.returncode != 0
+    assert "Could not confirm acknowledgement" in result.stderr
+    assert "inspect 'worker1-inflight'" in result.stderr
+    with Queue("worker1-tasks", db_path=str(db_path)) as source:
+        assert source.stats().pending == 0
+    with Queue("worker1-inflight", db_path=str(db_path)) as inflight:
+        assert inflight.peek_one(with_timestamps=False) == "one job"
+
+
 def test_transform_stops_after_real_write_when_source_delete_fails(
     tmp_path: Path,
 ) -> None:
@@ -910,17 +1189,23 @@ exec env PYTHONPATH={shlex.quote(str(REPO_ROOT))} \
 
 
 @pytest.mark.parametrize(
-    ("script", "selector", "expected_call_count"),
+    ("script", "selector", "expected_output", "expected_call"),
     [
-        (QUEUE_MIGRATION, "9", 15),
-        (DEAD_LETTER_QUEUE, "6", 4),
-        (WORK_STEALING, "8", 60),
+        (QUEUE_MIGRATION, "9", "Created demo queues", ("write", "old-orders")),
+        (DEAD_LETTER_QUEUE, "6", "Added 4 messages", ("write", "tasks")),
+        (
+            WORK_STEALING,
+            "8",
+            "Added 50 tasks",
+            ("write", "overflow"),
+        ),
     ],
 )
 def test_menu_selector_argument_dispatches_without_reading_stdin(
     script: Path,
     selector: str,
-    expected_call_count: int,
+    expected_output: str,
+    expected_call: tuple[str, str],
     tmp_path: Path,
     menu_env: dict[str, str],
 ) -> None:
@@ -928,7 +1213,8 @@ def test_menu_selector_argument_dispatches_without_reading_stdin(
 
     assert result.returncode == 0, result.stderr
     calls = Path(menu_env["BROKER_CALL_LOG"]).read_text(encoding="utf-8").splitlines()
-    assert len(calls) == expected_call_count
+    assert expected_output in result.stdout
+    assert any(line.split("\t")[1:3] == list(expected_call) for line in calls)
 
 
 @pytest.mark.parametrize(
