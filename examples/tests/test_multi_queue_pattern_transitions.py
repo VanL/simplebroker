@@ -377,11 +377,20 @@ def _run_monitoring_example(
             nonlocal caught
             _prepare_monitoring_owner(self, mode)
             rounds = 4 if mode == "threshold" else 1
+            queue1 = self._queues["queue1"]["queue"]
+            before = queue1.stats()
             try:
                 for _ in range(rounds):
                     self._drain_queue()
             except BaseException as exc:  # noqa: BLE001 - test records owner outcome
                 caught = exc
+            after = queue1.stats()
+            self.queue1_delivery_state = {
+                "pending_before": before.pending,
+                "pending_after": after.pending,
+                "claimed_before": before.claimed,
+                "claimed_after": after.claimed,
+            }
 
     clock = _ExampleClock(step=0.2 if mode == "slow" else 0.0)
     monkeypatch.setattr(multi_queue_patterns, "MultiQueueWatcher", CapturingWatcher)
@@ -407,6 +416,9 @@ def _assert_monitoring_result(
         assert caught is None
         assert metrics["total_processed"] == 2
         assert metrics["queue_stats"]["queue1"] == {"processed": 0, "errors": 1}
+        state = watcher.queue1_delivery_state
+        assert state["pending_after"] == state["pending_before"] - 1
+        assert state["claimed_after"] == state["claimed_before"] + 1
     elif mode == "round":
         assert caught is None
         assert metrics["total_processed"] == 3

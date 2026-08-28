@@ -956,6 +956,43 @@ terminal admission, stale-inflight replay, result-recorded output ownership,
 pending and claimed exact-ID collision handling, and the one-inflight-per-queue
 boundary.
 
+The slice is committed as `af1f062` (`Repair reactor discovery and replay`).
+
+### 2026-08-27 Task 4 watcher and multi-queue slice
+
+The structured-target probe failed against the prior example because
+`BrokerTarget` was stringified into a repr-shaped filesystem target. The Path
+case and the existing round-robin/error-handler suite were green. The repaired
+watcher accepts only `BrokerTarget | str | Path | None`, lets `Queue` normalize
+the initial target, then reuses the public `db_target` for every configured and
+dynamically added Queue. Real writes through all three managed handles land in
+the intended disposable target and no display-string path is created.
+
+Recommended watcher examples now import root watcher types and the public
+`simplebroker.ext` subclass/error surface. Their print, JSON, and logging
+handlers are ordinary local application code. Source and multi-queue prose state
+that consume claims before handler dispatch: continuation reaches later queues
+but does not restore or retry the failed row. The transition suite proves the
+failure changes pending and claimed counts by one while later queues run.
+
+Initial independent review found that the example's broad per-queue exception
+catch swallowed inherited terminal `StopWatching` and error-handler failure
+signals. Both new firing probes failed against that behavior: a handler stop
+claimed work from the next queue, while an error-handler exception was logged
+and suppressed. The catch was removed so the BaseWatcher owner receives those
+terminal signals; both probes now leave the later queue pending, and the
+error-handler failure remains observable.
+
+The watcher and pattern suites pass 18 tests. Ruff, format, the 16-file examples
+mypy gate, and `git diff --check` pass. Both runnable watcher programs completed
+against temporary targets; the run created no repository-local database.
+The expanded `examples` suite passes 137 tests.
+
+Focused re-review reported no remaining actionable findings. It verified that
+terminal signals now reach BaseWatcher, public synchronous `run()` exposes the
+exact error-handler `ValueError` with the original handler `RuntimeError` as its
+cause, later work remains pending, and target/activity prose is backend-neutral.
+
 ## Independent Plan Review
 
 Independent review completed 2026-08-27 by the repository's `plan_review`

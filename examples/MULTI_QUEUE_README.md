@@ -1,6 +1,9 @@
 # MultiQueueWatcher Examples
 
-This directory contains examples demonstrating the **MultiQueueWatcher** class - an extension of SimpleBroker that monitors and processes multiple queues in a single thread with round-robin scheduling.
+This directory contains a demonstration-only `MultiQueueWatcher`: an extension
+that monitors multiple queues on one broker target and dispatches them from one
+thread with round-robin scheduling. Its consume path claims a row before the
+application handler runs.
 
 ## 📁 Files
 
@@ -17,7 +20,7 @@ MultiQueueWatcher extends `BaseWatcher` to provide:
 ┌─────────────────────────────────────┐
 │         MultiQueueWatcher           │
 ├─────────────────────────────────────┤
-│ • Single thread, single DB          │
+│ • Single dispatch thread/target     │
 │ • Round-robin fairness              │
 │ • Per-queue handlers                │
 │ • Inherited BaseWatcher features    │
@@ -30,13 +33,20 @@ MultiQueueWatcher extends `BaseWatcher` to provide:
 
 ### Design Principles
 
-1. **Single Database Connection**: All queues share one database connection, avoiding the N-connection overhead of multiple `QueueWatcher` instances.
+1. **Shared target**: All managed queues preserve the same public path or
+   `BrokerTarget`. Persistent handles may share process-local backend resources
+   through SimpleBroker; the example does not promise one transaction spanning
+   queue operations.
 
 2. **Round-Robin Processing**: Active queues are processed in round-robin order, preventing queue starvation.
 
-3. **Activity Detection**: Uses `PRAGMA data_version` to detect changes across all queues in the shared database.
+3. **Activity detection**: Uses the selected backend's activity/version
+   mechanism. SQLite uses `PRAGMA data_version`; other backends own their
+   corresponding waiter or polling behavior.
 
-4. **Single-Threaded**: Eliminates thread synchronization, context switching, and race conditions.
+4. **Single dispatch thread**: Application handlers run serially in this
+   watcher. Other processes and handles can still race for broker rows, and the
+   backend still uses its normal locking and retry rules.
 
 ### Reactor Reference
 
@@ -44,7 +54,8 @@ MultiQueueWatcher extends `BaseWatcher` to provide:
 threads plus sidecar tables. `BaseReactor` is the reusable seam: it owns the
 single-thread process/wait/stop loop, local activity wakeups, and resource-close
 ordering. `Reactor` is the concrete demo policy layered on top: it owns input
-checkpoints, sidecar rows, output replay, control replies, and the worker pool.
+completion state, informational checkpoints, output replay, control replies,
+and the worker pool.
 
 The reactor thread owns the reactor's persistent `Queue` handles and is the only
 normal writer to the reactor sidecar tables. Other threads may use their own
@@ -66,12 +77,17 @@ The operational contract is:
 3. A joining `stop()` waits for an active drive thread before closing reactor
    queue handles. If an external caller uses `stop(join=False)`, the drive
    thread's `run_until_stopped()` finalizer performs the close when it exits.
-4. Source and control queues are read with peek-plus-sidecar checkpoints. This
-   preserves queue rows; production code needs a retention or compaction policy.
+4. Source and control queues are retained with peeks. Each discovery pass starts
+   at the lowest public message ID and uses pass-local bounds only for paging.
+   Terminal `reactor_seen` rows, not a numeric checkpoint, suppress completed
+   work. Complete scans revisit retained history, so production code needs a
+   retention or compaction policy; scan cost grows with uncompacted rows.
 5. Output publication is at-least-once with exact-ID idempotent replay. The
    reactor records a pending result row, publishes the exact output message ID,
-   then marks it written. Exact-ID insert handles the normal replay collision,
-   but the write and sidecar mark are separate commits. If a crash lands between
+   then marks it written. On an exact-ID collision, replay accepts the occupant
+   only when its body matches the pending payload, including when the occupant
+   is already claimed. The write and sidecar mark are separate commits. If a
+   crash lands between
    them and a downstream consumer has already vacuumed the claimed output row,
    replay can deliver the same logical output again. Downstream consumers should
    deduplicate by output message ID rather than payload; message bodies are
@@ -80,14 +96,14 @@ The operational contract is:
    row pending. In background mode the error ends the drive thread and the
    reactor finalizer closes its owned resources. Restore the recorded topology
    or migrate the row explicitly before restarting.
-6. Many processes may use the same broker database. Source and control lanes are
-   already at-least-once because they use peek-plus-checkpoint semantics: a
-   restart can re-run uncheckpointed work even with one reactor. More than one
-   reactor watching the same input or control lane adds another duplicate
-   execution path. Prefer one logical reactor per workstream when duplicate pure
-   work or non-idempotent side effects matter.
+6. Many processes may use the same broker database. A stale persisted
+   `inflight` row is redispatched after restart; `result_recorded`,
+   `output_written`, and `control_processed` are terminal for discovery. More
+   than one reactor watching the same input or control lane adds another
+   duplicate execution path. Prefer one logical reactor per workstream when
+   duplicate pure work or non-idempotent side effects matter.
 7. Control replies are at-least-once. A crash after writing the reply and before
-   checkpointing the control input can produce a duplicate reply after restart.
+   recording `control_processed` can produce a duplicate reply after restart.
    Plain-text commands and JSON objects are accepted. Other valid JSON shapes,
    including quoted command strings, receive an error reply and are checkpointed.
 8. Worker count gives cross-queue parallelism, not unlimited per-queue
@@ -228,9 +244,9 @@ class MonitoredMultiQueueWatcher(MultiQueueWatcher):
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `queues` | `list[str]` | Required | list of queue names to monitor |
-| `default_handler` | `Callable` | `simple_print_handler` | Default message handler |
+| `default_handler` | `Callable` | local `print_message` | Default message handler |
 | `queue_handlers` | `dict[str, Callable]` | `None` | Queue-specific handlers |
-| `db` | `str/Path/BrokerDB` | `None` | Database path or instance |
+| `db` | `str/Path/BrokerTarget` | `None` | Public broker target or path |
 | `error_handler` | `Callable` | `default_error_handler` | Error handling function |
 | `polling_strategy` | `PollingStrategy` | `None` | Custom polling strategy |
 | `check_interval` | `int` | `10` | How often to check inactive queues |
@@ -267,29 +283,25 @@ def error_handler(exc: Exception, message: str, timestamp: int) -> bool | None:
 
 ## ⚡ Performance Characteristics
 
-### Single Thread Benefits
+### Single Dispatch Thread
 
-- **Memory Efficiency**: No per-thread stack allocation (saves 1-8MB per thread)
-- **CPU Cache**: No context switching between threads
-- **Latency**: No thread scheduling jitter
-- **No Synchronization**: No locks, race conditions, or deadlocks
+- Handlers do not run in parallel inside one watcher.
+- Slow handlers delay every queue handled by that watcher.
+- Backend locking, contention, and cross-process races still apply.
 
 ### Shared Database Benefits
 
-- **Connection Efficiency**: One SQLite connection vs. N connections
-- **Transaction Consistency**: All queues in same transaction scope
-- **Activity Detection**: `PRAGMA data_version` detects changes across all queues
-- **Resource Management**: Single connection to manage
+- **Target identity**: Every managed Queue uses the same normalized public target
+- **Connection reuse**: Persistent handles may share process-local resources
+- **Activity detection**: Uses the selected backend's waiter/version mechanism
+- **Operation boundary**: Each Queue call keeps its own transaction semantics
 
 ### Scalability Profile
 
-| Queue Count | Memory Usage | Performance | Complexity |
-|-------------|--------------|-------------|------------|
-| 1-10 | O(1) | High | Low |
-| 10-50 | O(1) | Good | Low |
-| 50+ | O(1) | Moderate* | Medium |
-
-*At higher queue counts, consider batching or hierarchical organization
+The watcher stores one Queue entry per configured name and checks active queues
+every turn plus inactive queues at `check_interval`. Memory and scan work grow
+with queue count. Measure with the intended backend and workload; at higher
+counts, consider separate watcher groups.
 
 ## 🎯 When to Use MultiQueueWatcher
 
@@ -394,11 +406,13 @@ def _update_active_queues(self) -> None:
 
 ### Error Isolation
 
-Each queue's processing is isolated - if one queue's handler fails:
-1. Error is logged and handled per error_handler
-2. Processing continues with next queue in round-robin
-3. Failed queue remains in active list for retry
-4. Other queues are unaffected
+Consume commits the claim before dispatch. If one queue's handler fails:
+
+1. The failed message remains claimed. It is not restored or retried.
+2. The queue's error handler decides whether the watcher stops or continues.
+3. If it continues, the round-robin scheduler may dispatch later queues.
+4. Applications that need retry should first move work to an inflight queue and
+   settle it explicitly, or own another durable retry design.
 
 ## 🤝 Contributing
 
@@ -431,7 +445,7 @@ class CustomMultiQueueWatcher(MultiQueueWatcher):
 
 - **[SimpleBroker README](../README.md)** - Core SimpleBroker documentation
 - **[QueueWatcher Examples](simple_watcher_example.py)** - Single-queue watcher examples
-- **[BaseWatcher API](../simplebroker/watcher.py)** - Base class documentation
+- **[Watcher API contract](../docs/specs/16-python-library-api.md#watchers-and-activity-waiters-sb-api-6)** - Public root and extension imports
 
 ---
 

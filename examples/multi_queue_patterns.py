@@ -11,6 +11,11 @@ This file demonstrates various patterns and use cases for MultiQueueWatcher:
 6. Monitoring and metrics
 
 Each pattern is a standalone function that can be run independently.
+
+Every pattern uses consume delivery. Queue selection happens before handler
+dispatch, but the selected message is already claimed when its handler runs.
+Continuing after a handler error moves on to later work; it does not retry or
+restore the failed message.
 """
 
 from __future__ import annotations
@@ -195,7 +200,7 @@ def pattern_3_error_handling() -> None:
         ) -> bool:
             print(f"❌ CRITICAL ERROR: {exc}")
             print(f"   Message: {message}")
-            # Return False to stop processing for critical errors
+            # The failed row is already claimed. False stops later dispatch.
             return False
 
         def resilient_error_handler(
@@ -203,7 +208,7 @@ def pattern_3_error_handling() -> None:
         ) -> bool:
             print(f"⚠️  Recoverable error: {exc}")
             print(f"   Message: {message}")
-            # Return True to continue processing
+            # The failed row is already claimed. True continues with later work.
             return True
 
         watcher = MultiQueueWatcher(
@@ -451,7 +456,7 @@ def main() -> None:
         print("\nKey features:")
         print("✓ MultiQueueWatcher provides round-robin processing")
         print("✓ Each queue can have its own handler and error handling")
-        print("✓ Single database connection shared across all queues")
+        print("✓ One normalized broker target shared across all queues")
         print("✓ Can be extended for priority queues, load balancing, monitoring")
         print("✓ Inherits BaseWatcher's polling and lifecycle management")
 

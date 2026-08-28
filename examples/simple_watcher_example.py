@@ -1,21 +1,44 @@
-"""
-Simple watcher example demonstrating default handlers.
+"""Simple watcher example with ordinary application-owned handlers.
 
-This example shows how to use the built-in default handlers provided
-by SimpleBroker for common use cases like debugging and monitoring.
+Consume-mode watchers claim each message before calling a handler. If a handler
+fails, the error handler decides whether watching continues, but the message
+remains claimed and is not automatically retried.
 """
 
+import json
+import logging
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from simplebroker import Queue, QueueWatcher
-from simplebroker.watcher import (
-    default_error_handler,
-    json_print_handler,
-    logger_handler,
-    simple_print_handler,
-)
+from simplebroker import Queue, QueueWatcher, format_message_id
+from simplebroker.ext import default_error_handler
+
+logger = logging.getLogger(__name__)
+
+
+def simple_print_handler(message: str, timestamp: int) -> None:
+    """Print one message in a compact human-readable form."""
+
+    print(f"[{format_message_id(timestamp)}] {message}")
+
+
+def json_print_handler(message: str, timestamp: int) -> None:
+    """Print one JSON object suitable for a line-oriented pipeline."""
+
+    print(
+        json.dumps(
+            {"message": message, "timestamp": format_message_id(timestamp)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
+
+
+def logger_handler(message: str, timestamp: int) -> None:
+    """Send one message through this application's logger."""
+
+    logger.info("[%s] %s", format_message_id(timestamp), message)
 
 
 def main() -> None:
@@ -70,7 +93,7 @@ def run_examples(db_path: Path) -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
-    # Use logger_handler - good for production apps
+    # Use logger_handler to integrate with this application's logging setup.
     watcher3 = QueueWatcher("demo", logger_handler, db=str(db_path))
 
     with Queue("demo", db_path=str(db_path), persistent=True) as queue:
@@ -127,12 +150,12 @@ def run_examples(db_path: Path) -> None:
     with watcher5:
         time.sleep(0.5)
 
-    print("\nDemo complete! The default handlers provide:")
+    print("\nDemo complete! These local handlers show:")
     print("• simple_print_handler: Basic [timestamp] message output")
     print("• json_print_handler: Safe structured JSON output")
     print("• logger_handler: Integration with Python logging")
-    print("• default_error_handler: Error logging and continuation")
-    print("All are importable from simplebroker.watcher")
+    print("• default_error_handler: Public extension error policy")
+    print("Application handlers stay local; watcher types use public imports")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
 """
 MultiQueueWatcher Example
 
-A MultiQueueWatcher class that monitors multiple queues using a single thread
-and shared database connection. Features:
+A MultiQueueWatcher class that monitors multiple queues using one dispatch
+thread and one shared broker target. Features:
 
-1. Single database connection
+1. One normalized broker target for every managed queue
 2. Round-robin processing between active queues
 3. Single-threaded design
 4. BaseWatcher inheritance for polling, error handling, lifecycle management
@@ -29,13 +29,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from simplebroker import BrokerTarget, Queue
-from simplebroker.db import BrokerDB
-from simplebroker.watcher import (
+from simplebroker import BrokerTarget, Queue, format_message_id
+from simplebroker.ext import (
     BaseWatcher,
     PollingStrategy,
     default_error_handler,
-    simple_print_handler,
 )
 
 # Configure logging to see what's happening
@@ -43,6 +41,12 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def print_message(message: str, timestamp: int) -> None:
+    """Small application handler used as this example's default."""
+
+    print(f"[{format_message_id(timestamp)}] {message}")
 
 
 def _validate_watcher_configuration(
@@ -86,12 +90,12 @@ def _validate_watcher_configuration(
 class MultiQueueWatcher(BaseWatcher):
     """Watches multiple queues and processes them with round-robin scheduling.
 
-    Uses a single thread and shared database connection to monitor and process
-    messages from multiple queues. Each queue can have its own handler and
-    error handler, with fallback to defaults.
+    Uses a single thread and shared broker target to monitor and process messages
+    from multiple queues. Each queue can have its own handler and error handler,
+    with fallback to defaults.
 
     Features:
-    - Single database connection shared across all queues
+    - One normalized broker target shared across all queues
     - Round-robin processing to prevent queue starvation
     - Per-queue handler and error handler support
     - Inherits BaseWatcher's polling strategy and lifecycle management
@@ -101,12 +105,12 @@ class MultiQueueWatcher(BaseWatcher):
     def __init__(
         self,
         queues: list[str],
-        default_handler: Callable[[str, int], None] = simple_print_handler,
+        default_handler: Callable[[str, int], None] = print_message,
         queue_handlers: dict[str, Callable[[str, int], None]] | None = None,
         queue_error_handlers: dict[str, Callable[[Exception, str, int], bool | None]]
         | None = None,
         *,
-        db: BrokerDB | str | Path | None = None,
+        db: BrokerTarget | str | Path | None = None,
         stop_event: threading.Event | None = None,
         error_handler: Callable[
             [Exception, str, int], bool | None
@@ -123,7 +127,7 @@ class MultiQueueWatcher(BaseWatcher):
             default_handler: Default function called with (message_body, timestamp)
             queue_handlers: Optional mapping of queue names to specific handlers
             queue_error_handlers: Optional mapping of queue names to specific error handlers
-            db: Database instance or path (uses default if None)
+            db: Broker target or path (uses configured default if None)
             stop_event: Event to signal watcher shutdown
             error_handler: Default error handler (used when no queue-specific handler exists)
             persistent: Whether to use persistent Queue objects
@@ -151,11 +155,12 @@ class MultiQueueWatcher(BaseWatcher):
         self._check_interval = check_interval
 
         # Use first queue for BaseWatcher initialization
-        # This establishes the shared database connection
+        # This establishes the shared normalized broker target.
+        initial_target: str | BrokerTarget | None = (
+            str(db) if isinstance(db, Path) else db
+        )
         initial_queue = Queue(
-            str(queues[0]),
-            db_path=str(db) if db else "broker.db",
-            persistent=persistent,
+            str(queues[0]), db_path=initial_target, persistent=persistent
         )
 
         super().__init__(
@@ -164,15 +169,8 @@ class MultiQueueWatcher(BaseWatcher):
             polling_strategy=polling_strategy,
         )
 
-        # Determine database path for creating additional Queue objects
-        db_path: str | BrokerTarget
-        if isinstance(db, BrokerDB):
-            db_path = str(db.db_path)
-        elif isinstance(db, (str, Path)):
-            db_path = str(db)
-        else:
-            # Use database path from inherited queue object
-            db_path = initial_queue._db_path
+        # Reuse the Queue's public, normalized target for every managed queue.
+        self._shared_target = initial_queue.db_target
 
         # Create queue configuration dict
         self._queues: dict[str, dict[str, Any]] = {}
@@ -182,7 +180,7 @@ class MultiQueueWatcher(BaseWatcher):
             self._queues[queue_name] = self._build_queue_entry(
                 queue_name,
                 initial_queue=initial_queue,
-                db_path=db_path,
+                db_path=self._shared_target,
                 handler=(queue_handlers or {}).get(queue_name, default_handler),
                 error_handler=(queue_error_handlers or {}).get(
                     queue_name,
@@ -285,46 +283,35 @@ class MultiQueueWatcher(BaseWatcher):
 
         # Process one message from each active queue (one round)
         for _ in range(len(self._active_queues)):
-            try:
-                queue_name = next(self._queue_iterator)
-                queue_info = self._queues[queue_name]
+            queue_name = next(self._queue_iterator)
+            queue_info = self._queues[queue_name]
 
-                # Try to read one message
-                result = queue_info["queue"].read_one(with_timestamps=True)
-                if result:
-                    body, timestamp = result
+            # Consume commits the claim before the application handler runs.
+            result = queue_info["queue"].read_one(with_timestamps=True)
+            if result:
+                body, timestamp = result
 
-                    # Switch handler and error handler context for this message
-                    original_handler = self._handler
-                    original_error_handler = self._error_handler
-                    self._handler = queue_info["handler"]
-                    self._error_handler = queue_info["error_handler"]
+                # Switch handler and error handler context for this message
+                original_handler = self._handler
+                original_error_handler = self._error_handler
+                self._handler = queue_info["handler"]
+                self._error_handler = queue_info["error_handler"]
 
-                    try:
-                        # Use inherited _dispatch for consistent error handling and size validation
-                        self._dispatch(body, timestamp)
-                        messages_processed += 1
-                        logger.debug(
-                            f"Processed message from queue '{queue_name}': {body[:50]}..."
-                        )
-                    finally:
-                        # Restore original handlers
-                        self._handler = original_handler
-                        self._error_handler = original_error_handler
-                else:
-                    # Queue became empty during processing
-                    queues_to_remove.append(queue_name)
-                    logger.debug(f"Queue '{queue_name}' became empty")
-
-            except StopIteration:
-                break
-            except Exception as e:
-                # Log but continue processing other queues
-                logger.log(
-                    logging.ERROR,
-                    f"Error processing queue {queue_name}: {e}",
-                    exc_info=True,
-                )
+                try:
+                    # Use inherited _dispatch for consistent terminal semantics.
+                    self._dispatch(body, timestamp)
+                    messages_processed += 1
+                    logger.debug(
+                        f"Processed message from queue '{queue_name}': {body[:50]}..."
+                    )
+                finally:
+                    # Restore original handlers
+                    self._handler = original_handler
+                    self._error_handler = original_error_handler
+            else:
+                # Queue became empty during processing
+                queues_to_remove.append(queue_name)
+                logger.debug(f"Queue '{queue_name}' became empty")
 
         # Remove empty queues from active list
         if queues_to_remove:
@@ -375,25 +362,12 @@ class MultiQueueWatcher(BaseWatcher):
         if error_handler is None:
             error_handler = self._default_error_handler
 
-        # Determine database path from existing queues
-        db_path = None
-        if self._queues:
-            # Use database path from any existing queue
-            existing_queue = next(iter(self._queues.values()))["queue"]
-            if hasattr(existing_queue, "_db_path"):
-                db_path = existing_queue._db_path
-            else:
-                from simplebroker._constants import DEFAULT_DB_NAME
-
-                db_path = DEFAULT_DB_NAME
-        else:
-            # Fallback to default (shouldn't happen in normal usage)
-            from simplebroker._constants import DEFAULT_DB_NAME
-
-            db_path = DEFAULT_DB_NAME
-
         # Create Queue object sharing same database
-        queue_obj = Queue(queue_name, db_path=db_path, persistent=self._persistent)
+        queue_obj = Queue(
+            queue_name,
+            db_path=self._shared_target,
+            persistent=self._persistent,
+        )
 
         if hasattr(queue_obj, "set_stop_event"):
             queue_obj.set_stop_event(self._stop_event)
@@ -542,9 +516,9 @@ def populate_queues_with_messages(db_path: str, messages: dict[str, list[str]]) 
     print("\n📦 Populating queues with sample messages...")
 
     for queue_name, queue_messages in messages.items():
-        queue = Queue(queue_name, db_path=db_path, persistent=True)
-        for message in queue_messages:
-            queue.write(message)
+        with Queue(queue_name, db_path=db_path, persistent=True) as queue:
+            for message in queue_messages:
+                queue.write(message)
         print(f"   Added {len(queue_messages)} messages to '{queue_name}' queue")
 
 
@@ -554,13 +528,17 @@ def demonstrate_round_robin_fairness(watcher: MultiQueueWatcher, db_path: str) -
     print("   Adding more messages to 'orders' queue while others are empty...")
 
     # Add more messages to orders queue while processing is happening
-    orders_queue = Queue("orders", db_path=db_path, persistent=True)
-    for i in range(5):
-        order_message = json.dumps(
-            {"id": 2000 + i, "total": 15.99 + i * 5, "items": [f"item_{i}"]}
-        )
-        orders_queue.write(order_message)
-        time.sleep(0.1)  # Small delay to show interleaving
+    with Queue("orders", db_path=db_path, persistent=True) as orders_queue:
+        for i in range(5):
+            order_message = json.dumps(
+                {
+                    "id": 2000 + i,
+                    "total": 15.99 + i * 5,
+                    "items": [f"item_{i}"],
+                }
+            )
+            orders_queue.write(order_message)
+            time.sleep(0.1)  # Small delay to show interleaving
 
     print("   Orders queue now has more messages. Other queues continue processing.")
 
