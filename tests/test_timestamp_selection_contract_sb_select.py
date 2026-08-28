@@ -54,6 +54,7 @@ AFFECTED_EVIDENCE = {
             "test_redis_one_many_bounds_and_live_order_use_public_ids",
             "test_redis_newest_include_claimed_merges_both_states",
             "test_redis_newest_lua_resumes_below_reserved_windows",
+            "test_redis_many_fills_limit_past_partly_reserved_first_window",
             "test_redis_concurrent_newest_claims_select_distinct_highest_ids",
         },
         "tests/test_sqlite_message_id_returning_order.py": {

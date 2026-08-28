@@ -210,6 +210,13 @@ def test_api_generators_watchers_sidecar_io_errors_language() -> None:
     sidecar = _section("SB-API-7")
     assert "SidecarSession" in sidecar
     assert "RESERVED_TABLE_NAMES" in sidecar
+    assert "**SQLite:**" in sidecar
+    sqlite_migration = sidecar.split("**SQLite:**", 1)[1].split("**PostgreSQL:**", 1)[0]
+    assert "does not block" in sqlite_migration
+    assert "whole-file backup" in sqlite_migration
+    postgres_migration = sidecar.split("**PostgreSQL:**", 1)[1]
+    assert "`RESTRICT`" in postgres_migration
+    assert "fails without mutation" in postgres_migration
     io = _section("SB-API-8")
     assert "dump_lines" in io
     assert "load_lines" in io

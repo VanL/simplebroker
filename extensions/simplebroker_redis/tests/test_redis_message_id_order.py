@@ -212,6 +212,50 @@ def test_redis_newest_lua_resumes_below_reserved_windows(
         core.close()
 
 
+@pytest.mark.parametrize("operation", ["claim", "move"])
+@pytest.mark.parametrize("order", ["oldest", "newest"])
+def test_redis_many_fills_limit_past_partly_reserved_first_window(
+    redis_runner: RedisRunner,
+    operation: Literal["claim", "move"],
+    order: Literal["oldest", "newest"],
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    token = ""
+    reserved_rows: list[tuple[str, int]] = []
+    try:
+        # limit=3 scans 48 candidates per Lua window. Reserve the first 47 IDs
+        # in the requested direction, leaving one eligible ID in that window
+        # and two beyond it. The public many call must continue until it fills
+        # the requested eligible prefix within its bounded Lua scan budget.
+        eligible = [1000, 1001, 1002] if order == "oldest" else [3, 2, 1]
+        timestamps = (
+            [*range(1, 48), *eligible]
+            if order == "oldest"
+            else [*eligible, *range(1000, 1047)]
+        )
+        _insert_exact(core, "jobs", timestamps)
+        token, reserved_rows = core._begin_batch(
+            "jobs",
+            batch_size=47,
+            after_timestamp=999 if order == "newest" else None,
+            before_timestamp=None,
+            exact_timestamp=None,
+            op="claim",
+        )
+        assert len(reserved_rows) == 47
+
+        if operation == "claim":
+            selected = core.claim_many("jobs", 3, order=order)
+        else:
+            selected = core.move_many("jobs", "archive", 3, order=order)
+        timestamped = cast(list[tuple[str, int]], selected)
+        assert [timestamp for _body, timestamp in timestamped] == eligible
+    finally:
+        if token:
+            core._rollback_batch("jobs", token, reserved_rows)
+        core.close()
+
+
 def test_redis_concurrent_newest_claims_select_distinct_highest_ids(
     redis_url: str,
     redis_namespace: str,

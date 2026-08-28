@@ -30,8 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `simplebroker-redis` 4.0.0, migrate and verify once, then restart only v8
   clients. PostgreSQL takes an `ACCESS EXCLUSIVE` migration lock plus a
   transaction advisory lock. Caller-owned sidecar tables and state are
-  preserved; changes inside reserved broker objects are unsupported. Backend
-  API v8 requires the matching first-party extension releases.
+  preserved; changes inside reserved broker objects are unsupported. SQLite
+  does not block migration for unsupported dependencies on retired
+  `messages.id`, so detached view or foreign-key definitions may remain broken;
+  PostgreSQL rejects such dependencies through `RESTRICT`. Backend API v8
+  requires the matching first-party extension releases.
 - Repaired and reclassified the shipped examples for the v8 contracts. The
   recommended async wrapper now avoids hidden destructive prefetch and exposes
   bounded newest selection; the advanced async example delegates schema setup
@@ -40,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state and preserve their actual failure boundaries; and runnable Python demos
   use disposable targets. These are example and documentation guarantees, not
   additional core API or schema behavior beyond the changes above.
+
+### Fixed
+
+- SQLite schema-v6 admission no longer rejects an otherwise valid current
+  target merely because its unsupported `messages` table additions include
+  extra columns. Those additions remain outside the supported layout and have
+  no migration or preservation promise.
+- Redis `claim_many()` and `move_many()` no longer stop after the first
+  partially productive scan window. They continue within the bounded Lua scan
+  budget to fill the requested limit when enough eligible messages are found
+  within that budget, including newest-first scans with reserved high IDs.
 
 ## [7.5.1] - 2026-08-26
 

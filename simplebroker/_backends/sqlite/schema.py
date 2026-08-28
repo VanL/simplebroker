@@ -359,7 +359,6 @@ def ensure_schema_v5(
         raise
 
 
-_CANONICAL_V6_COLUMNS = ("queue", "body", "ts", "claimed")
 _CANONICAL_V6_INDEXES = {
     "idx_messages_queue_ts": (0, 0),
     "idx_messages_pending_queue_ts": (0, 1),
@@ -369,26 +368,28 @@ _CANONICAL_V6_INDEXES = {
 def _messages_v6_shape_is_current(runner: SQLRunner) -> bool:
     """Check the broker-owned messages shape.
 
-    Columns and the public-ID primary key must match exactly, and the two
+    Required columns and the public-ID primary key must match, and the two
     canonical indexes must exist with their canonical definitions. Extra
-    caller-created indexes or triggers on ``messages`` are outside the
-    supported schema: they are ignored here, never fatal, so repeated opens
-    stay idempotent. Anything outside the broker schema belongs in a sidecar
-    and carries no support.
+    caller-created columns, indexes, or triggers on ``messages`` are outside
+    the supported schema: admission ignores them without promising to preserve
+    them. Anything outside the broker schema belongs in a sidecar and carries
+    the preservation contract.
     """
     rows = list(runner.run("PRAGMA table_info('messages')", fetch=True))
-    columns = tuple(str(row[1]) for row in rows)
-    expected_columns = (
-        ("queue", "TEXT", 1, None, 0),
-        ("body", "TEXT", 1, None, 0),
-        ("ts", "INTEGER", 1, None, 1),
-        ("claimed", "INTEGER", 0, "0", 0),
-    )
-    column_shape = tuple(
-        (str(row[1]), str(row[2]).upper(), int(row[3]), row[4], int(row[5]))
+    expected_columns = {
+        "queue": ("TEXT", 1, None, 0),
+        "body": ("TEXT", 1, None, 0),
+        "ts": ("INTEGER", 1, None, 1),
+        "claimed": ("INTEGER", 0, "0", 0),
+    }
+    column_shape = {
+        str(row[1]): (str(row[2]).upper(), int(row[3]), row[4], int(row[5]))
         for row in rows
-    )
-    if columns != _CANONICAL_V6_COLUMNS or column_shape != expected_columns:
+    }
+    if any(
+        column_shape.get(name) != expected_shape
+        for name, expected_shape in expected_columns.items()
+    ):
         return False
 
     index_flags = {
@@ -553,8 +554,9 @@ def validate_or_repair_current_v6(runner: SQLRunner) -> None:
     Healthy steady state costs read-only catalog pragmas and takes no write
     transaction. The repair transaction runs only when the shape check fails
     (for example a missing canonical index) and is idempotent. Caller-created
-    objects on ``messages`` are outside the supported schema and are ignored,
-    never fatal; anything outside the broker schema belongs in a sidecar.
+    columns and other objects on ``messages`` are outside the supported schema
+    and are ignored for admission, never fatal; anything outside the broker
+    schema belongs in a sidecar and carries the preservation contract.
     """
     if _messages_v6_shape_is_current(runner):
         return

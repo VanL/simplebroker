@@ -224,8 +224,8 @@ local scan_maxb = maxb
 local window_size = limit * 16
 -- Each invocation examines at most 16 windows (256 * limit candidates), so
 -- reserved prefixes cannot create an unbounded Lua event-loop stall. The
--- caller resumes after cursor. A concurrently released id behind cursor is
--- intentionally left for the next public operation.
+-- When no row is found, the caller resumes after cursor. A concurrently
+-- released id behind cursor is intentionally left for the next public operation.
 for window = 1, 16 do
   local ids = {}
   if newest then
@@ -253,7 +253,7 @@ for window = 1, 16 do
       end
     end
   end
-  if moved > 0 or #ids < window_size then
+  if moved >= limit or #ids < window_size then
     cursor = ''
     break
   end
@@ -331,8 +331,9 @@ local function scan_eligible_ids()
   end
   return ids
 end
--- Bounded to 16 windows per invocation; Python resumes after cursor. A
--- concurrently released id behind cursor waits for the next public operation.
+-- Bounded to 16 windows per invocation. When no row is found, Python resumes
+-- after cursor. A concurrently released id behind cursor waits for the next
+-- public operation.
 for window = 1, 16 do
   local ids = {}
   if exact_id ~= '' then
@@ -367,7 +368,7 @@ for window = 1, 16 do
       end
     end
   end
-  if moved > 0 or exact_id ~= '' or #ids < window_size then
+  if moved >= limit or exact_id ~= '' or #ids < window_size then
     cursor = ''
     break
   end

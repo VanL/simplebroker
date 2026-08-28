@@ -362,13 +362,19 @@ def test_schema_v6_migrates_despite_unsupported_caller_objects(
 
     Anything outside the broker schema belongs in a sidecar: caller objects
     attached to ``messages`` are unsupported and do not survive the rebuild,
-    while detached caller state (tables, rows, views as definitions) is
-    preserved. Migration must not refuse over them.
+    while detached caller state (tables, rows, views and foreign keys as
+    definitions) is preserved even when a private-id dependency leaves its
+    definition broken. Migration must not refuse over them.
     """
     db_path = tmp_path / "dependent-sidecar.db"
     _create_v5_database(db_path)
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("CREATE VIEW sidecar_message_ids AS SELECT id FROM messages")
+        conn.execute(
+            "CREATE TABLE sidecar_private_refs "
+            "(message_id INTEGER REFERENCES messages(id))"
+        )
+        conn.execute("INSERT INTO sidecar_private_refs VALUES (1)")
         conn.execute("CREATE INDEX caller_body_idx ON messages(body)")
         conn.execute(
             "CREATE TRIGGER caller_audit AFTER INSERT ON messages BEGIN SELECT 1; END"
@@ -404,6 +410,13 @@ def test_schema_v6_migrates_despite_unsupported_caller_objects(
         assert conn.execute("SELECT * FROM sidecar_jobs").fetchall() == (
             sidecar_rows_before
         )
+        assert conn.execute("SELECT COUNT(*) FROM sidecar_private_refs").fetchone() == (
+            1,
+        )
+        with pytest.raises(sqlite3.OperationalError, match="foreign key mismatch"):
+            conn.execute("PRAGMA foreign_key_check('sidecar_private_refs')").fetchall()
+        with pytest.raises(sqlite3.OperationalError, match="no such column: id"):
+            conn.execute("SELECT * FROM sidecar_message_ids").fetchall()
         remaining = {
             row[0]
             for row in conn.execute(
@@ -416,16 +429,22 @@ def test_schema_v6_migrates_despite_unsupported_caller_objects(
         assert remaining == {"sidecar_message_ids"}
 
 
-def test_open_is_idempotent_with_caller_objects_added_after_v6(
+def test_open_tolerates_unsupported_columns_and_objects_added_after_v6(
     tmp_path: Path,
 ) -> None:
     """Steady-state validation ignores unsupported extras instead of failing."""
     from simplebroker.db import BrokerDB
 
     db_path = tmp_path / "extras.db"
-    BrokerDB(str(db_path)).close()
+    with BrokerDB(str(db_path)) as broker:
+        broker.write("jobs", "before-extra")
 
     with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("ALTER TABLE messages ADD COLUMN caller_note TEXT")
+        conn.execute(
+            "UPDATE messages SET caller_note='unsupported-but-tolerated' "
+            "WHERE body='before-extra'"
+        )
         conn.execute("CREATE INDEX caller_claimed_idx ON messages(claimed)")
         conn.execute(
             "CREATE TRIGGER caller_after_insert AFTER INSERT ON messages "
@@ -434,8 +453,8 @@ def test_open_is_idempotent_with_caller_objects_added_after_v6(
         conn.commit()
 
     for _ in range(2):
-        db = BrokerDB(str(db_path))
-        db.close()
+        with BrokerDB(str(db_path)) as broker:
+            assert broker.peek_one("jobs") is not None
 
     with closing(sqlite3.connect(db_path)) as conn:
         remaining = {

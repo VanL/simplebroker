@@ -825,10 +825,15 @@ Rules of the road:
   see `simplebroker.ext.RESERVED_TABLE_NAMES`.
 - SQL migration may rebuild only those reserved broker objects. Successful or
   failed migration leaves caller-owned sidecar definitions, rows, indexes,
-  constraints, and sequence state unchanged. A dependency on a retired private
-  broker column fails without `CASCADE`. Columns or constraints added inside
-  `messages`, `meta`, the aliases table, or broker-owned indexes are unsupported
-  reserved-object changes, not sidecars.
+  constraints, and sequence state unchanged. Dependencies on a retired private
+  broker column are unsupported. **SQLite:** migration does not block on them;
+  attached indexes and triggers are dropped with the old broker table, while a
+  detached view or foreign-key definition may survive but be broken. Take a
+  whole-file backup before migrating a target that may contain them.
+  **PostgreSQL:** `RESTRICT` makes the dependency fail without mutation, and
+  migration never uses `CASCADE`. Columns or constraints added inside
+  `messages`, `meta`, the aliases table, or broker-owned indexes are
+  unsupported reserved-object changes, not sidecars.
 - Connection lifetime follows the `Queue`: ephemeral queues get in and get out
   per session; `persistent=True` queues reuse their connection.
 - Use `?` (qmark) placeholders. They work natively on SQLite and are translated

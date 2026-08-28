@@ -476,8 +476,12 @@ Amend [SB-API-7] with:
 > state unchanged. `RESERVED_TABLE_NAMES` and broker-owned `idx_*` indexes are
 > not sidecars: caller changes to those owned objects are unsupported and have
 > no migration-preservation promise. A sidecar dependency on a removed private
-> broker column must make migration fail without mutation; migration never uses
-> `CASCADE` to erase caller-owned state.
+> broker column is unsupported. SQLite migration does not block on such a
+> dependency: attached indexes and triggers are dropped with the old broker
+> table, while a detached view or foreign-key definition may survive broken;
+> take a whole-file backup before migrating a target that may contain one.
+> PostgreSQL drops the private column with `RESTRICT`, so the dependency fails
+> without mutation; migration never uses `CASCADE` to erase caller-owned state.
 
 Amend [SB-API-10] with:
 
@@ -652,11 +656,12 @@ and indexes in one transaction: create the canonical table under a temporary
 name, copy `queue, body, ts, claimed` for every row (pending and claimed alike),
 verify row-count equality, drop the old table, rename, and create the canonical
 indexes. Metadata advances only after all migration DDL succeeds inside the
-same transaction. The migration preflights dependencies on the removed private
-column. A caller object that depends on `messages.id` causes a clear failure
-before mutation; the migration never uses `CASCADE` to remove caller state.
-Changes inside reserved broker tables or indexes are unsupported and need not
-be preserved as sidecars.
+same transaction. Unsupported dependencies on the removed private column do
+not block SQLite migration. Attached indexes and triggers are dropped with the
+old broker table; a detached view or foreign-key definition may survive broken.
+The migration never uses `CASCADE`; take a whole-file backup first if the
+target may contain such dependencies. Changes inside reserved broker tables or
+indexes are unsupported and need not be preserved as sidecars.
 
 Sidecar references to the supported public `messages.ts` key must remain valid
 and textually unchanged. The SQLite rebuild must use a foreign-key-safe
@@ -1426,7 +1431,7 @@ This plan is complete only when:
 | [SB-API-11], acceptance 7 | Every previous-client PostgreSQL cold open rejects v6 at the metadata-version gate before legacy column use. | The published v7.5.1/PG 3.10.0 `BrokerTarget` path rejects fresh and upgraded v6 cleanly and without mutation. The documented injected `Queue(..., runner=PostgresRunner(...))` path wraps the runner; v7's extension then misses its concrete-runner metadata fast path and parses legacy bootstrap DDL against `order_id` before core performs its version check. It fails with `column "order_id" does not exist`. | The previous artifacts are immutable. PostgreSQL resolves the missing column even when an index of the legacy name already exists, so a surrogate-free v6 target cannot repair that path with an index-name sentinel. | Resolved by owner decision on 2026-08-27: retain the surrogate-free layout and scope the transition to a coordinated quiesced update. Normal target-backed cold refusal remains guaranteed and tested; PG 3.10.0 injected-runner admission is a documented legacy exception that must never open v6 during cutover. |
 | Task 0 inventory, Task 7 Weft gate | Weft has no production dependency on insertion order for exact-ID rows and its suites pass the v8 artifacts unchanged. | Pipeline child TIDs are allocated stage-then-edge but exact-ID spawn rows are submitted edge-then-stage. Ascending public-ID retrieval therefore changes the observed internal spawn order. The two pipeline-order tests pass with core 7.5.1 and fail with core 8.0.0 on both SQLite and PostgreSQL artifact runs. Taut also declares lower-bound-only SimpleBroker requirements and must not refresh across the major-version boundary without its adoption suite. | The static Task 0 inventory saw exact insertion but incorrectly assumed the generated IDs were monotone in submission order. SimpleBroker is behaving according to the promoted [SB-SELECT-5] contract. | Resolved for SimpleBroker release readiness by owner decision on 2026-08-27: keep the SimpleBroker contract and coordinate Weft and Taut dependency/behavior updates before either adopts v8. These are downstream migration changes, not a backend-specific SimpleBroker mode. |
 
-| Storage Design (SQLite migration guard), Task 3 | The v5-to-v6 migration refuses when caller objects textually reference removed `messages.id`, via a pre-flight regex scan. | Owner-directed 2026-08-27: no migration refusal. The regex both over-matched (blocking legitimate sidecar views) and under-matched (missing `WHERE id` references). The guard and regex are removed; caller objects attached to `messages` are unsupported and do not survive the rebuild; detached views survive as definitions and may break. Post-rebuild FK verification is scoped to the preserved `messages(ts)` references. | Anything outside the broker schema belongs in a sidecar and carries no support; refusing migration to protect unsupported objects inverted priorities and the textual scan bricked innocent databases. | Documentation states the strict ownership rule; no [SB-*] clause change required. |
+| Storage Design (SQLite migration guard), Task 3 | The v5-to-v6 migration refuses when caller objects textually reference removed `messages.id`, via a pre-flight regex scan. | Owner-directed 2026-08-27: no migration refusal. The regex both over-matched (blocking legitimate sidecar views) and under-matched (missing `WHERE id` references). The guard and regex are removed; caller objects attached to `messages` are unsupported and do not survive the rebuild; detached views or foreign-key definitions survive as definitions and may break. Post-rebuild FK verification is scoped to preserved `messages(ts)` references. | Private-column dependencies are unsupported even when their definitions live in a sidecar. Refusing migration to protect them inverted priorities and the textual scan bricked innocent databases. | [SB-API-7] records the SQLite/PostgreSQL split and whole-file-backup action. |
 | Storage Design (steady-state validation), Task 3/4 | The SQLite v6 open-time check required exactly the canonical index list and zero triggers on `messages`. | Owner-directed 2026-08-27: upgrade and validation code is idempotent. The validator requires the canonical columns, primary key, and indexes to exist (repairing missing canonical indexes), and ignores unsupported caller extras instead of failing every subsequent open. | An open that can never converge after harmless caller DDL is a bug, and PostgreSQL validation already anchored on existence. | None; matches [SB-API-11]'s existing anchor language. |
 | Storage Design (migration architecture), Tasks 3/4 | Migrations applied via cumulative `< N` branches with steady-state assurance mixed into each step, including per-open index drop/recreate and an unconditional PostgreSQL advisory lock plus catalog shape query per runner setup. | Owner-directed 2026-08-27: exact-version ladder. Each step runs only on the exact preceding version, is idempotent, and advances the version by exactly one; fresh databases are created directly at v6 and run no steps; steady state costs a read-only shape probe (SQLite) or one `pg_indexes` probe with no advisory lock (PostgreSQL). The legacy SQLite drop list is deleted; the rebuild DDL derives from the single `create_messages_table_sql` builder. | Open-time regressions (double index rebuild per SQLite open; cluster-wide advisory-lock serialization per PostgreSQL setup) and three independently authored copies of the v6 shape. | None; behavior contracts unchanged. |
 | [SB-ID-1] loud-failure boundary | `ts INTEGER NOT NULL UNIQUE` raised `IntegrityError` on a NULL bind. | `ts` as the SQLite rowid alias transforms a NULL bind into auto-assignment even with `NOT NULL` declared (verified on SQLite 3.50.4), so the schema cannot restore the loud failure; a guard at the generated-ID insert boundary raises `RuntimeError` for a non-integer generator result before any row can be minted. The DDL declares `NOT NULL` as stated intent. | Stored NULL remains impossible; only the error surface moved from the engine to the insert boundary, where it can actually fire. | None; [SB-ID-1] already owns integer-only public IDs. |
@@ -1530,8 +1535,10 @@ Possession answers:
   equality before publishing schema version 6. Success and injected
   disk-full/rename failures preserve caller tables, rows, indexes, foreign
   keys to `messages.ts`, and unrelated `sqlite_sequence` entries. Both paths
-  restore the caller's prior `PRAGMA foreign_keys` setting. Dependencies on
-  removed `messages.id` fail before mutation.
+  restore the caller's prior `PRAGMA foreign_keys` setting. Unsupported
+  dependencies on removed `messages.id` do not block migration; attached
+  objects are dropped and detached definitions may survive broken, so the
+  documented operator action is a whole-file backup before migration.
 - `uv run pytest -m sqlite_only -q --tb=short` passed the full SQLite marker
   matrix with six documented environment/platform skips. Focused schema,
   forced-reverse-`RETURNING`, [SB-ID-1], [SB-SELECT-5], and [SB-DELIVERY-3]
@@ -1585,7 +1592,9 @@ Possession answers:
   many, strict bounds, ascending live traversal, claimed/pending merge, and
   concurrent newest claims. Claim and move each cross more than the Lua
   invocation's 256-candidate limit-one scan budget through 300 reserved higher
-  IDs and still select the lower eligible ID on the resumed call.
+  IDs and still select the lower eligible ID on the resumed call. A many-row
+  probe proves that one eligible row in a partly reserved first window does not
+  stop the bounded Lua scan before the requested prefix is filled.
 - `uv run bin/pytest-redis --fast` passed the shared release subset with 1502
   passed and 17 backend/platform skips in 43.08 seconds. After correcting a
   test that had reused Redis's namespace-global IDs across queues, the full
@@ -1789,6 +1798,45 @@ real-Valkey module passed 11 tests; the full evidence is the 1520/294 matrix
 above. The implementation-review verdict has no unresolved defect. The two
 compatibility deviations are accepted coordinated-rollout constraints, not
 SimpleBroker implementation blockers.
+
+#### Follow-up external review remediation
+
+A later external review found four additional issues. SQLite's implementation
+guide overstated failure-before-mutation for unsupported dependencies on the
+retired private ID; it now records the owner decision that those objects do not
+block migration, detached views may break, and a whole-file backup is required
+when such objects may exist. Current SQLite v6 admission compared the complete
+column tuple and rejected unsupported extra columns despite [SB-ID-1]'s
+projection-based tolerance; it now validates the four required columns by name
+and shape while leaving extras unsupported and unpromised. Redis claim/move
+Lua cleared its continuation cursor after any result; it now continues bounded
+scanning until the public limit is filled, the eligible range is exhausted, or
+the per-invocation scan budget is reached.
+Finally, the product registry now cites landed [SB-CLI-6] and [SB-SELECT-5]
+evidence rather than promising that evidence in a future plan slice.
+
+The SQLite extra-column reopen probe and the real-Valkey partial-window matrix
+were observed failing before the fixes and passing afterward. The newest case
+reserves 47 high IDs, leaves ID 3 eligible in the first descending window and
+IDs 2 and 1 below it, and requires both claim-many and move-many to return
+`[3, 2, 1]`. The symmetric oldest cases reserve the first 47 low IDs and prove
+the same continuation rule in ascending order.
+
+The independent remediation review then found that [SB-API-7], the Python
+guide, and earlier plan sections still stated the superseded cross-backend
+failure rule. Those loci now split behavior explicitly: SQLite proceeds and
+may leave detached view or foreign-key definitions broken, while PostgreSQL
+`RESTRICT` fails without mutation. The [SB-API-7] structural gate binds that
+split and the whole-file-backup action; the SQLite migration test now proves
+both broken-definition cases. The reviewer found no other blocker.
+
+Final remediation evidence: the full core suite passed with 3335 tests and 18
+documented skips; the full real-Valkey extension suite passed with 298 tests
+and one opt-in diagnostic skip; the focused schema, API, identity, selection,
+and documentation suite passed 95 tests. Ruff, mypy, DOM-15, plan-context,
+documentation-path, suppression-index, and diff checks passed with no new
+suppressions. The independent remediation re-review reported no actionable
+finding.
 
 ## Independent Plan Review
 

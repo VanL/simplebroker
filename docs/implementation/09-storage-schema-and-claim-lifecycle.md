@@ -81,10 +81,13 @@ integrity, and publishes version 6 last in the same transaction. The rebuild
 temporarily disables connection-level foreign-key enforcement when needed and
 restores the prior setting on success or failure. Caller-owned tables, indexes,
 rows, sequence entries, and references to the supported `messages.ts` key stay
-unchanged. A view, trigger, or foreign key that depends on retired
-`messages.id` fails before mutation. Additions inside reserved broker objects
-are unsupported; sidecars are objects outside those reserved tables and
-indexes.
+unchanged. Unsupported objects that depend on retired `messages.id` do not
+block the SQLite rebuild; attached indexes and triggers are dropped with the
+old table, while a detached view or foreign-key definition may survive broken.
+Take a whole-file backup before migration if the target may contain such
+objects. Additions inside reserved broker objects are unsupported and have no
+preservation promise, though current-shape admission tolerates extra columns;
+sidecars are objects outside those reserved tables and indexes.
 
 ## Schema completion proof
 
@@ -163,11 +166,13 @@ order rather than engine order and is part of backend API v8.
 Redis realizes the same finite order over its fixed-width encoded ID members.
 Oldest uses `ZRANGEBYLEX`; newest uses `ZREVRANGEBYLEX` with reversed open
 bounds. Claim and move Lua scripts return rows in selection order. If reserved
-members fill the script's bounded scan budget, newest continuation resumes
-below the last scanned member with an exclusive upper bound. Pending and
-claimed peek results are merged and sliced in the requested direction only
-after both state sets have applied the same bounds. Generator batches retain
-their ascending cursor and expose no reverse control.
+members fill the script's bounded scan budget without a result, directional
+continuation resumes beyond the last scanned member with an exclusive bound. A
+partly productive window continues inside the same bounded invocation until
+the requested limit, range exhaustion, or scan budget. Pending and claimed
+peek results are merged and sliced in the requested direction only after both
+state sets have applied the same bounds. Generator batches retain their
+ascending cursor and expose no reverse control.
 
 **Message Lifecycle:**
 1. **Write Phase**: Message inserted with unique timestamp
