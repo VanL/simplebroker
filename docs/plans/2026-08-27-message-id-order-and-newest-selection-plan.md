@@ -1,6 +1,6 @@
 # Message-ID Order and Newest Selection Plan
 
-Status: active
+Status: completed
 Class: 5+P. This changes the published default selection order, adds a public
 Python and CLI selection mode, changes both SQL storage schemas and backend
 API compatibility, and creates a one-way schema-version boundary for older
@@ -1403,10 +1403,10 @@ This plan is complete only when:
    ascending by public ID.
 9. Engine `RETURNING` order cannot affect exposed order.
 10. Whole-target backup/restore rollback, clean artifact installs, backend
-    handshake, and full SimpleBroker suites pass. Owner-approved Weft and Taut
-    handoff SHAs prove either coherent v8 adoption (updated bounds, locks,
-    exact artifact possession, and downstream suites) or a temporary `<8` cap;
-    the rollback rehearsal includes sidecar state.
+    handshake, and full SimpleBroker suites pass; the rollback rehearsal
+    includes sidecar state. On 2026-08-28 the owner explicitly retained
+    responsibility for the separate Weft and Taut adoption work, so their
+    handoff SHAs are outside this SimpleBroker plan's closure gate.
 11. Independent review findings are resolved, final evidence is recorded, the
     work is committed without agent attribution, and the index row is changed
     to `completed` in that same change.
@@ -1837,6 +1837,42 @@ and documentation suite passed 95 tests. Ruff, mypy, DOM-15, plan-context,
 documentation-path, suppression-index, and diff checks passed with no new
 suppressions. The independent remediation re-review reported no actionable
 finding.
+
+### 2026-08-28 publication and closure evidence
+
+The final candidate was commit
+`194dea5bd4841f3c7be36be44f5657e9a20817e1`. Exact-SHA workflow runs
+`33181300066` (core), `33181300079` (PostgreSQL), and `33181300036` (Redis)
+all passed. CodeQL run `33181300194` and OSSF Scorecard run `33181300151`
+also passed. The core matrix included successful Windows 3.11, 3.12, 3.13,
+and 3.14 jobs; the earlier Windows SQLite timeouts and worker crashes did not
+recur.
+
+`uv run --locked python bin/release.py all` then completed with the intended
+17-worker local gate. It observed 3335 core tests passing with 18 documented
+skips, 14 benchmark tests passing, 1527 shared PostgreSQL tests passing with
+11 skips, 311 PostgreSQL-extension tests passing with 7 skips, 1520 shared
+Redis tests passing with 18 skips, and 298 Redis-extension tests passing with
+one skip. ShellCheck, Ruff, formatting, mypy, example tests, lock refreshes,
+package builds, and isolated wheel/sdist smoke tests passed. No release commit
+was needed because the prepared version and lock files already matched the
+release set.
+
+Immutable tags `simplebroker_pg/v4.0.0`,
+`simplebroker_redis/v4.0.0`, and `v8.0.0` all resolve locally and on the remote
+to the exact candidate SHA. Tag-triggered release-gate runs `33183817933`,
+`33183823770`, and `33183830604` passed tag/current-version checks, rebuilt the
+artifacts, published through PyPI Trusted Publishing, and published immutable
+GitHub Releases. Final independent queries verified wheel and sdist files for
+`simplebroker` 8.0.0, `simplebroker-pg` 4.0.0, and `simplebroker-redis` 4.0.0
+on PyPI, with the same artifacts plus Sigstore bundles on the non-draft,
+non-prerelease GitHub Releases.
+
+Immediately before tagging, the owner explicitly directed that Weft and Taut
+not block this release because the owner is handling those repositories. This
+supersedes the earlier downstream-handoff closure gate for this SimpleBroker
+plan only. It does not claim downstream v8 compatibility or authorize either
+application to deploy v8 without its separately owned migration work.
 
 ## Independent Plan Review
 
