@@ -320,7 +320,7 @@ session cleanup under `[SB-OPS-6]`, after queue delivery has already completed.
 Disposition: deferred
 Owner: SimpleBroker product owner
 Governs: claimed-row deletion and automatic/explicit vacuum maintenance
-Source record: [ALT-RF20260824-001] in docs/plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md
+Source record: 2026-08-24-failure-path-and-contract-findings-resolution-plan.md at 813dd7ce [ALT-RF20260824-001]
 Candidate: Add a SQLite partial index on claimed messages, a schema migration
 or current-version repair, and a no-claimed fast path for vacuum eligibility.
 Why plausible: Claimed existence and batch deletion currently scan without a
