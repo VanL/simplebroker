@@ -824,36 +824,46 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- completed: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
-  — aligns public, async-wrapper, watcher, sidecar, and runner examples
-- active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It aligns public,
+  async-wrapper, watcher, sidecar, and runner examples.
+- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
   — owns bounded order, sidecar-safe SQL schema v6, backend API v8, and
   cross-surface parity
-- active: [2026-08-25-postgres-connection-pressure-inspection-plan](../plans/2026-08-25-postgres-connection-pressure-inspection-plan.md)
-  — PostgreSQL-only zero-setup connection pressure through the Queue's normal
+- retired: 2026-08-25-postgres-connection-pressure-inspection-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns PostgreSQL-only
+  zero-setup connection pressure through the Queue's normal
   connection lifecycle
-- completed: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
-  — storage admission/proof, backend target states, session identity/cleanup,
+- retired: 2026-08-25-schema-and-representation-assumption-remediation-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns storage
+  admission/proof, backend target states, session identity/cleanup,
   and plugin uniqueness
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — borrowed-runner teardown, watcher iterator cleanup, command results and
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns borrowed-runner
+  teardown, watcher iterator cleanup, command results and
   warning ownership, and exact bounded timestamp parsing
-- completed: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
-  — public closeable read, move, and stream iterator contract
-- completed: [2026-08-24-peek-generator-close-contract-plan](../plans/2026-08-24-peek-generator-close-contract-plan.md)
-  — closeable peek iterator and same-thread synchronous Queue-operation cleanup
-- completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)
-  — target snapshots, sidecar qmark adaptation, fork recovery, compatibility,
+- retired: 2026-08-25-closeable-queue-iterator-contract-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns the public
+  closeable read, move, and stream iterator contract.
+- retired: 2026-08-24-peek-generator-close-contract-plan — source `813dd7ce`;
+  see the ledger in `docs/plans/README.md`. It owns closeable peek iteration
+  and same-thread synchronous Queue-operation cleanup.
+- retired: 2026-08-24-comprehensive-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns target
+  snapshots, sidecar qmark adaptation, fork recovery, compatibility,
   command-error ownership, and interface corrections
-- completed: [2026-08-24-failure-path-and-contract-findings-resolution-plan](../plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md)
-  — watcher callback-failure and context-exit contract promotion at baseline
+- retired: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns watcher
+  callback-failure and context-exit contract promotion at baseline
   `1b8ecfa0`
-- completed: 2026-08-24-cli-output-and-error-contract-remediation-plan — all
-  19 exported command functions follow the ordinary-result/direct-exception
+- retired: 2026-08-24-cli-output-and-error-contract-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. All 19 exported command
+  functions follow the ordinary-result/direct-exception
   boundary; CLI translation, selector parity, and no-mutation guards are pinned
   under owner-directed targeted closure
-- completed: 2026-08-24-cli-grammar-validation-and-example-reliability-plan —
-  derived every `PollingStrategy` constructor default from one isolated
+- retired: 2026-08-24-cli-grammar-validation-and-example-reliability-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It derived every
+  `PollingStrategy` constructor default from one isolated
   canonical configuration and implemented the linked CLI reliability slices;
   owner directed targeted closure with hosted Windows/POSIX/Atheris retained
   as post-commit evidence

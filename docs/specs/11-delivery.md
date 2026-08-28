@@ -283,23 +283,30 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- completed: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
-  — aligns async, watcher, reactor, and worker examples with claim boundaries
-- completed: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
-  — established engine-order independence; its private storage-FIFO rule is
-  superseded by the active message-ID order plan and [SB-SELECT-5]
-- active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It aligns async,
+  watcher, reactor, and worker examples with claim boundaries.
+- retired: 2026-08-25-schema-and-representation-assumption-remediation-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It established
+  engine-order independence; its private storage-FIFO rule is
+  superseded by the completed message-ID order plan and [SB-SELECT-5]
+- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
   — preserves atomic move while changing deterministic result order to public ID
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — handler-boundary consume admission and owner-thread iterator cleanup
-- completed: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
-  — public closeable read, move, and stream iterator contract
-- completed: [2026-08-24-peek-generator-close-contract-plan](../plans/2026-08-24-peek-generator-close-contract-plan.md)
-  — closeable peek iterator and same-thread synchronous Queue-operation cleanup
-- completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)
-  — preserves pending/claimed delivery state while changing only queue binding
-- completed: [2026-08-24-failure-path-and-contract-findings-resolution-plan](../plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md)
-  — terminal watcher callback-failure delivery state at baseline `1b8ecfa0`
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns handler-boundary
+  consume admission and owner-thread iterator cleanup.
+- retired: 2026-08-25-closeable-queue-iterator-contract-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns the public
+  closeable read, move, and stream iterator contract.
+- retired: 2026-08-24-peek-generator-close-contract-plan — source `813dd7ce`;
+  see the ledger in `docs/plans/README.md`. It owns closeable peek iteration
+  and same-thread synchronous Queue-operation cleanup.
+- retired: 2026-08-24-comprehensive-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It preserves
+  pending/claimed delivery state while changing only queue binding.
+- retired: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns terminal
+  watcher callback-failure delivery state at baseline `1b8ecfa0`.
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
   source `23d6c9d1` (local-only pin); see the ledger in
   `docs/plans/README.md`

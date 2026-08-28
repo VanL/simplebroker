@@ -285,12 +285,15 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- completed: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
-  — repairs example stats, rename, exact delete, and queue mutation handling
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — delete no-match result parity and PostgreSQL uncertain-unlock session discard
-- completed: [2026-08-24-failure-path-and-contract-findings-resolution-plan](../plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md)
-  — explicit SQL transaction ownership for queue/all delete at baseline
+- retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It repairs
+  example stats, rename, exact delete, and queue mutation handling.
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns delete no-match
+  result parity and PostgreSQL uncertain-unlock session discard.
+- retired: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns explicit
+  SQL transaction ownership for queue/all delete at baseline
   `1b8ecfa0`; Redis behavior unchanged
 - retired: 2026-08-23-public-api-and-cli-review-remediation-plan — source
   `2605b79a` (local-only pin); see the ledger in `docs/plans/README.md`

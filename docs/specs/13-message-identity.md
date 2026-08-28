@@ -197,19 +197,24 @@ message identity and delivery state with only the queue binding updated.
 
 ## Related Plans
 
-- completed: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
-  — aligns exact-ID examples, replay checks, shell bounds, and portable export
-- completed: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
-  — established engine-order independence; its private storage-FIFO rule is
-  superseded by [SB-SELECT-5] and the active message-ID order plan
-- active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It aligns
+  exact-ID examples, replay checks, shell bounds, and portable export.
+- retired: 2026-08-25-schema-and-representation-assumption-remediation-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It established
+  engine-order independence; its private storage-FIFO rule is
+  superseded by [SB-SELECT-5] and the completed message-ID order plan
+- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
   — owns public-ID retrieval order and the surrogate-free canonical SQL layout
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — correct message-ID range diagnostics without changing identity grammar
-- completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)
-  — preserves delivery state as well as identity during move
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It corrects message-ID
+  range diagnostics without changing identity grammar.
+- retired: 2026-08-24-comprehensive-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It preserves delivery
+  state as well as identity during move.
 
-- completed: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+- retired: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns the
   direct [SB-ID-3] lazy-failure versus empty-origin proof; implemented and
   verified from baseline `1b8ecfa0`
 - retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9`; see the

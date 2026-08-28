@@ -356,19 +356,23 @@ Promoted to: none
 
 ## Related Plans
 
-- completed: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
-  — single-connection admission, factual migration receipts, schema-proof
-  caching, semantic timestamp uniqueness, and engine-order independence
-- active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-25-schema-and-representation-assumption-remediation-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns
+  single-connection admission, factual migration receipts, schema-proof
+  caching, semantic timestamp uniqueness, and engine-order independence.
+- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
   — public-ID order, bounded newest selection, and surrogate-free SQL schemas
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — PostgreSQL vacuum session discard after uncertain unlock
-- completed: 2026-08-24-comprehensive-review-findings-remediation-plan —
-  read-only SQLite ownership admission and claim-preserving cross-backend move
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns PostgreSQL
+  vacuum session discard after uncertain unlock.
+- retired: 2026-08-24-comprehensive-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns read-only SQLite
+  ownership admission and claim-preserving cross-backend move.
 
-- completed: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
-  source for [ALT-IMPL09-001], commit-before-handoff cleanup, and explicit SQL
-  delete ownership; implemented and verified from baseline `1b8ecfa0`
+- retired: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It is the source
+  for [ALT-IMPL09-001], commit-before-handoff cleanup, and explicit SQL delete
+  ownership; implemented and verified from baseline `1b8ecfa0`.
 - retired: 2026-08-06-pre-release-review-remediation-plan — source `84159198`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the

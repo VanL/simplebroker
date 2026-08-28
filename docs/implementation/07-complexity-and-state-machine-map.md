@@ -412,11 +412,13 @@ findings must update source, registry, and policy evidence atomically.
 
 ## Related Plan
 
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — watcher iterator admission and cleanup, PostgreSQL vacuum discard, delete
-  results, load-warning locality, and bounded exact timestamp conversion
-- completed: [2026-08-24-failure-path-and-contract-findings-resolution-plan](../plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md)
-  — adds the terminal watcher callback-failure lifecycle row
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns watcher iterator
+  admission and cleanup, PostgreSQL vacuum discard, delete results,
+  load-warning locality, and bounded exact timestamp conversion.
+- retired: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It adds the
+  terminal watcher callback-failure lifecycle row.
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
   source `23d6c9d1` (local-only pin); see the ledger in
   `docs/plans/README.md`

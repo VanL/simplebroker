@@ -224,9 +224,10 @@ not pass/fail thresholds.
 
 ## Related plan
 
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — bounded timestamp-bound admission, integer ISO conversion, and message-ID
-  diagnostic ownership
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns bounded
+  timestamp-bound admission, integer ISO conversion, and message-ID diagnostic
+  ownership.
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
   source `23d6c9d1` (local-only pin); see the ledger in
   `docs/plans/README.md`

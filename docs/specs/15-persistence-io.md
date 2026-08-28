@@ -150,10 +150,12 @@ claim delivery semantics (`[SB-DELIVERY-1]`).
 
 ## Related Plans
 
-- completed: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
-  — replaces an ad hoc copy recipe with pending-only dump/load guidance
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — invocation-owned `cmd_load` clock-skew presentation
+- retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It replaces an
+  ad hoc copy recipe with pending-only dump/load guidance.
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns invocation-local
+  `cmd_load` clock-skew presentation.
 - retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;

@@ -360,33 +360,40 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- completed: [2026-08-27-all-examples-correctness-and-contract-alignment-plan](../plans/2026-08-27-all-examples-correctness-and-contract-alignment-plan.md)
-  — repairs shell example status, bound, rename, stats, and failure handling
-- active: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It repairs shell
+  example status, bound, rename, stats, and failure handling.
+- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
   — owns [SB-CLI-6], registered-token behavior, and the CLI/Python parity proof
 
-- completed: [2026-08-25-schema-and-representation-assumption-remediation-plan](../plans/2026-08-25-schema-and-representation-assumption-remediation-plan.md)
-  — consumer-based path admission and representation-assumption corrections
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — delete no-match parity, invocation-owned load warnings, exact ISO bounds,
-  and bounded hostile-input rejection
-- completed: [2026-08-24-comprehensive-review-findings-remediation-plan](../plans/2026-08-24-comprehensive-review-findings-remediation-plan.md)
-  — exposes the existing root-action JSON grammar in help without changing its
-  preprocessing or compatibility boundary
+- retired: 2026-08-25-schema-and-representation-assumption-remediation-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns
+  consumer-based path admission and representation-assumption corrections.
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns delete no-match
+  parity, invocation-owned load warnings, exact ISO bounds, and bounded
+  hostile-input rejection.
+- retired: 2026-08-24-comprehensive-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It exposes the existing
+  root-action JSON grammar in help without changing its preprocessing or
+  compatibility boundary.
 
-- completed: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
-  historical Strategy-D [SB-CLI-3] clarification and write-token matrix from
+- retired: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. Historical
+  Strategy-D [SB-CLI-3] clarification and write-token matrix from
   baseline `1b8ecfa0`; its registered-token-as-data judgment is superseded by
   the corrected option grammar in
   2026-08-24-cli-grammar-validation-and-example-reliability-plan, while its
   unrelated completed findings remain authoritative
-- completed: 2026-08-24-cli-grammar-validation-and-example-reliability-plan —
-  corrected [SB-CLI-3] option recognition and implemented the linked parser,
+- retired: 2026-08-24-cli-grammar-validation-and-example-reliability-plan —
+  source `813dd7ce`; see the ledger in `docs/plans/README.md`. It corrected
+  [SB-CLI-3] option recognition and implemented the linked parser,
   validation, action JSON, example, fuzz, and CI reliability slices; owner
   directed targeted closure with hosted Windows/POSIX/Atheris retained as
   post-commit evidence
-- completed: 2026-08-24-cli-output-and-error-contract-remediation-plan —
-  closed stdout, owned warning, cause-classification, and direct-command error
+- retired: 2026-08-24-cli-output-and-error-contract-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. Closed stdout, owned
+  warning, cause-classification, and direct-command error
   ownership are implemented and verified; owner directed targeted closure with
   exact-SHA Windows retained as post-commit evidence
 - retired: 2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan

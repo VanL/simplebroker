@@ -230,52 +230,6 @@ Dated moment-tier entries (foldable after age floor and distillation).
   Prove the shipped default path; altered-environment variants are companion
   tests, never replacements. (Now `runbooks/testing-patterns.md` Pattern 8.)
 
-- 2026-07-27: Plan checklists and in-file `Status:` headers go stale. Before
-  treating a plan as open work, verify the claimed behavior in code and
-  CHANGELOG; open `- [ ]` boxes are not evidence that the feature is unshipped.
-  (Harvested from evaluation-fixes, independent-review-fixes, core-reliability,
-  and undated review-remediation plans left as `draft` after land.)
-- 2026-07-27: When plan B supersedes plan A, flip A's index status to
-  `superseded` in the same change as B is accepted — otherwise both remain
-  "open" in the inventory. (Phaselock cursor plan vs atomic status-file plan.)
-- 2026-07-27: Cross-thread finalization of SQL transactional generators cannot
-  be fixed with a poison flag or foreign-thread `rollback()`: the owner
-  connection and `RLock` stay held, waiters stay blocked, and Redis does not
-  share the failure mode. Same-thread create/iterate/close is the contract
-  until an owner-thread healing design is reviewed. (Unit D evidence matrix;
-  orphan-healing plan failed pre-implementation review.)
-- 2026-07-27: Stable hybrid timestamps as message IDs make `move` + consumer
-  `after`/checkpoint filters a permanent-skip hazard by design. Document and
-  test the skip; do not "fix" it by changing ID stability without a new
-  identity model. (checkpoint-move plans; characterization tests.)
-- 2026-07-27: "Exactly-once" in this codebase means claim commits before yield
-  (no double-delivery of that claim), not crash-safe end-to-end processing.
-  Default consume/`watch` can lose work if the handler dies after claim.
-  Safe workers use peek-ack or move-ack. (Repeated safety/delivery plans and
-  README Critical Safety.)
-- 2026-07-27: Multi-backend work splits into SQL `BrokerCore` vs direct Redis
-  cores; domain fixes must be proven on each released backend, and private
-  `db` helpers are not a stable third-party SDK. (redis/pg extension plans;
-  `simplebroker.ext` scope note.)
-- 2026-07-27: Setup/migration coordination (phase-lock) needs an atomic status
-  publish and independent completed-phase facts; a single "cursor phase name"
-  is weaker under crash/reorder. Large legacy migrations can exceed fixed
-  waiter budgets — measure before changing timeouts. (phaselock plans; F21
-  memo + migration-aware waiting proposal.)
-- 2026-07-27: Coverage + xdist + subprocess CLI tests are a first-class
-  reliability surface: do not redirect `COVERAGE_FILE` before workers spawn;
-  give children private shards and atomic publish; preserve SIGTERM saves.
-  (Already Golden Rules; re-cited from coverage/release plans.)
-- 2026-07-27: Coalescing harvest candidates must come from a complete Status
-  Index. Declaring legacy plans "not a count" hides debt forever; census
-  first, then soft-retire. (agent-docs hygiene plan F1/F7.)
-- 2026-07-28: When a direct backend selects targets inside an atomic server
-  script, do not persist shared allocation state before the script knows the
-  target set is nonempty. Reserve process-local candidates, fence them against
-  the persisted high-water mark inside the same script, and retry after a
-  refresh if another process advanced first. Otherwise zero-target calls mutate
-  metadata, or a race can insert IDs below the global high-water mark.
-  (Exact-target Redis broadcast.)
 - 2026-07-30: A canonical-doc extraction must audit every removed README
   paragraph for operational hazards, not only normative rules. A pointer can
   stay correct while a safety warning disappears. Bind each enumerable branch
@@ -612,3 +566,31 @@ Dated moment-tier entries (foldable after age floor and distillation).
   the original missing-object error converts healthy concurrent bootstrap into
   a failure. Retry the primary snapshot narrowly and with a hard bound; do not
   turn every schema error into retry or treat the fallback as atomic proof.
+- 2026-08-28: A destructive streaming adapter must not prefetch beyond the
+  caller's active `next()` or `anext()`. Early break or cancellation otherwise
+  hides an already-claimed remainder that the caller never received. Keep the
+  claim window to one active iteration unless the public contract explicitly
+  transfers ownership of a buffered batch. (Harvested from the examples
+  alignment plan at `813dd7ce`.)
+- 2026-08-28: A global order over multiple paginated sorted sources needs
+  per-source lookahead and global-next emission. Concatenating whole sorted
+  pages can leap over an unseen value in another source, even when every page
+  is locally ordered. Prove the merged result across page boundaries and
+  asymmetric source sizes. (Harvested from the message-ID order plan at
+  `813dd7ce`.)
+- 2026-08-28: A pytest marker-policy gate must inspect evaluated collection
+  marks, not decorator source syntax. Module marks can be assigned, augmented,
+  appended, aliased, or constructed dynamically, while test-local opt-outs can
+  remain valid; only the collected item exposes the effective policy. (Harvested
+  from the shared-backend proof plan at `813dd7ce`.)
+- 2026-08-28: If iterator advancement itself claims or mutates state, check a
+  stop condition before calling `next()`, not only inside a `for` loop body.
+  Any wrapper that may end early must also close its delegate in `finally`;
+  closing only the outer generator does not forward cleanup automatically.
+  (Harvested from the verified-findings and closeable-iterator plans at
+  `813dd7ce`.)
+- 2026-08-28: Manual recovery of a tag-triggered release workflow must dispatch
+  at the immutable tag ref, not at a branch plus a tag-shaped input. GitHub run
+  identity and Trusted Publishing policy follow the workflow ref, so a branch
+  dispatch can build the intended commit while carrying the wrong publication
+  identity. (Harvested from the release-gate recovery plan at `813dd7ce`.)

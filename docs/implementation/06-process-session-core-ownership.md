@@ -364,13 +364,16 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
-- active: [2026-08-25-verified-review-findings-remediation-plan](../plans/2026-08-25-verified-review-findings-remediation-plan.md)
-  — caller-owned borrowed-runner shutdown masking
-- completed: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
-  — public closeable Queue iterator ownership
-- completed: 2026-08-24-comprehensive-review-findings-remediation-plan — target
+- retired: 2026-08-25-verified-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns caller-owned
+  borrowed-runner shutdown masking.
+- retired: 2026-08-25-closeable-queue-iterator-contract-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns public closeable
+  Queue iterator ownership.
+- retired: 2026-08-24-comprehensive-review-findings-remediation-plan — source
+  `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns target
   snapshots, pre-lock fork recovery, Redis listener ownership, and PostgreSQL
-  sidecar adaptation
+  sidecar adaptation.
 
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
   source `23d6c9d1` (local-only pin); see the ledger in
