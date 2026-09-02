@@ -116,6 +116,24 @@ promise of exactly-once application processing or external side effects:
 a crash between the claim commit and the handoff can leave a message
 claimed and not handed off.
 
+**Write-time pending window:** `[SB-DELIVERY-9]` deliberately broadens claimed
+state beyond consume attempts. A keep-write inserts a new generated-ID row and
+claims every older pending row below the highest-N cutoff in the same atomic
+operation. Existing claimed rows are excluded from `N` and remain unchanged.
+This is logical delivery-state cleanup, not physical deletion or a stored cap;
+vacuum remains the only ordinary reclamation owner.
+
+SQLite and PostgreSQL use one dialect-owned `CLAIM_OLDER_PENDING` update after
+insert and before commit. Its scalar cutoff query and outer update both use the
+partial pending `(queue, ts)` index. SQLite relies on `BEGIN IMMEDIATE`.
+PostgreSQL locks the high-water row before its table-wide keep lock, matching
+the established meta-then-table order and preventing every row producer from
+interleaving. Redis computes and validates the displaced set inside
+`WRITE_MESSAGE`; an active reservation in that set aborts before mutation, so
+the write never steals an open at-least-once batch. A reservation in the
+retained set need not block Redis, while PostgreSQL's coarse transaction lock
+still waits for any open batch transaction.
+
 Materialized SQL claim and move operations have one transaction shape:
 begin, execute, then commit every non-empty result before return; an empty
 result or ordinary exception rolls back. There is no deferred
@@ -175,18 +193,18 @@ state sets have applied the same bounds. Generator batches retain their
 ascending cursor and expose no reverse control.
 
 **Message Lifecycle:**
-1. **Write Phase**: Message inserted with unique timestamp
-2. **Claim Phase**: Read marks message as "claimed" (fast, logical delete)
+1. **Write Phase**: Message inserted with unique timestamp; optional keep may claim older pending rows atomically
+2. **Claim Phase**: Read, or an explicit keep-write, marks a message as "claimed" (fast, logical delete)
 3. **Maintenance Phase**: Explicit `--vacuum` or a due opportunistic check permanently removes claimed messages
 
 This optimization is transparent to the delivery contract: claimed rows
 are never selected again for ordinary pending delivery
 ([`[SB-DELIVERY-1]`](../specs/11-delivery.md)).
 
-**Why are read messages marked claimed before vacuum removes them?** Claiming
-keeps reads fast and atomic while deferring physical cleanup. Vacuum removes
-claimed rows later. This is why queue stats distinguish pending, claimed, and
-total rows.
+**Why are messages marked claimed before vacuum removes them?** Claiming keeps
+reads and write-time supersession fast and atomic while deferring physical
+cleanup. Vacuum removes claimed rows later. This is why queue stats distinguish
+pending, claimed, and total rows; claimed does not prove consumer handoff.
 
 ## Cross-process setup coordination
 

@@ -43,10 +43,22 @@ local bodies = KEYS[2]
 local all_ids = KEYS[3]
 local pending = KEYS[4]
 local queues = KEYS[5]
+local claimed = KEYS[6]
+local reserved = KEYS[7]
 local queue = ARGV[1]
 local raw_id = ARGV[2]
 local id = ARGV[3]
 local body = ARGV[4]
+local keep_raw = ARGV[5]
+local keep = nil
+local displaced = {}
+if keep_raw ~= nil then
+  keep = tonumber(keep_raw)
+  if #KEYS ~= 7 or #ARGV ~= 5 or keep == nil or keep < 1
+      or keep > 9999 or keep ~= math.floor(keep) then
+    return {-5}
+  end
+end
 if redis.call('HGET', meta, 'magic') == false then
   return {-2}
 end
@@ -61,11 +73,37 @@ local current = pad19(redis.call('HGET', meta, 'last_ts') or '0')
 if current >= id then
   return {-6}
 end
+if keep ~= nil then
+  -- Script errors do not roll back prior commands. Exercise every key with
+  -- its required type and validate the full displaced set before mutation.
+  redis.call('SCARD', queues)
+  local pending_count = redis.call('ZCARD', pending)
+  redis.call('ZCARD', claimed)
+  redis.call('ZCARD', reserved)
+  local remove_count = math.max(0, pending_count + 1 - keep)
+  if remove_count > 0 then
+    displaced = redis.call(
+      'ZRANGEBYLEX', pending, '-', '+', 'LIMIT', 0, remove_count
+    )
+  end
+  for _, displaced_id in ipairs(displaced) do
+    if redis.call('HEXISTS', bodies, displaced_id) ~= 1 then
+      return {-8}
+    end
+    if redis.call('ZSCORE', reserved, displaced_id) ~= false then
+      return {-7}
+    end
+  end
+end
 redis.call('HSET', meta, 'last_ts', raw_id)
 redis.call('HSET', bodies, id, body)
 redis.call('ZADD', all_ids, 0, id)
 redis.call('ZADD', pending, 0, id)
 redis.call('SADD', queues, queue)
+for _, displaced_id in ipairs(displaced) do
+  redis.call('ZREM', pending, displaced_id)
+  redis.call('ZADD', claimed, 0, displaced_id)
+end
 return {1}
 """
 

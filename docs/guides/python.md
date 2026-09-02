@@ -111,6 +111,33 @@ q.peek_many(10, include_claimed=True)  # pending + claimed, in message-ID order
 Claimed rows are deletion-pending — vacuum may remove them at any time — so
 `include_claimed` is an inspection tool, not delivery state.
 
+### Write-time pending windows
+
+For a dedicated single-producer snapshot or state feed, one write can claim
+the older pending values atomically:
+
+```python
+from simplebroker import Queue
+
+with Queue("current-state") as state:
+    message_id = state.write("version 42", keep_newest=5)
+```
+
+`Queue.write(message, *, keep_newest=None)` still returns only the new message
+ID. `None` is an ordinary write. Otherwise the value must be an exact `int`
+from 1 through 9999; booleans and digit strings raise `TypeError`, while an
+out-of-range integer raises `ValueError`, before target acquisition.
+
+The successful operation leaves pending the highest `N` public message IDs,
+including the new row. Existing claimed rows do not count. Displaced rows
+become claimed and remain visible to claimed inspection until vacuum removes
+them. This is a per-call transition, not a stored queue size or physical cap;
+later ordinary writes, broadcasts, exact inserts, or moves may grow the
+pending set again. On a shared queue it can claim another producer's work.
+Concurrent operations observe a serial order around the atomic keep-write;
+the work is linear in the number of displaced rows and has no bounded-time
+guarantee. Normative behavior is [SB-DELIVERY-9](../specs/11-delivery.md#write-time-pending-window-sb-delivery-9).
+
 Bounded operations can instead select the highest eligible public message ID
 first:
 

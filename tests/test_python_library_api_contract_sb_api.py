@@ -289,7 +289,7 @@ def test_api_command_layer_and_advanced_language() -> None:
     assert "SDK" in advanced or "sdk" in advanced.lower()
 
 
-def test_api_owned_runner_lifecycle_and_backend_v8_contract() -> None:
+def test_api_owned_runner_lifecycle_and_backend_v9_contract() -> None:
     """[SB-API-11] identifier and version tokens; behaviors owned by the
     runner-lifecycle and timestamp-advance suites in the verification
     row."""
@@ -297,6 +297,8 @@ def test_api_owned_runner_lifecycle_and_backend_v8_contract() -> None:
     assert "backend api v6" in advanced
     assert "backend api v7" in advanced
     assert "backend api v8" in advanced
+    assert "backend api v9" in advanced
+    assert "keep_newest" in advanced
     assert "selection order" in advanced
     assert "advance_last_timestamp(timestamp)" in advanced
     assert "linearization point" in advanced
@@ -349,6 +351,23 @@ def test_api_queue_write_returns_id_not_exit_code(tmp_path: Path) -> None:
         message_id = q.write("hello")
     assert isinstance(message_id, int)
     assert message_id > 0
+
+
+def test_api_write_keep_newest_signatures_and_public_validator() -> None:
+    from simplebroker import ext
+
+    queue_parameter = inspect.signature(Queue.write).parameters["keep_newest"]
+    command_parameter = inspect.signature(commands.cmd_write).parameters["keep_newest"]
+    for parameter in (queue_parameter, command_parameter):
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameter.default is None
+
+    assert ext.validate_keep_newest(1) == 1
+    assert ext.validate_keep_newest(9999) == 9999
+    with pytest.raises(TypeError):
+        ext.validate_keep_newest(True)
+    with pytest.raises(ValueError):
+        ext.validate_keep_newest(10_000)
 
 
 def test_api_dump_load_library_entrypoints(tmp_path: Path) -> None:

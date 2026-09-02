@@ -814,7 +814,7 @@ def test_plugin_option_rejection_keeps_plugin_diagnostic(
     [
         (
             'version = 2\nbackend = "sqlite"\ntarget = "queue.db"\n',
-            "Unsupported .broker.toml version",
+            ".broker.toml version",
         ),
         ('version = 1\ntarget = "queue.db"\n', "requires a non-empty string 'backend'"),
         ('version = 1\nbackend = "sqlite"\n', "requires a non-empty string 'target'"),
@@ -834,8 +834,91 @@ def test_load_project_config_rejects_invalid_required_fields(
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(contents, encoding="utf-8")
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError) as raised:
         load_project_config(config_path)
+    assert message in str(raised.value)
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize(
+    ("contents", "expected_template"),
+    [
+        (
+            'version = 2\nbackend = "sqlite"\ntarget = "queue.db"\n',
+            "Unsupported {path} version 2; expected 1",
+        ),
+        (
+            'version = 1\ntarget = "queue.db"\n',
+            "{path} requires a non-empty string 'backend'",
+        ),
+        (
+            'version = 1\nbackend = "sqlite"\n',
+            "{path} requires a non-empty string 'target'",
+        ),
+        (
+            (
+                'version = 1\nbackend = "sqlite"\ntarget = "queue.db"\n'
+                'backend_options = "bad"\n'
+            ),
+            "'backend_options' must be a table in {path}",
+        ),
+    ],
+)
+def test_invalid_project_config_diagnostic_names_selected_config_file(
+    tmp_path: Path,
+    contents: str,
+    expected_template: str,
+) -> None:
+    """A non-default project-config filename must survive into its error."""
+    config_dir = tmp_path / ".weft"
+    config_dir.mkdir()
+    config_path = config_dir / "broker.toml"
+    config_path.write_text(contents, encoding="utf-8")
+
+    code, stdout, stderr = run_cli(
+        "--status",
+        cwd=tmp_path,
+        env={
+            "BROKER_PROJECT_SCOPE": "1",
+            "BROKER_PROJECT_CONFIG_PATH": ".weft",
+            "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+            "BROKER_TEST_BACKEND": "sqlite",
+        },
+    )
+
+    assert code == 1
+    assert stdout == ""
+    assert stderr == "simplebroker: error: " + expected_template.format(
+        path=config_path.resolve()
+    )
+    assert ".broker.toml" not in stderr
+
+
+@pytest.mark.sqlite_only
+def test_invalid_project_sqlite_target_diagnostic_names_selected_config_file(
+    tmp_path: Path,
+) -> None:
+    """Target validation must use the selected config path as its context."""
+    config_dir = tmp_path / ".weft"
+    config_dir.mkdir()
+    config_path = config_dir / "broker.toml"
+    _write_project_config(config_path, backend="sqlite", target=" bad.db")
+
+    code, stdout, stderr = run_cli(
+        "--status",
+        cwd=tmp_path,
+        env={
+            "BROKER_PROJECT_SCOPE": "1",
+            "BROKER_PROJECT_CONFIG_PATH": ".weft",
+            "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+            "BROKER_TEST_BACKEND": "sqlite",
+        },
+    )
+
+    assert code == 1
+    assert stdout == ""
+    assert f"{config_path.resolve()} sqlite target" in stderr
+    assert ".broker.toml" not in stderr
 
 
 def test_load_project_config_ignores_unknown_top_level_fields(

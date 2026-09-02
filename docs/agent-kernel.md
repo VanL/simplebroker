@@ -69,6 +69,7 @@ prefer the **move-to-inflight** recipe in this file.
 | CLI | Python (`from simplebroker import Queue`) |
 |-----|-------------------------------------------|
 | `broker write Q "msg"` | `q.write("msg")` → returns message id |
+| `broker write --keep-newest N Q "msg"` | `q.write("msg", keep_newest=N)` → same ID result; atomically claims older pending rows |
 | `broker read Q` | `q.read()` / `q.read_one()` (claims) |
 | `broker peek Q` | `q.peek()` / `q.peek_one()` (no claim) |
 | `broker move SRC DST` | `q.move(...)` / `move_one` / `move_many` |
@@ -123,7 +124,9 @@ Normative: `docs/specs/10-cli.md` [SB-CLI-1]–[SB-CLI-4].
 ## Delivery (use-level)
 
 Normative: `docs/specs/11-delivery.md`
-[SB-DELIVERY-1]–[SB-DELIVERY-8].
+[SB-DELIVERY-1]–[SB-DELIVERY-9].
+The established iterator contract includes [SB-DELIVERY-8]; the write-time
+window is [SB-DELIVERY-9].
 
 | Path | What happens |
 |------|----------------|
@@ -132,8 +135,17 @@ Normative: `docs/specs/11-delivery.md`
 | Peek | Observes without claiming. Mutating actions (delete/move/claim) are atomic (one winner). App concurrency model is the app’s responsibility. |
 | Transactional generators | `Queue.read_generator()`, `Queue.move_generator()`, and `Queue.stream_messages()` return the package-root `CloseableIterator`, as do high-level `read`/`move` all-message views. Default `exactly_once`: one-by-one, commit before yield. `at_least_once`: strongest public **batch** promise (commit after full batch yield; early stop may redeliver). Construction is lazy. Create, advance, exhaust, and close on one thread. |
 | Peek iterators | `Queue.peek_generator()` and `Queue.peek(all_messages=True)` return the same `CloseableIterator`. Construction is lazy. Exhaust it or call `close()` on the same thread before closing the Queue/client. |
+| Write-time pending window | `write --keep-newest N` / `write(..., keep_newest=N)` inserts the new message and leaves only the highest `N` pending IDs in one atomic operation. Older pending rows become claimed. |
 
-`include_claimed` / claimed rows: inspection only; vacuum may remove them.
+The write-time window is destructive to delivery state. Use it only for a
+dedicated single-producer queue where newer values supersede older ones. It is
+per call, not a stored queue policy, physical cap, or backpressure mechanism;
+later producers can grow the queue again. Existing claimed rows do not count
+toward `N`, and vacuum may physically remove all claimed rows. The operation
+still returns only the new message ID (`[SB-DELIVERY-9]`).
+
+`include_claimed` / claimed rows: inspection only; rows may come from consume
+or write-time keep, and vacuum may remove them.
 
 ### Peek streams and deletes
 

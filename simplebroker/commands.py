@@ -34,6 +34,7 @@ from ._constants import (
     ResolvedConfig,
     snapshot_config,
 )
+from ._delivery import validate_keep_newest
 from ._dump import _load_clock_skew_warning_sink, dump_lines, load_lines
 from ._exceptions import (
     DatabaseError,
@@ -655,6 +656,7 @@ def cmd_write(
     *,
     json_output: bool = False,
     show_timestamps: bool = False,
+    keep_newest: int | None = None,
     config: Mapping[str, Any] | None = None,
 ) -> int:
     """Write message to queue using Queue API.
@@ -665,10 +667,12 @@ def cmd_write(
         message: Message content, None to read piped stdin, or "-" for stdin
         json_output: If True, print the new message id as a JSON string
         show_timestamps: If True, print the new message's timestamp ID
+        keep_newest: If set, atomically leave only the highest N pending IDs
 
     Returns:
         Exit code
     """
+    validated_keep = validate_keep_newest(keep_newest)
     resolved_config = snapshot_config(config)
     content = _get_message_content(message, config=resolved_config)
     canonical_queue, _ = _resolve_alias_name(
@@ -677,7 +681,7 @@ def cmd_write(
         config=resolved_config,
     )
     with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
-        timestamp = queue.write(content)
+        timestamp = queue.write(content, keep_newest=validated_keep)
     try:
         if json_output:
             _print_stdout(

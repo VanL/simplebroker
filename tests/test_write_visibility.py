@@ -21,11 +21,12 @@ import time
 from collections.abc import Callable, Sequence
 from multiprocessing.process import BaseProcess
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 
 import pytest
 
 from simplebroker import Queue
+from simplebroker._backend_plugins import BackendPlugin
 from simplebroker.db import BrokerCore
 
 from .helper_scripts.broker_factory import active_backend
@@ -183,6 +184,8 @@ class _RecordingRunner:
             self.events.append("advance_last_ts")
         elif "INSERT INTO messages" in normalized:
             self.events.append("insert_message")
+        elif normalized.startswith("UPDATE messages SET claimed ="):
+            self.events.append("claim_older_pending")
         return self._inner.run(sql, params, fetch=fetch)  # type: ignore[attr-defined]
 
     def begin_immediate(self):
@@ -201,6 +204,13 @@ class _RecordingRunner:
         return getattr(self._inner, name)
 
 
+class _SQLBrokerFixture(Protocol):
+    """Structural view of the shared SQL broker fixture used by this test."""
+
+    _runner: object
+    _backend_plugin: BackendPlugin
+
+
 @pytest.mark.shared
 def test_write_allocates_timestamp_inside_the_insert_transaction(
     broker: object,
@@ -212,10 +222,11 @@ def test_write_allocates_timestamp_inside_the_insert_transaction(
             "ordinary-write visibility tests"
         )
 
-    runner = _RecordingRunner(broker._runner)  # type: ignore[attr-defined]
+    fixture = cast(_SQLBrokerFixture, broker)
+    runner = _RecordingRunner(fixture._runner)
     core = BrokerCore(
         runner,
-        backend_plugin=broker._backend_plugin,  # type: ignore[attr-defined]
+        backend_plugin=fixture._backend_plugin,
     )
     runner.events.clear()  # discard schema-setup noise
 
@@ -234,4 +245,29 @@ def test_write_allocates_timestamp_inside_the_insert_transaction(
         f"publishes the insert; got {events}"
     )
     assert "rollback" not in events, f"write rolled back unexpectedly: {events}"
+    core.close()
+
+
+@pytest.mark.shared
+def test_write_keep_claims_between_insert_and_commit(broker: object) -> None:
+    if active_backend() == "redis":
+        pytest.skip("Redis owns the equivalent ordering inside WRITE_MESSAGE Lua")
+
+    fixture = cast(_SQLBrokerFixture, broker)
+    runner = _RecordingRunner(fixture._runner)
+    core = BrokerCore(
+        runner,
+        backend_plugin=fixture._backend_plugin,
+    )
+    core.write("q", "older")
+    runner.events.clear()
+
+    core.write("q", "newest", keep_newest=1)
+
+    events = runner.events
+    assert events.index("begin") < events.index("advance_last_ts")
+    assert events.index("advance_last_ts") < events.index("insert_message")
+    assert events.index("insert_message") < events.index("claim_older_pending")
+    assert events.index("claim_older_pending") < events.index("commit")
+    assert "rollback" not in events
     core.close()

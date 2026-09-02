@@ -129,6 +129,30 @@ final durable read. Core 7.3.0 and the first-party PostgreSQL and Redis/Valkey
 3.8.0 packages are the first coordinated v7 set. Exact-version rejection keeps
 v6 plugins from failing later during load.
 
+Backend API v8 adds the validated public-ID selection order to bounded claim,
+peek, and move operations. Backend API v9 changes
+`BrokerConnection.write(queue, message, *, keep_newest=None)` and exports
+`validate_keep_newest()` through `simplebroker.ext`. Every backend must realize
+[SB-DELIVERY-9](../specs/11-delivery.md#write-time-pending-window-sb-delivery-9)
+as one atomic operation when the value is present, while preserving its
+ordinary-write path when it is absent. Core 8.1.0 and the first-party
+PostgreSQL and Redis/Valkey 4.1.0 packages are the first coordinated v9 set.
+
+The SQL implementation inserts and then claims rows below the highest-N cutoff
+inside one transaction. SQLite uses its existing `BEGIN IMMEDIATE` writer
+serialization. PostgreSQL takes a transaction-scoped `SHARE ROW EXCLUSIVE`
+table lock after locking the high-water metadata row, so a large first trim
+also stalls row mutations on unrelated queues. Measured 100k/220k displaced
+rows took about 425/1000 ms on PostgreSQL 18 and 46/106 ms on SQLite with WAL
+and `synchronous=FULL`.
+
+Redis/Valkey uses one Lua script. It checks every key type, every displaced
+body, and reservation absence before its first mutation. A displaced active
+at-least-once reservation produces a retryable atomic failure; a reservation
+inside the retained newest-N set is not displaced. The script blocks the
+server while it runs; measured 100k/220k displaced rows took about 166/377 ms
+on Valkey 7.2. These are linear-cost observations, not a bounded-time promise.
+
 There are two backend shapes:
 
 1. **SQL-runner-shaped backends** reuse SimpleBroker's shared `BrokerCore`.

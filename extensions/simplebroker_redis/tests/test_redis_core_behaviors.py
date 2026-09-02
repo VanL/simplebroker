@@ -51,6 +51,68 @@ def test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval(
         core.close()
 
 
+def test_keep_write_transport_failure_after_real_eval_leaves_whole_unit_committed(
+    redis_runner: RedisRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    observer = RedisBrokerCore(redis_runner)
+    original_eval = core._client.eval
+
+    def eval_then_disconnect(
+        script: str,
+        numkeys: int,
+        *keys_and_args: KeyT | EncodableT,
+    ) -> NoReturn:
+        original_eval(script, numkeys, *keys_and_args)
+        raise redis.ConnectionError("injected disconnect after keep EVAL")
+
+    try:
+        core.write("jobs", "old-1")
+        core.write("jobs", "old-2")
+        monkeypatch.setattr(core._client, "eval", eval_then_disconnect)
+
+        with pytest.raises(OperationalError, match="disconnect after keep EVAL"):
+            core.write("jobs", "new", keep_newest=1)
+
+        assert observer.peek_many("jobs", limit=10, with_timestamps=False) == ["new"]
+        assert observer.peek_many(
+            "jobs",
+            limit=10,
+            with_timestamps=False,
+            include_claimed=True,
+        ) == ["old-1", "old-2", "new"]
+        stats = observer.get_queue_stat("jobs")
+        assert (stats.pending, stats.claimed, stats.total) == (1, 2, 3)
+    finally:
+        observer.close()
+        core.close()
+
+
+def test_keep_write_publish_failure_leaves_whole_unit_committed(
+    redis_runner: RedisRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    observer = RedisBrokerCore(redis_runner)
+
+    def fail_publish(_queue: str | None) -> NoReturn:
+        raise OperationalError("injected publish failure")
+
+    try:
+        core.write("jobs", "old-1")
+        core.write("jobs", "old-2")
+        monkeypatch.setattr(core, "_publish", fail_publish)
+
+        with pytest.raises(OperationalError, match="injected publish failure"):
+            core.write("jobs", "new", keep_newest=1)
+
+        assert observer.peek_many("jobs", limit=10, with_timestamps=False) == ["new"]
+        stats = observer.get_queue_stat("jobs")
+        assert (stats.pending, stats.claimed, stats.total) == (1, 2, 3)
+    finally:
+        observer.close()
+        core.close()
+
+
 def test_redis_manual_vacuum_translates_client_errors(
     redis_runner: RedisRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:

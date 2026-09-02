@@ -11,7 +11,7 @@ from simplebroker_redis import RedisRunner, scripts
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys, encode_id
 
-from simplebroker._exceptions import OperationalError, QueueNameError
+from simplebroker._exceptions import IntegrityError, OperationalError, QueueNameError
 
 pytestmark = [pytest.mark.redis_only]
 
@@ -261,6 +261,288 @@ def test_steady_state_ordinary_write_uses_one_data_eval(
         assert scripts_seen == [scripts.WRITE_MESSAGE]
     finally:
         core.close()
+
+
+def test_write_keep_newest_claims_all_older_pending_in_one_eval(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    original_eval = core._client.eval
+    scripts_seen: list[str] = []
+
+    def track_eval(script: str, numkeys: int, *args: Any) -> object:
+        scripts_seen.append(script)
+        return original_eval(script, numkeys, *args)
+
+    try:
+        first = core.write("jobs", "first")
+        second = core.write("jobs", "second")
+        scripts_seen.clear()
+        monkeypatch.setattr(core._client, "eval", track_eval)
+
+        newest = core.write("jobs", "newest", keep_newest=2)
+
+        assert scripts_seen == [scripts.WRITE_MESSAGE]
+        assert core.peek_many("jobs", limit=10) == [
+            ("second", second),
+            ("newest", newest),
+        ]
+        assert core.peek_many("jobs", limit=10, include_claimed=True) == [
+            ("first", first),
+            ("second", second),
+            ("newest", newest),
+        ]
+        stats = core.get_queue_stat("jobs")
+        assert (stats.pending, stats.claimed, stats.total) == (2, 1, 3)
+    finally:
+        core.close()
+
+
+def test_write_keep_newest_rejects_displaced_active_reservation_atomically(
+    redis_runner: RedisRunner,
+) -> None:
+    holder = RedisBrokerCore(redis_runner)
+    writer = RedisBrokerCore(redis_runner)
+    generator = None
+    try:
+        first = holder.write("jobs", "first")
+        second = holder.write("jobs", "second")
+        generator = holder.claim_generator(
+            "jobs",
+            delivery_guarantee="at_least_once",
+            batch_size=1,
+            with_timestamps=True,
+        )
+        assert next(generator) == ("first", first)
+        before_last_ts = writer.refresh_last_timestamp()
+
+        with pytest.raises(OperationalError) as raised:
+            writer.write("jobs", "rejected", keep_newest=2)
+
+        assert raised.value.retryable is True
+        assert writer.refresh_last_timestamp() == before_last_ts
+        assert writer.peek_many("jobs", limit=10, include_claimed=True) == [
+            ("first", first),
+            ("second", second),
+        ]
+
+        generator.close()
+        generator = None
+        newest = writer.write("jobs", "accepted", keep_newest=2)
+        assert writer.peek_many("jobs", limit=10) == [
+            ("second", second),
+            ("accepted", newest),
+        ]
+    finally:
+        if generator is not None:
+            generator.close()
+        writer.close()
+        holder.close()
+
+
+def test_write_keep_newest_rejects_an_all_reserved_displaced_set_atomically(
+    redis_runner: RedisRunner,
+) -> None:
+    holder = RedisBrokerCore(redis_runner)
+    writer = RedisBrokerCore(redis_runner)
+    generator = None
+    try:
+        first = holder.write("jobs", "first")
+        holder.write("jobs", "second")
+        generator = holder.claim_generator(
+            "jobs",
+            delivery_guarantee="at_least_once",
+            batch_size=2,
+            with_timestamps=True,
+        )
+        assert next(generator) == ("first", first)
+        before_last_ts = writer.refresh_last_timestamp()
+
+        with pytest.raises(OperationalError) as raised:
+            writer.write("jobs", "rejected", keep_newest=1)
+
+        assert raised.value.retryable is True
+        assert writer.refresh_last_timestamp() == before_last_ts
+        stats = writer.get_queue_stat("jobs")
+        assert (stats.pending, stats.claimed, stats.total) == (2, 0, 2)
+
+        generator.close()
+        generator = None
+        accepted = writer.write("jobs", "accepted", keep_newest=1)
+        assert writer.peek_many("jobs", limit=10) == [("accepted", accepted)]
+    finally:
+        if generator is not None:
+            generator.close()
+        writer.close()
+        holder.close()
+
+
+def test_write_keep_newest_allows_reservation_in_retained_window(
+    redis_runner: RedisRunner,
+) -> None:
+    holder = RedisBrokerCore(redis_runner)
+    writer = RedisBrokerCore(redis_runner)
+    generator = None
+    try:
+        first = holder.write("jobs", "first")
+        generator = holder.claim_generator(
+            "jobs",
+            delivery_guarantee="at_least_once",
+            batch_size=1,
+            with_timestamps=True,
+        )
+        assert next(generator) == ("first", first)
+
+        newest = writer.write("jobs", "newest", keep_newest=2)
+
+        assert writer.peek_many("jobs", limit=10) == [
+            ("first", first),
+            ("newest", newest),
+        ]
+    finally:
+        if generator is not None:
+            generator.close()
+        writer.close()
+        holder.close()
+
+
+def test_write_keep_newest_rejects_missing_displaced_body_before_mutation(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        first = core.write("jobs", "first")
+        second = core.write("jobs", "second")
+        core._client.hdel(keys.bodies, encode_id(first))
+        before_last_ts = core.refresh_last_timestamp()
+
+        with pytest.raises(IntegrityError, match="missing its stored body"):
+            core.write("jobs", "rejected", keep_newest=2)
+
+        assert core.refresh_last_timestamp() == before_last_ts
+        assert core._client.zrange(keys.pending("jobs"), 0, -1) == [
+            encode_id(first),
+            encode_id(second),
+        ]
+    finally:
+        core.close()
+
+
+@pytest.mark.parametrize("competing_operation", ["claim", "write"])
+def test_write_keep_newest_is_serial_with_consumer_and_ordinary_writer(
+    redis_runner: RedisRunner,
+    competing_operation: str,
+) -> None:
+    keeper = RedisBrokerCore(redis_runner)
+    competitor = RedisBrokerCore(redis_runner)
+    start = threading.Barrier(2)
+    try:
+        original_ids = [keeper.write("jobs", f"original-{index}") for index in range(8)]
+
+        def keep() -> int:
+            start.wait(timeout=5)
+            return keeper.write("jobs", "kept-write", keep_newest=5)
+
+        def compete() -> object:
+            start.wait(timeout=5)
+            if competing_operation == "claim":
+                return competitor.claim_one("jobs")
+            return competitor.write("jobs", "ordinary-write")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            keep_future = executor.submit(keep)
+            competing_future = executor.submit(compete)
+            kept_id = keep_future.result(timeout=5)
+            competing_result = competing_future.result(timeout=5)
+
+        assert kept_id > original_ids[-1]
+        assert competing_result is not None
+        pending_rows = keeper.peek_many("jobs", limit=20)
+        all_rows = keeper.peek_many("jobs", limit=20, include_claimed=True)
+        if competing_operation == "claim":
+            assert len(pending_rows) in {4, 5}
+            assert len(all_rows) == 9
+        else:
+            assert len(pending_rows) in {5, 6}
+            assert len(all_rows) == 10
+        assert pending_rows == all_rows[-len(pending_rows) :]
+    finally:
+        competitor.close()
+        keeper.close()
+
+
+def test_sustained_keep_writers_with_different_windows_are_serial(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = RedisBrokerCore(redis_runner)
+    second = RedisBrokerCore(redis_runner)
+    start = threading.Barrier(2)
+
+    def observe_successful_window(
+        core: RedisBrokerCore,
+        expected: int,
+    ) -> None:
+        original_eval = core._eval_write_message
+
+        def observed_eval(
+            queue: str,
+            message: str,
+            *,
+            timestamp: int,
+            keep_newest: int | None,
+        ) -> int:
+            before = core._client.zcard(core._keys.pending(queue))
+            result = original_eval(
+                queue,
+                message,
+                timestamp=timestamp,
+                keep_newest=keep_newest,
+            )
+            if result == 1:
+                # _eval_write_message runs while write holds the shared target
+                # lock, so this observes that commit before the other writer.
+                assert core._client.zcard(core._keys.pending(queue)) == min(
+                    before + 1,
+                    expected,
+                )
+            return result
+
+        monkeypatch.setattr(core, "_eval_write_message", observed_eval)
+
+    observe_successful_window(first, 3)
+    observe_successful_window(second, 7)
+
+    def write_window(core: RedisBrokerCore, keep_newest: int) -> list[int]:
+        start.wait(timeout=5)
+        written: list[int] = []
+        for index in range(30):
+            written.append(
+                core.write(
+                    "jobs",
+                    f"keep-{keep_newest}-{index}",
+                    keep_newest=keep_newest,
+                )
+            )
+        return written
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            first_future = executor.submit(write_window, first, 3)
+            second_future = executor.submit(write_window, second, 7)
+            ids = first_future.result(timeout=10) + second_future.result(timeout=10)
+
+        assert len(set(ids)) == 60
+        pending = first.peek_many("jobs", limit=10)
+        assert 3 <= len(pending) <= 7
+        all_rows = first.peek_many("jobs", limit=100, include_claimed=True)
+        assert len(all_rows) == 60
+        assert pending == all_rows[-len(pending) :]
+    finally:
+        second.close()
+        first.close()
 
 
 def test_single_core_concurrent_writes_preserve_cross_writer_retry_budget(

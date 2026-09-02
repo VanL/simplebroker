@@ -16,9 +16,11 @@ registry below remain the owners of exact intended behavior.
 Product section authority: `product-section-registry.md`.
 
 1. `10-cli.md` — `[SB-CLI-*]` (exit codes, Unix stream roles, JSON
-   shapes when the registry marks canonical)
+   shapes, selection and write-option grammar when the registry marks
+   canonical)
 2. `11-delivery.md` — `[SB-DELIVERY-*]` (claim, watch, move, peek,
-   generators when the registry marks canonical)
+   generators, and write-time pending windows when the registry marks
+   canonical)
 3. `12-broadcast.md` — `[SB-BCAST-*]` (selection, create_missing,
    atomicity, CLI selectors when the registry marks canonical)
 4. `13-message-identity.md` — `[SB-ID-*]` (IDs, allocation, exact

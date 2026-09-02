@@ -93,6 +93,15 @@ backend API v8 set. It adds bounded public-ID selection order. Package
 dependency floors remain minimums; the exact runtime handshake remains
 authoritative for every installed pair.
 
+SimpleBroker 8.1.0 and `simplebroker-redis` 4.1.0 are the first coordinated
+backend API v9 set. It adds the atomic write-time `keep_newest` pending window
+in one Lua script. The script validates key types, displaced bodies, and active
+reservations before mutation. A displaced active reservation produces a
+retryable failure with no write or claim; a reservation in the retained
+newest-N set does not conflict. The server is blocked for the script; measured
+100k/220k displaced rows took about 166/377 ms on Valkey 7.2. Cost is linear in
+displaced rows and has no bounded-time guarantee.
+
 ## Core Compatibility
 
 This first-party extension declares a minimum supported SimpleBroker core

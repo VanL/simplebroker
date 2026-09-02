@@ -42,33 +42,40 @@ def _warn_for_inline_project_config_password(config_path: Path, target: str) -> 
         )
 
 
-def _validated_backend_options(raw_options: object) -> dict[str, Any]:
+def _validated_backend_options(
+    raw_options: object,
+    *,
+    config_path: Path,
+) -> dict[str, Any]:
     match raw_options:
         case dict() as raw_options_dict:
             return dict(raw_options_dict)
         case _:
-            raise ValueError("'backend_options' must be a table in .broker.toml")
+            raise ValueError(f"'backend_options' must be a table in {config_path}")
 
 
 def load_project_config(config_path: Path) -> dict[str, Any]:
-    """Load and validate a .broker.toml file."""
+    """Load and validate a project TOML file."""
     with config_path.open("rb") as config_file:
         data = tomllib.load(config_file)
 
     version = data.get("version")
     backend = data.get("backend")
     target = data.get("target")
-    backend_options = _validated_backend_options(data.get("backend_options", {}))
+    backend_options = _validated_backend_options(
+        data.get("backend_options", {}),
+        config_path=config_path,
+    )
 
     if version != SUPPORTED_PROJECT_CONFIG_VERSION:
         raise ValueError(
-            "Unsupported .broker.toml version "
+            f"Unsupported {config_path} version "
             f"{version!r}; expected {SUPPORTED_PROJECT_CONFIG_VERSION}"
         )
     if not isinstance(backend, str) or not backend:
-        raise ValueError(".broker.toml requires a non-empty string 'backend'")
+        raise ValueError(f"{config_path} requires a non-empty string 'backend'")
     if not isinstance(target, str) or not target:
-        raise ValueError(".broker.toml requires a non-empty string 'target'")
+        raise ValueError(f"{config_path} requires a non-empty string 'target'")
 
     _warn_for_inline_project_config_password(config_path, target)
 
@@ -217,7 +224,7 @@ def resolve_project_target(
     if backend_name == "sqlite":
         resolved_target = (config_path.parent / target).expanduser().resolve()
         _validate_safe_path_components(
-            str(resolved_target), ".broker.toml sqlite target"
+            str(resolved_target), f"{config_path} sqlite target"
         )
         target = str(resolved_target)
 

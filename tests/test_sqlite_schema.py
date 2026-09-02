@@ -26,6 +26,7 @@ from simplebroker._backends.sqlite.schema import (
 from simplebroker._constants import SCHEMA_VERSION, SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import IntegrityError, OperationalError
 from simplebroker._runner import SetupPhase, SQLiteRunner, SQLRunner
+from simplebroker._sql import CLAIM_OLDER_PENDING
 
 from .helper_scripts.sqlite_legacy_layouts import (
     create_sqlite_v1_layout,
@@ -804,6 +805,27 @@ def test_bounded_pending_selection_uses_queue_ts_index(
 
         plan_text = "\n".join(str(row) for row in rows)
         assert "idx_messages_pending_queue_ts" in plan_text
+    finally:
+        runner.close()
+
+
+def test_keep_newest_cutoff_and_claim_use_pending_queue_index(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path / "broker.db")
+    try:
+        initialize_database(runner, run_with_retry=_run_direct)
+
+        rows = list(
+            runner.run(
+                f"EXPLAIN QUERY PLAN {CLAIM_OLDER_PENDING}",
+                ("jobs", "jobs", 4),
+                fetch=True,
+            )
+        )
+
+        plan_text = "\n".join(str(row) for row in rows)
+        assert plan_text.count("idx_messages_pending_queue_ts") >= 2
     finally:
         runner.close()
 

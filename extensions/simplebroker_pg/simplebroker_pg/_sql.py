@@ -205,6 +205,20 @@ SELECT pg_notify(
 )
 FROM inserted
 """
+
+# [SB-DELIVERY-9] runs after the generated row insert in the same transaction.
+# A missing OFFSET row yields NULL and therefore claims nothing.
+CLAIM_OLDER_PENDING = """
+UPDATE messages
+SET claimed = TRUE
+WHERE queue = ? AND claimed = FALSE AND ts < (
+    SELECT ts
+    FROM messages
+    WHERE queue = ? AND claimed = FALSE
+    ORDER BY ts DESC
+    LIMIT 1 OFFSET ?
+)
+"""
 LIST_QUEUES_UNCLAIMED = """
 SELECT queue, COUNT(*)
 FROM messages
@@ -277,6 +291,8 @@ WHERE n.nspname = ?
 # order deadlocks against any in-flight write.
 LOCK_LAST_TS_ROW = "SELECT last_ts FROM meta WHERE singleton = TRUE FOR UPDATE"
 LOCK_BROADCAST_SCOPE = "LOCK TABLE messages IN SHARE ROW EXCLUSIVE MODE"
+# Same lock mode, separate owner: keep-write acquires it after LOCK_LAST_TS_ROW.
+LOCK_WRITE_KEEP_SCOPE = "LOCK TABLE messages IN SHARE ROW EXCLUSIVE MODE"
 LOCK_RENAME_SCOPE = "LOCK TABLE messages IN SHARE ROW EXCLUSIVE MODE"
 
 COMPACT_TABLE_MESSAGES = "VACUUM (ANALYZE) messages"

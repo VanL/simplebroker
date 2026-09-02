@@ -281,6 +281,52 @@ def test_automatic_vacuum_failure_preserves_committed_operation(
         broker.shutdown()
 
 
+@pytest.mark.sqlite_only
+def test_automatic_vacuum_failure_preserves_committed_keep_write(
+    broker_target, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    broker = make_broker(
+        broker_target,
+        config={
+            "BROKER_AUTO_VACUUM": 1,
+            "BROKER_AUTO_VACUUM_INTERVAL": 3,
+            "BROKER_VACUUM_THRESHOLD": 0.1,
+            "BROKER_VACUUM_BATCH_SIZE": 10,
+            "BROKER_LOGGING_ENABLED": 1,
+        },
+    )
+
+    def fail_vacuum(runner, *, compact, config) -> None:
+        raise RuntimeError("injected automatic vacuum failure")
+
+    monkeypatch.setattr(broker._backend_plugin, "vacuum", fail_vacuum)
+    try:
+        broker.write("snapshots", "old-1")
+        broker.write("snapshots", "old-2")
+
+        with caplog.at_level("ERROR", logger="simplebroker.db"):
+            message_id = broker.write(
+                "snapshots",
+                "new",
+                keep_newest=1,
+            )
+
+        assert broker.peek_one("snapshots", with_timestamps=True) == (
+            "new",
+            message_id,
+        )
+        stats = broker.get_queue_stat("snapshots")
+        assert (stats.pending, stats.claimed, stats.total) == (1, 2, 3)
+        assert (
+            sum(
+                "Automatic vacuum failed" in record.message for record in caplog.records
+            )
+            == 1
+        )
+    finally:
+        broker.shutdown()
+
+
 def _concurrent_reader_worker(args: tuple[int, str, str]) -> list[str]:
     """Worker function for concurrent read tests."""
     _worker_id, db_path, queue_name = args

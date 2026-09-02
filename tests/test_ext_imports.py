@@ -30,6 +30,7 @@ def test_ext_all_exports():
         "TimestampGenerator",
         "DeliveryGuarantee",
         "validate_delivery_guarantee",
+        "validate_keep_newest",
         "MaintenanceSchedule",
         "vacuum_is_eligible",
         "BrokerError",

@@ -59,7 +59,11 @@ from ._constants import (
     _overlay_config,
     snapshot_config,
 )
-from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
+from ._delivery import (
+    DeliveryGuarantee,
+    validate_delivery_guarantee,
+    validate_keep_newest,
+)
 from ._exceptions import (
     DatabaseError,
     IntegrityError,
@@ -1868,7 +1872,13 @@ class BrokerCore:
                 f"({self._max_message_size} bytes). Adjust BROKER_MAX_MESSAGE_SIZE if needed."
             )
 
-    def write(self, queue: str, message: str) -> int:
+    def write(
+        self,
+        queue: str,
+        message: str,
+        *,
+        keep_newest: int | None = None,
+    ) -> int:
         """Write a message to a queue with resilience against timestamp conflicts.
 
         Args:
@@ -1883,6 +1893,7 @@ class BrokerCore:
             RuntimeError: If called from a forked process or timestamp conflict
                          cannot be resolved after retries
         """
+        validated_keep = validate_keep_newest(keep_newest)
         self._check_fork_safety()
         self._validate_queue_name(queue)
         self._assert_no_reentrant_mutation_during_batch("write")
@@ -1898,7 +1909,11 @@ class BrokerCore:
             for attempt in range(MAX_TS_RETRIES):
                 try:
                     # Use existing _do_write logic wrapped in retry handler
-                    return self._do_write_with_ts_retry(queue, message)
+                    return self._do_write_with_ts_retry(
+                        queue,
+                        message,
+                        keep_newest=validated_keep,
+                    )
 
                 except IntegrityError as e:
                     # The only INSERT in _do_write_with_ts_retry targets the
@@ -2003,11 +2018,21 @@ class BrokerCore:
                 stacklevel=4,
             )
 
-    def _do_write_with_ts_retry(self, queue: str, message: str) -> int:
+    def _do_write_with_ts_retry(
+        self,
+        queue: str,
+        message: str,
+        *,
+        keep_newest: int | None,
+    ) -> int:
         """Execute write within retry context. Separates retry logic from transaction logic."""
         # Use retry helper with stop-aware behavior for database lock handling
         timestamp = self._run_with_retry(
-            lambda: self._do_write_transaction(queue, message)
+            lambda: self._do_write_transaction(
+                queue,
+                message,
+                keep_newest=keep_newest,
+            )
         )
         self._record_maintenance_activity(1)
         return timestamp
@@ -2029,7 +2054,13 @@ class BrokerCore:
             else:
                 self._maintenance_schedule.mark_check_succeeded()
 
-    def _do_write_transaction(self, queue: str, message: str) -> int:
+    def _do_write_transaction(
+        self,
+        queue: str,
+        message: str,
+        *,
+        keep_newest: int | None,
+    ) -> int:
         """Allocate the timestamp and insert the message in ONE transaction.
 
         The meta.last_ts advance and the message row must become visible in
@@ -2050,10 +2081,21 @@ class BrokerCore:
                 timestamp = self._checked_generated_message_id(
                     self.generate_timestamp()
                 )
+                if keep_newest is not None:
+                    self._backend_plugin.prepare_queue_operation(
+                        self._runner,
+                        operation="write_keep",
+                        queue=queue,
+                    )
                 self._runner.run(
                     self._sql.INSERT_MESSAGE,
                     (queue, message, timestamp),
                 )
+                if keep_newest is not None:
+                    self._runner.run(
+                        self._sql.CLAIM_OLDER_PENDING,
+                        (queue, queue, keep_newest - 1),
+                    )
                 self._runner.commit()
             except Exception:
                 self._runner.rollback()

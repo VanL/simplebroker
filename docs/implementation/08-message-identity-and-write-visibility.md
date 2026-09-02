@@ -1,4 +1,4 @@
-# Message Identity and Ordinary-Write Visibility
+# Message Identity and Write Visibility
 
 Owner: timestamp allocation in `simplebroker/_timestamp.py`; exact-insert
 admission in `simplebroker/_message_insert.py`; SQL write transactions in
@@ -69,6 +69,20 @@ The real runner sequence is:
 The pass-through recorder in `tests/test_write_visibility.py` observes that
 sequence without replacing SQL execution. Redis is explicitly excluded from
 that SQL-only proof.
+
+When `keep_newest` is present, shared SQL extends the same transaction:
+
+`begin → high-water compare-and-advance → backend lock preparation → row insert → claim older pending rows → commit`
+
+The claim cutoff is the highest-N boundary selected by public message ID on
+the existing partial pending `(queue, ts)` index. A missing cutoff row makes
+the update a no-op. SQLite's `BEGIN IMMEDIATE` already serializes writers.
+PostgreSQL locks the singleton high-water row first, then takes a transaction-
+scoped `SHARE ROW EXCLUSIVE` table lock so move, exact insert, broadcast,
+delete, rename, and other row mutations cannot interleave. That lock is
+intentionally coarse and can stall unrelated queues. If insert, trim, or
+commit fails with a known rollback, the generated high-water, row, and claims
+all roll back together.
 
 ## Same-generator timestamp serialization
 
@@ -154,6 +168,16 @@ after a fork so a child cannot inherit a lock held by a vanished parent thread.
 Different processes remain concurrent and are reconciled by the Lua fence and
 bounded retry protocol.
 
+With `keep_newest`, the same `WRITE_MESSAGE` script also receives the claimed
+and reserved queue keys. Before its first write, it type-checks every key it
+will touch, computes the lowest displaced pending IDs, verifies that every one
+has a body, and rejects any active reservation intersection. Success updates
+high-water, inserts the new row, and moves every displaced ID from pending to
+claimed in one script. Reservation conflict is retryable but does not consume
+the timestamp-conflict budget. A missing displaced body is a non-retryable
+integrity failure. Stale-batch recovery is best-effort preparation outside the
+script; the script's reservation recheck is the atomic guard.
+
 Redis conflict repair reads current high-water and the maximum stored ID, calls the
 backend's compare-and-advance operation, then refreshes the local generator.
 It never performs an unconditional high-water write, so a concurrent later
@@ -203,7 +227,8 @@ the data commit.
 
 ## Checkpoint limit
 
-The visibility guarantee is deliberately limited to ordinary `write()`.
+The visibility guarantee is deliberately limited to generated `write()`, with
+or without the optional keep transition.
 Standalone `generate_timestamp()` persists an ID without a row. Exact
 insertion and ID-preserving move can introduce an older ID later. Redis
 patterned broadcast retains its Python snapshot and separate allocation path.

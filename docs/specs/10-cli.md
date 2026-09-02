@@ -157,14 +157,15 @@ for registered value-taking short options; a shared prefix alone does not make
 an otherwise unknown token registered. Command-specific contracts may still
 reject option abbreviations before mutation, as broadcast does in `[SB-BCAST-5]`.
 
-`write` output options (`-t`, `--timestamps`, and `--json`) are recognized in
-every currently supported option position before `--`: before the queue,
-after a non-dash literal message, after the stdin marker `-`, or before the
-explicit marker whose following token supplies literal data. An unescaped
-output option with no message follows the ordinary omitted-message stdin
-contract; it is not the message. `broadcast` selectors retain their current
-command-local forms. Unescaped `-h` / `--help` remains a side-effect-free help
-request.
+`write` output options (`-t`, `--timestamps`, and `--json`) and the
+value-taking `--keep-newest N` option are recognized in every currently
+supported option position before `--`: before the queue, after a non-dash
+literal message, after the stdin marker `-`, or before the explicit marker
+whose following token supplies literal data. An unescaped output option with
+no message follows the ordinary omitted-message stdin contract; it is not the
+message. The keep option retains its value as one grammar unit during
+normalization. `broadcast` selectors retain their current command-local forms.
+Unescaped `-h` / `--help` remains a side-effect-free help request.
 
 `--` ends option interpretation and is the required escape for a literal
 registered spelling. For example, `broker write -t tasks -- "--cleanup"`
@@ -358,7 +359,39 @@ _Implementation mapping_:
   `_validate_selection_filters_before_target`, and command dispatch)
 - `simplebroker/commands.py` (`cmd_read`, `cmd_peek`, and `cmd_move`)
 
+## Write-time pending window option [SB-CLI-7]
+
+`write` accepts `--keep-newest N`, where `N` is one or more ASCII decimal
+digits. After leading zeroes are stripped, one to four digits must remain with
+value at least 1, so the value is from 1 to 9999 and no unbounded conversion
+occurs. A sign, underscore, non-ASCII digit, zero, value above 9999, missing
+value, or repeated `--keep-newest` is an invalid argument. It fails before
+stdin consumption, alias or target resolution, or broker mutation. Text mode
+emits the ordinary invalid-argument diagnostic and exits `1`; established JSON
+mode emits one [SB-CLI-4] `INVALID_ARGUMENT` object and exits `1`.
+
+The option is valid only for `write`. It follows the supported write-option
+positions under [SB-CLI-3] and accepts both `--keep-newest N` and
+`--keep-newest=N` before the option terminator. Because it is a registered CLI
+token, `--` is required to write or broadcast the literal body
+`--keep-newest` or `--keep-newest=<value>`. The help text states that the
+operation claims older pending messages, that the newly written message is
+included in `N`, and that the option is meant for a dedicated single-producer
+queue.
+
+Success keeps the existing write output contract: plain mode is quiet, `-t` /
+`--timestamps` prints the new ID, and `--json` emits only the existing
+timestamp object. An empty pre-write queue or a queue with fewer than `N`
+pending rows is success `0`.
+
+_Implementation mapping_:
+- `simplebroker/cli.py` (registered write grammar, pre-target validation, dispatch)
+- `simplebroker/commands.py` (`cmd_write`)
+
 ## Related Plans
+
+- active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
+  — owns [SB-CLI-7] and the [SB-CLI-3] value-taking write-option extension
 
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It repairs shell
@@ -536,3 +569,14 @@ _Implementation mapping_:
   - `tests/test_cli_contract_sb_cli.py::test_sb_cli_6_help_and_surface_inventory`
   - `tests/test_cli_rearrange_args.py::TestArgumentProcessor::test_newest_registered_operand_requires_explicit_escape`
   - `tests/test_cli_rearrange_args.py::TestHelpHasNoSideEffects::test_newest_literal_body_uses_explicit_escape`
+- `[SB-CLI-7]` structural and executable evidence:
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_7_contract_help_and_literal_escape`;
+  `tests/test_cli_rearrange_args.py::TestArgumentProcessor::test_write_keep_newest_option_and_value_are_canonicalized_together`,
+  `::test_write_keep_newest_pair_moves_before_explicit_escape`, and
+  `::test_write_keep_newest_after_explicit_escape_is_literal`;
+  `tests/test_cli_write_output.py::test_write_keep_newest_preserves_output_and_claims_older_rows`,
+  `::test_write_keep_newest_rejects_invalid_cli_value_before_target`,
+  `::test_write_keep_newest_accepts_leading_zeroes`, and
+  `::test_write_keep_newest_rejects_duplicate_values_before_target`;
+  `tests/test_property_cli_args.py::test_cli_args_totality_property`; real
+  write-window behavior is bound through [SB-DELIVERY-9]

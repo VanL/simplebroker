@@ -113,10 +113,13 @@ Specifications: `docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-1
 from simplebroker import Queue
 
 with Queue("jobs") as queue:
+    message_id = queue.write("current state", keep_newest=10)
     oldest = queue.peek_one()
     newest = queue.peek_one(order="newest")
     recent = queue.peek_many(limit=10, order="newest")
 ```
+
+The keep-write call still returns only the new committed message ID.
 
 Bounded read, peek, and move operations select the lowest public message ID
 first by default. `order="newest"` selects highest ID first. The option is not
@@ -164,6 +167,9 @@ The CLI is available as both `broker` and `simplebroker`.
 ```bash
 # Write a message
 $ broker write myqueue "Hello, World!"
+
+# Superseding snapshot/state feeds can atomically claim older pending values
+# with --keep-newest. Read its destructive-state warning under Write options.
 
 # Read the message (removes it)
 $ broker read myqueue
@@ -251,7 +257,7 @@ Global options must appear before the command, for example `broker -f queue.db r
 
 | Command | Description |
 |---------|-------------|
-| `write <queue> [message\|-]` | Add message to queue (omit or use `-` for stdin); `-t`/`--json` print the new message's ID |
+| `write <queue> [message\|-] [--keep-newest N]` | Add a message; optional `--keep-newest` atomically claims older pending messages after the write; `-t`/`--json` print the new ID |
 | `read <queue> [options]` | Remove and return message(s) |
 | `peek <queue> [options]` | Return message(s) without removing |
 | `move <source> <dest> [options]` | Atomically transfer messages between queues |
@@ -341,17 +347,37 @@ queue mode and is unavailable on `--all`, generators, and watch.
 - `-t, --timestamps` - Print the new message's 19-digit timestamp ID on stdout
 - `--json` - Print `{"timestamp": "<19-digit-id>"}` for the new message (the message body
   is not echoed back, unlike read/peek JSON)
+- `--keep-newest N` - In the same atomic operation as the write, leave pending
+  only the `N` highest public message IDs, including the new message, and mark
+  older pending messages claimed. `N` is from 1 to 9999.
 
-Place write output flags before the queue name (`broker write -t tasks "job"`).
+`--keep-newest` applies only to that write. It is not a stored queue size,
+physical retention cap, or backpressure policy. Existing claimed rows do not
+count toward `N`, and later ordinary writes, broadcasts, exact inserts, or
+moves may grow the pending set again. Claimed rows remain visible to stats and
+claimed inspection until vacuum removes them. Normative behavior:
+[`SB-DELIVERY-9`](docs/specs/11-delivery.md#write-time-pending-window-sb-delivery-9)
+and
+[`SB-CLI-7`](docs/specs/10-cli.md#write-time-pending-window-option-sb-cli-7).
+
+```bash
+# Write new state and leave only the 10 highest-ID messages pending.
+# Older pending messages become claimed; the new message counts toward 10.
+$ broker write --keep-newest 10 snapshots "current state"
+```
+
+Place write options before the queue name (`broker write -t tasks "job"`).
 They are also recognized after a literal message or after the stdin marker
-`-`. Before an explicit `--`, any spelling registered as a CLI option remains
-an option or is rejected when it belongs to another command; it is never
-silently written as message data. Use `broker write tasks -- --json` to write
-the literal body `--json`. Unknown dash-leading bodies remain compatible as
-literal data, though an explicit `--` is the clearest form for scripts.
-Because `--newest` is also registered, use
-`broker write tasks -- --newest` or `broker broadcast -- --newest` for that
-literal body.
+`-`; `--keep-newest N` and `--keep-newest=N` follow the same supported
+positions before `--`. Before an explicit `--`, any spelling registered as a
+CLI option remains an option or is rejected when it belongs to another
+command; it is never silently written as message data. Use `broker write tasks
+-- --json` to write the literal body `--json`. Unknown dash-leading bodies
+remain compatible as literal data, though an explicit `--` is the clearest
+form for scripts. Because `--newest` and `--keep-newest` are also registered,
+use `broker write tasks -- --newest` or `broker broadcast -- --newest` for the
+literal `--newest` body. Use `--` before a literal `--keep-newest` or
+`--keep-newest=<value>` body too.
 
 **Watch options:**
 - `--peek` - Monitor without consuming
@@ -422,6 +448,14 @@ and are reclaimed by `--vacuum` (`[SB-OPS-6]`).
 
 ### Safe Message Handling
 
+`write --keep-newest N` is destructive to delivery state. It can make older
+pending messages unavailable to ordinary consumers even though no consumer
+received them. Use it only when newer messages supersede older ones, and only
+on a dedicated single-producer queue. On a shared queue it claims other
+producers' pending messages. The operation claims rather than physically
+deletes displaced rows, but automatic or explicit vacuum may later remove
+them.
+
 Messages can contain any characters including newlines, control characters, and shell metacharacters:
 - **Shell injection risks** - When piping output to shell commands, malicious message content could execute unintended commands
 - **Special characters** - Messages containing newlines or other special characters can break shell pipelines that expect single-line output
@@ -454,7 +488,7 @@ delivery settlement; for peek, it does not claim messages or turn the live
 traversal into a snapshot.
 
 Normative delivery contract:
-`docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-8]).
+`docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-9]).
 
 Single-consumer example: [`examples/safe_worker.sh`](https://github.com/VanL/simplebroker/blob/main/examples/safe_worker.sh)
 polls one message at a time and acknowledges it by deleting its exact ID only
@@ -820,7 +854,7 @@ owner on first advancement. Early-stop callers must close on the owning thread
 before their Queue/client.
 
 Specifications: `docs/specs/11-delivery.md`
-(`[SB-DELIVERY-1]`–`[SB-DELIVERY-8]`); worked patterns, generator rules,
+(`[SB-DELIVERY-1]`–`[SB-DELIVERY-9]`); worked patterns, generator rules,
 and the cross-thread safety net are in the
 [Python guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/python.md#delivery-guarantees-in-practice).
 
@@ -839,8 +873,9 @@ if queue.exists():
 ```
 
 `QueueStats.pending` is the unclaimed count. `QueueStats.claimed` is the count
-of messages already read or claimed but not yet vacuumed. `QueueStats.exists`
-is true when `total > 0`.
+of deletion-pending messages claimed by a consume operation or by write-time
+`keep_newest`, but not yet vacuumed. `QueueStats.exists` is true when
+`total > 0`.
 
 For cross-queue metadata, `open_broker(...).list_queues()` returns queue names
 only, including claimed-only queues. Use `list_queue_stats()` when you need

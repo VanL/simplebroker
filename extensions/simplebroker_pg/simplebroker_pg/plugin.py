@@ -472,7 +472,7 @@ class PostgresBackendPlugin:
 
     name = "postgres"
     sql: BackendSQLNamespace = ensure_backend_sql_namespace(pg_sql)
-    backend_api_version = 8
+    backend_api_version = 9
     schema_version = POSTGRES_SCHEMA_VERSION
 
     def init_backend(
@@ -848,6 +848,13 @@ class PostgresBackendPlugin:
         operation: str,
         queue: str,
     ) -> None:
+        if operation == "write_keep":
+            del queue
+            # BrokerCore has already advanced/locked the singleton last_ts row.
+            # Match broadcast's meta-then-table order before touching messages.
+            runner.run(pg_sql.LOCK_WRITE_KEEP_SCOPE)
+            return
+
         if operation == "rename":
             del queue
             # The singleton meta row also stores alias_version. Rename may bump

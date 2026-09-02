@@ -59,14 +59,14 @@ def test_delivery_contract_clause_inventory_and_bindings() -> None:
         int(code)
         for code in re.findall(r"^## .+ \[SB-DELIVERY-(\d+)\]$", text, re.MULTILINE)
     ]
-    assert heading_codes == list(range(1, 9))
+    assert heading_codes == list(range(1, 10))
 
     verification = text.split("## Verification", 1)[1].split("## Related Plans", 1)[0]
     verification_codes = re.findall(
         r"^\| \[(SB-DELIVERY-\d+)\] \|", verification, re.MULTILINE
     )
-    assert verification_codes == [f"SB-DELIVERY-{code}" for code in range(1, 9)]
-    for code in range(1, 9):
+    assert verification_codes == [f"SB-DELIVERY-{code}" for code in range(1, 10)]
+    for code in range(1, 10):
         assert f"| [SB-DELIVERY-{code}] |" in verification
         assert "tests/test_delivery_contract_sb_delivery.py" in _verification_row(
             f"SB-DELIVERY-{code}"
@@ -87,7 +87,7 @@ def test_delivery_contract_clause_inventory_and_bindings() -> None:
     assert "`canonical-spec`" in registry_row
     assert "`11-delivery.md`" in registry_row
     assert "[SB-DELIVERY-1]" in registry_row
-    assert "[SB-DELIVERY-8]" in registry_row
+    assert "[SB-DELIVERY-9]" in registry_row
     assert "tests/test_delivery_contract_sb_delivery.py" in registry_row
     assert "tests/test_cross_thread_finalization_poisoning.py" in registry_row
     assert "tests/test_cli_broken_pipe.py" in registry_row
@@ -99,7 +99,7 @@ def test_delivery_contract_clause_inventory_and_bindings() -> None:
 def test_readme_and_kernel_delivery_ranges_reach_the_canonical_terminal_clause() -> (
     None
 ):
-    """Enumerable delivery restatements cannot silently stop before clause 8."""
+    """Enumerable delivery restatements cannot silently stop before clause 9."""
     terminal = max(
         int(code)
         for code in re.findall(
@@ -117,6 +117,42 @@ def test_readme_and_kernel_delivery_ranges_reach_the_canonical_terminal_clause()
         }
         assert terminal_clauses
         assert terminal_clauses == {terminal}
+
+
+def test_write_time_pending_window_contract_binds_public_surfaces_and_backends() -> (
+    None
+):
+    section = _section("SB-DELIVERY-9")
+    normalized = " ".join(section.split())
+    for needle in (
+        "keep_newest",
+        "highest integer public message IDs",
+        "one atomic backend operation",
+        "linear in the number of displaced rows",
+        "not a stored queue policy",
+        "dedicated single-producer queue",
+        "never steals an active at-least-once reservation",
+    ):
+        assert needle in normalized
+
+    readme = README.read_text(encoding="utf-8")
+    kernel = KERNEL.read_text(encoding="utf-8")
+    for text in (readme, kernel):
+        assert "--keep-newest" in text
+        assert "single-producer" in text
+        assert "not a stored queue" in text
+    assert "SB-DELIVERY-9" in readme
+    assert "SB-DELIVERY-9" in kernel
+
+    row = _verification_row("SB-DELIVERY-9")
+    for path in (
+        "tests/test_keep_newest.py",
+        "tests/test_write_visibility.py",
+        "tests/test_custom_runner_integration.py",
+        "extensions/simplebroker_pg/tests/test_pg_write_keep.py",
+        "extensions/simplebroker_redis/tests/test_redis_atomicity.py",
+    ):
+        assert path in row
 
 
 def test_watch_mode_clause_binds_all_modes_and_runtime_gates() -> None:

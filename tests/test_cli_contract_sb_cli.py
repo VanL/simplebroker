@@ -782,9 +782,11 @@ def test_sb_cli_6_help_and_surface_inventory(workdir: Path) -> None:
 
 
 def test_sb_cli_6_exact_evidence_manifest() -> None:
-    evidence = SPEC.read_text(encoding="utf-8").split(
-        "- `[SB-CLI-6]` exact executable evidence:", 1
-    )[1]
+    evidence = (
+        SPEC.read_text(encoding="utf-8")
+        .split("- `[SB-CLI-6]` exact executable evidence:", 1)[1]
+        .split("- `[SB-CLI-7]`", 1)[0]
+    )
     cited: dict[str, set[str]] = {}
     for relative_path, node in re.findall(
         r"`((?:tests/)[^`:]+\.py)::([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)`",
@@ -808,3 +810,43 @@ def test_sb_cli_6_exact_evidence_manifest() -> None:
                     if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
                 )
         assert expected_nodes <= executable_nodes
+
+
+def test_sb_cli_7_contract_help_and_literal_escape(workdir: Path) -> None:
+    spec = SPEC.read_text(encoding="utf-8")
+    section = spec.split("## Write-time pending window option [SB-CLI-7]", 1)[1].split(
+        "## ", 1
+    )[0]
+    normalized = " ".join(section.split())
+    for needle in (
+        "--keep-newest N",
+        "ASCII decimal",
+        "1 to 9999",
+        "before stdin consumption",
+        "dedicated single-producer queue",
+        "Success keeps the existing write output contract",
+    ):
+        assert needle in normalized
+
+    rc, out, err = run_cli("write", "--help", cwd=workdir)
+    assert rc == EXIT_SUCCESS, err
+    assert "--keep-newest N" in out
+    assert "claim older pending" in out
+    assert "including this write" in out
+    assert "single-producer" in out
+
+    assert run_cli("write", "q", "--", "--keep-newest=3", cwd=workdir) == (
+        EXIT_SUCCESS,
+        "",
+        "",
+    )
+    assert run_cli("broadcast", "--", "--keep-newest", cwd=workdir) == (
+        EXIT_SUCCESS,
+        "",
+        "",
+    )
+    with Queue("q", db_path=workdir / ".broker.db") as queue:
+        assert queue.peek_many(10, with_timestamps=False) == [
+            "--keep-newest=3",
+            "--keep-newest",
+        ]

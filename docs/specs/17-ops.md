@@ -34,7 +34,7 @@ Public metadata reports queue presence and counts without delivering messages.
 | Surface | Promise |
 |---------|---------|
 | **exists** | True when the queue has any row (pending or claimed); CLI exits `0` when true and `2` when false (`[SB-CLI-1]`) |
-| **stats** | Reports **pending**, **claimed**, and **total** for one queue; `exists` is true when `total > 0` |
+| **stats** | Reports **pending**, **claimed**, and **total** for one queue; `claimed` counts all deletion-pending rows whether claimed by consume or [SB-DELIVERY-9]; `exists` is true when `total > 0` |
 | **list** | Reports queue **names** that exist under [SB-OPS-1], including claimed-only queues |
 | **list --stats** / library list-with-stats | Adds pending/claimed/total (and exists) per listed queue |
 | **list filters** | `--prefix` is a literal name prefix; `--pattern` is fnmatch-style; prefix and pattern are not combined |
@@ -82,8 +82,8 @@ CLI `delete` exit codes follow `[SB-CLI-1]`. Library `Queue.delete` /
 exceptions (`[SB-API-4]`).
 
 Ordinary **read** still uses claim-before-handoff (`[SB-DELIVERY-1]`); claimed
-rows from consume are reclaimed by **vacuum** ([SB-OPS-6]), not by delete’s
-claim semantics.
+rows from consume or write-time pending-window trim are reclaimed by
+**vacuum** ([SB-OPS-6]), not by delete's claim semantics.
 
 _Implementation mapping_:
 - `simplebroker/db.py`, `simplebroker/sbqueue.py`
@@ -158,7 +158,8 @@ _Implementation mapping_:
 
 ## Vacuum claimed rows [SB-OPS-6]
 
-**Vacuum** removes **claimed** (deletion-pending) message rows.
+**Vacuum** removes **claimed** (deletion-pending) message rows, whether they
+were claimed by consume or by [SB-DELIVERY-9].
 
 - After vacuum, claimed-only queues cease to exist ([SB-OPS-1]).
 - CLI global `--vacuum` runs vacuum and exits; `--compact` is only valid with
@@ -284,6 +285,9 @@ _Implementation mapping_:
 | [SB-OPS-7] | `tests/test_operations_contract_sb_ops.py::test_ops_language_core_promises`; `tests/test_cli_argument_parsing.py::test_cleanup_help_uses_backend_generic_target_wording`; `tests/test_cleanup.py::test_cleanup_removes_complete_owned_namespace_only`; `tests/test_cleanup.py::test_cleanup_nonexistent_database`; `tests/test_cleanup.py::test_cleanup_rejects_plain_file`; `tests/test_cleanup.py::test_cleanup_rejects_directory_main_before_deleting_sidecars`; `tests/test_cleanup.py::test_cleanup_rejects_unreadable_main_before_deleting_sidecars`; `tests/test_cleanup.py::test_cleanup_rejects_sqlite_db_with_wrong_magic`; `tests/test_cleanup.py::test_cleanup_removes_owned_orphans_when_main_is_absent`; `tests/test_cleanup.py::test_cleanup_attempts_every_later_path_after_each_unlink_failure`; `tests/test_cleanup.py::test_cleanup_unlinks_owned_symlinks_without_touching_targets`; `tests/test_cleanup.py::test_cleanup_observed_main_disappearance_still_counts_as_found`; `tests/test_cleanup.py::test_cleanup_enumerated_temp_disappearance_still_counts_as_found`; `tests/test_cleanup.py::test_cleanup_aggregates_multiple_cli_failures_and_json_error`; `tests/test_cleanup.py::test_cleanup_windows_open_handle_refusal_is_clean_and_nonrollback`; `tests/test_cleanup.py::test_cleanup_validates_literal_uri_metacharacters`; `tests/test_cleanup.py::test_cleanup_cli_accepts_literal_percent_filename`; `tests/test_cleanup.py::test_cleanup_cli_retains_unsafe_metacharacter_rejection`; `tests/test_cleanup.py::test_cleanup_no_namespace_targets_are_noops_without_creation_or_open`; `tests/test_cleanup.py::test_cleanup_path_derivation_error_is_a_clean_database_error`; `tests/test_cleanup.py::test_cleanup_freezes_resolved_symlink_target_namespace`; `tests/test_cleanup.py::test_cleanup_main_lstat_failure_is_a_zero_delete_gate`; `tests/test_cleanup.py::test_cleanup_enumeration_failure_still_attempts_frozen_names_and_all_fixed`; `tests/test_cleanup.py::test_cleanup_reports_enumeration_before_ordered_unlink_failures`; `tests/test_cleanup.py::test_cleanup_multiple_temp_failures_are_reported_in_lexical_order`; `tests/test_cleanup.py::test_cleanup_with_quiet` |
 
 ## Related Plans
+
+- active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
+  — clarifies [SB-OPS-2], [SB-OPS-3], and [SB-OPS-6] for write-time claims
 
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It repairs

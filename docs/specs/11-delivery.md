@@ -6,6 +6,12 @@ generator delivery modes.
 
 ## Consume claim boundary [SB-DELIVERY-1]
 
+Claimed is a delivery state, not proof that a caller received or attempted a
+message. In addition to consume claims, an explicit write-time pending-window
+operation may claim older pending rows without handoff under
+[SB-DELIVERY-9]. Both forms are deletion-pending and are omitted from ordinary
+pending delivery.
+
 Default `read` / claim operations and consume-mode `watch` claim the message
 **before** returning it or invoking the handler.
 
@@ -268,6 +274,48 @@ _Implementation mapping_:
 - `extensions/simplebroker_pg/`
 - `extensions/simplebroker_redis/simplebroker_redis/core.py`
 
+## Write-time pending window [SB-DELIVERY-9]
+
+`Queue.write(message, *, keep_newest=N)` and CLI `write --keep-newest N`
+perform one operation-scoped pending-window transition. `N` is an integer
+from 1 to 9999. The operation allocates and inserts the new generated-ID
+message, then leaves pending only the `N` highest integer public message IDs
+from the prior pending set plus that new row. Every other previously pending
+row becomes claimed. Existing claimed rows do not count toward `N` and remain
+claimed.
+
+Allocation/high-water advancement, insertion, and displaced-row claims are
+one atomic backend operation. A known rejection or rollback commits none of
+those effects. A transport or commit failure whose outcome is unknown may
+leave the complete unit committed, but never a durable subset; a raising call
+returns no ID. When the prior pending count is less than `N`, the write
+succeeds without changing any existing row's state. The new row counts toward
+`N` and remains pending. The operation's cost is linear in the number of
+displaced rows, and concurrent operations wait through the backend's ordinary
+contention policy; there is no displaced-row ceiling.
+
+The guarantee is scoped to this operation's linearization point. It is not a
+stored queue policy, physical storage limit, or backpressure mechanism. Later
+writes, exact inserts, broadcasts, and moves that do not carry `keep_newest`
+may increase the pending count above `N`. Displaced rows remain physically
+present until ordinary vacuum policy removes them. The option is intended for
+a dedicated single-producer queue; on a shared queue it claims other
+producers' pending messages.
+
+A keep-write never steals an active at-least-once reservation. The backend may
+wait under its normal contention policy. If it cannot establish the atomic
+transition, it raises an operational failure without partial write or claim.
+A retryable conflict instructs the caller to let the active batch finish or
+expire, then retry the whole write.
+
+_Implementation mapping_:
+- `simplebroker/sbqueue.py` (`Queue.write`)
+- `simplebroker/db.py` (`BrokerCore.write` and SQL transaction)
+- `simplebroker/_sql/sqlite.py` and `extensions/simplebroker_pg/simplebroker_pg/_sql.py`
+- `extensions/simplebroker_pg/simplebroker_pg/plugin.py` (write-keep lock)
+- `extensions/simplebroker_redis/simplebroker_redis/core.py`
+- `extensions/simplebroker_redis/simplebroker_redis/scripts.py` (`WRITE_MESSAGE`)
+
 ## Verification
 
 | Clause | Firing gates |
@@ -280,8 +328,12 @@ _Implementation mapping_:
 | [SB-DELIVERY-6] | `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`, `::test_foreign_thread_contract_binds_sql_and_redis_process_probes`; `tests/test_queue_typing_contract.py`; `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`; `tests/test_cross_thread_finalization_poisoning.py`; `tests/test_cross_thread_probe_transitions.py`; `tests/test_cross_thread_generator_probe.py`; `extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`; `extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py` |
 | [SB-DELIVERY-7] | `tests/test_cli_broken_pipe.py`; `tests/test_delivery_contract_sb_delivery.py` |
 | [SB-DELIVERY-8] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_property_queue_names.py`; `tests/test_message_size_contract.py::test_non_string_bodies_raise_message_error_before_any_mutation`; `tests/test_property_message_roundtrip.py::test_lone_surrogate_bodies_raise_message_error`, `::test_nul_byte_bodies_pinned_per_backend` (shared, per-backend NUL stance) |
+| [SB-DELIVERY-9] | `tests/test_delivery_contract_sb_delivery.py::test_write_time_pending_window_contract_binds_public_surfaces_and_backends`; `tests/test_keep_newest.py`; `tests/test_write_visibility.py::test_write_keep_claims_between_insert_and_commit`; `tests/test_custom_runner_integration.py::test_write_keep_rolls_back_insert_high_water_and_claims_together`; `extensions/simplebroker_pg/tests/test_pg_write_keep.py`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py` (one-EVAL, keep-window, reservation, and integrity cases); `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py::test_redis_write_fires_transition_table` |
 
 ## Related Plans
+
+- active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
+  — owns [SB-DELIVERY-9] and the [SB-DELIVERY-1] claimed-state clarification
 
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It aligns async,

@@ -60,6 +60,7 @@ from simplebroker.ext import (
     MaintenanceSchedule,
     vacuum_is_eligible,
     validate_delivery_guarantee,
+    validate_keep_newest,
 )
 from simplebroker.metadata import QueueRenameResult, QueueStats
 
@@ -134,7 +135,16 @@ _write_lock_registry = _ProcessWriteLockRegistry()
 
 
 def _translate_redis_error(exc: redis.RedisError) -> OperationalError:
-    return OperationalError(str(exc))
+    error = OperationalError(str(exc))
+    if isinstance(exc, redis.ResponseError) and str(exc).startswith("BUSY "):
+        error.retryable = True
+    return error
+
+
+def _retryable_operational_error(message: str) -> OperationalError:
+    error = OperationalError(message)
+    error.retryable = True
+    return error
 
 
 class RedisBrokerCore:
@@ -285,13 +295,29 @@ class RedisBrokerCore:
         with self._lock:
             return self._timestamp_gen.advance_to_at_least(timestamp)
 
-    def write(self, queue: str, message: str) -> int:
+    def write(
+        self,
+        queue: str,
+        message: str,
+        *,
+        keep_newest: int | None = None,
+    ) -> int:
+        validated_keep = validate_keep_newest(keep_newest)
         self._check_fork_safety()
         self._validate_queue_name(queue)
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("write")
         with self._write_lock:
-            timestamp = self._write_message(queue, message)
+            if validated_keep is not None:
+                try:
+                    self._maybe_recover_stale_batches()
+                except redis.RedisError as exc:
+                    raise _translate_redis_error(exc) from exc
+            timestamp = self._write_message(
+                queue,
+                message,
+                keep_newest=validated_keep,
+            )
         self._publish(queue)
         self._record_maintenance_activity(1)
         return timestamp
@@ -355,38 +381,26 @@ class RedisBrokerCore:
                 raise OperationalError(str(exc.__cause__)) from exc
             raise
 
-    def _write_message(self, queue: str, message: str) -> int:
+    def _write_message(
+        self,
+        queue: str,
+        message: str,
+        *,
+        keep_newest: int | None,
+    ) -> int:
         conflict_attempts = 0
         while True:
             timestamp = self._reserve_write_candidate()
-            encoded = encode_id(timestamp)
-            try:
-                result = response_list(
-                    self._client.eval(
-                        scripts.WRITE_MESSAGE,
-                        5,
-                        self._keys.meta,
-                        self._keys.bodies,
-                        self._keys.all_ids,
-                        self._keys.pending(queue),
-                        self._keys.queues,
-                        queue,
-                        str(timestamp),
-                        encoded,
-                        message,
-                    )
-                )
-            except redis.RedisError as exc:
-                raise _translate_redis_error(exc) from exc
-            if not result:
-                raise OperationalError("Unexpected Redis write result: empty response")
-            code = int(result[0])
+            code = self._eval_write_message(
+                queue,
+                message,
+                timestamp=timestamp,
+                keep_newest=keep_newest,
+            )
             if code == 1:
                 return timestamp
-            if code == -2:
-                raise OperationalError("Redis namespace is not initialized")
             if code not in (-1, -6):
-                raise OperationalError(f"Unexpected Redis write result: {code}")
+                self._raise_write_result(code)
             self._ts_conflict_count += 1
             conflict_attempts += 1
             if conflict_attempts >= 3:
@@ -399,6 +413,62 @@ class RedisBrokerCore:
                 time.sleep(0.001)
             else:
                 self._resync_timestamp_generator()
+
+    def _eval_write_message(
+        self,
+        queue: str,
+        message: str,
+        *,
+        timestamp: int,
+        keep_newest: int | None,
+    ) -> int:
+        """Run the one-script write boundary and return its protocol code."""
+        keys = [
+            self._keys.meta,
+            self._keys.bodies,
+            self._keys.all_ids,
+            self._keys.pending(queue),
+            self._keys.queues,
+        ]
+        arguments = [queue, str(timestamp), encode_id(timestamp), message]
+        if keep_newest is not None:
+            keys.extend(
+                (
+                    self._keys.claimed(queue),
+                    self._keys.reserved(queue),
+                )
+            )
+            arguments.append(str(keep_newest))
+        try:
+            result = response_list(
+                self._client.eval(
+                    scripts.WRITE_MESSAGE,
+                    len(keys),
+                    *keys,
+                    *arguments,
+                )
+            )
+        except redis.RedisError as exc:
+            raise _translate_redis_error(exc) from exc
+        if not result:
+            raise OperationalError("Unexpected Redis write result: empty response")
+        return int(result[0])
+
+    @staticmethod
+    def _raise_write_result(code: int) -> None:
+        """Translate every non-success, non-timestamp write result."""
+        if code == -2:
+            raise OperationalError("Redis namespace is not initialized")
+        if code == -5:
+            raise OperationalError("Redis write received an invalid keep value")
+        if code == -7:
+            raise _retryable_operational_error(
+                "keep-write conflicts with an active at-least-once batch; "
+                "finish or expire the batch, then retry the whole write"
+            )
+        if code == -8:
+            raise IntegrityError("Redis pending message is missing its stored body")
+        raise OperationalError(f"Unexpected Redis write result: {code}")
 
     def get_conflict_metrics(self) -> dict[str, int]:
         return {

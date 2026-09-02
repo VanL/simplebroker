@@ -74,6 +74,14 @@ For an ordinary generated `write()`, allocation/high-water advancement and
 insertion commit together. A stale candidate must not advance persisted
 high-water or insert a row.
 
+When write carries the [SB-DELIVERY-9] pending window, its optional claims join
+generated-ID allocation/high-water advancement and row insertion in the same
+atomic operation. A known rejected or rolled-back trim does not commit the
+generated high-water value, message row, or claims. An outcome-ambiguous
+commit/transport failure may leave all three durable, but never a subset, and
+a raising call returns no ID. A successful call returns the new row's ID
+exactly as ordinary write does.
+
 ## Global high-water and caches [SB-ID-3]
 
 Persisted `last_ts` is a database-global allocation high-water mark. It is not
@@ -196,6 +204,9 @@ message identity and delivery state with only the queue binding updated.
 | [SB-ID-5] | `tests/test_message_identity_contract_sb_id.py`; `tests/test_move_by_id.py::test_move_by_id_preserves_timestamp`, `test_move_many_preserves_original_message_ids`, `test_move_generator_preserves_original_message_ids_in_each_delivery_mode`; `tests/test_cli_move.py::TestEdgeCases::test_move_preserves_timestamps` |
 
 ## Related Plans
+
+- active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
+  — extends [SB-ID-2] atomic generated-write visibility with optional claims
 
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It aligns

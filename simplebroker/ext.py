@@ -62,6 +62,12 @@ Backend API v8 adds the validated ``order`` argument to bounded claim, peek,
 and move one/many operations. The closed values are ``"oldest"`` and
 ``"newest"``. Generator methods do not accept the argument. All v7 plugins
 are rejected by the exact-version handshake.
+
+Backend API v9 adds keyword-only ``keep_newest`` to
+``BrokerConnection.write`` and exports ``validate_keep_newest`` for direct
+backends. ``None`` preserves ordinary write; an exact integer from 1 through
+9999 requests the atomic write-time pending window in [SB-DELIVERY-9]. All v8
+plugins are rejected by the exact-version handshake.
 """
 
 from ._backend_plugins import (
@@ -73,7 +79,11 @@ from ._backend_plugins import (
     MultiQueueActivityWaiterHook,
     get_backend_plugin,
 )
-from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
+from ._delivery import (
+    DeliveryGuarantee,
+    validate_delivery_guarantee,
+    validate_keep_newest,
+)
 from ._exceptions import (
     BrokerError,
     DatabaseError,
@@ -137,6 +147,7 @@ __all__ = [
     "resolve_project_target",
     "vacuum_is_eligible",
     "validate_delivery_guarantee",
+    "validate_keep_newest",
 ]
 
 # ~

@@ -722,6 +722,7 @@ def test_redis_runner_fires_transition_table(
 class _WriteProtocolScenario:
     responses: tuple[tuple[object, ...] | BaseException, ...] = ()
     reservation_error: bool = False
+    keep_newest: int | None = None
     expected_error: str | None = None
     expected_conflicts: int = 0
     expected_sleeps: int = 0
@@ -764,6 +765,7 @@ def _write_script_protocol(
 
     monkeypatch.setattr(core._timestamp_gen, "_reserve_candidates", reserve)
     monkeypatch.setattr(core._client, "eval", evaluate)
+    monkeypatch.setattr(core, "_maybe_recover_stale_batches", lambda: None)
     monkeypatch.setattr(time, "sleep", sleeps.append)
     monkeypatch.setattr(
         core, "_resync_timestamp_generator", lambda: resyncs.append(None)
@@ -783,7 +785,11 @@ def _write_script_protocol(
     )
     try:
         with expectation:
-            result = core.write("jobs", "message")
+            result = core.write(
+                "jobs",
+                "message",
+                keep_newest=scenario.keep_newest,
+            )
             assert result == reserve_calls[-1]
         assert len(eval_calls) == len(scenario.responses)
         assert len(reserve_calls) == (
@@ -795,12 +801,15 @@ def _write_script_protocol(
         assert len(refreshes) == scenario.expected_refreshes
         assert publishes == ([] if scenario.expected_error else ["jobs"])
         for call, candidate in zip(eval_calls, reserve_calls, strict=True):
-            assert call[-4:] == (
+            expected_tail = (
                 "jobs",
                 str(candidate),
                 encode_id(candidate),
                 "message",
             )
+            if scenario.keep_newest is not None:
+                expected_tail = (*expected_tail, str(scenario.keep_newest))
+            assert call[-len(expected_tail) :] == expected_tail
     finally:
         core.close()
 
@@ -893,6 +902,23 @@ REDIS_WRITE_TRANSITIONS = (
         ),
     ),
     TransitionCase(
+        transition_id="KEEP-STALE-FENCE-REFRESH",
+        start_state="executing first keep-write Lua attempt",
+        event="Lua returns -6 then succeeds",
+        guard="another writer advanced persisted high-water",
+        next_state="complete",
+        effects="retries the complete write-and-claim unit with a fresh candidate",
+        expected_result="returns only the surviving attempt's candidate",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-6,), (1,)),
+                keep_newest=2,
+                expected_conflicts=1,
+                expected_refreshes=1,
+            )
+        ),
+    ),
+    TransitionCase(
         transition_id="STALE-FENCE-SECOND",
         start_state="executing after one stale fence",
         event="Lua returns -6 again then succeeds",
@@ -938,6 +964,54 @@ REDIS_WRITE_TRANSITIONS = (
             _WriteProtocolScenario(
                 responses=((-2,),),
                 expected_error="namespace is not initialized",
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="KEEP-INVALID-INTERNAL",
+        start_state="executing keep-write Lua",
+        event="Lua returns -5",
+        guard="Python and Lua keep contracts disagree",
+        next_state="failed",
+        effects="does not retry or publish",
+        expected_result="OperationalError reports the invalid internal keep value",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-5,),),
+                keep_newest=2,
+                expected_error="invalid keep value",
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="KEEP-RESERVATION-CONFLICT",
+        start_state="executing keep-write Lua",
+        event="Lua returns -7",
+        guard="a displaced pending ID belongs to an active batch",
+        next_state="failed",
+        effects="does not consume timestamp retry budget or publish",
+        expected_result="retryable OperationalError asks the caller to retry",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-7,),),
+                keep_newest=2,
+                expected_error="active at-least-once batch",
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="KEEP-MISSING-BODY",
+        start_state="executing keep-write Lua",
+        event="Lua returns -8",
+        guard="a displaced pending ID has no body",
+        next_state="failed",
+        effects="does not retry or publish",
+        expected_result="IntegrityError reports corrupt stored state",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-8,),),
+                keep_newest=2,
+                expected_error="missing its stored body",
             )
         ),
     ),

@@ -36,6 +36,14 @@ backend API v8 set. It adds bounded public-ID selection order and SQL storage
 schema v6. Package dependency floors remain minimums; the exact runtime
 handshake remains authoritative for every installed pair.
 
+SimpleBroker 8.1.0 and `simplebroker-pg` 4.1.0 are the first coordinated
+backend API v9 set. It adds the atomic write-time `keep_newest` pending window.
+PostgreSQL locks the high-water metadata row and then takes a transaction-
+scoped `SHARE ROW EXCLUSIVE` lock on `messages` before insert and trim. A large
+first trim therefore stalls row mutations on unrelated queues; measured
+100k/220k displaced rows took about 425/1000 ms on PostgreSQL 18. Cost is
+linear in displaced rows and has no bounded-time guarantee.
+
 Timestamp resynchronization uses a guarded compare-and-advance update. If a
 concurrent allocator publishes a higher durable `last_ts` after repair begins,
 the repair preserves that winner and refreshes its local cache from the

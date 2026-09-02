@@ -1074,10 +1074,16 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
     ordering: list[str] = []
     original_write = BrokerCore.write
 
-    def delayed_write(self: BrokerCore, queue_name: str, message: str) -> None:
+    def delayed_write(
+        self: BrokerCore,
+        queue_name: str,
+        message: str,
+        *,
+        keep_newest: int | None = None,
+    ) -> None:
         operation_entered.set()
         assert release_operation.wait(timeout=_LIVENESS)
-        original_write(self, queue_name, message)
+        original_write(self, queue_name, message, keep_newest=keep_newest)
         ordering.append("write-finished")
 
     def write_message() -> None:

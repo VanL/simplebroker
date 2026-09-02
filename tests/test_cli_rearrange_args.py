@@ -68,13 +68,19 @@ def _assert_preparse_grammar_matches_parser(bundle: _CliParserBundle) -> None:
     }
 
     write_parser = subparsers_action.choices["write"]
-    write_output_actions = [
+    write_actions = [
         action
         for action in write_parser._actions
         if action.option_strings and action.dest != "help"
     ]
-    write_output_options = {
-        option for action in write_output_actions for option in action.option_strings
+    write_options = {
+        option for action in write_actions for option in action.option_strings
+    }
+    write_value_options = {
+        option
+        for action in write_actions
+        if action.nargs != 0
+        for option in action.option_strings
     }
     broadcast_parser = subparsers_action.choices["broadcast"]
     [broadcast_selector_group] = broadcast_parser._mutually_exclusive_groups
@@ -88,7 +94,8 @@ def _assert_preparse_grammar_matches_parser(bundle: _CliParserBundle) -> None:
     assert grammar.root_options == root_options
     assert grammar.value_options == value_options
     assert grammar.subcommands == set(subparsers_action.choices)
-    assert grammar.write_output_options == write_output_options
+    assert grammar.write_options == write_options
+    assert grammar.write_value_options == write_value_options
     assert grammar.broadcast_selector_options == broadcast_selector_options
     assert grammar.broadcast_attached_options == {
         option
@@ -210,6 +217,45 @@ class TestArgumentProcessor:
             "write",
             "queue",
             "--json",
+        ]
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["write", "--keep-newest", "5", "queue", "message"],
+            ["write", "queue", "--keep-newest", "5", "message"],
+            ["write", "queue", "message", "--keep-newest", "5"],
+            ["write", "queue", "message", "--keep-newest=5"],
+        ],
+    )
+    def test_write_keep_newest_option_and_value_are_canonicalized_together(
+        self, argv: list[str]
+    ) -> None:
+        normalized = _normalize_args(argv)
+        args = _build_cli_parser().parser.parse_args(normalized)
+
+        assert args.queue == "queue"
+        assert args.message == "message"
+        assert args.keep_newest == ["5"]
+
+    def test_write_keep_newest_pair_moves_before_explicit_escape(self) -> None:
+        assert _normalize_args(
+            ["write", "queue", "--keep-newest", "5", "--", "--status"]
+        ) == [
+            "write",
+            "--keep-newest",
+            "5",
+            "queue",
+            "--",
+            "--status",
+        ]
+
+    def test_write_keep_newest_after_explicit_escape_is_literal(self) -> None:
+        assert _normalize_args(["write", "queue", "--", "--keep-newest=5"]) == [
+            "write",
+            "queue",
+            "--",
+            "--keep-newest=5",
         ]
 
     def test_broadcast_attached_short_pattern_is_preserved(self):

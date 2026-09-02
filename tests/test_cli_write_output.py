@@ -75,6 +75,104 @@ def test_write_json_wins_over_timestamps(workdir):
     assert set(json.loads(stdout)) == {"timestamp"}
 
 
+def test_write_keep_newest_preserves_output_and_claims_older_rows(workdir):
+    for body in ("first", "second"):
+        code, stdout, stderr = run_cli("write", "q", body, cwd=workdir)
+        assert code == 0, stderr
+        assert stdout == ""
+
+    code, stdout, stderr = run_cli(
+        "write", "q", "newest", "--keep-newest=2", "--json", cwd=workdir
+    )
+
+    assert code == 0, stderr
+    assert set(json.loads(stdout)) == {"timestamp"}
+    with Queue("q", db_path=target_for_directory(workdir), persistent=True) as queue:
+        assert queue.peek_many(10) == ["second", "newest"]
+        stats = queue.stats()
+        assert (stats.pending, stats.claimed, stats.total) == (2, 1, 3)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["0", "10000", "12x", "+1", "-1", "1_0", "١", "9" * 10_000, ""],
+)
+def test_write_keep_newest_rejects_invalid_cli_value_before_target(workdir, value):
+    option = f"--keep-newest={value}"
+
+    code, stdout, stderr = run_cli("write", "q", "body", option, "--json", cwd=workdir)
+
+    assert code == 1
+    assert stdout == ""
+    assert json.loads(stderr)["error"] == "INVALID_ARGUMENT"
+    assert not (workdir / ".broker.db").exists()
+
+
+def test_write_keep_newest_accepts_leading_zeroes(workdir):
+    code, stdout, stderr = run_cli(
+        "write", "q", "body", "--keep-newest", "0007", cwd=workdir
+    )
+
+    assert (code, stdout, stderr) == (0, "", "")
+    assert _peek_one(workdir) == "body"
+
+
+def test_write_keep_newest_rejects_duplicate_values_before_target(workdir):
+    code, stdout, stderr = run_cli(
+        "write",
+        "q",
+        "body",
+        "--keep-newest",
+        "2",
+        "--keep-newest=3",
+        "--json",
+        cwd=workdir,
+    )
+
+    assert code == 1
+    assert stdout == ""
+    assert json.loads(stderr)["error"] == "INVALID_ARGUMENT"
+    assert not (workdir / ".broker.db").exists()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("write", "q", "body", "--keep-newest", "--json"),
+        ("write", "--json", "q", "body", "--keep-newest"),
+    ],
+)
+def test_write_keep_newest_missing_value_uses_requested_json_error(workdir, args):
+    code, stdout, stderr = run_cli(*args, cwd=workdir)
+
+    assert code == 1
+    assert stdout == ""
+    payload = json.loads(stderr)
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert "--keep-newest" in payload["message"]
+    assert not (workdir / ".broker.db").exists()
+
+
+@pytest.mark.parametrize("value", ["-1", "--bogus"])
+def test_write_keep_newest_dash_leading_separate_value_uses_json_error(workdir, value):
+    code, stdout, stderr = run_cli(
+        "write",
+        "--json",
+        "q",
+        "body",
+        "--keep-newest",
+        value,
+        cwd=workdir,
+    )
+
+    assert code == 1
+    assert stdout == ""
+    payload = json.loads(stderr)
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert "--keep-newest" in payload["message"]
+    assert not (workdir / ".broker.db").exists()
+
+
 def test_write_flag_after_literal_message(workdir):
     code, stdout, stderr = run_cli("write", "q", "hello", "-t", cwd=workdir)
 

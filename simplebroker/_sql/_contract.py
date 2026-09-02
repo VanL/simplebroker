@@ -11,6 +11,7 @@ class BackendSQLNamespace(Protocol):
     """Minimum SQL surface BrokerCore expects from a backend."""
 
     INSERT_MESSAGE: str
+    CLAIM_OLDER_PENDING: str
     GET_MAX_MESSAGE_TS: str
     LIST_QUEUES_PREFIX: str
     GET_QUEUE_STATS: str
@@ -39,6 +40,7 @@ class BackendSQLNamespace(Protocol):
 
 _REQUIRED_SQL_ATTRIBUTES = (
     "INSERT_MESSAGE",
+    "CLAIM_OLDER_PENDING",
     "GET_MAX_MESSAGE_TS",
     "LIST_QUEUES_PREFIX",
     "GET_QUEUE_STATS",

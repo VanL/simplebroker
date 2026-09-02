@@ -78,6 +78,11 @@ def _process_and_parse(argv: list[str]) -> tuple[str, ...] | None:
 
 
 @example(argv=["write", "q", "--json"])
+@example(argv=["write", "q", "body", "--keep-newest", "5"])
+@example(argv=["write", "--keep-newest=0005", "q", "body"])
+@example(argv=["write", "q", "body", "--keep-newest", "5", "--keep-newest=4"])
+@example(argv=["write", "q", "body", "--keep-newest=١"])
+@example(argv=["write", "q", "body", "--keep-newest=" + ("9" * 10_000)])
 @example(argv=["write", "q", "--cleanup"])
 @example(argv=["write", "q", "--newest"])
 @example(argv=["write", "q", "--", "--newest"])

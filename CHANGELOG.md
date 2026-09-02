@@ -5,6 +5,33 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `broker write --keep-newest N` and
+  `Queue.write(..., keep_newest=N)` can atomically insert a message and mark
+  every older pending row outside the highest-N public message IDs as claimed.
+  The new row counts toward `N`; existing claimed rows do not. This is a
+  destructive, per-write snapshot-feed primitive for dedicated single-producer
+  queues, not a stored or physical queue cap. Ordinary write output and the
+  scalar Python return remain unchanged. Cost is linear in displaced rows and
+  has no bounded-time guarantee.
+
+### Changed
+
+- Backend API v9 adds the keyword-only write argument and requires one atomic
+  backend realization. SimpleBroker 8.1.0, `simplebroker-pg` 4.1.0, and
+  `simplebroker-redis` 4.1.0 are the coordinated package set. PostgreSQL uses a
+  transaction-scoped table lock, so a large trim can stall mutations on other
+  queues. Redis/Valkey uses one blocking Lua script and atomically rejects a
+  displaced active batch reservation with a retryable error.
+
+### Fixed
+
+- Project-config validation errors now identify the actual selected config
+  path instead of always naming the default `.broker.toml` file.
+
 
 ## [8.0.0] - 2026-08-28
 

@@ -25,16 +25,24 @@ class RecordingRunner:
         self.close_calls = 0
         self.transaction_events: list[str] = []
         self.delete_failure: Exception | None = None
+        self.keep_failure: Exception | None = None
 
     def run(
         self, sql: str, params: tuple[Any, ...] = (), *, fetch: bool = False
     ) -> list[tuple[Any, ...]]:
         deleting_messages = sql.strip().startswith("DELETE FROM messages")
+        claiming_older = (
+            sql.strip().startswith("UPDATE messages") and "SET claimed = 1" in sql
+        )
         if deleting_messages:
             self.transaction_events.append("delete")
+        if claiming_older:
+            self.transaction_events.append("claim_older_pending")
         rows = list(self._inner.run(sql, params, fetch=fetch))
         if deleting_messages and self.delete_failure is not None:
             raise self.delete_failure
+        if claiming_older and self.keep_failure is not None:
+            raise self.keep_failure
         return rows
 
     def begin_immediate(self) -> None:
@@ -237,6 +245,42 @@ def test_queue_delete_rolls_back_a_mutation_failure_and_preserves_the_error(
         assert runner.transaction_events == ["begin", "delete", "rollback"]
         with Queue("tasks", db_path=str(runner_path)) as observer:
             assert observer.peek_one() == "still-present"
+    finally:
+        queue.close()
+        runner.close()
+
+
+def test_write_keep_rolls_back_insert_high_water_and_claims_together(
+    tmp_path: Path,
+) -> None:
+    runner_path = tmp_path / "write-keep-failure.db"
+    runner = RecordingRunner(str(runner_path))
+    queue = Queue("tasks", db_path=str(tmp_path / "decoy.db"), runner=runner)
+    failure = RuntimeError("injected keep failure")
+    try:
+        first = queue.write("first")
+        second = queue.write("second")
+        before_last_ts = queue.refresh_last_ts()
+        runner.transaction_events.clear()
+        runner.keep_failure = failure
+
+        with pytest.raises(RuntimeError) as exc_info:
+            queue.write("not-committed", keep_newest=1)
+
+        assert exc_info.value is failure
+        assert runner.transaction_events == [
+            "begin",
+            "claim_older_pending",
+            "rollback",
+        ]
+        assert queue.refresh_last_ts() == before_last_ts
+        with Queue("tasks", db_path=str(runner_path)) as observer:
+            assert observer.peek_many(10, with_timestamps=True) == [
+                ("first", first),
+                ("second", second),
+            ]
+            stats = observer.stats()
+            assert (stats.pending, stats.claimed, stats.total) == (2, 0, 2)
     finally:
         queue.close()
         runner.close()

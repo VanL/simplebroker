@@ -847,12 +847,12 @@ def test_extension_core_floor_guard_accepts_higher_floors(tmp_path: Path) -> Non
     )
 
 
-def test_repository_backend_api_v8_handshake_and_floors_match() -> None:
+def test_repository_backend_api_v9_handshake_and_floors_match() -> None:
     release.require_backend_api_versions_match()
     release.require_extension_core_floors_for_backend_api()
 
-    assert release.read_core_backend_api_version() == 8
-    required_core_floor = release.BACKEND_API_MIN_CORE_VERSION[8]
+    assert release.read_core_backend_api_version() == 9
+    required_core_floor = release.BACKEND_API_MIN_CORE_VERSION[9]
     assert release.version_tuple(
         release.read_current_version()
     ) >= release.version_tuple(required_core_floor)
@@ -894,6 +894,7 @@ def test_repository_backend_api_v8_handshake_and_floors_match() -> None:
     assert release.BACKEND_API_MIN_CORE_VERSION[6] == "7.1.0"
     assert release.BACKEND_API_MIN_CORE_VERSION[7] == "7.3.0"
     assert release.BACKEND_API_MIN_CORE_VERSION[8] == "8.0.0"
+    assert release.BACKEND_API_MIN_CORE_VERSION[9] == "8.1.0"
 
     first_api_v7_extension_versions = {
         "simplebroker_pg": "`simplebroker-pg` 3.8.0",

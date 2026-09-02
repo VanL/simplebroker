@@ -27,7 +27,11 @@ from ._constants import (
     ResolvedConfig,
     snapshot_config,
 )
-from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
+from ._delivery import (
+    DeliveryGuarantee,
+    validate_delivery_guarantee,
+    validate_keep_newest,
+)
 from ._exceptions import QueueNameError
 from ._key_material import FrozenValue, freeze_key_material, snapshot_key_material
 from ._message_id import MessageIdInput
@@ -385,11 +389,15 @@ class Queue:
         if self._last_ts is None or timestamp > self._last_ts:
             self._last_ts = timestamp
 
-    def write(self, message: str) -> int:
+    def write(self, message: str, *, keep_newest: int | None = None) -> int:
         """Write a message to this queue.
 
         Args:
             message: The message content to write
+            keep_newest: If set, atomically claim older pending rows after
+                inserting this message, leaving the highest ``N`` message IDs
+                pending including the new row. Intended for a dedicated
+                single-producer queue.
 
         Returns:
             The committed message's unique 64-bit timestamp/message ID —
@@ -405,8 +413,13 @@ class Queue:
             MessageError: If the message is invalid
             OperationalError: If the database is locked/busy
         """
+        validated_keep = validate_keep_newest(keep_newest)
         with self.get_connection() as connection:
-            timestamp: int = connection.write(self.name, message)
+            timestamp: int = connection.write(
+                self.name,
+                message,
+                keep_newest=validated_keep,
+            )
             self._update_last_ts_hint(connection)
             return timestamp
 

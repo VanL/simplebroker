@@ -18,6 +18,7 @@ from ._constants import (
     ResolvedConfig,
     snapshot_config,
 )
+from ._delivery import MAX_KEEP_NEWEST
 from ._exceptions import (
     DatabaseError,
     IntegrityError,
@@ -118,6 +119,37 @@ def _validate_selection_filters_before_target(args: argparse.Namespace) -> int |
         return EXIT_ERROR
 
     return None
+
+
+def _validate_write_keep_before_target(args: argparse.Namespace) -> None:
+    """Normalize the bounded ASCII CLI count before any target or stdin work."""
+    if getattr(args, "command", None) != "write":
+        return
+    values = getattr(args, "keep_newest", None)
+    if values is None:
+        return
+    if len(values) != 1:
+        raise _ArgumentValidationError("--keep-newest may be provided only once")
+
+    raw_value = values[0]
+    significant = raw_value.lstrip("0")
+    if (
+        not raw_value
+        or not raw_value.isascii()
+        or not raw_value.isdecimal()
+        or not significant
+        or len(significant) > len(str(MAX_KEEP_NEWEST))
+    ):
+        raise _ArgumentValidationError(
+            f"--keep-newest must be an ASCII decimal integer from 1 to {MAX_KEEP_NEWEST}"
+        )
+
+    keep_newest = int(significant)
+    if keep_newest > MAX_KEEP_NEWEST:
+        raise _ArgumentValidationError(
+            f"--keep-newest must be an ASCII decimal integer from 1 to {MAX_KEEP_NEWEST}"
+        )
+    args.keep_newest = keep_newest
 
 
 def _json_output_requested(
@@ -241,7 +273,8 @@ class _PreparseGrammar:
     registered_options: frozenset[str]
     registered_value_options: frozenset[str]
     subcommands: frozenset[str]
-    write_output_options: frozenset[str]
+    write_options: frozenset[str]
+    write_value_options: frozenset[str]
     broadcast_selector_options: frozenset[str]
     broadcast_attached_options: frozenset[str]
     action_options: frozenset[str]
@@ -274,7 +307,8 @@ class _PreparseGrammarBuilder:
         self.registered_options: set[str] = set()
         self.registered_value_options: set[str] = set()
         self.subcommands: set[str] = set()
-        self.write_output_options: set[str] = set()
+        self.write_options: set[str] = set()
+        self.write_value_options: set[str] = set()
         self.broadcast_selector_options: set[str] = set()
         self.broadcast_attached_options: set[str] = set()
         self.action_options: set[str] = set()
@@ -307,8 +341,12 @@ class _PreparseGrammarBuilder:
         """Record the action-only JSON spelling advertised by root help."""
         self.action_json_options.update(action.option_strings)
 
-    def add_write_output_action(self, action: argparse.Action) -> None:
-        self.write_output_options.update(action.option_strings)
+    def add_write_action(self, action: argparse.Action) -> None:
+        """Record a write option that may move around its free-form operands."""
+        options = set(action.option_strings)
+        self.write_options.update(options)
+        if action.nargs != 0:
+            self.write_value_options.update(options)
 
     def add_broadcast_selector_action(self, action: argparse.Action) -> None:
         self.broadcast_selector_options.update(action.option_strings)
@@ -329,7 +367,8 @@ class _PreparseGrammarBuilder:
             registered_options=frozenset(self.registered_options),
             registered_value_options=frozenset(self.registered_value_options),
             subcommands=frozenset(self.subcommands),
-            write_output_options=frozenset(self.write_output_options),
+            write_options=frozenset(self.write_options),
+            write_value_options=frozenset(self.write_value_options),
             broadcast_selector_options=broadcast_options,
             broadcast_attached_options=frozenset(self.broadcast_attached_options),
             action_options=frozenset(self.action_options),
@@ -491,23 +530,31 @@ def _build_cli_parser(
         help="message content (omit or use '-' for stdin)",
     )
 
-    def add_write_output_argument(
-        *option_strings: str, **kwargs: Any
-    ) -> argparse.Action:
+    def add_write_argument(*option_strings: str, **kwargs: Any) -> argparse.Action:
         action = add_argument(write_parser, *option_strings, **kwargs)
-        grammar_builder.add_write_output_action(action)
+        grammar_builder.add_write_action(action)
         return action
 
-    add_write_output_argument(
+    add_write_argument(
         "-t",
         "--timestamps",
         action="store_true",
         help="print the new message's timestamp ID",
     )
-    add_write_output_argument(
+    add_write_argument(
         "--json",
         action="store_true",
         help='print {"timestamp": "<19-digit-id>"} for the new message',
+    )
+    add_write_argument(
+        "--keep-newest",
+        action="append",
+        metavar="N",
+        help=(
+            "atomically claim older pending messages, leaving the highest N "
+            "message IDs including this write (1..9999; for dedicated "
+            "single-producer queues)"
+        ),
     )
 
     # Read command
@@ -956,8 +1003,8 @@ class ArgumentProcessor:
             partitioned = self._partition_write_arguments(command_args[1:marker])
             if partitioned is None:
                 return command_args
-            output_options, operands = partitioned
-            if not output_options:
+            write_options, operands = partitioned
+            if not write_options:
                 return command_args
             # Python 3.11 argparse rejects an option interleaved between the
             # write positionals and their explicit end-of-options marker.
@@ -965,7 +1012,7 @@ class ArgumentProcessor:
             # the public flexible ordering while preserving escaped data.
             return [
                 command_args[0],
-                *output_options,
+                *write_options,
                 *operands,
                 "--",
                 *command_args[marker + 1 :],
@@ -974,11 +1021,21 @@ class ArgumentProcessor:
         partitioned = self._partition_write_arguments(command_args[1:])
         if partitioned is None:
             return command_args
-        output_options, rest = partitioned
+        write_options, rest = partitioned
 
-        protected = [command_args[0], *output_options]
+        protected = [command_args[0], *write_options]
         if not rest:
             return protected
+
+        if any(
+            (option.endswith("=") and option[:-1] in self.grammar.write_value_options)
+            or any(
+                option.startswith(f"{value_option}=-")
+                for value_option in self.grammar.write_value_options
+            )
+            for option in write_options
+        ):
+            return [*protected, *rest]
 
         # Queue names that start with '-' are invalid, but protecting the token
         # prevents it from being interpreted as a global option before
@@ -996,23 +1053,58 @@ class ArgumentProcessor:
     def _partition_write_arguments(
         self, arguments: list[str]
     ) -> tuple[list[str], list[str]] | None:
-        """Separate valid write output flags from operands.
+        """Separate valid write options, including value pairs, from operands.
 
         ``None`` leaves a malformed command-local option form for argparse.
         """
-        output_options: list[str] = []
+        write_options: list[str] = []
         operands: list[str] = []
-        for arg in arguments:
-            if arg in self.grammar.write_output_options:
-                output_options.append(arg)
+        index = 0
+        while index < len(arguments):
+            arg = arguments[index]
+            if arg in self.grammar.write_options:
+                write_options.append(arg)
+                if arg in self.grammar.write_value_options:
+                    next_index = index + 1
+                    if next_index < len(arguments):
+                        next_arg = arguments[next_index]
+                        if self._registered_option_name(next_arg) is None:
+                            if next_arg.startswith("-"):
+                                # argparse treats a dash-leading token as a
+                                # new option instead of this option's value.
+                                # Attach it so the bounded lexical validator
+                                # owns every invalid keep value and can honor
+                                # command-local JSON error mode.
+                                write_options[-1] = f"{arg}={next_arg}"
+                                index += 2
+                                continue
+                            write_options.append(next_arg)
+                            index += 2
+                            continue
+                    # Preserve command-local output flags while turning a
+                    # missing value into the empty value handled by the
+                    # post-parse validator.  That keeps this enumerated
+                    # invalid form on the same text/JSON error surface as
+                    # every other --keep-newest value error.
+                    write_options[-1] = f"{arg}="
+                index += 1
                 continue
             registered_option = self._registered_option_name(arg)
             if registered_option is not None:
-                if registered_option in self.grammar.write_output_options:
+                if registered_option in self.grammar.write_options:
+                    if (
+                        registered_option in self.grammar.write_value_options
+                        and arg.startswith(f"{registered_option}=")
+                        and not arg.endswith("=")
+                    ):
+                        write_options.append(arg)
+                        index += 1
+                        continue
                     return None
                 self._raise_registered_operand(arg, registered_option)
             operands.append(arg)
-        return output_options, operands
+            index += 1
+        return write_options, operands
 
     def _protect_broadcast_operands(self, command_args: list[str]) -> list[str]:
         """Protect the broadcast message while preserving selector options."""
@@ -1622,6 +1714,7 @@ def _dispatch_message_command(
             args.message,
             json_output=args.json,
             show_timestamps=args.timestamps,
+            keep_newest=args.keep_newest,
             config=config,
         )
 
@@ -1969,6 +2062,8 @@ def _main(*, config: ResolvedConfig) -> int:
         )
         if pre_target_result is not None:
             return pre_target_result
+
+        _validate_write_keep_before_target(args)
 
         selection_error = _validate_selection_filters_before_target(args)
         if selection_error is not None:

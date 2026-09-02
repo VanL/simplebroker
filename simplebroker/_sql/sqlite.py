@@ -175,6 +175,20 @@ INSERT_MESSAGE = """
 INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)
 """
 
+# [SB-DELIVERY-9] runs after the generated row insert in the same transaction.
+# A missing OFFSET row yields NULL and therefore claims nothing.
+CLAIM_OLDER_PENDING = """
+UPDATE messages
+SET claimed = 1
+WHERE queue = ? AND claimed = 0 AND ts < (
+    SELECT ts
+    FROM messages
+    WHERE queue = ? AND claimed = 0
+    ORDER BY ts DESC
+    LIMIT 1 OFFSET ?
+)
+"""
+
 # ============================================================================
 # UNIFIED RETRIEVE OPERATIONS
 # These queries support both single and batch operations via the LIMIT parameter
