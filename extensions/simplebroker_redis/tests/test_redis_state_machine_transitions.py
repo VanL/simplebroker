@@ -801,7 +801,7 @@ def _write_script_protocol(
         assert len(refreshes) == scenario.expected_refreshes
         assert publishes == ([] if scenario.expected_error else ["jobs"])
         for call, candidate in zip(eval_calls, reserve_calls, strict=True):
-            expected_tail = (
+            expected_tail: tuple[str, ...] = (
                 "jobs",
                 str(candidate),
                 encode_id(candidate),

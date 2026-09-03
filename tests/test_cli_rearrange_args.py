@@ -232,6 +232,12 @@ class TestArgumentProcessor:
         self, argv: list[str]
     ) -> None:
         normalized = _normalize_args(argv)
+        assert normalized[0] == "write"
+        assert normalized[-2:] == ["queue", "message"]
+        assert normalized[1:-2] in (
+            ["--keep-newest", "5"],
+            ["--keep-newest=5"],
+        )
         args = _build_cli_parser().parser.parse_args(normalized)
 
         assert args.queue == "queue"

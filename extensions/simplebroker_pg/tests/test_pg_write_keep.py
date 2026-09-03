@@ -76,7 +76,8 @@ def _run_competing_operation(core: BrokerCore, operation: str) -> object:
     if operation == "claim":
         return core.claim_one("source", with_timestamps=False)
     if operation == "insert":
-        return core.insert_messages([("unrelated", "exact", 1)])
+        core.insert_messages([("unrelated", "exact", 1)])
+        return None
     if operation == "broadcast":
         return core.broadcast("broadcast", queue_names=["unrelated"])
     if operation == "write":

@@ -239,8 +239,8 @@ def test_keep_write_is_serial_with_consumer_and_ordinary_writer(
     queue_factory: Any,
     competing_operation: str,
 ) -> None:
-    keeper = queue_factory("jobs")
-    competitor = queue_factory("jobs")
+    keeper = cast(Queue, queue_factory("jobs"))
+    competitor = cast(Queue, queue_factory("jobs"))
     original_ids = [keeper.write(f"original-{index}") for index in range(8)]
     start = threading.Barrier(2)
 

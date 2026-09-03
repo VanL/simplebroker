@@ -1048,6 +1048,27 @@ class ArgumentProcessor:
         if len(rest) >= 2 and rest[1].startswith("-") and rest[1] != "-":  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-037] exception
             return [*protected, rest[0], "--", *rest[1:]]
 
+        return self._canonicalize_value_write_options(
+            command_args, protected, rest, write_options
+        )
+
+    def _canonicalize_value_write_options(
+        self,
+        command_args: list[str],
+        protected: list[str],
+        rest: list[str],
+        write_options: list[str],
+    ) -> list[str]:
+        """Move value-taking write options ahead of both positionals."""
+        if any(
+            option.split("=", 1)[0] in self.grammar.write_value_options
+            for option in write_options
+        ):
+            # Python 3.11 cannot reliably resume consuming write positionals
+            # after a value-taking option appears between them. Keep one
+            # canonical layout for those options across supported runtimes.
+            return [*protected, *rest]
+
         return command_args
 
     def _partition_write_arguments(

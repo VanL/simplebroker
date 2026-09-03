@@ -693,6 +693,7 @@ def test_late_lower_input_id_is_discovered_after_higher_completion(
 
 def test_late_lower_control_id_is_processed_once_and_terminally_seen(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "reactor-late-control.db"
     _insert_exact_json(
@@ -703,6 +704,15 @@ def test_late_lower_control_id_is_processed_once_and_terminally_seen(
     )
 
     reactor = _make_reactor(db_path, worker_count=1)
+    allow_late_terminal_record = threading.Event()
+    record_control_processed = reactor._record_control_processed
+
+    def hold_late_terminal_record(*, timestamp: int, command: str) -> None:
+        if timestamp == 100:
+            allow_late_terminal_record.wait()
+        record_control_processed(timestamp=timestamp, command=command)
+
+    monkeypatch.setattr(reactor, "_record_control_processed", hold_late_terminal_record)
     thread = reactor.start()
     try:
         _wait_for_control_reply_at_timestamp(db_path, input_timestamp=300)
@@ -720,16 +730,38 @@ def test_late_lower_control_id_is_processed_once_and_terminally_seen(
             if payload.get("request_id") == "late-lower"
         ]
         assert len(replies) == 1
-        assert _sidecar_rows(
-            db_path,
-            """
-            SELECT status
-            FROM reactor_seen
-            WHERE source_queue = ? AND input_ts = ?
-            """,
-            (CONTROL_IN, 100),
-        ) == [("control_processed",)]
+        seen_query = """
+        SELECT status
+        FROM reactor_seen
+        WHERE source_queue = ? AND input_ts = ?
+        """
+        assert _sidecar_rows(db_path, seen_query, (CONTROL_IN, 100)) == []
+
+        allow_late_terminal_record.set()
+        drive_until(
+            lambda: (
+                _sidecar_rows(db_path, seen_query, (CONTROL_IN, 100))
+                == [("control_processed",)]
+            ),
+            timeout=5.0,
+            interval=0.01,
+            message="late lower control ID did not reach terminal seen state",
+            diagnostics=lambda: {
+                "seen_rows": _sidecar_rows(
+                    db_path,
+                    seen_query,
+                    (CONTROL_IN, 100),
+                )
+            },
+        )
+        terminal_replies = [
+            payload
+            for payload, _output_id in _read_json_messages(CONTROL_OUT, db_path)
+            if payload.get("request_id") == "late-lower"
+        ]
+        assert len(terminal_replies) == 1
     finally:
+        allow_late_terminal_record.set()
         _stop_reactor(reactor, thread)
 
 

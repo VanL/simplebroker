@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Project-config validation errors now identify the actual selected config
   path instead of always naming the default `.broker.toml` file.
+- `broker write` now canonicalizes value-taking options ahead of its queue and
+  message operands, avoiding a Python 3.11 `argparse` failure when
+  `--keep-newest N` appears between the queue and message.
 
 
 ## [8.0.0] - 2026-08-28

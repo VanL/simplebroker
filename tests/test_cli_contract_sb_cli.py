@@ -13,7 +13,7 @@ from typing import cast
 
 import pytest
 
-from simplebroker import Queue, cli
+from simplebroker import Queue, cli, target_for_directory
 from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
 from simplebroker._exceptions import (
     DatabaseError,
@@ -845,7 +845,7 @@ def test_sb_cli_7_contract_help_and_literal_escape(workdir: Path) -> None:
         "",
         "",
     )
-    with Queue("q", db_path=workdir / ".broker.db") as queue:
+    with Queue("q", db_path=target_for_directory(workdir), persistent=True) as queue:
         assert queue.peek_many(10, with_timestamps=False) == [
             "--keep-newest=3",
             "--keep-newest",
