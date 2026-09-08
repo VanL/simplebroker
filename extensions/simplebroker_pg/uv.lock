@@ -158,7 +158,7 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "8.1.0"
+version = "8.1.1"
 source = { editable = "../../" }
 
 [package.metadata]
@@ -174,10 +174,12 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8.0" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.3" },
     { name = "redis", marker = "extra == 'dev'", specifier = ">=5" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.0" },
     { name = "simplebroker-pg", marker = "extra == 'pg'", editable = "." },
     { name = "simplebroker-redis", marker = "extra == 'redis'", editable = "../simplebroker_redis" },
+    { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20260906" },
 ]
 provides-extras = ["dev", "pg", "redis"]
 
@@ -193,7 +195,7 @@ release = [
 
 [[package]]
 name = "simplebroker-pg"
-version = "4.1.0"
+version = "4.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
