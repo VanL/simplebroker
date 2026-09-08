@@ -91,7 +91,13 @@ requires a higher patch version and new immutable tags.
 
 ## Deviation Log
 
-None.
+- The first full local release attempt reached 99% of the PostgreSQL gate, then
+  an xdist worker exited without a Python traceback and its replacement hung.
+  An unrelated full Weft xdist run was competing for the same host at the
+  time. The attempt was interrupted before tags, the orphan test container was
+  removed, and the unchanged candidate was retried after `git pull --ff-only`
+  with the competing load gone. That retry completed every gate. No timeout,
+  worker-count, test, or product change was made for this local harness event.
 
 ## Tasks
 
@@ -173,3 +179,29 @@ deferred-close change.
 - Final independent review: PASS after both review rounds were incorporated;
   no remaining code, race, exception-priority, test, documentation, or plan
   finding.
+
+## Completion Evidence
+
+- Replacement commit `c56b16083ec6211c30b5e53c502a932b1673bd54`
+  passed the affected process-session, dump/load, transition, cross-thread,
+  and CLI tests (215 tests), plus 50 repetitions of the four key race proofs
+  (200 tests). Full Ruff, formatting, core mypy, generated suppression-index,
+  DOM-15, plan-context, and release dry-run gates also passed.
+- Exact-SHA workflows passed before tagging: Test `34180897433`, Test
+  Postgres Extension `34180897380`, Test Redis Extension `34180897402`,
+  CodeQL `34180897386`, and OSSF Scorecard `34180897418`. Core included green
+  Windows 3.11, 3.12, 3.13, and 3.14 jobs.
+- After a fresh `git pull --ff-only`, the unchanged command
+  `uv run --locked python bin/release.py all` completed the core, benchmark,
+  PostgreSQL, and Redis local gates and pushed immutable tags `v8.1.1`,
+  `simplebroker_pg/v4.1.1`, and `simplebroker_redis/v4.1.1`, all at the exact
+  replacement commit.
+- Tag-triggered release gates passed: core `34182960759`, PostgreSQL
+  `34182953383`, and Redis `34182957307`. Each gate verified the tested commit
+  and current tag, built and attested the distributions, published through
+  Trusted Publishing, and published the immutable GitHub Release.
+- Independent publication inspection found PyPI versions `simplebroker
+  8.1.1`, `simplebroker-pg 4.1.1`, and `simplebroker-redis 4.1.1`, each with a
+  wheel and source distribution. Their non-draft, non-prerelease GitHub
+  Releases each contain three assets (wheel, source distribution, and
+  attestation bundle).
