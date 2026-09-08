@@ -328,6 +328,8 @@ Potentially blocking core disposal happens outside the session condition. The
 deadline bounds the drain wait, not arbitrary backend constructor or close
 calls. If the deadline expires, in-flight work is not cancelled:
 
+- factory shutdown is deferred until every admitted core creation finishes, so
+  a slow constructor cannot lose its runner underneath it;
 - a late unpublished runner candidate closes itself;
 - an in-flight checkout rollback continues;
 - a core returned to the closing session is discarded rather than cached.

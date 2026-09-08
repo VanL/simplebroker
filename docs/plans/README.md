@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-09-07-process-session-deferred-close-release-plan.md | active - class 4; exact-SHA Windows failure escalated patch preparation into a process-session cleanup ownership correction and coordinated patch release |
 | 2026-09-07-test-proof-quality-plan.md | completed - class 4; independent final PASS; 3414 tests passed plus targeted PostgreSQL/Redis proof; failure diagnoses recorded; closed in the owner-authorized targeted commit |
 | 2026-09-07-critical-review-remediation-plan.md | completed - class 5+P; target identity, worker, fork, delivery, and verification fixes; independent PASS and full verification recorded; closed in the targeted remediation commit |
 | 2026-09-02-write-keep-pending-window-plan.md | completed - class 5; implements and verifies a write-only pending window (`--keep-newest N` / `Queue.write(..., keep_newest=N)`, `N` 1..9999) for dedicated single-producer queues, claimed-state clarification, backend API v9 in a minor release (core 8.1.0, extensions 4.1.0), one atomic operation per backend with measured linear cost, exact spec/README deltas, real SQL/Valkey concurrency and reservation proof, clean artifact installs, and Weft compatibility; owner directed closure without the obsolete downstream-call-site gate and with coordinated publication left as a separate release operation |

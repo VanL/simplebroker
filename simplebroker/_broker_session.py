@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -69,6 +70,13 @@ class _RegistryEntry:
 _ABANDONED_FORK_SESSION_ENTRIES: list[dict[_SessionKey, _RegistryEntry]] = []
 
 
+def _stable_exception_message(failure: BaseException) -> str:
+    """Render literal string arguments without invoking custom formatting."""
+
+    string_args = [argument for argument in failure.args if type(argument) is str]
+    return ": ".join(string_args) if string_args else "<message unavailable>"
+
+
 def _retain_cleanup_failure(
     primary: Exception | None,
     failure: Exception,
@@ -79,11 +87,25 @@ def _retain_cleanup_failure(
         return failure
     primary.add_note(
         "Additional process-session cleanup failure: "
-        f"{type(failure).__qualname__}: {failure}"
+        f"{type(failure).__qualname__}: {_stable_exception_message(failure)}"
     )
     for note in getattr(failure, "__notes__", ()):
         primary.add_note(f"Additional process-session cleanup diagnostic: {note}")
     return primary
+
+
+def _attach_process_session_cleanup_failure(
+    primary: BaseException,
+    failure: Exception,
+) -> None:
+    """Attach deferred cleanup evidence without replacing the active failure."""
+
+    primary.add_note(
+        "Additional process-session cleanup failure: "
+        f"{type(failure).__qualname__}: {_stable_exception_message(failure)}"
+    )
+    for note in getattr(failure, "__notes__", ()):
+        primary.add_note(f"Additional process-session cleanup diagnostic: {note}")
 
 
 def _capture_process_session_cleanup(
@@ -176,6 +198,7 @@ class _ProcessBrokerSession:
         self._cores: set[BrokerConnection] = set()
         self._closing = False
         self._closed = False
+        self._factory_close_deferred = False
 
     def get_connection(
         self,
@@ -222,7 +245,16 @@ class _ProcessBrokerSession:
             raise
         finally:
             if creation_started:
-                self._end_core_creation()
+                active_failure = sys.exc_info()[1]
+                try:
+                    self._end_core_creation()
+                except Exception as cleanup_failure:
+                    if active_failure is None:
+                        raise
+                    _attach_process_session_cleanup_failure(
+                        active_failure,
+                        cleanup_failure,
+                    )
 
     def _begin_operation(self) -> None:
         """Retain the session while a queue operation is using a core."""
@@ -252,12 +284,17 @@ class _ProcessBrokerSession:
                 self._operation_condition.notify_all()
 
     def _end_core_creation(self) -> None:
+        close_factory = False
         with self._operation_condition:
             if self._active_core_creations <= 0:
                 return
             self._active_core_creations -= 1
             if self._active_core_creations == 0:
+                close_factory = self._factory_close_deferred
+                self._factory_close_deferred = False
                 self._operation_condition.notify_all()
+        if close_factory:
+            self._factory.close()
 
     def cleanup_current_thread(self) -> None:
         """Recycle the current thread's cached core without releasing the session."""
@@ -300,6 +337,8 @@ class _ProcessBrokerSession:
             self._closed = True
             cores = list(self._cores)
             self._cores.clear()
+            defer_factory_close = self._active_core_creations > 0
+            self._factory_close_deferred = defer_factory_close
             if hasattr(self._thread_local, "core"):
                 delattr(self._thread_local, "core")
 
@@ -309,10 +348,11 @@ class _ProcessBrokerSession:
                 cleanup_failure,
                 partial(self._factory.close_core, core),
             )
-        cleanup_failure = _capture_process_session_cleanup(
-            cleanup_failure,
-            self._factory.close,
-        )
+        if not defer_factory_close:
+            cleanup_failure = _capture_process_session_cleanup(
+                cleanup_failure,
+                self._factory.close,
+            )
 
         if cleanup_failure is not None:
             raise cleanup_failure

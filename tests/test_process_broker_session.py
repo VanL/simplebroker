@@ -1543,13 +1543,17 @@ def test_registry_builds_factory_only_for_new_session_key(tmp_path: Path) -> Non
     assert session_a._closed
 
 
-def test_session_close_wins_race_with_core_creation(
+def test_session_close_timeout_defers_factory_close_until_core_creation_finishes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     counting_backend: CountingBackendPlugin,
 ) -> None:
     target = counting_target(tmp_path, schema="close-race")
     session = build_process_session(target)
+    monkeypatch.setattr(
+        "simplebroker._broker_session._CLOSE_ACTIVE_OPERATION_TIMEOUT",
+        0.05,
+    )
     core_created = threading.Event()
     allow_return = threading.Event()
     close_returned = threading.Event()
@@ -1599,7 +1603,9 @@ def test_session_close_wins_race_with_core_creation(
     close_thread.start()
     try:
         assert close_waiting.wait(timeout=_LIVENESS)
-        assert not close_returned.is_set()
+        assert close_returned.wait(timeout=_LIVENESS)
+        assert worker.is_alive()
+        assert counting_backend.runner_close_calls == 0
     finally:
         allow_return.set()
         worker.join(timeout=_LIVENESS)
@@ -1708,6 +1714,7 @@ def test_factory_close_does_not_cancel_checkout_rollback(
     release_entered = threading.Event()
     allow_release = threading.Event()
     creation_error = RuntimeError("core creation failed")
+    factory_close_error = RuntimeError("factory close failed")
     errors: list[BaseException] = []
     monkeypatch.setattr(
         "simplebroker._broker_session._CLOSE_ACTIVE_OPERATION_TIMEOUT",
@@ -1730,6 +1737,7 @@ def test_factory_close_does_not_cancel_checkout_rollback(
 
         def close(self) -> None:
             self.close_calls += 1
+            raise factory_close_error
 
     class DirectPlugin:
         name = "rollback-race"
@@ -1763,21 +1771,91 @@ def test_factory_close_does_not_cancel_checkout_rollback(
     worker.start()
     assert release_entered.wait(timeout=_LIVENESS)
 
-    session.close_all()
-    assert session._closed
-    assert runner.close_calls == 1
-    assert worker.is_alive()
-
-    allow_release.set()
-    worker.join(timeout=_LIVENESS)
+    try:
+        session.close_all()
+        assert session._closed
+        assert runner.close_calls == 0
+        assert worker.is_alive()
+    finally:
+        allow_release.set()
+        worker.join(timeout=_LIVENESS)
 
     assert not worker.is_alive()
     assert errors == [creation_error]
+    assert getattr(creation_error, "__notes__", []) == [
+        (
+            "Additional process-session cleanup failure: "
+            "RuntimeError: factory close failed"
+        )
+    ]
     assert runner.lease_calls == 1
     assert runner.release_calls == 1
     assert runner.close_calls == 1
     assert session._active_core_creations == 0
     assert not session._cores
+
+
+def test_deferred_factory_close_failure_keeps_closed_session_error_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnformattableCleanupFailure(RuntimeError):
+        def __str__(self) -> str:
+            raise RuntimeError("cleanup failure was stringified")
+
+    creation_entered = threading.Event()
+    allow_creation = threading.Event()
+    errors: list[BaseException] = []
+    factory_close_error = UnformattableCleanupFailure("deferred factory close failed")
+    monkeypatch.setattr(
+        "simplebroker._broker_session._CLOSE_ACTIVE_OPERATION_TIMEOUT",
+        0.05,
+    )
+
+    class Core:
+        def set_stop_event(self, stop_event: threading.Event | None) -> None:
+            del stop_event
+
+    class Factory:
+        def create(self, stop_event: threading.Event | None) -> Core:
+            del stop_event
+            creation_entered.set()
+            assert allow_creation.wait(timeout=_LIVENESS)
+            return Core()
+
+        def close_core(self, core: Core) -> None:
+            del core
+
+        def close(self) -> None:
+            raise factory_close_error
+
+    session = _ProcessBrokerSession(cast(Any, Factory()))
+
+    def get_connection() -> None:
+        try:
+            session.get_connection(None, lease_operation=False)
+        except RuntimeError as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=get_connection)
+    worker.start()
+    assert creation_entered.wait(timeout=_LIVENESS)
+    try:
+        session.close_all()
+    finally:
+        allow_creation.set()
+        worker.join(timeout=_LIVENESS)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert str(errors[0]) == "Broker session is closed"
+    assert getattr(errors[0], "__notes__", []) == [
+        (
+            "Additional process-session cleanup failure: "
+            f"{type(factory_close_error).__qualname__}: "
+            "deferred factory close failed"
+        )
+    ]
 
 
 def test_closed_factory_rejects_runner_creation(

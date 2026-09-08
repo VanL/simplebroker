@@ -223,6 +223,10 @@ def test_quiet_cmd_load_does_not_hide_another_threads_clock_skew_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    db = _db(tmp_path, "quiet.db")
+    # Keep this warning-routing test independent of first-use schema bootstrap.
+    with open_broker(db):
+        pass
     entered = threading.Event()
     release = threading.Event()
     failures: list[BaseException] = []
@@ -238,7 +242,7 @@ def test_quiet_cmd_load_does_not_hide_another_threads_clock_skew_warning(
 
     def load_quietly() -> None:
         try:
-            commands.cmd_load(str(tmp_path / "quiet.db"), quiet=True)
+            commands.cmd_load(db, quiet=True)
         except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             failures.append(exc)
 
