@@ -136,6 +136,25 @@ def test_create_activity_waiter_for_queues_calls_backend_hook_with_deduped_names
     ]
 
 
+def test_waiter_uses_queue_target_snapshot_after_descriptor_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plugin = RecordingPlugin()
+    plugin.calls.clear()
+    _install_dummy_plugin(monkeypatch, lambda: plugin)
+    target = BrokerTarget("dummy", "target", {"pool": {"max": 4}})
+    with Queue("jobs", db_path=target) as queue:
+        target.backend_options["pool"]["max"] = 8
+        waiter = create_activity_waiter_for_queues(
+            [queue], stop_event=threading.Event()
+        )
+        assert waiter is not None
+        try:
+            assert plugin.calls[-1]["backend_options"] == {"pool": {"max": 4}}
+        finally:
+            waiter.close()
+
+
 def test_queue_create_activity_waiter_still_uses_single_queue_hook(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

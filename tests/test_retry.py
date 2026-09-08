@@ -5,6 +5,9 @@ from __future__ import annotations
 import ast
 import contextvars
 import logging
+import os
+import select
+import signal
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +36,76 @@ from simplebroker._retry import test_config as retry_test_config
 
 _ALLOWED_STDLIB_ROOTS = frozenset(sys.stdlib_module_names) | {"__future__"}
 _THREAD_TEST_TIMEOUT = 5.0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize("hold_guard", [False, True], ids=["control", "held-lock"])
+def test_retry_recovers_inherited_hot_loop_guard(hold_guard: bool) -> None:
+    acquired = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        if hold_guard:
+            retry_module._hot_loop_lock.acquire()
+        try:
+            acquired.set()
+            release.wait(15.0)
+        finally:
+            if hold_guard:
+                retry_module._hot_loop_lock.release()
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    read_fd, write_fd = os.pipe()
+    child_pid: int | None = None
+    try:
+        assert acquired.wait(_THREAD_TEST_TIMEOUT)
+        child_pid = os.fork()
+        if child_pid == 0:
+            os.close(read_fd)
+            status = 1
+            try:
+                attempts = 0
+
+                def operation() -> str:
+                    nonlocal attempts
+                    attempts += 1
+                    if attempts == 1:
+                        raise ValueError("retry once")
+                    return "completed"
+
+                result = execute_retry(
+                    operation,
+                    retry_on=lambda exc: isinstance(exc, ValueError),
+                    stop=stop_after_attempt(2),
+                    wait_gen_kwargs={"factor": 0.01},
+                )
+                assert attempts == 2
+                os.write(write_fd, result.encode())
+                status = 0
+            finally:
+                os._exit(status)
+
+        os.close(write_fd)
+        write_fd = -1
+        ready, _, _ = select.select([read_fd], [], [], _THREAD_TEST_TIMEOUT)
+        assert ready, "child retry hung on the inherited hot-loop guard"
+        assert os.read(read_fd, 4096) == b"completed"
+        _, status = os.waitpid(child_pid, 0)
+        child_pid = None
+        assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+    finally:
+        if child_pid is not None:
+            os.kill(child_pid, signal.SIGKILL)
+            os.waitpid(child_pid, 0)
+        os.close(read_fd)
+        if write_fd != -1:
+            os.close(write_fd)
+        release.set()
+        holder.join(timeout=_THREAD_TEST_TIMEOUT)
+    assert not holder.is_alive()
+    assert _capture_retry_sleeps() == [1.0]
 
 
 def _capture_retry_sleeps() -> list[float]:

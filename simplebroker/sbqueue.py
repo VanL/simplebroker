@@ -141,13 +141,18 @@ def _normalize_sqlite_waiter_target(target: str) -> str:
 
 
 def _canonicalize_queue_target(target: str | BrokerTarget) -> str | BrokerTarget:
-    """Freeze SQLite targets to their construction-time absolute path."""
+    """Bind Queue storage and identity to one target snapshot [SB-API-2]."""
     if isinstance(target, BrokerTarget):
-        if target.backend_name != "sqlite":
-            return target
         return replace(
             target,
-            target=_normalize_sqlite_waiter_target(target.target),
+            target=(
+                _normalize_sqlite_waiter_target(target.target)
+                if target.backend_name == "sqlite"
+                else target.target
+            ),
+            backend_options=cast(
+                dict[str, Any], snapshot_key_material(target.backend_options)
+            ),
         )
     return _normalize_sqlite_waiter_target(str(target))
 
@@ -273,8 +278,15 @@ class Queue:
 
     @property
     def db_target(self) -> str | BrokerTarget:
-        """Return the configured broker target for this queue."""
+        """Report the bound target without exposing its mutable options."""
 
+        if isinstance(self._db_path, BrokerTarget):
+            return replace(
+                self._db_path,
+                backend_options=cast(
+                    dict[str, Any], snapshot_key_material(self._db_path.backend_options)
+                ),
+            )
         return self._db_path
 
     @property
@@ -712,10 +724,11 @@ class Queue:
             limit: Maximum number of messages to read
             with_timestamps: If True, return list of (message, timestamp) tuples
             delivery_guarantee: Delivery contract for materializing messages.
-                Materialized batch APIs commit before returning, so
-                ``"at_least_once"`` is satisfied by the stricter exactly-once
-                behavior. Use ``read_generator()`` when you need retry-on-stop
-                batch processing.
+                Materialized batch APIs commit before returning.
+                ``"at_least_once"`` is accepted for compatibility; it does not
+                defer commit or roll back caller processing failures. Use
+                ``read_generator()`` when you need rollback of an incomplete
+                yielded batch.
             after_timestamp: Only read messages newer than this timestamp
             before_timestamp: Only read messages older than this timestamp
 
@@ -1495,10 +1508,11 @@ class Queue:
             limit: Maximum number of messages to move
             with_timestamps: If True, return list of (message, timestamp) tuples
             delivery_guarantee: Delivery contract for materializing messages.
-                Materialized batch APIs commit before returning, so
-                ``"at_least_once"`` is satisfied by the stricter exactly-once
-                behavior. Use ``move_generator()`` when you need retry-on-stop
-                batch processing.
+                Materialized batch APIs commit before returning.
+                ``"at_least_once"`` is accepted for compatibility; it does not
+                defer commit or roll back caller processing failures. Use
+                ``move_generator()`` when you need rollback of an incomplete
+                yielded batch.
             after_timestamp: Only move messages newer than this timestamp
             before_timestamp: Only move messages older than this timestamp
             require_unclaimed: If True (default), only move unclaimed messages

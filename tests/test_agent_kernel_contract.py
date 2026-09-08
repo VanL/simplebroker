@@ -65,7 +65,7 @@ def test_agent_kernel_cites_delivery_contract() -> None:
     assert "[SB-DELIVERY-8]" in section
 
 
-def test_agent_kernel_forbids_delete_while_peek_stream() -> None:
+def test_agent_kernel_peek_section_mentions_related_operations() -> None:
     text = KERNEL.read_text(encoding="utf-8")
     section = _markdown_section(text, "### Peek streams and deletes")
     normalized = " ".join(section.lower().split())
@@ -77,7 +77,7 @@ def test_agent_kernel_forbids_delete_while_peek_stream() -> None:
     assert "close" in normalized
 
 
-def test_agent_kernel_does_not_claim_identical_cli_python_packaging() -> None:
+def test_agent_kernel_mentions_cli_and_python_surfaces() -> None:
     text = KERNEL.read_text(encoding="utf-8")
     # Identifier tokens; bold-marker-dependent sentence pins removed
     # (audit Task 6.2 — the old comment itself records the arms race:

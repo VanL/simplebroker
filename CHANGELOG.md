@@ -5,6 +5,22 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Queues now retain their effective target when a caller edits a supplied
+  `BrokerTarget` or a value returned by `Queue.db_target`. Storage, move
+  compatibility checks, and activity waiters continue to use the original
+  target; edited descriptors can still configure new Queues.
+- Fresh Queues and retries in forked children recover the process-session
+  registry and retry diagnostic locks before acquiring them, avoiding hangs
+  when another parent thread held those locks at fork.
+- The agent-kernel worker now routes failed tasks with an atomic exact-ID move
+  and stops on reservation, acknowledgement, or routing errors. Delivery docs
+  clarify that materialized `at_least_once` calls commit before returning and
+  cannot roll back caller processing failures.
+
 ## [8.1.0] - 2026-09-02
 
 ### Added

@@ -167,6 +167,13 @@ initialization and maintenance, and the backend activity registries. Checking
 after lock acquisition is not recovery: the child may already be waiting on a
 lock held by a vanished parent thread.
 
+The process-session registry checks PID before acquire, release, or shutdown
+takes its global lock. Child recovery retains the inherited entry graph without
+finalizing backend resources, then creates an empty registry and a fresh lock.
+Child shutdown touches only child-owned entries. The retry hot-loop diagnostic
+guard also resets its lock and counters before acquisition; its warning remains
+process-wide. Both use the existing single-threaded first-child-access rule.
+
 Transaction-owner progress belongs to the runner, not the process session.
 When several thread-local cores share one runner, their separate core locks do
 not serialize a transaction. The runner must keep a successful transaction
@@ -239,6 +246,14 @@ caller's source mapping from changing a session target while preserving the
 existing shallow nested values, pickling, `dataclasses.replace()`, and direct
 mapping mutation compatibility. The JSON transport decoder validates boolean
 and optional-path field types exactly; it does not reinterpret truthy payloads.
+
+A `Queue` binds a separate effective target at construction using the same
+container snapshot rules. Its persistent session, later ephemeral operations,
+move compatibility checks, and waiter arguments therefore describe the same
+target even when the original descriptor is edited. `Queue.db_target` returns
+a detached reporting value so it cannot expose the internal options. Edited
+standalone descriptors can still configure new handles. The acquisition
+snapshot remains necessary for direct `DBConnection` consumers.
 
 ### SQLite ownership admission
 

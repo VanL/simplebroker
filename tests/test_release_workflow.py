@@ -3,8 +3,10 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 
@@ -205,6 +207,8 @@ def test_development_tool_floors_are_current() -> None:
         "pytest-timeout",
         "aiosqlite",
         "aiosqlitepool",
+        "pyyaml",
+        "types-pyyaml",
     }
     for name, requirement in requirements.items():
         assert any(
@@ -580,36 +584,91 @@ def test_release_gate_uploads_python_distributions_and_attestations() -> None:
         assert "id-token" not in github_release_section
 
 
+def _assert_release_dependencies(
+    workflow_path: str, workflow_text: str
+) -> dict[str, Any]:
+    """Check release prerequisites, independently of YAML declaration order."""
+    workflow = yaml.safe_load(workflow_text)
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict), workflow_path
+    required = {
+        "verify-tag-current": {"require-tests"},
+        "build": {"require-tests", "verify-tag-current"},
+        "stage-github-release": {"build"},
+        "publish-to-pypi": {"stage-github-release"},
+        "publish-github-release": {"stage-github-release", "publish-to-pypi"},
+    }
+    if workflow_path in {"release-gate-pg.yml", "release-gate-redis.yml"}:
+        for job_name in (
+            "verify-tag-current",
+            "build",
+            "stage-github-release",
+            "publish-github-release",
+        ):
+            required[job_name].add("extract-version")
+    for job_name, prerequisites in required.items():
+        context = f"{workflow_path}::{job_name}"
+        assert job_name in jobs, context
+        needs = jobs[job_name].get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+        assert isinstance(needs, list), context
+        assert all(isinstance(name, str) for name in needs), context
+        assert prerequisites <= set(needs), (
+            f"{context}: missing {prerequisites - set(needs)}"
+        )
+        assert prerequisites <= jobs.keys(), f"{context}: prerequisite job missing"
+    return jobs
+
+
 def test_release_gate_stages_draft_before_pypi_and_publishes_last() -> None:
     for workflow_path in RELEASE_WORKFLOWS:
-        workflow_text = _workflow_text(workflow_path)
+        jobs = _assert_release_dependencies(
+            workflow_path, _workflow_text(workflow_path)
+        )
+        stage_steps = jobs["stage-github-release"]["steps"]
+        publish_steps = jobs["publish-github-release"]["steps"]
+        release_actions = [
+            step
+            for step in stage_steps
+            if step.get("uses", "").startswith("softprops/action-gh-release@")
+        ]
 
-        require_index = workflow_text.index("  require-tests:")
-        verify_index = workflow_text.index("  verify-tag-current:")
-        build_index = workflow_text.index("  build:")
-        stage_index = workflow_text.index("  stage-github-release:")
-        pypi_index = workflow_text.index("  publish-to-pypi:")
-        publish_index = workflow_text.index("  publish-github-release:")
+        assert any("replace-draft" in step.get("run", "") for step in stage_steps)
+        assert release_actions
+        assert all(step["with"]["draft"] is True for step in release_actions)
+        assert any("publish-draft" in step.get("run", "") for step in publish_steps)
+        assert not any(
+            step.get("uses", "").startswith("softprops/action-gh-release@")
+            for step in publish_steps
+        )
+        assert all("files" not in step.get("with", {}) for step in publish_steps)
 
-        assert require_index < verify_index < build_index < stage_index
-        assert stage_index < pypi_index < publish_index
-        stage_section = workflow_text[stage_index:pypi_index]
-        pypi_section = workflow_text[pypi_index:publish_index]
-        publish_section = workflow_text[publish_index:]
-        verify_section = workflow_text[verify_index:build_index]
-        build_section = workflow_text[build_index:stage_index]
 
-        assert "- require-tests" in verify_section
-        assert "- verify-tag-current" in build_section
-        assert "- build" in stage_section
-        assert "replace-draft" in stage_section
-        assert "draft: true" in stage_section
-        assert "uses: softprops/action-gh-release@" in stage_section
-        assert "publish-draft" in publish_section
-        assert "uses: softprops/action-gh-release@" not in publish_section
-        assert "files:" not in publish_section
-        assert "- stage-github-release" in pypi_section
-        assert "- publish-to-pypi" in publish_section
+def test_release_dependencies_reject_commented_staging_edge() -> None:
+    prefix, pypi = _workflow_text("release-gate.yml").split("  publish-to-pypi:", 1)
+    pypi = pypi.replace(
+        "    needs:\n      - stage-github-release\n",
+        "    needs: []\n    # - stage-github-release\n",
+        1,
+    )
+    mutated = prefix + "  publish-to-pypi:" + pypi
+    with pytest.raises(
+        AssertionError, match="publish-to-pypi: missing.*stage-github-release"
+    ):
+        _assert_release_dependencies("release-gate.yml", mutated)
+
+
+def test_release_dependencies_allow_equivalent_job_declarations() -> None:
+    workflow_text = _workflow_text("release-gate.yml")
+    jobs = yaml.safe_load(workflow_text)["jobs"]
+    for job in jobs.values():
+        if len(job.get("needs", [])) == 1:
+            job["needs"] = job["needs"][0]
+    jobs["stage-github-release"]["needs"] = ["require-tests", "build"]
+    reordered = workflow_text.split("\njobs:\n", 1)[0] + "\n"
+    reordered += yaml.safe_dump({"jobs": dict(reversed(jobs.items()))}, sort_keys=False)
+    _assert_release_dependencies("release-gate.yml", reordered)
 
 
 def test_release_gate_uses_one_shared_publication_state_machine() -> None:

@@ -864,6 +864,8 @@ Local adoption record (soft-retired; not a live path claim):
 
 Local plans:
 
+- [Critical review remediation](../plans/2026-09-07-critical-review-remediation-plan.md)
+
 - retired: 2026-08-06-ruff-suppression-registry-extraction-plan — source
   `3cb6e091`; see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-plan-context-gate-plan — source `94e15bc`; see the

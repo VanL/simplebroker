@@ -169,9 +169,17 @@ yield — the consume claim boundary of [SB-DELIVERY-1] per item.
 A batch is made available to the iterator and commits only after the entire
 batch has been yielded. Graceful early close within a batch makes the
 uncommitted batch available again, so items already observed in that batch may
-be delivered again. Materialized `read_many()` / `move_many()` commit before
-return; passing `"at_least_once"` there is accepted and satisfied by that
-stricter commit-before-return behavior.
+be delivered again.
+
+Materialized `read_many()` / `move_many()` commit before returning their
+result lists. They accept `"at_least_once"` for compatibility, but that value
+does not defer their commit or provide rollback when caller processing
+fails. A failure after a consume claim commits and before the result reaches
+the caller can leave a message claimed without a handoff, as specified in
+[SB-DELIVERY-1]. A committed move retains the message at its destination
+under [SB-DELIVERY-3]. Use a transactional generator when rollback of an
+incomplete yielded batch is required; neither form promises successful
+application processing.
 
 `Queue.stream_messages(...)` with batch processing uses the same delivery
 vocabulary where applicable.
@@ -331,6 +339,8 @@ _Implementation mapping_:
 | [SB-DELIVERY-9] | `tests/test_delivery_contract_sb_delivery.py::test_write_time_pending_window_contract_binds_public_surfaces_and_backends`; `tests/test_keep_newest.py`; `tests/test_write_visibility.py::test_write_keep_claims_between_insert_and_commit`; `tests/test_custom_runner_integration.py::test_write_keep_rolls_back_insert_high_water_and_claims_together`; `extensions/simplebroker_pg/tests/test_pg_write_keep.py`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py` (one-EVAL, keep-window, reservation, and integrity cases); `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py::test_redis_write_fires_transition_table` |
 
 ## Related Plans
+
+- [Critical review remediation](../plans/2026-09-07-critical-review-remediation-plan.md)
 
 - active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
   — owns [SB-DELIVERY-9] and the [SB-DELIVERY-1] claimed-state clarification

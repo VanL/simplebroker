@@ -87,6 +87,17 @@ Public ways to bind a broker for library use:
 - **`resolve_config`** / **`snapshot_config`** — resolve ordinary configuration
   or retain one complete snapshot for handles and discovery.
 
+A `Queue` binds its effective target at construction. Supported mutable
+containers in a supplied target's backend options are recursively detached
+using the same value and opaque-identity rules as process-session identity.
+Later mutation of the supplied descriptor does not retarget that Queue,
+including its ephemeral operations, move compatibility checks, or activity
+waiters. A newly constructed Queue may use the descriptor's edited values.
+`Queue.db_target` reports a value-equivalent detached descriptor when the
+effective target is a `BrokerTarget`; changing supported containers in that
+returned value does not alter the Queue. String targets remain strings.
+Caller-supplied runners retain their existing resource and identity ownership.
+
 Project configuration is a trusted developer input. When the configured target
 string contains a recognized inline password, project-config loading emits a
 redacted advisory warning that does not include the password. SimpleBroker does
@@ -843,6 +854,8 @@ _Implementation mapping_:
 | [SB-API-13] | `tests/test_python_library_api_contract_sb_api.py::test_api_postgres_connection_inspection_contract`; `tests/test_backend_probe.py`; `extensions/simplebroker_pg/tests/test_connection_stats.py` (shape, ordinary role, cross-role/database, lifecycle, autovacuum, PG15, and PG18) |
 
 ## Related Plans
+
+- [Critical review remediation](../plans/2026-09-07-critical-review-remediation-plan.md)
 
 - active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
   — extends [SB-API-4], [SB-API-10], [SB-API-11], and [SB-API-12] for the

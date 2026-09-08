@@ -685,6 +685,31 @@ def test_session_key_and_lazy_factory_share_one_recursive_snapshot(
     }
 
 
+def test_ephemeral_queue_detaches_target_input_and_reporting(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+) -> None:
+    target = counting_target(tmp_path, pool={"hosts": ["primary"]})
+    with Queue("jobs", db_path=target) as queue:
+        queue.write("first")
+        reported = queue.db_target
+        assert isinstance(reported, BrokerTarget)
+        reported.backend_options["pool"]["hosts"].append("reported-edit")
+        target.backend_options["pool"]["hosts"].append("caller-edit")
+        queue.write("second")
+
+        current = queue.db_target
+        assert isinstance(current, BrokerTarget)
+        assert current.backend_options == {"pool": {"hosts": ["primary"]}}
+        assert queue.peek_many(limit=2) == ["first", "second"]
+
+    assert counting_backend.runner_backend_options
+    assert all(
+        options["pool"] == {"hosts": ["primary"]}
+        for options in counting_backend.runner_backend_options
+    )
+
+
 def test_persistent_queues_different_config_do_not_share_backend_runner(
     tmp_path: Path,
     counting_backend: CountingBackendPlugin,

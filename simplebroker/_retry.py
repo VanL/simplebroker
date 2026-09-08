@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import logging
+import os
 import random
 import threading
 import time
@@ -26,6 +27,7 @@ from typing import Any, TypeVar
 # function; production behavior is identical.
 _monotonic = time.monotonic
 _uniform = random.uniform
+_getpid = os.getpid
 
 # Hot-loop detection: this many retry wake-ups inside this window (in
 # seconds) triggers the diagnostic slow-down path.
@@ -251,9 +253,18 @@ def _init_wait_gen(
 
 _hot_loop_data: dict[str, float | int] = {"last_retry": 0.0, "count": 0}
 _hot_loop_lock = threading.Lock()
+_hot_loop_pid = _getpid()
 
 
 def _check_hot_loop() -> None:
+    global _hot_loop_data, _hot_loop_lock, _hot_loop_pid
+    current_pid = _getpid()
+    if current_pid != _hot_loop_pid:
+        # A vanished parent thread may own the inherited diagnostic guard.
+        # Reset before locking, just as process-owned backend resources do.
+        _hot_loop_data = {"last_retry": 0.0, "count": 0}
+        _hot_loop_lock = threading.Lock()
+        _hot_loop_pid = current_pid
     now = _monotonic()
     with _hot_loop_lock:
         prev = float(_hot_loop_data["last_retry"])

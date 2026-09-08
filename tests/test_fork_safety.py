@@ -2,12 +2,96 @@
 
 import multiprocessing
 import os
+import select
+import signal
 import sys
+import threading
 from pathlib import Path
 
 import pytest
 
 from simplebroker.db import BrokerDB
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize("hold_guard", [False, True], ids=["control", "held-lock"])
+def test_fresh_queue_recovers_inherited_session_registry(
+    workdir: Path, hold_guard: bool
+) -> None:
+    from simplebroker import Queue
+    from simplebroker._broker_session import (
+        _ABANDONED_FORK_SESSION_ENTRIES,
+        _registry,
+    )
+
+    with Queue("parent", db_path=str(workdir / "parent.db"), persistent=True) as parent:
+        parent.write("before fork")
+        inherited_entries = _registry._entries
+        acquired = threading.Event()
+        release = threading.Event()
+
+        def hold() -> None:
+            if hold_guard:
+                _registry._lock.acquire()
+            try:
+                acquired.set()
+                release.wait(15.0)
+            finally:
+                if hold_guard:
+                    _registry._lock.release()
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        read_fd, write_fd = os.pipe()
+        child_pid: int | None = None
+        try:
+            assert acquired.wait(5.0)
+            child_pid = os.fork()
+            if child_pid == 0:
+                os.close(read_fd)
+                status = 1
+                try:
+                    with Queue(
+                        "child", db_path=str(workdir / "child.db"), persistent=True
+                    ) as child:
+                        child.write("child message")
+                        assert child.read_one() == "child message"
+                    # Exercise the normal exit hook, which os._exit skips below.
+                    _registry.close_all()
+                    assert any(
+                        graph is inherited_entries
+                        for graph in _ABANDONED_FORK_SESSION_ENTRIES
+                    )
+                    assert all(
+                        not entry.session._closed
+                        for entry in inherited_entries.values()
+                    )
+                    os.write(write_fd, b"completed")
+                    status = 0
+                finally:
+                    os._exit(status)
+
+            os.close(write_fd)
+            write_fd = -1
+            ready, _, _ = select.select([read_fd], [], [], 5.0)
+            assert ready, "fresh child Queue hung on the inherited session registry"
+            assert os.read(read_fd, 4096) == b"completed"
+            _, status = os.waitpid(child_pid, 0)
+            child_pid = None
+            assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+        finally:
+            if child_pid is not None:
+                os.kill(child_pid, signal.SIGKILL)
+                os.waitpid(child_pid, 0)
+            os.close(read_fd)
+            if write_fd != -1:
+                os.close(write_fd)
+            release.set()
+            holder.join(timeout=5.0)
+        assert not holder.is_alive()
+        parent.write("after fork")
+        assert parent.read_many(2) == ["before fork", "after fork"]
 
 
 def _worker_write(db_path: str, worker_id: int, count: int):

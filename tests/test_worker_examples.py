@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -16,6 +17,7 @@ from simplebroker import Queue
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SAFE_WORKER = REPO_ROOT / "examples" / "safe_worker.sh"
 RESILIENT_WORKER = REPO_ROOT / "examples" / "resilient_worker.sh"
+AGENT_KERNEL = REPO_ROOT / "docs" / "agent-kernel.md"
 MESSAGE_ID = "1722783600000000000"
 MAX_MESSAGE_ID = str(2**63 - 1)
 
@@ -204,6 +206,137 @@ def _broker_argv(env: dict[str, str]) -> list[list[str]]:
 
 def _set_handler(script: Path, env: dict[str, str], command: str) -> None:
     env["PROCESS_TASK" if script == SAFE_WORKER else "PROCESS_EVENT"] = command
+
+
+@pytest.fixture
+def kernel_worker_env(tmp_path: Path, worker_env: dict[str, str]) -> dict[str, str]:
+    if shutil.which("jq") is None:
+        pytest.skip("jq is required to exercise the kernel worker")
+    bin_dir = tmp_path / "kernel-bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "broker",
+        f"""#!/bin/bash
+if [ "${{3-}}" = "${{BROKER_FAIL_OPERATION:-}}" ] && [ "${{4-}}" = inflight ]; then
+    echo "injected inflight operation failure" >&2
+    exit 1
+fi
+exec env PYTHONPATH={shlex.quote(str(REPO_ROOT))} \
+    {shlex.quote(sys.executable)} -m simplebroker "$@"
+""",
+    )
+    _write_executable(
+        bin_dir / "process_task_json",
+        """#!/bin/bash
+cat > "$HANDLER_CALL_LOG"
+exit "$HANDLER_STATUS"
+""",
+    )
+    worker_env.update(
+        {
+            "PATH": f"{bin_dir}:{worker_env['PATH']}",
+            "DB": str(tmp_path / "kernel.db"),
+            "HANDLER_STATUS": "0",
+        }
+    )
+    return worker_env
+
+
+def _run_kernel_worker(
+    tmp_path: Path, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    text = AGENT_KERNEL.read_text(encoding="utf-8")
+    section = text.split("### Move-reserve worker\n", 1)[1]
+    block = section.split("```bash\n", 1)[1].split("```", 1)[0]
+    script = tmp_path / "kernel-worker.sh"
+    script.write_text(block, encoding="utf-8")
+    return _run_worker(script, tmp_path, env)
+
+
+def _kernel_messages(env: dict[str, str], name: str) -> list[tuple[str, int]]:
+    with Queue(name, db_path=env["DB"]) as queue:
+        return queue.peek_many(limit=10, with_timestamps=True, include_claimed=True)
+
+
+def test_kernel_worker_routes_original_message_despite_write_size_limit(
+    tmp_path: Path, kernel_worker_env: dict[str, str]
+) -> None:
+    body = "line one\nline two\x00end\n\n"
+    message_id = 1234567890123456789
+    with Queue("tasks", db_path=kernel_worker_env["DB"]) as queue:
+        queue.insert_messages([(body, message_id)])
+    kernel_worker_env.update({"HANDLER_STATUS": "7", "BROKER_MAX_MESSAGE_SIZE": "1"})
+
+    result = _run_kernel_worker(tmp_path, kernel_worker_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _kernel_messages(kernel_worker_env, "tasks") == []
+    assert _kernel_messages(kernel_worker_env, "inflight") == []
+    assert _kernel_messages(kernel_worker_env, "dlq") == [(body, message_id)]
+    envelope = json.loads(Path(kernel_worker_env["HANDLER_CALL_LOG"]).read_text())
+    assert envelope["message"] == body
+    assert envelope["timestamp"] == str(message_id)
+
+
+def test_kernel_worker_acknowledges_successful_handler(
+    tmp_path: Path, kernel_worker_env: dict[str, str]
+) -> None:
+    with Queue("tasks", db_path=kernel_worker_env["DB"]) as queue:
+        message_id = queue.write("work\nwith newline")
+
+    result = _run_kernel_worker(tmp_path, kernel_worker_env)
+
+    assert result.returncode == 0, result.stderr
+    assert all(
+        _kernel_messages(kernel_worker_env, name) == []
+        for name in ("tasks", "inflight", "dlq")
+    )
+    envelope = json.loads(Path(kernel_worker_env["HANDLER_CALL_LOG"]).read_text())
+    assert envelope["message"] == "work\nwith newline"
+    assert envelope["timestamp"] == str(message_id)
+
+
+@pytest.mark.parametrize(
+    ("handler_status", "operation"), [("7", "move"), ("0", "delete")]
+)
+def test_kernel_worker_stops_when_inflight_transition_fails(
+    tmp_path: Path,
+    kernel_worker_env: dict[str, str],
+    handler_status: str,
+    operation: str,
+) -> None:
+    with Queue("tasks", db_path=kernel_worker_env["DB"]) as queue:
+        message_id = queue.write("retained work")
+    kernel_worker_env.update(
+        {"HANDLER_STATUS": handler_status, "BROKER_FAIL_OPERATION": operation}
+    )
+
+    result = _run_kernel_worker(tmp_path, kernel_worker_env)
+
+    assert result.returncode != 0
+    assert "injected inflight operation failure" in result.stderr
+    assert _kernel_messages(kernel_worker_env, "tasks") == []
+    assert _kernel_messages(kernel_worker_env, "inflight") == [
+        ("retained work", message_id)
+    ]
+    assert _kernel_messages(kernel_worker_env, "dlq") == []
+
+
+@pytest.mark.parametrize("operational_failure", [False, True])
+def test_kernel_worker_distinguishes_empty_reservation_from_error(
+    tmp_path: Path,
+    kernel_worker_env: dict[str, str],
+    operational_failure: bool,
+) -> None:
+    if operational_failure:
+        kernel_worker_env["DB"] = str(tmp_path)
+
+    result = _run_kernel_worker(tmp_path, kernel_worker_env)
+
+    assert result.returncode == (1 if operational_failure else 0)
+    if operational_failure:
+        assert result.stderr
+    assert not Path(kernel_worker_env["HANDLER_CALL_LOG"]).exists()
 
 
 def test_safe_worker_requires_handler_before_broker_call(

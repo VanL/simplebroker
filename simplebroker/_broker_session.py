@@ -65,6 +65,10 @@ class _RegistryEntry:
     refcount: int = 0
 
 
+# Retain inherited resource graphs without invoking their parent-owned cleanup.
+_ABANDONED_FORK_SESSION_ENTRIES: list[dict[_SessionKey, _RegistryEntry]] = []
+
+
 def _retain_cleanup_failure(
     primary: Exception | None,
     failure: Exception,
@@ -318,8 +322,22 @@ class _ProcessBrokerSessionRegistry:
     """Reference-counted registry for process-local broker sessions."""
 
     def __init__(self) -> None:
+        self._pid = _getpid()
         self._lock = threading.RLock()
         self._entries: dict[_SessionKey, _RegistryEntry] = {}
+
+    def _recover_after_fork_if_needed(self) -> None:
+        """Replace process state before acquire, release, or shutdown takes a lock."""
+        current_pid = _getpid()
+        if current_pid == self._pid:
+            return
+        # First child access follows the runner's single-threaded recovery rule.
+        # Closing or dropping this graph could enter a vanished parent's locks.
+        if self._entries:
+            _ABANDONED_FORK_SESSION_ENTRIES.append(self._entries)
+        self._entries = {}
+        self._lock = threading.RLock()
+        self._pid = current_pid
 
     def acquire(
         self,
@@ -328,6 +346,7 @@ class _ProcessBrokerSessionRegistry:
         config: ResolvedConfig,
         factory_builder: _SessionCoreFactoryBuilder,
     ) -> tuple[_SessionKey, _ProcessBrokerSession]:
+        self._recover_after_fork_if_needed()
         spec = _session_spec(db_path, config)
         key = spec.key
         with self._lock:
@@ -341,6 +360,7 @@ class _ProcessBrokerSessionRegistry:
             return key, entry.session
 
     def release(self, key: _SessionKey) -> None:
+        self._recover_after_fork_if_needed()
         session: _ProcessBrokerSession | None = None
         with self._lock:
             entry = self._entries.get(key)
@@ -355,6 +375,7 @@ class _ProcessBrokerSessionRegistry:
         session.close_all()
 
     def close_all(self) -> None:
+        self._recover_after_fork_if_needed()
         with self._lock:
             entries = list(self._entries.values())
             self._entries.clear()

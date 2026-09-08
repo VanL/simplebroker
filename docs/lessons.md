@@ -594,3 +594,10 @@ Dated moment-tier entries (foldable after age floor and distillation).
   identity and Trusted Publishing policy follow the workflow ref, so a branch
   dispatch can build the intended commit while carrying the wrong publication
   identity. (Harvested from the release-gate recovery plan at `813dd7ce`.)
+- 2026-09-07: When a handle snapshots storage configuration, identity checks,
+  waiters, and reporting accessors must describe that same snapshot. Copying
+  only at session acquisition left a Queue's mutable descriptor able to pass a
+  cross-target move check while storage still used the original target.
+  Preserve editable descriptors for future handles; detach both the handle's
+  input and its reporting value. (Critical-review remediation, real Valkey
+  namespace regression.)

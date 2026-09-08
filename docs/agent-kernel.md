@@ -269,30 +269,60 @@ DB="/path/to/.broker.db"   # or any explicit path
 # Write / claim (fire-and-forget; can lose work on crash after read)
 broker -f "$DB" write tasks "do thing"
 broker -f "$DB" read tasks --json
+```
 
-# Preferred job worker: atomic move reserves work (safe under concurrency)
-# Create inflight by first move; empty move/read exits 2 when nothing left.
-while msg_json=$(broker -f "$DB" move tasks inflight --json 2>/dev/null); do
-  [ -z "$msg_json" ] && break
-  id=$(echo "$msg_json" | jq -r '.timestamp')
-  msg=$(echo "$msg_json" | jq -r '.message')
-  if process "$msg"; then
-    broker -f "$DB" delete inflight -m "$id"
+### Move-reserve worker
+
+Set `DB` to the explicit database path and provide a `process_task_json`
+executable on `PATH`. It reads one JSON envelope from stdin and returns zero
+on successful processing. The body stays encoded, preserving newlines and NUL
+characters without passing message text through shell arguments.
+
+This finite drain reserves each message atomically into `inflight`, then
+deletes its exact ID after handler success or moves it to `dlq` after handler
+failure. Empty input ends the drain. Operational errors stop it; inspect the
+named queues before retrying. A crash can leave work in `inflight`, and handler
+side effects may already have occurred. Recovery policy belongs to the caller.
+
+```bash
+set -euo pipefail
+: "${DB:?Set DB to the explicit database path}"
+command -v process_task_json >/dev/null || {
+  echo "process_task_json must be an executable on PATH" >&2
+  exit 1
+}
+
+while true; do
+  if msg_json=$(broker -f "$DB" move tasks inflight --json); then
+    id=$(printf '%s\n' "$msg_json" | jq -er '.timestamp | strings') || {
+      echo "Could not read the reserved ID; inspect inflight" >&2
+      exit 1
+    }
   else
-    # leave on inflight for retry/ops, or move to dlq
-    echo "$msg" | broker -f "$DB" write dlq -
-    broker -f "$DB" delete inflight -m "$id"
+    status=$?
+    [ "$status" -eq 2 ] && break
+    echo "Reservation failed; inspect tasks and inflight" >&2
+    exit "$status"
+  fi
+
+  handler_status=0
+  printf '%s\n' "$msg_json" | process_task_json || handler_status=${PIPESTATUS[1]}
+  if [ "$handler_status" -eq 0 ]; then
+    broker -f "$DB" delete inflight -m "$id" || {
+      echo "Acknowledgement failed after processing; inspect inflight before retrying" >&2
+      exit 1
+    }
+  else
+    broker -f "$DB" move inflight dlq -m "$id" >/dev/null || {
+      echo "Dead-letter move failed; inspect inflight and dlq" >&2
+      exit 1
+    }
   fi
 done
-
-# Single-consumer only: one peek at a time (not peek --all + delete-in-loop)
-while msg_json=$(broker -f "$DB" peek tasks --json 2>/dev/null); do
-  [ -z "$msg_json" ] && break
-  id=$(echo "$msg_json" | jq -r '.timestamp')
-  msg=$(echo "$msg_json" | jq -r '.message')
-  process "$msg" && broker -f "$DB" delete tasks -m "$id"
-done
 ```
+
+For a single-consumer peek/process/delete loop, use
+[`examples/safe_worker.sh`](../examples/safe_worker.sh).
 
 ```python
 from simplebroker import Queue

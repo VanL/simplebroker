@@ -14,6 +14,7 @@ from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys
 
+from simplebroker import BrokerTarget, Queue, resolve_isolated_config
 from simplebroker._exceptions import (
     IntegrityError,
     MessageError,
@@ -22,6 +23,53 @@ from simplebroker._exceptions import (
 )
 
 pytestmark = [pytest.mark.redis_only]
+
+
+def test_queue_move_rejects_mutated_descriptor_namespace(
+    redis_url: str, redis_namespace: str
+) -> None:
+    plugin = get_backend_plugin()
+    other_namespace = f"{redis_namespace}_other"
+    target = BrokerTarget("redis", redis_url, {"namespace": redis_namespace})
+    config = resolve_isolated_config({})
+    try:
+        with ExitStack() as stack:
+            source = stack.enter_context(
+                Queue("source", db_path=target, persistent=True, config=config)
+            )
+            message_id = source.write("original payload")
+            target.backend_options["namespace"] = other_namespace
+            destination = stack.enter_context(
+                Queue("destination", db_path=target, persistent=True, config=config)
+            )
+            same_target_destination = stack.enter_context(
+                Queue(
+                    "destination",
+                    db_path=BrokerTarget(
+                        "redis", redis_url, {"namespace": redis_namespace}
+                    ),
+                    config=config,
+                )
+            )
+
+            with pytest.raises(ValueError, match="different broker targets"):
+                source.move(destination)
+
+            assert source.peek_one(with_timestamps=True) == (
+                "original payload",
+                message_id,
+            )
+            assert destination.peek() is None
+            assert same_target_destination.peek() is None
+            assert source.move(same_target_destination) == {
+                "message": "original payload",
+                "timestamp": message_id,
+            }
+            assert same_target_destination.peek() == "original payload"
+            assert destination.peek() is None
+    finally:
+        for namespace in (redis_namespace, other_namespace):
+            plugin.cleanup_target(redis_url, backend_options={"namespace": namespace})
 
 
 def test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval(

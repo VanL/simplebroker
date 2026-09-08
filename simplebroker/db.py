@@ -2556,10 +2556,11 @@ class BrokerCore:
             limit: Maximum number of messages to claim
             with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
             delivery_guarantee: Delivery contract for materializing messages.
-                Materialized batch APIs commit before returning, so
-                ``"at_least_once"`` is satisfied by the stricter exactly-once
-                behavior. Use ``claim_generator()`` when you need retry-on-stop
-                batch processing.
+                Materialized batch APIs commit before returning.
+                ``"at_least_once"`` is accepted for compatibility; it does not
+                defer commit or roll back caller processing failures. Use
+                ``claim_generator()`` when you need rollback of an incomplete
+                yielded batch.
             after_timestamp: If provided, only claim messages after this timestamp
             before_timestamp: If provided, only claim messages before this timestamp
 
@@ -2903,10 +2904,11 @@ class BrokerCore:
             limit: Maximum number of messages to move
             with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
             delivery_guarantee: Delivery contract for materializing messages.
-                Materialized batch APIs commit before returning, so
-                ``"at_least_once"`` is satisfied by the stricter exactly-once
-                behavior. Use ``move_generator()`` when you need retry-on-stop
-                batch processing.
+                Materialized batch APIs commit before returning.
+                ``"at_least_once"`` is accepted for compatibility; it does not
+                defer commit or roll back caller processing failures. Use
+                ``move_generator()`` when you need rollback of an incomplete
+                yielded batch.
             after_timestamp: If provided, only move messages after this timestamp
             before_timestamp: If provided, only move messages before this timestamp
             require_unclaimed: If True (default), only move unclaimed messages
