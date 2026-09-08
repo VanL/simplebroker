@@ -440,7 +440,7 @@ def test_build_frontend_is_bounded_and_locked() -> None:
         for requirement in (Requirement(raw_requirement),)
     }
     assert set(release_requirements) == {"build", "hatchling"}
-    assert release_requirements["build"].specifier == SpecifierSet("==1.5.0")
+    assert release_requirements["build"].specifier == SpecifierSet("==1.6.0")
 
     pinned_hatchling = list(release_requirements["hatchling"].specifier)
     assert len(pinned_hatchling) == 1
