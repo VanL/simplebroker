@@ -335,8 +335,9 @@ def test_delivery_selector_vocabulary_matches_implementation() -> None:
 def test_materialized_batches_commit_before_return(queue_factory, operation) -> None:
     """[SB-DELIVERY-5] Materialized results are committed when returned."""
     source = queue_factory("materialized_source")
-    observer = queue_factory("materialized_source")
-    destination = queue_factory("materialized_destination")
+    # Persistent same-thread handles share a transaction; observe outside it.
+    observer = queue_factory("materialized_source", persistent=False)
+    destination = queue_factory("materialized_destination", persistent=False)
     source.write("one")
     source.write("two")
 
@@ -491,22 +492,6 @@ def test_closed_pipe_contract_binds_black_box_cli_effects() -> None:
         "test_watch_stops_claiming_after_stdout_consumer_exits",
         "test_read_all_pipe_closure_rolls_back_active_at_least_once_batch",
     } <= _test_functions("tests/test_cli_broken_pipe.py")
-
-
-def test_readme_dlq_recipe_preserves_pending_work_on_failure() -> None:
-    """The human-entry DLQ recipe must not claim before its fallback is safe."""
-    readme = README.read_text(encoding="utf-8")
-    recipe = readme.split("<summary>Dead Letter Queue Pattern</summary>", 1)[1]
-    recipe = recipe.split("</details>", 1)[0]
-
-    assert "broker peek tasks --json" in recipe
-    assert 'broker move tasks dlq -m "$msg_id"' in recipe
-    assert 'broker delete tasks -m "$msg_id"' in recipe
-    assert "process_task_json" in recipe
-    assert "| python3 -c" in recipe
-    assert "broker read tasks" not in recipe
-    assert "broker write dlq" not in recipe
-    assert 'echo "$msg"' not in recipe
 
 
 def test_readme_newline_recipe_writes_an_actual_newline() -> None:

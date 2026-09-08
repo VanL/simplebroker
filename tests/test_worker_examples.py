@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SAFE_WORKER = REPO_ROOT / "examples" / "safe_worker.sh"
 RESILIENT_WORKER = REPO_ROOT / "examples" / "resilient_worker.sh"
 AGENT_KERNEL = REPO_ROOT / "docs" / "agent-kernel.md"
+README = REPO_ROOT / "README.md"
 MESSAGE_ID = "1722783600000000000"
 MAX_MESSAGE_ID = str(2**63 - 1)
 
@@ -337,6 +338,84 @@ def test_kernel_worker_distinguishes_empty_reservation_from_error(
     if operational_failure:
         assert result.stderr
     assert not Path(kernel_worker_env["HANDLER_CALL_LOG"]).exists()
+
+
+@pytest.fixture
+def readme_worker_env(tmp_path: Path, worker_env: dict[str, str]) -> dict[str, str]:
+    bin_dir = tmp_path / "readme-bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "broker",
+        f"""#!/bin/bash
+if [ "${{1-}}" = move ] && [ "${{BROKER_FAIL_MOVE:-0}}" = 1 ]; then
+    echo "injected dead-letter move failure" >&2
+    exit 1
+fi
+exec env PYTHONPATH={shlex.quote(str(REPO_ROOT))} \
+    {shlex.quote(sys.executable)} -m simplebroker -f "$DB" "$@"
+""",
+    )
+    _write_executable(
+        bin_dir / "python3",
+        f'#!/bin/bash\nexec {shlex.quote(sys.executable)} "$@"\n',
+    )
+    _write_executable(
+        bin_dir / "process_task_json",
+        """#!/bin/bash
+cat > "$HANDLER_CALL_LOG"
+exit "$HANDLER_STATUS"
+""",
+    )
+    worker_env.update(
+        {
+            "PATH": f"{bin_dir}:{worker_env['PATH']}",
+            "DB": str(tmp_path / "readme.db"),
+        }
+    )
+    return worker_env
+
+
+@pytest.mark.parametrize(
+    ("handler_status", "fail_move", "retained_queue"),
+    [(0, False, None), (7, False, "dlq"), (7, True, "tasks")],
+    ids=["acknowledged", "dead-lettered", "failed-move"],
+)
+def test_readme_dlq_worker_preserves_original_message(
+    tmp_path: Path,
+    readme_worker_env: dict[str, str],
+    handler_status: int,
+    fail_move: bool,
+    retained_queue: str | None,
+) -> None:
+    body = "line one\nline two\n\n"
+    message_id = 1234567890123456789
+    with Queue("tasks", db_path=readme_worker_env["DB"]) as queue:
+        queue.insert_messages([(body, message_id)])
+    readme_worker_env.update(
+        {"HANDLER_STATUS": str(handler_status), "BROKER_FAIL_MOVE": str(int(fail_move))}
+    )
+    section = README.read_text(encoding="utf-8").split(
+        "<summary>Dead Letter Queue Pattern</summary>", 1
+    )[1]
+    block = section.split("```bash\n", 1)[1].split("```", 1)[0]
+    script = tmp_path / "readme-worker.sh"
+    script.write_text(block, encoding="utf-8")
+
+    result = _run_worker(script, tmp_path, readme_worker_env)
+
+    assert result.returncode == (1 if fail_move else 0), result.stderr
+    if fail_move:
+        assert "injected dead-letter move failure" in result.stderr
+    for name in ("tasks", "dlq"):
+        expected = [(body, message_id)] if name == retained_queue else []
+        with Queue(name, db_path=readme_worker_env["DB"]) as queue:
+            assert (
+                queue.peek_many(limit=10, with_timestamps=True, include_claimed=True)
+                == expected
+            )
+            assert queue.stats().claimed == 0
+    envelope = json.loads(Path(readme_worker_env["HANDLER_CALL_LOG"]).read_text())
+    assert envelope == {"message": body, "timestamp": str(message_id)}
 
 
 def test_safe_worker_requires_handler_before_broker_call(

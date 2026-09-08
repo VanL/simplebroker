@@ -8,6 +8,7 @@ import concurrent.futures as cf
 import sqlite3
 import threading
 import time
+from collections import Counter
 
 import pytest
 
@@ -221,7 +222,7 @@ def test_parallel_writes(workdir):
 
 @pytest.mark.xdist_group(name="concurrency_serial")
 def test_concurrent_read_write(workdir):
-    """Readers and writers can work concurrently."""
+    """A concurrent reader drains every write, including after transient emptiness."""
 
     # Initialize the database by writing and reading one message
     rc, _, _ = run_cli("write", "mixed", "init", cwd=workdir)
@@ -229,47 +230,74 @@ def test_concurrent_read_write(workdir):
     rc, _, _ = run_cli("read", "mixed", cwd=workdir)
     assert rc == 0
 
+    writer_done = threading.Event()
+    reader_started = threading.Event()
+    cancelled = threading.Event()
+    deadline = time.monotonic() + scale_timeout_for_ci(30.0)
+
+    def remaining(phase):
+        budget = deadline - time.monotonic()
+        assert budget > 0, f"concurrent read/write timed out during {phase}"
+        return budget
+
     def writer():
-        """Write messages continuously."""
-        for i in range(10):
-            rc, _, _ = run_cli("write", "mixed", f"w{i}", cwd=workdir)
-            if rc != 0:
-                return rc
-            time.sleep(0.01)  # Small delay
-        return 0
+        try:
+            assert reader_started.wait(remaining("reader startup"))
+            for i in range(10):
+                assert not cancelled.is_set(), "writer cancelled after reader failure"
+                rc, _, err = run_cli(
+                    "write", "mixed", f"w{i}", cwd=workdir, timeout=remaining("write")
+                )
+                if rc != 0:
+                    return rc, err
+            return 0, ""
+        finally:
+            writer_done.set()
 
     def reader():
-        """Read messages as they arrive."""
         messages = []
-        empty_count = 0
-        while empty_count < 3:  # Stop after 3 empty reads
-            rc, out, err = run_cli("read", "mixed", cwd=workdir)
-            if rc == 0:
-                messages.append(out)
-                empty_count = 0
-            elif rc == 2:  # Queue empty
-                empty_count += 1
-                time.sleep(0.05)
-            else:
-                # Unexpected error - print for debugging
-                print(f"Unexpected return code {rc}, stderr: {err}")
-                return rc, messages
-        return 0, messages
+        try:
+            while not cancelled.is_set():
+                # The empty observation must follow writer completion. Checking
+                # the event only after read could miss a write racing that read.
+                finished_before_read = writer_done.is_set()
+                rc, out, err = run_cli(
+                    "read", "mixed", cwd=workdir, timeout=remaining("read")
+                )
+                reader_started.set()
+                if rc == 0:
+                    messages.append(out)
+                elif rc == 2:
+                    if finished_before_read:
+                        return 0, messages, ""
+                else:
+                    return rc, messages, err
+            return 1, messages, "reader cancelled"
+        finally:
+            reader_started.set()
+            cancelled.set()
 
     # Run reader and writer concurrently
     with cf.ThreadPoolExecutor(max_workers=2) as pool:
         writer_future = pool.submit(writer)
         reader_future = pool.submit(reader)
 
-        writer_rc = writer_future.result()
-        reader_rc, messages = reader_future.result()
+        try:
+            reader_rc, messages, reader_error = reader_future.result(
+                remaining("reader completion")
+            )
+            assert reader_rc == 0, reader_error
+            writer_rc, writer_error = writer_future.result(
+                remaining("writer completion")
+            )
+        finally:
+            reader_started.set()
+            cancelled.set()
+            # Each in-flight CLI call owns a subprocess timeout bounded by the
+            # remaining deadline; cancellation prevents any subsequent call.
 
-    assert writer_rc == 0
-    assert reader_rc == 0
-
-    # Should have read some messages (but maybe not all due to timing)
-    assert len(messages) > 0
-    assert all(msg.startswith("w") for msg in messages)
+    assert writer_rc == 0, writer_error
+    assert Counter(messages) == Counter(f"w{i}" for i in range(10))
 
 
 @pytest.mark.xdist_group(name="concurrency_serial")

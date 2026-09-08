@@ -874,16 +874,19 @@ def test_coverage_jobs_bound_hangs_and_report_the_active_test() -> None:
         assert "--max-worker-restart=0" in step
 
 
-def _job_pytest_steps(job_block: str) -> tuple[dict[str, str], dict[str, str]]:
-    """Split a job's steps into direct-pytest and wrapper-pytest steps."""
-    pytest_steps: dict[str, str] = {}
-    wrapper_steps: dict[str, str] = {}
-    for raw_step in job_block.split("    - name: ")[1:]:
-        step_name = raw_step.split("\n", 1)[0].strip()
-        if "bin/pytest-pg" in raw_step or "bin/pytest-redis" in raw_step:
-            wrapper_steps[step_name] = raw_step
-        elif " pytest " in raw_step or raw_step.rstrip().endswith("pytest"):
-            pytest_steps[step_name] = raw_step
+def _job_pytest_steps(
+    job: dict[str, Any],
+) -> tuple[list[tuple[str, dict[str, Any]]], list[tuple[str, dict[str, Any]]]]:
+    """Classify each parsed step's own command; names are diagnostics only."""
+    pytest_steps: list[tuple[str, dict[str, Any]]] = []
+    wrapper_steps: list[tuple[str, dict[str, Any]]] = []
+    for ordinal, step in enumerate(job.get("steps", []), start=1):
+        command = step.get("run", "")
+        context = f"step {ordinal}: {step.get('name', '(unnamed)')}"
+        if "bin/pytest-pg" in command or "bin/pytest-redis" in command:
+            wrapper_steps.append((context, step))
+        elif " pytest " in command or command.rstrip().endswith("pytest"):
+            pytest_steps.append((context, step))
     return pytest_steps, wrapper_steps
 
 
@@ -930,6 +933,41 @@ def test_wrapper_step_must_bound_its_default_xdist_worker_loss() -> None:
         _assert_wrapper_step_bounds_worker_loss("synthetic.yml::test", step)
 
 
+@pytest.mark.parametrize("bounded", [False, True], ids=["unbounded", "bounded"])
+def test_unnamed_pytest_step_cannot_borrow_adjacent_bounds(
+    monkeypatch: pytest.MonkeyPatch, bounded: bool
+) -> None:
+    original = _workflow_text
+    command = "uv run --frozen --no-sync pytest -q"
+    if bounded:
+        command += " -n0 --timeout=180 --timeout-method=thread"
+    original_text = original("test.yml")
+    jobs = yaml.safe_load(original_text)["jobs"]
+    jobs["test"]["steps"].extend(
+        [
+            {
+                "name": "Run tests with pytest",
+                "env": {"PYTEST_ADDOPTS": "-n0 --timeout=180 --timeout-method=thread"},
+                "run": "uv run --frozen --no-sync pytest -q",
+            },
+            {"run": command},
+        ]
+    )
+    # Preserve the top-level trigger text: PyYAML treats YAML 1.1 `on` as bool.
+    workflow_text = original_text.split("\njobs:", 1)[0] + "\n"
+    workflow_text += yaml.safe_dump({"jobs": jobs}, sort_keys=False)
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_workflow_text",
+        lambda name: workflow_text if name == "test.yml" else original(name),
+    )
+    if bounded:
+        test_every_matrix_pytest_path_bounds_hangs_and_worker_loss()
+    else:
+        with pytest.raises(AssertionError, match="test.yml::test"):
+            test_every_matrix_pytest_path_bounds_hangs_and_worker_loss()
+
+
 def test_every_matrix_pytest_path_bounds_hangs_and_worker_loss() -> None:
     """Derive every pytest step across ALL test workflows.
 
@@ -941,45 +979,40 @@ def test_every_matrix_pytest_path_bounds_hangs_and_worker_loss() -> None:
     carry timeout-minutes for the pre-pytest Docker/setup phase.
     """
     for workflow_name in TEST_WORKFLOWS:
-        workflow_text = _workflow_text(workflow_name)
-        jobs = re.split(
-            r"(?m)^  (?=[A-Za-z0-9_-]+:\n)",
-            workflow_text.split("\njobs:\n", 1)[1],
-        )
-        for job_block in jobs:
-            if "    steps:" not in job_block:
-                continue
-            job_name = job_block.split(":", 1)[0].strip()
-            job_header = job_block.split("    steps:", 1)[0]
-            pytest_steps, wrapper_steps = _job_pytest_steps(job_block)
+        jobs = yaml.safe_load(_workflow_text(workflow_name))["jobs"]
+        for job_name, job in jobs.items():
+            pytest_steps, wrapper_steps = _job_pytest_steps(job)
             if wrapper_steps:
-                assert "timeout-minutes:" in job_header, f"{workflow_name}::{job_name}"
-            for step_name, step in wrapper_steps.items():
+                assert "timeout-minutes" in job, f"{workflow_name}::{job_name}"
+            for step_name, step in wrapper_steps:
+                options = step.get("env", {}).get("PYTEST_ADDOPTS", "")
                 _assert_wrapper_step_bounds_worker_loss(
-                    f"{workflow_name}::{job_name}::{step_name}", step
+                    f"{workflow_name}::{job_name}::{step_name}",
+                    f"{options}\n{step['run']}",
                 )
-            for step_name, step in pytest_steps.items():
-                _assert_step_bounded(f"{workflow_name}::{job_name}::{step_name}", step)
+            for step_name, step in pytest_steps:
+                # coverage-linux carries its controls in this step's environment.
+                options = step.get("env", {}).get("PYTEST_ADDOPTS", "")
+                _assert_step_bounded(
+                    f"{workflow_name}::{job_name}::{step_name}",
+                    f"{options}\n{step['run']}",
+                )
 
-    # The derivation itself is load-bearing: these known steps must be
-    # found in test.yml, or the parser is matching nothing.
-    matrix_job = (
-        _workflow_text("test.yml").split("  test:", 1)[1].split("  lint:", 1)[0]
-    )
+    # Anchor discovery to the real matrix commands, not their display names.
+    matrix_job = yaml.safe_load(_workflow_text("test.yml"))["jobs"]["test"]
     found, _wrappers = _job_pytest_steps(matrix_job)
-    for known_step in (
-        "Run tests with pytest",
-        "Run Windows tests with pytest",
-        "Run Windows tests with coverage",
-        "Run SQLite cross-thread finalization probe",
-        "Run phaselock fallback-path gate",
-        "Run Windows phaselock fallback-path gate with coverage",
-    ):
-        assert known_step in found, known_step
-    assert (
-        "    timeout-minutes: 45"
-        in _workflow_text("test.yml").split("  test:", 1)[1].split("    steps:", 1)[0]
+    expected_runs = [
+        step["run"]
+        for step in matrix_job["steps"]
+        if "uv run --frozen --no-sync pytest" in step.get("run", "")
+    ]
+    assert expected_runs
+    found_runs = [step["run"] for _, step in found]
+    assert all(
+        found_runs.count(command) >= expected_runs.count(command)
+        for command in expected_runs
     )
+    assert matrix_job["timeout-minutes"] == 45
 
 
 def test_windows_tests_keep_default_xdist_contention() -> None:

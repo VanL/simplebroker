@@ -852,6 +852,8 @@ heading blocks deletion.
 
 ## Related Plans
 
+- [Test proof quality](../plans/2026-09-07-test-proof-quality-plan.md)
+
 This spec was authored and evolved in the agent-guidance repository;
 the plans below live there, not in this repository (quoted by name so
 no local path dangles).

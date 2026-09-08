@@ -772,7 +772,11 @@ while true; do
         broker move tasks dlq -m "$msg_id" >/dev/null || exit 1
     fi
 done
+```
 
+After inspecting the dead-letter queue, retry its messages manually:
+
+```bash
 # Retry failed messages
 broker move dlq tasks --all
 ```

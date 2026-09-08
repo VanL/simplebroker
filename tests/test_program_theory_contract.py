@@ -67,16 +67,30 @@ class Record:
 
 
 def _without_fenced_blocks(text: str) -> str:
+    """Apply the fence rules used by bin/check-plan-context's corpus gate."""
     kept: list[str] = []
-    fence: str | None = None
+    fence: tuple[str, int] | None = None
     for line in text.splitlines():
-        marker = re.match(r"^\s*(```+|~~~+)", line)
-        if marker:
-            token = marker.group(1)[0]
-            fence = None if fence == token else token
+        marker: tuple[str, int, str] | None = None
+        leading_spaces = len(line) - len(line.lstrip(" "))
+        stripped = line[leading_spaces:]
+        if leading_spaces <= 3 and stripped.startswith(("```", "~~~")):
+            char = stripped[0]
+            length = len(stripped) - len(stripped.lstrip(char))
+            marker = char, length, stripped[length:]
+        if fence is None and marker is not None:
+            fence = marker[0], marker[1]
             continue
-        if fence is None:
-            kept.append(line)
+        if fence is not None:
+            if (
+                marker is not None
+                and marker[0] == fence[0]
+                and marker[1] >= fence[1]
+                and not marker[2].strip()
+            ):
+                fence = None
+            continue
+        kept.append(line)
     return "\n".join(kept)
 
 
@@ -432,15 +446,49 @@ not a provenance row
         _validate_record_vocabulary(record)
 
 
-def test_record_parser_ignores_fenced_examples() -> None:
-    example = """\
+@pytest.mark.parametrize(
+    ("example", "malformed_live_record"),
+    [
+        (
+            """\
 ```markdown
 ### [ALT-EXAMPLE-001] Not a definition
 
 Disposition: rejected
 ```
-"""
-    assert _parse_records(Path("fixture.md"), example) == []
+""",
+            False,
+        ),
+        (
+            """\
+````markdown
+```text
+### [REV-EXAMPLE-001] Not a definition
+```
+````
+""",
+            False,
+        ),
+        (
+            """\
+```text
+~~~
+```
+### [REV-EXAMPLE-001] A live record with missing fields
+""",
+            True,
+        ),
+    ],
+    ids=["simple-example", "shorter-inner-fence", "other-delimiter-is-content"],
+)
+def test_record_parser_ignores_fenced_examples(
+    example: str, malformed_live_record: bool
+) -> None:
+    if malformed_live_record:
+        with pytest.raises(ValueError, match="field order"):
+            _parse_records(Path("fixture.md"), example)
+    else:
+        assert _parse_records(Path("fixture.md"), example) == []
 
 
 def test_retired_source_form_matches_the_ledger_exactly() -> None:

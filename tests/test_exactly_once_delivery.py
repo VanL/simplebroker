@@ -21,13 +21,14 @@ from .helper_scripts.broker_factory import make_broker
 def test_single_message_immediate_commit(queue_factory):
     """Test that single message reads provide exactly-once delivery."""
     q = queue_factory("test_queue")
+    observer = queue_factory("test_queue", persistent=False)
     q.write("message1")
     q.write("message2")
 
     message = q.read_one()
     assert message == "message1"
 
-    remaining = list(q.peek(all_messages=True))
+    remaining = list(observer.peek(all_messages=True))
     assert len(remaining) == 1
     assert remaining[0] == "message2"
 

@@ -415,25 +415,52 @@ def test_concurrent_writers_readers(broker_target) -> None:
 
 
 def test_pre_check_drain_race(broker_target) -> None:
-    """Test race between pre-check and actual drain."""
+    """A stale positive pre-check tolerates a rival drain and later work."""
     broker = make_broker(broker_target)
-    watcher = None
+    thread = None
+    checked_pending = threading.Event()
+    release_check = threading.Event()
+    consumer_stop = threading.Event()
+    empty_drain_finished = threading.Event()
+    later_message_processed = threading.Event()
+    timeout = scale_timeout_for_ci(10.0)
 
+    class GatedWatcher(ConcurrencyTestWatcher):
+        def _has_pending_messages(self) -> bool:
+            pending = super()._has_pending_messages()
+            if pending and not checked_pending.is_set():
+                checked_pending.set()
+                assert release_check.wait(timeout), (
+                    "competitor did not release pre-check"
+                )
+            return pending
+
+        def _drain_queue(self) -> None:
+            after_gated_check = checked_pending.is_set()
+            super()._drain_queue()
+            # Startup drain cannot satisfy this phase. The main thread writes
+            # the later message only after this first post-check drain returns.
+            if after_gated_check:
+                empty_drain_finished.set()
+
+    processed = []
+
+    def handler(msg, ts) -> None:
+        processed.append(msg)
+        later_message_processed.set()
+
+    watcher = GatedWatcher("test_queue", handler, db=broker_target)
     try:
-        processed = []
-
-        def handler(msg, ts) -> None:
-            processed.append(msg)
-
-        # Create watcher with delay to increase race window
-        watcher = ConcurrencyTestWatcher("test_queue", handler, db=broker_target)
-        watcher._pre_check_delay = 0.01  # 10ms delay after pre-check
-        watcher.run_in_thread()
+        thread = watcher.run_in_thread()
+        assert watcher.main_loop_entered.wait(
+            _watcher_startup_timeout(broker_target)
+        ), "watcher did not finish its empty startup drain"
 
         # Function to consume messages from another connection
         def consume_messages():
             # Use a separate broker instance
             other_broker = make_broker(broker_target)
+            other_broker.set_stop_event(consumer_stop)
             try:
                 # Use claim_generator to consume all messages
                 return list(
@@ -442,32 +469,51 @@ def test_pre_check_drain_race(broker_target) -> None:
             finally:
                 other_broker.shutdown()
 
-        # Add messages
-        for i in range(50):
-            broker.write("test_queue", f"message_{i}")
+        initial_messages = [f"message_{i}" for i in range(50)]
+        for message in initial_messages:
+            broker.write("test_queue", message)
+        assert checked_pending.wait(timeout), "watcher never observed pending messages"
 
-        # Start consuming from another thread during watcher operation
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        # The real pre-check has returned true, but the watcher owns no storage
+        # lock while paused. A separate connection/thread consumes that work.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             consume_future = executor.submit(consume_messages)
+            try:
+                other_consumed = consume_future.result(timeout)
+            finally:
+                release_check.set()
+                # Retry cancellation lets the executor finish on timeout too.
+                consumer_stop.set()
 
-            # Let watcher run
-            time.sleep(1.0)
-
-            # Get messages consumed by other thread
-            other_consumed = consume_future.result()
-
-            # Total messages processed should equal messages written
-            total_processed = len(processed) + len(other_consumed)
-            assert total_processed == 50
-
-            # Verify no message was processed twice
-            all_messages = processed + other_consumed
-            assert len(set(all_messages)) == total_processed
+        assert Counter(other_consumed) == Counter(initial_messages)
+        assert empty_drain_finished.wait(timeout), (
+            "watcher did not finish the stale-check drain"
+        )
+        assert processed == []
+        broker.write("test_queue", "later message")
+        assert later_message_processed.wait(timeout), (
+            "watcher made no progress after the rival drain"
+        )
+        assert processed == ["later message"]
+        assert Counter(processed + other_consumed) == Counter(
+            [*initial_messages, "later message"]
+        )
     finally:
-        # Ensure watcher is stopped before closing broker
-        if watcher is not None:
-            watcher.stop()
-        broker.shutdown()
+        release_check.set()
+        consumer_stop.set()
+        primary_failure = sys.exception()
+        try:
+            try:
+                watcher.stop(timeout=timeout)
+                assert thread is None or not thread.is_alive(), (
+                    "watcher did not stop after releasing the race gate"
+                )
+            finally:
+                broker.shutdown()
+        except Exception as cleanup_error:
+            if primary_failure is None:
+                raise
+            primary_failure.add_note(f"Race cleanup also failed: {cleanup_error}")
 
 
 def test_multiple_queues_concurrent_activity(broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-033] exception
