@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-09-11-keyset-peek-pagination-plan.md | completed — class 5; live keyset traversal verified and independently reviewed; SQLite/PG benchmarks and Weft acceptance passed |
 | 2026-09-07-process-session-deferred-close-release-plan.md | completed - class 4; deferred close correction independently reviewed; exact-SHA CI and local batch gate passed; 8.1.1/4.1.1/4.1.1 published with immutable tags and verified artifacts |
 | 2026-09-07-test-proof-quality-plan.md | completed - class 4; independent final PASS; 3414 tests passed plus targeted PostgreSQL/Redis proof; failure diagnoses recorded; closed in the owner-authorized targeted commit |
 | 2026-09-07-critical-review-remediation-plan.md | completed - class 5+P; target identity, worker, fork, delivery, and verification fixes; independent PASS and full verification recorded; closed in the targeted remediation commit |

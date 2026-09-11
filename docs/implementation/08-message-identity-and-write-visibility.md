@@ -8,8 +8,10 @@ admission in `simplebroker/_message_insert.py`; SQL write transactions in
 
 Boundary: realizes `[SB-ID-1]` through `[SB-ID-4]` from
 `docs/specs/13-message-identity.md`. It does not own strict timestamp
-selection, watcher lifecycle, move identity, patterned-broadcast atomicity, or
-dump record ordering. Persistence load delegates its header-floor meaning to
+selection semantics, watcher lifecycle, move identity, patterned-broadcast
+atomicity, or dump record ordering. The live-peek section explains cursor
+mechanics under `[SB-DELIVERY-4]`; the delivery spec owns traversal semantics.
+Persistence load delegates its header-floor meaning to
 `[SB-IO-4]` while using the same high-water machinery described here.
 
 Verification: shared reserved-zero and SQL transaction-ordering tests; the
@@ -235,6 +237,41 @@ patterned broadcast retains its Python snapshot and separate allocation path.
 Those paths can place an ID behind an already advanced checkpoint, so this
 implementation does not turn `after_timestamp` into a durable broker offset.
 
+## Live peek cursor
+
+`BrokerCore.peek_generator()` owns SQLite/PG page progression through
+`_retrieve`; `RedisBrokerCore.peek_generator()` uses `_peek_rows` with the same
+public-ID boundary. The first page preserves the caller's lower and upper
+bounds. Later pages set the strict lower bound to the last returned ID and
+retain the upper bound, with zero offset. This seeks through the existing
+queue/ID indexes instead of revisiting an ever-growing prefix. It also avoids
+positional skips when previously returned rows are deleted or moved out.
+Bodies-only iteration still retains the page's final ID internally. No ID
+arithmetic is needed, including at the signed maximum.
+
+Exact-ID selection takes precedence over ranges in the query builders, so it
+must fetch once and terminate; advancing only the range bound would repeat
+the exact row. Redis combines eligible pending and claimed candidates in
+global ID order before emitting each page. Neither path changes selection
+outside peek generators or introduces a public cursor API.
+
+Page fetching finishes before user yields; the Queue closeable iterator still
+owns operation entry and exit. The cursor is a value, so deleting its row does
+not invalidate it. Buffered rows can outlive removal, and older exact inserts
+or ID-preserving moves can arrive behind the cursor. Empty or short pages end
+iteration. These are live observation limits, not claims of queue emptiness or
+exclusive processing. `tests/test_peek_keyset_pagination.py` verifies traversal;
+`tests/test_peek_generator_lifecycle.py` verifies resource ownership.
+
+Larger OFFSET pages would reduce overhead while retaining repeated prefix
+work and positional skips. A snapshot or server-side cursor would change
+consistency and resource lifetimes. A fixed-start upper watermark would change
+live-tail observation without recovering older arrivals. None is needed for
+forward progress; consumers still own checkpoint recovery and processing.
+Rollback reverts code and `[SB-DELIVERY-4]` together without data conversion,
+restoring OFFSET cost and skipping. Restart affected processes to adopt either
+version; existing iterators retain their process's code.
+
 ## Rollback and observation
 
 Code and contract must be reverted together. Neither the SQL guarded repair nor
@@ -248,6 +285,8 @@ data `EVAL` for a steady-state ordinary write; timing samples are diagnostic,
 not pass/fail thresholds.
 
 ## Related plan
+
+- [Keyset peek pagination](../plans/2026-09-11-keyset-peek-pagination-plan.md)
 
 - retired: 2026-08-25-verified-review-findings-remediation-plan — source
   `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns bounded

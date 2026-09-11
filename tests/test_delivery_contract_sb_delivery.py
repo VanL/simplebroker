@@ -247,10 +247,10 @@ def test_two_peekers_observe_same_id_without_mutation(queue_factory) -> None:
     assert first.peek_one(with_timestamps=True) == expected
 
 
-def test_live_peek_stream_mutation_leaves_unvisited_messages(queue_factory) -> None:
-    """[SB-DELIVERY-4] Removing rows shifts a live offset-paged peek stream."""
-    source = queue_factory("offset_source")
-    deleter = queue_factory("offset_source")
+def test_live_peek_stream_deletion_visits_every_message(queue_factory) -> None:
+    """[SB-DELIVERY-4] Removing rows does not shift keyset progress."""
+    source = queue_factory("keyset_source")
+    deleter = queue_factory("keyset_source")
     source.insert_messages(
         (f"message-{index}", index + 1) for index in range(PEEK_BATCH_SIZE + 2)
     )
@@ -260,8 +260,8 @@ def test_live_peek_stream_mutation_leaves_unvisited_messages(queue_factory) -> N
         visited.append(message_id)
         assert deleter.delete(message_id=message_id)
 
-    assert visited
-    assert source.peek_one(with_timestamps=True) is not None
+    assert visited == list(range(1, PEEK_BATCH_SIZE + 3))
+    assert source.peek_one(with_timestamps=True) is None
 
 
 def test_live_peek_stream_rejects_naive_cursor_completeness() -> None:
@@ -270,7 +270,7 @@ def test_live_peek_stream_rejects_naive_cursor_completeness() -> None:
     Prose-fragment and plan-path/SHA pins removed (audit Task 6.1 —
     they broke twice on pure doc reorganizations); the live-rescan
     behavior itself is owned by
-    test_live_peek_stream_mutation_leaves_unvisited_messages.
+    test_live_peek_stream_deletion_visits_every_message.
     """
     section = _section("SB-DELIVERY-4")
     assert section.strip()

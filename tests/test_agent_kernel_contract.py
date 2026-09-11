@@ -72,7 +72,8 @@ def test_agent_kernel_peek_section_mentions_related_operations() -> None:
 
     # Identifier tokens only; sentence pins removed (audit Task 6.2).
     assert "peek_generator" in section
-    assert "offset" in normalized and "skip" in normalized
+    assert "public-message-id" in normalized
+    assert "cursor" in normalized
     assert "move-then-process" in normalized
     assert "close" in normalized
 

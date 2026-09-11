@@ -79,7 +79,7 @@ def test_generator_paginates_across_claimed_boundary(queue_factory: Any) -> None
     assert q.read() == "m1"
 
     # Queue.peek_generator has no batch_size knob; drive the connection-level
-    # generator where batch_size=1 forces offset pagination through the
+    # generator where batch_size=1 forces keyset pagination through the
     # merged stream. Then confirm the Queue-level generator agrees.
     with q.get_connection() as conn:
         bodies = list(

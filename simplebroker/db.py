@@ -2799,15 +2799,14 @@ class BrokerCore:
             RuntimeError: If called from a forked process
         """
         effective_batch_size = batch_size if batch_size is not None else PEEK_BATCH_SIZE
-        offset = 0
+        cursor = after_timestamp
         while True:
-            # Peek with proper offset-based pagination
+            # [SB-DELIVERY-4]: seek past the previous page without rescanning it.
             results = self._retrieve(
                 queue,
                 operation="peek",
                 limit=effective_batch_size,
-                offset=offset,
-                after_timestamp=after_timestamp,
+                after_timestamp=cursor,
                 before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
                 require_unclaimed=not include_claimed,
@@ -2824,10 +2823,14 @@ class BrokerCore:
                 else:
                     yield body
 
-            # Move to next batch
-            offset += len(results)
+            # Exact selection overrides range predicates; never fetch it twice.
+            if exact_timestamp is not None:
+                return
 
-            # If we got less than the effective batch size, we're done (no more messages)
+            # Keep the original upper bound and avoid arithmetic at the ID ceiling.
+            cursor = results[-1][1]
+
+            # A short observed page ends this scan, even if later writes arrive.
             if len(results) < effective_batch_size:
                 break
 

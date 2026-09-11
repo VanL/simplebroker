@@ -149,9 +149,13 @@ or write-time keep, and vacuum may remove them.
 
 ### Peek streams and deletes
 
-`peek --all` and `Queue.peek_generator()` are live offset-paged streams.
-Removing rows during that iteration can shift offsets and skip messages.
-Prefer one-message peek + delete-by-id, or move-then-process.
+`peek --all` and `Queue.peek_generator()` are live forward-only streams in
+ascending public-message-ID order. Deleting or moving previously returned
+rows out of the source does not skip later eligible rows. An older ID
+inserted or moved behind the cursor may be missed. An empty or short page
+ends the scan; completion does not prove the queue is empty. For exclusive
+processing, reserve with move-then-process. Peek + delete-by-id still needs
+a single consumer or idempotent duplicate handling.
 
 The Python peek iterator owns one Queue operation from first advancement until
 `StopIteration`, an advancement error, or explicit `close()` on that same
@@ -337,7 +341,7 @@ with Queue("tasks", db_path=db) as tasks, Queue("inflight", db_path=db) as infli
         process(body)
         inflight.delete(message_id=ts)
 
-# Single-consumer only — never delete inside peek_generator iteration
+# Single-consumer only; peek does not reserve the message
 with Queue("tasks", db_path=db) as q:
     while True:
         item = q.peek_one(with_timestamps=True)
@@ -446,7 +450,7 @@ SimpleBroker will comply; your product will not.
 # Do not
 
 - Treat default consume as safe job processing.
-- Delete (or move) rows while iterating `peek --all` / `peek_generator`.
+- Treat a completed live peek stream as proof that the queue is empty.
 - Use bare peek-then-delete under concurrent workers without idempotency.
 - Use `last_ts` as “the id of the message I just wrote.”
 - Checkpoint-filter a queue that receives `move`s without understanding skip

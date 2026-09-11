@@ -5,6 +5,18 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Live peek streams (`Queue.peek_generator()`, `Queue.peek(all_messages=True)`,
+  and CLI `peek --all`) now advance by public message ID on SQLite,
+  PostgreSQL, and Redis/Valkey. This avoids repeatedly scanning earlier pages
+  and prevents deletion or move-out of returned rows from skipping later
+  eligible rows. Exact-ID streams return at most one row. Streams remain live
+  observations: older IDs inserted or moved behind the cursor may be missed,
+  buffered rows may outlive removal, and an empty or short page ends the scan.
+
 ## [8.1.1] - 2026-09-07
 
 ### Fixed

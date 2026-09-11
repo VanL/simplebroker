@@ -1091,13 +1091,12 @@ class RedisBrokerCore:
     ) -> Generator[tuple[str, int] | str, None, None]:
         self._validate_queue_name(queue)
         effective_batch_size = batch_size or PEEK_BATCH_SIZE
-        offset = 0
+        cursor = after_timestamp
         while True:
             rows = self._peek_rows(
                 queue,
                 limit=effective_batch_size,
-                offset=offset,
-                after_timestamp=after_timestamp,
+                after_timestamp=cursor,
                 before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
                 include_claimed=include_claimed,
@@ -1106,7 +1105,10 @@ class RedisBrokerCore:
                 return
             for row in rows:
                 yield row if with_timestamps else row[0]
-            offset += len(rows)
+            # [SB-DELIVERY-4]: exact predicates override ranges; fetch only once.
+            if exact_timestamp is not None:
+                return
+            cursor = rows[-1][1]
             if len(rows) < effective_batch_size:
                 return
 

@@ -177,12 +177,10 @@ def dump_lines(
     for queue in sorted(broker.list_queues()):
         if not _selected(queue, include, exclude):
             continue
-        # The broker's internal iteration order is physical insertion order
-        # (rowid), which equals message-ID order for normally written brokers
-        # but can differ after exact-ID insert_messages calls — and Redis
-        # always iterates in ID order. Dump canonicalizes: buffer one queue's
-        # pending rows and sort by message ID, the durable, backend-portable
-        # ordering. Memory scales with the largest queue's pending count.
+        # Peek traverses live pages in public message-ID order. Retain dump's
+        # explicit canonical sort and one-queue buffer: pagination does not
+        # provide snapshot consistency or change dump's memory bound, which
+        # scales with the largest queue's pending count.
         rows = [
             cast("tuple[str, int]", row)
             for row in broker.peek_generator(

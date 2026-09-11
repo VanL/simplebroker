@@ -473,9 +473,12 @@ processes them. If your script fails or crashes, **the message is lost**.
 For critical work, prefer atomically moving each message to an inflight queue,
 then deleting it there after successful processing. Peek-then-delete is not a
 reservation: it is safe only for a single consumer or when duplicate handling
-is idempotent. Do not delete or move source rows while iterating `peek --all`
-or `Queue.peek_generator()`, because their live offset pagination can skip
-messages.
+is idempotent. `peek --all` and `Queue.peek_generator()` traverse live pages
+in ascending public-message-ID order. Deleting or moving previously returned
+rows out of the source does not skip later eligible rows. Older IDs inserted
+or moved behind the cursor may be missed; an empty or short page ends the
+scan. Peek remains observation, not a snapshot or an exclusive consumer
+protocol.
 
 Python callers receive a package-root `CloseableIterator` from Queue read,
 peek, move, and stream generators and from the high-level all-message views.

@@ -108,9 +108,13 @@ Peek APIs and peek-mode watch do not claim messages. Multiple callers may
 observe the same pending message. Mutating actions on a message (delete, move,
 claim) are atomic: one winner.
 
-`Queue.peek_generator()` and CLI `peek --all` are live, offset-paged streams.
-Removing rows from the source while such a stream is active can shift offsets
-and skip messages. One-message peek, process, delete-by-id avoids that.
+`Queue.peek_generator()` and CLI `peek --all` are live, forward-only streams
+in ascending public-message-ID order. Range traversal fetches bounded pages;
+each page after the first selects IDs strictly greater than the last ID
+returned by the preceding page, within the caller's original upper bound.
+Removing or moving previously returned rows out of the source does not shift
+the next page past other eligible rows. Exact-ID traversal returns at most
+one matching row and terminates. Peek does not claim or reserve messages.
 
 `Queue.peek_generator()` returns a single-use closeable iterator. Creating the
 iterator is lazy and starts no Queue operation. Its first advancement attempt
@@ -137,19 +141,20 @@ persistent Queue may retain its cached process session, core, or backend
 checkout; an ephemeral Queue releases its operation-owned connection/core
 handle; and a Queue with a caller-supplied runner retains its cached
 connection/core handle until `Queue.close()` without closing or shutting down
-the runner. These lifecycle rules do not change the live, offset-paged
-traversal or strengthen peek into a snapshot, claim, or exhaustive concurrent
-traversal.
+the runner.
 
-Replacing the offset with the public message ID or the current storage
-sequence would not by itself make this traversal complete under concurrent
-mutation. Exact insertion may put an older public ID behind an advanced
-`(timestamp, id)` cursor. Move re-homes a row in place while preserving both
-its public ID and current internal sequence, so a moved-in row may also land
-behind a cursor on either ordering. Callers needing one bounded observation
-should use a materialized peek; a future exhaustive concurrent traversal
-would first need to choose and specify fixed-start, live-rescan, or snapshot
-semantics.
+These lifecycle rules do not strengthen peek into a snapshot, claim, or
+exhaustive concurrent traversal. Pages are buffered: a fetched row may be
+yielded after another caller removes or changes its queue membership.
+
+Exact insertion or an ID-preserving move into the source can place a message
+at or below the last returned ID; that message may be missed by the current
+traversal. Messages arriving ahead of the cursor may be observed on a later
+page, but an empty or short page ends iteration. Claim-state changes and
+deletion can also change what later pages observe. A completed traversal
+does not prove that the queue is empty. Callers needing one bounded
+observation should use a materialized peek; exhaustive concurrent traversal
+would require a separately specified consistency contract.
 
 _Implementation mapping_:
 - `simplebroker/db.py`
@@ -331,7 +336,7 @@ _Implementation mapping_:
 | [SB-DELIVERY-1] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_watcher.py::TestErrorScenarios::test_consuming_watcher_queue_preservation_on_failure` |
 | [SB-DELIVERY-2] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_watcher_error_handler_contract.py` (consume, peek, and move terminal-callback matrix); `tests/test_watcher_stop_contract.py::test_batch_consume_checks_handler_stop_before_next_iterator_advance`, `test_batch_consume_handler_stop_leaves_later_message_pending`; `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_handler_failure_isolation`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_transaction_safety` |
 | [SB-DELIVERY-3] | `tests/test_worker_examples.py::test_readme_dlq_worker_preserves_original_message`; `tests/test_delivery_contract_sb_delivery.py`; `tests/test_move.py`; `tests/test_move_by_id.py`; `tests/test_move_claim_patterns.py`; `tests/test_sqlite_message_id_returning_order.py::test_move_many_normalizes_sqlite_returning_rows_by_public_id`, `test_move_generator_uses_ascending_ids_when_returning_rows_are_reversed`; first-party PostgreSQL and Redis exact-ID move tests |
-| [SB-DELIVERY-4] | `tests/test_peek_generator_lifecycle.py`; `tests/test_delivery_contract_sb_delivery.py::test_live_peek_stream_rejects_naive_cursor_completeness`, `::test_closeable_peek_lifecycle_contract_is_bound_to_real_backends`; `tests/test_agent_kernel_contract.py` |
+| [SB-DELIVERY-4] | `tests/test_peek_keyset_pagination.py`; `tests/test_peek_generator_lifecycle.py`; `tests/test_delivery_contract_sb_delivery.py::test_live_peek_stream_rejects_naive_cursor_completeness`, `::test_closeable_peek_lifecycle_contract_is_bound_to_real_backends`; `tests/test_agent_kernel_contract.py` |
 | [SB-DELIVERY-5] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_generator_methods.py`; `extensions/simplebroker_redis/tests/test_redis_batches.py` |
 | [SB-DELIVERY-6] | `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`, `::test_foreign_thread_contract_binds_sql_and_redis_process_probes`; `tests/test_queue_typing_contract.py`; `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`; `tests/test_cross_thread_finalization_poisoning.py`; `tests/test_cross_thread_probe_transitions.py`; `tests/test_cross_thread_generator_probe.py`; `extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`; `extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py` |
 | [SB-DELIVERY-7] | `tests/test_cli_broken_pipe.py`; `tests/test_delivery_contract_sb_delivery.py` |
@@ -339,6 +344,9 @@ _Implementation mapping_:
 | [SB-DELIVERY-9] | `tests/test_delivery_contract_sb_delivery.py::test_write_time_pending_window_contract_binds_public_surfaces_and_backends`; `tests/test_keep_newest.py`; `tests/test_write_visibility.py::test_write_keep_claims_between_insert_and_commit`; `tests/test_custom_runner_integration.py::test_write_keep_rolls_back_insert_high_water_and_claims_together`; `extensions/simplebroker_pg/tests/test_pg_write_keep.py`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py` (one-EVAL, keep-window, reservation, and integrity cases); `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py::test_redis_write_fires_transition_table` |
 
 ## Related Plans
+
+- [Keyset peek pagination](../plans/2026-09-11-keyset-peek-pagination-plan.md)
+  owns forward-only live traversal under [SB-DELIVERY-4].
 
 - [Test proof quality](../plans/2026-09-07-test-proof-quality-plan.md)
 
