@@ -131,6 +131,7 @@ def test_fork_safety_protection(workdir: Path):
     else:  # Parent process
         # Wait for child
         _, status = os.waitpid(pid, 0)
+        assert os.WIFEXITED(status), f"child did not exit normally: {status}"
         exit_code = os.WEXITSTATUS(status)
         assert exit_code == 0  # Child exited successfully with expected error
 
@@ -173,6 +174,7 @@ def test_new_instance_after_fork_works(workdir: Path):
     else:  # Parent process
         # Wait for child
         _, status = os.waitpid(pid, 0)
+        assert os.WIFEXITED(status), f"child did not exit normally: {status}"
         exit_code = os.WEXITSTATUS(status)
         assert exit_code == 0
 

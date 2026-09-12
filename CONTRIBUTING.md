@@ -79,19 +79,19 @@ Use the repo-local release helper instead of pushing release tags by hand:
 
 ```bash
 # Release simplebroker
-python bin/release.py --version X.Y.Z
+uv run --locked python bin/release.py --version X.Y.Z
 
 # Release simplebroker-pg
-python bin/release.py pg --version X.Y.Z
+uv run --locked python bin/release.py pg --version X.Y.Z
 
 # Release every current unpublished package version with one local check run
-python bin/release.py all
+uv run --locked python bin/release.py all
 
 # Preview the checks, version files, commit, and tag action
-python bin/release.py --dry-run
+uv run --locked python bin/release.py --dry-run
 
 # Read back the release-related GitHub settings without changing anything
-uv run python bin/release.py --check-repository-settings
+uv run --locked python bin/release.py --check-repository-settings
 ```
 
 Replace `X.Y.Z` with the next unpublished version for the package being
@@ -149,7 +149,7 @@ PyPI trusted publisher entries should use repository `VanL/simplebroker`, the
 - `release-gate-pg.yml` for `simplebroker-pg`
 - `release-gate-redis.yml` for `simplebroker-redis`
 
-Use `python bin/release.py all` after version files have already been bumped
+Use `uv run --locked python bin/release.py all` after version files have already been bumped
 across packages. It scans `simplebroker`, `simplebroker-pg`, and
 `simplebroker-redis`, skips versions already published on GitHub Releases or
 PyPI, runs the combined release checks once, syncs root extension extras when
