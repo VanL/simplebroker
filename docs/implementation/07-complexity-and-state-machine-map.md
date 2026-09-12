@@ -184,14 +184,25 @@ failure or cleanup order.
 | managed subprocess context (24) | `managed_subprocess` (7) | `ManagedProcess.close` is the one idempotent escalation and reader-cleanup owner. |
 | two diagnostic race tests (19, 11) | deleted | Stronger production-path transition and concurrency tests made the diagnostic-only assertions redundant. |
 
-Configuration has one deep resolution seam in `_constants.py`.
+Configuration has one shared schema/resolution owner in `simplebroker/config.py`.
+`simplebroker/_constants.py` retains ordinary constants and compatibility exports.
 `load_config()` is the strict fresh environment parser; `resolve_config()` is
 the compatible environment-base resolver for ordinary mappings. Public
-ownership boundaries convert those results to the sole lower-layer carrier,
-`ResolvedConfig`, through `snapshot_config()`. There is no import-time config
+ownership boundaries convert ordinary results through `snapshot_config()`.
+Existing `ResolvedConfig` and the additive `ConfigSnapshot` are naming facades
+over shared receipt machinery. New composed snapshots retain their app schema
+and values directly across broker handoffs; legacy views keep their public keys.
+There is no import-time config
 object or cached exception. Each invalid fresh sample therefore raises a new
 `InvalidConfigError`, while import remains safe and `cli.main()` remains the
 sole process-level translator to the one-line exit-1 diagnostic.
+
+`ConfigSnapshot` supplies canonical internal access and selected-prefix aliases.
+`CONFIG_DEFAULTS` owns broker fields; embedders derive defaults or add fields
+without registering them in core. Explicit env and TOML select declared names
+under one prefix; unknown external names are ignored. File activation remains
+explicit, separate from project discovery. Preserve source validation timing,
+not just merge order, when changing this seam.
 
 `ResolvedConfig` guarantees every canonical key with the existing
 normalization and validation. It also preserves additional keys as opaque

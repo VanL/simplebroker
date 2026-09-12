@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from ..._exceptions import DatabaseError, OperationalError
 from ..._sql.sqlite import SELECT_SQLITE_VERSION, SET_AUTO_VACUUM_INCREMENTAL
+from ...config import canonical_config
 from .validation import is_valid_database
 
 
@@ -55,10 +56,10 @@ def apply_connection_settings(
     optimization_complete: bool = False,
 ) -> None:
     """Apply per-connection SQLite settings that do not require exclusive locks."""
-    busy_timeout = config["BROKER_BUSY_TIMEOUT"]
+    busy_timeout = canonical_config(config)["busy_timeout"]
     _execute_and_close(conn, f"PRAGMA busy_timeout={busy_timeout}")
 
-    wal_autocheckpoint = config["BROKER_WAL_AUTOCHECKPOINT"]
+    wal_autocheckpoint = canonical_config(config)["wal_autocheckpoint"]
     if wal_autocheckpoint < 0:
         warnings.warn(
             f"Invalid BROKER_WAL_AUTOCHECKPOINT '{wal_autocheckpoint}', "
@@ -76,10 +77,10 @@ def apply_optimization_settings(
     conn: sqlite3.Connection, *, config: Mapping[str, Any]
 ) -> None:
     """Apply SQLite performance tuning settings to a connection."""
-    cache_mb = config["BROKER_CACHE_MB"]
+    cache_mb = canonical_config(config)["cache_mb"]
     _execute_and_close(conn, f"PRAGMA cache_size=-{cache_mb * 1024}")
 
-    sync_mode = config["BROKER_SYNC_MODE"]
+    sync_mode = canonical_config(config)["sync_mode"]
     if sync_mode not in ("FULL", "NORMAL", "OFF"):
         warnings.warn(
             f"Invalid BROKER_SYNC_MODE '{sync_mode}', defaulting to FULL",
@@ -107,7 +108,7 @@ def setup_connection_phase(
             f"File at {db_path} exists but is not a valid SQLite database"
         )
 
-    configured_busy_timeout = int(config["BROKER_BUSY_TIMEOUT"])
+    configured_busy_timeout = int(canonical_config(config)["busy_timeout"])
     setup_busy_timeout = (
         configured_busy_timeout if busy_timeout_ms is None else busy_timeout_ms
     )

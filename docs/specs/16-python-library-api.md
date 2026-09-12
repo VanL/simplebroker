@@ -86,6 +86,9 @@ Public ways to bind a broker for library use:
   - `resolve_project_target` — TOML path → `BrokerTarget`
 - **`resolve_config`** / **`snapshot_config`** — resolve ordinary configuration
   or retain one complete snapshot for handles and discovery.
+- **`ConfigField`**, **`ConfigSchema`**, **`ConfigSnapshot`**,
+  **`CONFIG_DEFAULTS`**, **`build_config`** — compose a schema, select one
+  external namespace, and retain canonical broker/application values together.
 
 A `Queue` binds its effective target at construction. Supported mutable
 containers in a supplied target's backend options are recursively detached
@@ -162,9 +165,65 @@ extras. The flag never changes normalization or validation of recognized keys.
 once and freezes the complete result; for an exact `ResolvedConfig` it returns
 that object unchanged. `snapshot_config()` preserves additional keys.
 
+### Shared configuration builder
+
+`simplebroker.config` adds ConfigField, ConfigSchema, ConfigSnapshot,
+CONFIG_DEFAULTS and build_config, also exported at package root. The immutable
+default schema declares canonical unprefixed fields, descriptions, defaults,
+parsers and validators. Embedders may derive defaults/input policies and add
+their own fields without changing SimpleBroker. Broker canonical validation
+cannot be weakened. Independent app-only schemas also work with the builder.
+
+`build_config(prefix, env=None, config_file=None, options=None, *,
+defaults=CONFIG_DEFAULTS)` returns a complete canonical ConfigSnapshot.
+Canonical lookup and selected-prefix lookup name the same stored field:
+snapshot['cache_mb'] and snapshot['WEFT_CACHE_MB'] agree for a WEFT build.
+get and membership follow the same alias rule; canonical iteration/transport
+emits each new-snapshot field once. Existing public views retain their current
+spellings and serialization. Read aliases do not expand source-prefix selection.
+Explicit env and TOML root fields use PREFIX_FIELD names. Other prefixes and
+unprefixed external names are ignored. Unknown environment names retain the
+broker's ignore behavior; undeclared TOML names are likewise ignored. New file/options inputs validate selected fields
+under the supplied schema. TOML can contain both existing project-target fields
+and namespaced settings; the loader ignores unprefixed target fields and leaves
+their existing parser and precedence unchanged. No separate settings file,
+discovery, includes or interpolation is required or introduced.
+
+Existing precedence and validation timing remain. The shared engine supports
+declared source policies without moving app target/alias/lifetime logic into
+core. For new explicit file input, options > file > env > defaults. Existing
+public entry points acquire no new file lookup or precedence change. Putting a
+namespaced tuning key in discovered project TOML alone does not activate it;
+callers explicitly pass config_file to use the additive settings path.
+
+New snapshots recursively freeze declared values, retain safe source labels,
+and support ambient-free with_options overlays. Derived defaults recompute only
+while their provenance remains default/derived; supplied values remain supplied.
+to_values exports detached canonical transport data; from_values requires a
+complete schema-validated payload without reading env or filling defaults.
+
+Queue/watcher consumers accept a composed snapshot directly, retain its app
+fields and use core-owned validation for broker fields. One backing config
+supplies canonical internal access and legacy public compatibility views.
+Existing resolver exports, signatures, return types, prefixed lookup/iteration,
+opaque extras, preserve_unknown behavior, ResolvedConfig construction and
+subclass revalidation retain their contracts. New ConfigSnapshot subclasses
+are also accepted through value revalidation, not rejected for subclassing.
+No warning or deprecation is added.
+
+Existing snapshot events, lazy acquisition, error types/metadata and plugin API
+version remain. Internal configuration field names are unprefixed. Existing
+public/plugin config views retain their current key spelling and extension
+access. Complete configuration identity, including opaque extras, remains the
+conservative pooling rule; namespacing adapters do not duplicate identity fields.
+New composed fields visible through plugin config also participate in identity.
+No plugin config_schema requirement, field-access restriction or new handshake
+is introduced. The same retained values back all config views.
+
 Every public configuration-consuming handle or invocation converts `None` or
 an ordinary mapping to one `ResolvedConfig` at its ownership event in the
-table below, then passes and retains that snapshot through Queue,
+table below. A supplied complete `ConfigSnapshot` follows the same retained
+receipt path without ambient resolution. The owner passes that snapshot through Queue,
 target/project discovery, broker, process-session, runner, watcher, command,
 load, and CLI dump's broker-opening path. Lower layers and later lazy resource
 acquisition do not reread ambient `BROKER_*`. Converting a marker to an
@@ -187,6 +246,7 @@ README residual where listed; this clause owns the **public callables**, not
 every config key.
 
 _Implementation mapping_:
+- `simplebroker/config.py`
 - `simplebroker/_constants.py`
 - `simplebroker/project.py`
 - `simplebroker/_project_config.py`
@@ -840,7 +900,7 @@ _Implementation mapping_:
 | Clause | Firing evidence |
 |--------|-----------------|
 | [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`, `::test_api_moved_message_is_package_root_public`, `::test_api_closeable_peek_iterator_contract`; `tests/test_queue_typing_contract.py`; `tests/test_dev_scripts.py` (isolated root wheel/sdist import and published-artifact verification); `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
-| [SB-API-2] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_target_discovery_samples_environment_for_each_call`; `tests/test_project_config.py` (recursive plugin-owned options, TOML-native normalization/rejection, target serialization, and SQLite rejection); `tests/test_process_broker_session.py` (type/opaque identity, one recursive key/factory snapshot, and all SQLite public option paths); `tests/test_activity_waiter_api.py::test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
+| [SB-API-2] | `tests/test_config_builder.py`; `tests/test_config_coexistence.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_target_discovery_samples_environment_for_each_call`; `tests/test_project_config.py` (recursive plugin-owned options, TOML-native normalization/rejection, target serialization, and SQLite rejection); `tests/test_process_broker_session.py` (type/opaque identity, one recursive key/factory snapshot, and all SQLite public option paths); `tests/test_activity_waiter_api.py::test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
 | [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_backend_plugin_resolution.py` (built-in, third-party, and injected-runner backend identity without target I/O); `tests/test_connection_config.py::test_ephemeral_queue_keeps_constructor_snapshot_after_invalid_env_change`, `tests/test_connection_config.py::test_new_queue_observes_later_environment_while_existing_queue_stays_fixed`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_timestamp_selection_contract_sb_select.py::test_bounded_one_and_many_order_matrix`, `::test_invalid_or_unbounded_order_fails_before_target_acquisition`, `::test_generator_signatures_do_not_expose_order`; `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py` (high-level `all_messages=True` path); `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`, `::test_queue_delete_explicit_none_is_rejected_without_mutation`, `::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py::test_api_write_keep_newest_signatures_and_public_validator`; `tests/test_keep_newest.py`; delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_closeable_peek_iterator_contract`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_reads_ordinary_override_on_first_iteration`; Queue generator / `*_many` suites |
@@ -854,6 +914,8 @@ _Implementation mapping_:
 | [SB-API-13] | `tests/test_python_library_api_contract_sb_api.py::test_api_postgres_connection_inspection_contract`; `tests/test_backend_probe.py`; `extensions/simplebroker_pg/tests/test_connection_stats.py` (shape, ordinary role, cross-role/database, lifecycle, autovacuum, PG15, and PG18) |
 
 ## Related Plans
+
+- [Shared configuration loader and unprefixed snapshots](../plans/2026-09-11-shared-configuration-loader-plan.md): additive shared API with preserved legacy views and lifecycle.
 
 - [Critical review remediation](../plans/2026-09-07-critical-review-remediation-plan.md)
 

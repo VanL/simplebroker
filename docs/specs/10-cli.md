@@ -55,6 +55,16 @@ _Implementation mapping_:
 
 ## Stdout and stderr [SB-CLI-2]
 
+The CLI resolves its broker environment snapshot before parser-dependent
+behavior; invalid selected configuration still produces
+the plain preparse exit-1 error, including help, version, and raw --json.
+Parsed explicit settings overlay that retained snapshot without another
+environment read. This preserved CLI failure ordering is distinct from a
+schema's value-precedence rule and is preserved for direct broker resolution
+as well. Command syntax, target-selection precedence, and the post-parse JSON error contract are
+unchanged. Internal field names are canonical; env diagnostics retain the
+external `BROKER_*` spelling.
+
 The CLI follows ordinary Unix stream roles:
 
 - **stdout** carries command output (messages, JSON records, dumps, list/stats
@@ -389,6 +399,8 @@ _Implementation mapping_:
 - `simplebroker/commands.py` (`cmd_write`)
 
 ## Related Plans
+
+- [Shared configuration loader and unprefixed snapshots](../plans/2026-09-11-shared-configuration-loader-plan.md): shared configuration internals with preserved CLI behavior.
 
 - active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
   — owns [SB-CLI-7] and the [SB-CLI-3] value-taking write-option extension

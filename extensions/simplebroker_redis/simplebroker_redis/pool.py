@@ -9,6 +9,7 @@ from typing import Any
 
 from simplebroker._constants import ResolvedConfig
 from simplebroker._exceptions import DatabaseError
+from simplebroker.config import canonical_config
 
 POOL_OPTION_KEYS = frozenset({"max_connections", "pool_timeout"})
 
@@ -25,7 +26,7 @@ def pool_options_from_config(
 ) -> RedisPoolOptions:
     options = backend_options or {}
     max_connections = _parse_max_connections(options.get("max_connections", 50))
-    default_timeout = max(0.001, int(config["BROKER_BUSY_TIMEOUT"]) / 1000)
+    default_timeout = max(0.001, int(canonical_config(config)["busy_timeout"]) / 1000)
     timeout = _parse_timeout(options.get("pool_timeout", default_timeout))
     return RedisPoolOptions(max_connections=max_connections, timeout=timeout)
 

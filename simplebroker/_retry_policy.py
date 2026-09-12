@@ -26,6 +26,7 @@ from ._retry import (
     stop_any,
     stop_never,
 )
+from .config import canonical_config
 
 # Module-owned clock/rng seam: tests patch these aliases instead of the
 # shared stdlib attributes, which background threads, destructors, and
@@ -243,7 +244,7 @@ def _execute_connection_retry(
 def setup_busy_timeout_ms(config: Mapping[str, Any]) -> int:
     """Return the short busy timeout used by SQLite setup operations."""
 
-    busy_timeout = int(config["BROKER_BUSY_TIMEOUT"])
+    busy_timeout = int(canonical_config(config)["busy_timeout"])
     return max(0, min(busy_timeout, SETUP_BUSY_TIMEOUT_CAP_MS))
 
 

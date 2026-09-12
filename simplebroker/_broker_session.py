@@ -17,6 +17,7 @@ from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugi
 from ._constants import ResolvedConfig
 from ._key_material import FrozenValue, freeze_key_material, snapshot_key_material
 from ._targets import BrokerTarget
+from .config import ConfigSnapshot, legacy_config
 
 _CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
 
@@ -40,7 +41,7 @@ class _SessionSpec:
     backend_name: str
     target: str
     backend_options: Mapping[str, Any]
-    config: ResolvedConfig
+    config: ResolvedConfig | ConfigSnapshot
     backend_plugin: BackendPlugin
 
 
@@ -150,27 +151,33 @@ def _target_parts(
     )
 
 
-def _session_key(db_path: str | BrokerTarget, config: ResolvedConfig) -> _SessionKey:
+def _session_key(
+    db_path: str | BrokerTarget, config: ResolvedConfig | ConfigSnapshot
+) -> _SessionKey:
     return _session_spec(db_path, config).key
 
 
 def _session_spec(
     db_path: str | BrokerTarget,
-    config: ResolvedConfig,
+    config: ResolvedConfig | ConfigSnapshot,
 ) -> _SessionSpec:
     backend_name, target, backend_options, backend_plugin = _target_parts(db_path)
     backend_options_snapshot = cast(
         dict[str, Any], snapshot_key_material(backend_options)
     )
-    config_snapshot = ResolvedConfig(
-        cast(Mapping[str, Any], snapshot_key_material(config))
+    # New declared fields are already frozen. Legacy opaque containers retain
+    # the existing acquisition-time ownership copy. All fields remain keyed.
+    config_snapshot = (
+        config
+        if isinstance(config, ConfigSnapshot)
+        else ResolvedConfig(cast(Mapping[str, Any], snapshot_key_material(config)))
     )
     key = _SessionKey(
         pid=_getpid(),
         backend_name=backend_name,
         target=target,
         backend_options=freeze_key_material(backend_options_snapshot),
-        config=freeze_key_material(config_snapshot),
+        config=freeze_key_material(legacy_config(config_snapshot)),
     )
     return _SessionSpec(
         key=key,
@@ -383,7 +390,7 @@ class _ProcessBrokerSessionRegistry:
         self,
         db_path: str | BrokerTarget,
         *,
-        config: ResolvedConfig,
+        config: ResolvedConfig | ConfigSnapshot,
         factory_builder: _SessionCoreFactoryBuilder,
     ) -> tuple[_SessionKey, _ProcessBrokerSession]:
         self._recover_after_fork_if_needed()
@@ -437,7 +444,7 @@ _registry = _ProcessBrokerSessionRegistry()
 def acquire_process_broker_session(
     db_path: str | BrokerTarget,
     *,
-    config: ResolvedConfig,
+    config: ResolvedConfig | ConfigSnapshot,
     factory_builder: _SessionCoreFactoryBuilder,
 ) -> tuple[_SessionKey, _ProcessBrokerSession]:
     return _registry.acquire(

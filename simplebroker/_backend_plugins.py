@@ -11,6 +11,7 @@ from ._constants import __version__ as SIMPLEBROKER_VERSION
 from ._delivery import DeliveryGuarantee
 from ._exceptions import DatabaseError, UnknownBackendPluginError
 from ._sql import BackendSQLNamespace, ensure_backend_sql_namespace
+from .config import legacy_config
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -664,7 +665,7 @@ def validate_backend_target(
             target,
             backend_options=backend_options,
             verify_initialized=verify_initialized,
-            config=config,
+            config=legacy_config(config) if config is not None else None,
         )
     except DatabaseError:
         raise

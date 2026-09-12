@@ -116,6 +116,7 @@ from ._timestamp import (
     decode_hybrid_timestamp,
     validate_timestamp_bound,
 )
+from .config import canonical_config, legacy_config
 from .metadata import QueueRenameResult, QueueStats
 
 if TYPE_CHECKING:
@@ -140,7 +141,7 @@ def _initialize_project_backend_target(
         target.plugin.initialize_target(
             target.target,
             backend_options=target.backend_options,
-            config=config,
+            config=legacy_config(config),
         )
         return
 
@@ -160,7 +161,7 @@ def _initialize_project_backend_target(
                 target.target,
                 backend_options=target.backend_options,
                 verify_initialized=True,
-                config=config,
+                config=legacy_config(config),
             )
         except DatabaseError:
             return False
@@ -174,7 +175,7 @@ def _initialize_project_backend_target(
                     lambda: plugin.initialize_target(
                         target.target,
                         backend_options=target.backend_options,
-                        config=config,
+                        config=legacy_config(config),
                     ),
                 ),
             ),
@@ -463,7 +464,7 @@ class _ProcessSessionCoreFactory:
             if _is_direct_backend(self._backend_plugin):
                 return self._backend_plugin.create_core_from_runner(
                     runner,
-                    config=self._config,
+                    config=legacy_config(self._config),
                     stop_event=stop_event,
                 )
             return BrokerCore(
@@ -499,7 +500,7 @@ class _ProcessSessionCoreFactory:
             candidate = self._backend_plugin.create_runner(
                 self._target,
                 backend_options=self._backend_options,
-                config=self._config,
+                config=legacy_config(self._config),
             )
         except BaseException:
             with self._runner_condition:
@@ -725,7 +726,7 @@ class DBConnection:
             and self._resolved_target.backend_options
         ):
             self._resolved_target.plugin.init_backend(
-                self._config,
+                legacy_config(self._config),
                 toml_target=self._resolved_target.target,
                 toml_options=self._resolved_target.backend_options,
             )
@@ -763,7 +764,7 @@ class DBConnection:
                 create_core = self._backend_plugin.create_core_from_runner
                 self._core = create_core(
                     self._runner,
-                    config=self._config,
+                    config=legacy_config(self._config),
                     stop_event=self._stop_event,
                 )
             else:
@@ -812,7 +813,7 @@ class DBConnection:
             core = self._backend_plugin.create_core(
                 self._resolved_target.target,
                 backend_options=self._resolved_target.backend_options,
-                config=self._config,
+                config=legacy_config(self._config),
                 stop_event=self._stop_event,
             )
             core.set_stop_event(self._stop_event)
@@ -821,7 +822,7 @@ class DBConnection:
         runner = self._backend_plugin.create_runner(
             self._resolved_target.target,
             backend_options=self._resolved_target.backend_options,
-            config=self._config,
+            config=legacy_config(self._config),
         )
         core = BrokerCore(
             runner,
@@ -842,7 +843,7 @@ class DBConnection:
         max_retries = 3
 
         def log_retry(state: Any, exc: Exception, wait: float) -> None:
-            if config["BROKER_LOGGING_ENABLED"]:
+            if canonical_config(config)["logging_enabled"]:
                 logger.debug(
                     f"Database connection error "
                     f"(retry {state.tries}/{max_retries}): {exc}. "
@@ -858,7 +859,7 @@ class DBConnection:
         except StopException:
             raise
         except Exception as exc:
-            if config["BROKER_LOGGING_ENABLED"]:
+            if canonical_config(config)["logging_enabled"]:
                 logger.log(
                     logging.ERROR,
                     "Failed to get database connection after "
@@ -1000,14 +1001,14 @@ class DBConnection:
                     self._core = self._backend_plugin.create_core(
                         self._resolved_target.target,
                         backend_options=self._resolved_target.backend_options,
-                        config=self._config,
+                        config=legacy_config(self._config),
                         stop_event=self._stop_event,
                     )
                 else:
                     create_core = self._backend_plugin.create_core_from_runner
                     self._core = create_core(
                         self._runner,
-                        config=self._config,
+                        config=legacy_config(self._config),
                         stop_event=self._stop_event,
                     )
             else:
@@ -1015,7 +1016,7 @@ class DBConnection:
                     self._runner = self._backend_plugin.create_runner(
                         self._resolved_target.target,
                         backend_options=self._resolved_target.backend_options,
-                        config=self._config,
+                        config=legacy_config(self._config),
                     )
                 assert self._runner is not None
                 self._core = BrokerCore(
@@ -1086,7 +1087,7 @@ class DBConnection:
             return
 
         connections_to_close, owned_core, owned_runner = self._drain_owned_connections()
-        logging_enabled = bool(effective_config["BROKER_LOGGING_ENABLED"])
+        logging_enabled = bool(canonical_config(effective_config)["logging_enabled"])
 
         for connection in connections_to_close:
             operation = (
@@ -1220,7 +1221,7 @@ class BrokerCore:
         """
         config = _merge_config(config)
         self._config = config
-        self._max_message_size = int(config["BROKER_MAX_MESSAGE_SIZE"])
+        self._max_message_size = int(canonical_config(config)["max_message_size"])
 
         # Re-entrant lock allows same-thread read-only re-entry from generator
         # callbacks. Mutating re-entry during an open at-least-once batch is
@@ -1249,7 +1250,7 @@ class BrokerCore:
         self._stop_event = stop_event or threading.Event()
 
         self._maintenance_schedule = MaintenanceSchedule(
-            int(config["BROKER_AUTO_VACUUM_INTERVAL"])
+            int(canonical_config(config)["auto_vacuum_interval"])
         )
 
         self._sqlite_admission_snapshot: _SQLiteAdmissionSnapshot | None = None
@@ -1996,7 +1997,7 @@ class BrokerCore:
         # Use warnings for now, can be replaced with proper logging
         if conflict_type == "transient":
             # Debug level - might be normal under extreme concurrency
-            if self._config["BROKER_DEBUG"]:
+            if canonical_config(self._config)["debug"]:
                 warnings.warn(
                     f"Timestamp conflict detected (attempt {attempt + 1}), retrying...",
                     RuntimeWarning,
@@ -2039,7 +2040,7 @@ class BrokerCore:
 
     def _record_maintenance_activity(self, completed: int) -> None:
         """Run one best-effort maintenance check after committed activity."""
-        if self._config["BROKER_AUTO_VACUUM"] != 1 or completed <= 0:
+        if canonical_config(self._config)["auto_vacuum"] != 1 or completed <= 0:
             return
 
         with self._lock:
@@ -2049,7 +2050,7 @@ class BrokerCore:
                 if self._should_vacuum():
                     self._vacuum_claimed_messages()
             except Exception:
-                if self._config["BROKER_LOGGING_ENABLED"]:
+                if canonical_config(self._config)["logging_enabled"]:
                     logger.exception("Automatic vacuum failed; will retry later")
             else:
                 self._maintenance_schedule.mark_check_succeeded()
@@ -2652,7 +2653,7 @@ class BrokerCore:
             effective_batch_size = (
                 batch_size
                 if batch_size is not None
-                else effective_config["BROKER_GENERATOR_BATCH_SIZE"]
+                else canonical_config(effective_config)["generator_batch_size"]
             )
             yield from self._yield_transactional_batches(
                 queue,
@@ -3015,7 +3016,7 @@ class BrokerCore:
             effective_batch_size = (
                 batch_size
                 if batch_size is not None
-                else effective_config["BROKER_GENERATOR_BATCH_SIZE"]
+                else canonical_config(effective_config)["generator_batch_size"]
             )
             yield from self._yield_transactional_batches(
                 source_queue,
@@ -3698,7 +3699,7 @@ class BrokerCore:
             return vacuum_is_eligible(
                 claimed_count=int(claimed_count),
                 total_count=int(total_count),
-                threshold=float(self._config["BROKER_VACUUM_THRESHOLD"]),
+                threshold=float(canonical_config(self._config)["vacuum_threshold"]),
             )
 
     def _vacuum_claimed_messages(self, *, compact: bool = False) -> None:
@@ -3707,7 +3708,7 @@ class BrokerCore:
             self._backend_plugin.vacuum(
                 self._runner,
                 compact=compact,
-                config=self._config,
+                config=legacy_config(self._config),
             )
 
     def queue_exists_and_has_messages(self, queue: str) -> bool:

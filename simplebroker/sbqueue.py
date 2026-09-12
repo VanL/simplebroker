@@ -40,6 +40,7 @@ from ._runner import SQLRunner
 from ._selection import validate_bounded_order, validate_selection_order
 from ._sidecar import SidecarSession
 from ._targets import BrokerTarget
+from .config import canonical_config
 from .db import DBConnection, _validate_queue_name_cached
 from .metadata import QueueStats
 from .project import target_for_directory
@@ -161,9 +162,9 @@ def _default_target_from_config(config: Mapping[str, Any]) -> BrokerTarget:
     """Resolve the implicit Queue target from caller-provided configuration."""
 
     root = (
-        Path(str(config["BROKER_DEFAULT_DB_LOCATION"]))
-        if config.get("BROKER_DEFAULT_DB_LOCATION")
-        and config.get("BROKER_BACKEND", "sqlite") == "sqlite"
+        Path(str(canonical_config(config)["default_db_location"]))
+        if canonical_config(config).get("default_db_location")
+        and canonical_config(config).get("backend", "sqlite") == "sqlite"
         else Path.cwd()
     )
     return target_for_directory(root, config=config)
@@ -2084,7 +2085,7 @@ class Queue:
                 if conn:
                     conn.close()
             except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
-                if config.get("BROKER_LOGGING_ENABLED", True):
+                if canonical_config(config).get("logging_enabled", True):
                     logger.warning(f"Error during Queue finalizer cleanup: {e}")
 
         # Install finalizer with reference to connection

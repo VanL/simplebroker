@@ -37,6 +37,7 @@ from ._message_id import (
     normalize_message_id,
 )
 from ._message_insert import RESERVED_MESSAGE_ID_MESSAGE
+from .config import canonical_config
 
 # Module-owned clock/rng seam: tests patch these aliases instead of the
 # shared stdlib attributes, which background threads, destructors, and
@@ -298,7 +299,8 @@ def load_lines(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
         )
     resolved_config = snapshot_config(config)
     max_future_skew_ns = (
-        int(resolved_config["BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS"]) * NS_PER_SECOND
+        int(canonical_config(resolved_config)["load_max_future_skew_seconds"])
+        * NS_PER_SECOND
     )
 
     messages = 0

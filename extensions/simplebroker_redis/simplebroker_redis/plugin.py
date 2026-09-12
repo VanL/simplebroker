@@ -18,6 +18,7 @@ from simplebroker._backend_plugins import (
 )
 from simplebroker._constants import SIMPLEBROKER_MAGIC, ResolvedConfig, snapshot_config
 from simplebroker._exceptions import DatabaseError, OperationalError
+from simplebroker.config import canonical_config
 
 from . import scripts
 from ._constants import DEFAULT_NAMESPACE, REDIS_SCHEMA_VERSION
@@ -87,10 +88,10 @@ def _database_number(value: object) -> int:
 
 
 def _target_from_parts(config: Mapping[str, Any]) -> str:
-    host = _text(config.get("BROKER_BACKEND_HOST"), "127.0.0.1")
-    port = _text(config.get("BROKER_BACKEND_PORT"), "6379")
-    password = config.get("BROKER_BACKEND_PASSWORD")
-    db = _database_number(config.get("BROKER_BACKEND_DATABASE"))
+    host = _text(canonical_config(config).get("backend_host"), "127.0.0.1")
+    port = _text(canonical_config(config).get("backend_port"), "6379")
+    password = canonical_config(config).get("backend_password")
+    db = _database_number(canonical_config(config).get("backend_database"))
     auth = f":{quote(str(password), safe='')}@" if password else ""
     return f"redis://{auth}{host}:{port}/{db}"
 
@@ -107,7 +108,7 @@ def _namespace_from_options(
             raise DatabaseError("Redis namespace and schema options must match")
     if "namespace" in options or "schema" in options:
         return require_namespace(options)
-    schema = _text(config.get("BROKER_BACKEND_SCHEMA"), DEFAULT_NAMESPACE)
+    schema = _text(canonical_config(config).get("backend_schema"), DEFAULT_NAMESPACE)
     return require_namespace({"namespace": schema})
 
 
@@ -392,7 +393,7 @@ class RedisBackendPlugin:
     ) -> dict[str, Any]:
         resolved_config = snapshot_config(config)
         target = _text(toml_target) or _text(
-            resolved_config.get("BROKER_BACKEND_TARGET")
+            canonical_config(resolved_config).get("backend_target")
         )
         if not target:
             target = _target_from_parts(resolved_config)

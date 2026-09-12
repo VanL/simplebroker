@@ -1010,9 +1010,14 @@ with client.broker() as broker:
 The stable embedding surface is the public package API exported from
 `simplebroker` plus the extension contracts in `simplebroker.ext`. Treat
 underscore-prefixed modules and raw storage details as implementation. If your
-application owns a separate environment namespace, translate its complete
-selected values into canonical `BROKER_*` keys and pass them through
-`resolve_isolated_config()`. Preserve the returned `ResolvedConfig` marker
+application already translates a separate environment namespace into complete
+selected `BROKER_*` values, it can continue passing them through
+`resolve_isolated_config()`. For new integrations, the
+[shared configuration builder](configuration.md#shared-configuration-for-embedders)
+lets an application derive broker defaults, declare its own fields and validators,
+and select its external prefix. Pass its `ConfigSnapshot` directly to these same
+handles; app fields remain available in the retained snapshot.
+Preserve the returned snapshot marker
 through every lower-layer call; converting it to an ordinary dict restores the
 normal ambient-base behavior. Use `resolve_config()` when inheriting ambient
 SimpleBroker configuration is intentional. Use `snapshot_config()` when

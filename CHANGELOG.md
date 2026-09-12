@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Shared `build_config()` API with immutable schemas, configurable external
+  prefixes, explicit namespaced TOML input, and embedder-defined fields and
+  validators. Composed snapshots pass directly into broker handles and support
+  ambient-free overlays and canonical value transport. Existing resolver
+  APIs, namespaced mapping views, CLI precedence, and backend contracts remain
+  compatible.
+
 ### Changed
 
 - Live peek streams (`Queue.peek_generator()`, `Queue.peek(all_messages=True)`,

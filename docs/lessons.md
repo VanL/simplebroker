@@ -97,6 +97,8 @@ pass; bootstrap source `2f93ee5`)
 
 ## Ledger
 
+- 2026-09-12: Canonical config storage is not a public key migration. Preserve lookup, iteration, opaque extras and receipt recognition separately; canonical-looking legacy extras must never drive broker settings. A naming view must carry the receipt through resolver gates without rereading env. Evidence: shared-configuration-loader plan and its collision/handoff regressions.
+
 Dated moment-tier entries (foldable after age floor and distillation).
 
 - 2026-08-24: A unique temp filename does not establish cleanup ownership.

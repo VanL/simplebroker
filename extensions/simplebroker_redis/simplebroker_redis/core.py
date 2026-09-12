@@ -50,6 +50,7 @@ from simplebroker._message_search import (
 from simplebroker._selection import SelectionOrder, validate_selection_order
 from simplebroker._sidecar import SidecarSession
 from simplebroker._timestamp import TimestampGenerator, validate_timestamp_bound
+from simplebroker.config import canonical_config
 from simplebroker.db import (
     _literal_prefix_from_fnmatch,
     _validate_queue_name_cached,
@@ -165,9 +166,9 @@ class RedisBrokerCore:
         self._pid = os.getpid()
         self._keys = RedisKeys(runner.namespace)
         self._prefix = self._keys.prefix
-        self._max_message_size = int(self._config["BROKER_MAX_MESSAGE_SIZE"])
+        self._max_message_size = int(canonical_config(self._config)["max_message_size"])
         self._maintenance_schedule = MaintenanceSchedule(
-            int(self._config["BROKER_AUTO_VACUUM_INTERVAL"])
+            int(canonical_config(self._config)["auto_vacuum_interval"])
         )
         self._active_generator_batch: Literal["claim", "move"] | None = None
         self._active_generator_batch_owner: int | None = None
@@ -818,7 +819,7 @@ class RedisBrokerCore:
         effective_batch_size = (
             batch_size
             if batch_size is not None
-            else effective_config["BROKER_GENERATOR_BATCH_SIZE"]
+            else canonical_config(effective_config)["generator_batch_size"]
         )
         yield from self._claim_batch_generator(
             queue,
@@ -1210,7 +1211,7 @@ class RedisBrokerCore:
         effective_batch_size = (
             batch_size
             if batch_size is not None
-            else effective_config["BROKER_GENERATOR_BATCH_SIZE"]
+            else canonical_config(effective_config)["generator_batch_size"]
         )
         while True:
             token, rows = self._begin_batch(
@@ -1315,7 +1316,7 @@ class RedisBrokerCore:
     def _record_maintenance_activity(self, completed: int) -> None:
         """Run one best-effort maintenance check after committed activity."""
         self._check_fork_safety()
-        if self._config["BROKER_AUTO_VACUUM"] != 1 or completed <= 0:
+        if canonical_config(self._config)["auto_vacuum"] != 1 or completed <= 0:
             return
 
         with self._lock:
@@ -1326,11 +1327,11 @@ class RedisBrokerCore:
                 if vacuum_is_eligible(
                     claimed_count=claimed_count,
                     total_count=total_count,
-                    threshold=float(self._config["BROKER_VACUUM_THRESHOLD"]),
+                    threshold=float(canonical_config(self._config)["vacuum_threshold"]),
                 ):
                     self.vacuum()
             except Exception:
-                if self._config["BROKER_LOGGING_ENABLED"]:
+                if canonical_config(self._config)["logging_enabled"]:
                     logger.exception("Automatic vacuum failed; will retry later")
             else:
                 self._maintenance_schedule.mark_check_succeeded()
@@ -1890,7 +1891,7 @@ class RedisBrokerCore:
         self._assert_no_reentrant_mutation_during_batch("vacuum")
         try:
             with self._lock:
-                batch_size = int(self._config["BROKER_VACUUM_BATCH_SIZE"])
+                batch_size = int(canonical_config(self._config)["vacuum_batch_size"])
                 for queue in [str(item) for item in self._queue_names()]:
                     self._client.eval(
                         scripts.VACUUM_CLAIMED,

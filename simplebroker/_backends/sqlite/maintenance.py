@@ -35,6 +35,7 @@ from ..._sql.sqlite import (
     build_insert_delete_message_ids_query,
     build_insert_delete_queue_names_query,
 )
+from ...config import canonical_config
 
 # PRAGMA auto_vacuum mode 2 is INCREMENTAL (SQLite documented value).
 _AUTO_VACUUM_INCREMENTAL = 2
@@ -202,7 +203,7 @@ def _vacuum_without_lock(
     compact: bool,
     config: Mapping[str, Any],
 ) -> None:
-    batch_size = int(config["BROKER_VACUUM_BATCH_SIZE"])
+    batch_size = int(canonical_config(config)["vacuum_batch_size"])
     had_claimed_messages = False
 
     while True:

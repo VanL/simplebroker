@@ -50,6 +50,7 @@ from ._paths import _validate_sqlite_database
 from ._selection import SelectionOrder, validate_bounded_order
 from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
+from .config import canonical_config
 from .db import (
     BrokerDB,
     DBConnection,
@@ -405,7 +406,7 @@ def _get_message_content(
         ValueError: If message exceeds size limit or no interactive message was given
     """
     resolved_config = snapshot_config(config)
-    max_message_size = int(resolved_config["BROKER_MAX_MESSAGE_SIZE"])
+    max_message_size = int(canonical_config(resolved_config)["max_message_size"])
 
     if message == "-":
         return _read_from_stdin(max_message_size)
@@ -752,7 +753,7 @@ def cmd_read(
     )
     with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
         selected_fetch_generator: FetchGeneratorFn = queue.read_generator
-        commit_interval = int(resolved_config["BROKER_READ_COMMIT_INTERVAL"])
+        commit_interval = int(canonical_config(resolved_config)["read_commit_interval"])
         if all_messages and commit_interval > 1:
 
             def stream_fetch_generator(

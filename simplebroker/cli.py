@@ -44,6 +44,7 @@ from ._project_config import (
     resolve_project_target,
 )
 from ._targets import BrokerTarget
+from .config import canonical_config, legacy_config
 from .project import _configured_backend_target, resolve_broker_target
 
 _TIMESTAMP_BOUND_LIMIT = (
@@ -421,12 +422,12 @@ def _build_cli_parser(
 
     # Add global arguments with environment-aware defaults
     default_dir = (
-        Path(resolved_config["BROKER_DEFAULT_DB_LOCATION"])
-        if resolved_config["BROKER_DEFAULT_DB_LOCATION"]
-        and resolved_config.get("BROKER_BACKEND", "sqlite") == "sqlite"
+        Path(canonical_config(resolved_config)["default_db_location"])
+        if canonical_config(resolved_config)["default_db_location"]
+        and canonical_config(resolved_config).get("backend", "sqlite") == "sqlite"
         else Path.cwd()
     )
-    default_file = resolved_config["BROKER_DEFAULT_DB_NAME"]
+    default_file = canonical_config(resolved_config)["default_db_name"]
 
     # Custom action to track when -d was explicitly provided
     class DirectoryAction(argparse.Action):
@@ -1289,10 +1290,10 @@ def _resolve_database_path(
     # Determine working dir and filename with env defaults
     working_dir = args.dir
     db_filename = args.file
-    if args.file == DEFAULT_DB_NAME and config["BROKER_DEFAULT_DB_NAME"]:
-        db_filename = config["BROKER_DEFAULT_DB_NAME"]
+    if args.file == DEFAULT_DB_NAME and canonical_config(config)["default_db_name"]:
+        db_filename = canonical_config(config)["default_db_name"]
 
-    if config["BROKER_PROJECT_SCOPE"] and args.command != "init":
+    if canonical_config(config)["project_scope"] and args.command != "init":
         # Use resolved working directory, not Path.cwd(), to account for -d flag
         search_start_dir = working_dir
         _validate_working_directory(search_start_dir)
@@ -1311,10 +1312,10 @@ def _resolve_database_path(
     # -d/--dir wins over BROKER_DEFAULT_DB_LOCATION; the parser already
     # defaults args.dir to that location when -d is absent, so this override
     # only applies when the directory was not explicitly chosen.
-    if config["BROKER_DEFAULT_DB_LOCATION"] and not getattr(
+    if canonical_config(config)["default_db_location"] and not getattr(
         args, "_dir_explicitly_provided", False
     ):
-        working_dir = Path(config["BROKER_DEFAULT_DB_LOCATION"])
+        working_dir = Path(canonical_config(config)["default_db_location"])
     return working_dir / db_filename, False
 
 
@@ -1354,7 +1355,7 @@ def _resolve_target(
             legacy_sqlite_path_mode=True,
         )
 
-    if config["BROKER_PROJECT_SCOPE"]:
+    if canonical_config(config)["project_scope"]:
         discovered_target = resolve_broker_target(root, config=config)
         if discovered_target is not None:
             return discovered_target
@@ -1380,7 +1381,7 @@ def _resolve_target(
         return configured_target
 
     if args.command == "init":
-        init_filename = config["BROKER_DEFAULT_DB_NAME"]
+        init_filename = canonical_config(config)["default_db_name"]
         return _build_sqlite_target(
             Path.cwd() / init_filename,
             used_project_scope=False,
@@ -1511,7 +1512,7 @@ def _run_cleanup(
             file_existed = resolved_target.plugin.cleanup_target(
                 str(db_path),
                 backend_options=resolved_target.backend_options,
-                config=config,
+                config=legacy_config(config),
             )
 
             if file_existed and not args.quiet:
@@ -1523,7 +1524,7 @@ def _run_cleanup(
             existed = resolved_target.plugin.cleanup_target(
                 resolved_target.target,
                 backend_options=resolved_target.backend_options,
-                config=config,
+                config=legacy_config(config),
             )
             if not args.quiet:
                 if existed:
@@ -1633,11 +1634,11 @@ def _validate_legacy_sqlite_target(
         if (
             not getattr(args, "_file_explicitly_provided", False)
             and args.file == DEFAULT_DB_NAME
-            and config["BROKER_DEFAULT_DB_NAME"]
+            and canonical_config(config)["default_db_name"]
         ):
             db_path = ensure_compound_db_path(
                 working_dir,
-                config["BROKER_DEFAULT_DB_NAME"],
+                canonical_config(config)["default_db_name"],
             )
         else:
             db_path = working_dir / args.file
@@ -1716,7 +1717,7 @@ def _validate_command_target(
             resolved_target.target,
             backend_options=resolved_target.backend_options,
             verify_initialized=True,
-            config=config,
+            config=legacy_config(config),
         )
 
 

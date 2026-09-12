@@ -17,6 +17,7 @@ from ._project_config import (
     resolve_project_target,
 )
 from ._targets import BrokerTarget
+from .config import canonical_config, legacy_config
 
 
 def _config_snapshot(config: Mapping[str, Any] | None) -> ResolvedConfig:
@@ -48,12 +49,12 @@ def _configured_backend_target(
     config: Mapping[str, Any],
     used_project_scope: bool,
 ) -> BrokerTarget | None:
-    backend_name = str(config.get("BROKER_BACKEND", "sqlite"))
+    backend_name = str(canonical_config(config).get("backend", "sqlite"))
     if backend_name == "sqlite":
         return None
 
     plugin = _requested_backend_plugin(backend_name)
-    resolved = plugin.init_backend(config)
+    resolved = plugin.init_backend(legacy_config(config))
     return BrokerTarget(
         backend_name=backend_name,
         target=str(resolved["target"]),
@@ -88,7 +89,7 @@ def _discover_legacy_sqlite_target(
 ) -> BrokerTarget | None:
     """Discover an existing legacy SQLite project target rooted above start_dir."""
 
-    default_target = Path(str(config["BROKER_DEFAULT_DB_NAME"]))
+    default_target = Path(str(canonical_config(config)["default_db_name"]))
     discovered = _find_project_database(str(default_target), start_dir)
     if discovered is None:
         return None
@@ -168,7 +169,7 @@ def target_for_directory(
     if configured_target is not None:
         return configured_target
 
-    default_target = Path(str(config_dict["BROKER_DEFAULT_DB_NAME"]))
+    default_target = Path(str(canonical_config(config_dict)["default_db_name"]))
     target_path = (
         default_target.resolve(strict=False)
         if default_target.is_absolute()

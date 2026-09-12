@@ -19,6 +19,7 @@ from simplebroker._runner import (
     release_runner_thread_connection,
 )
 from simplebroker._sql import BackendSQLNamespace, ensure_backend_sql_namespace
+from simplebroker.config import canonical_config
 
 from . import _sql as pg_sql
 from ._constants import POSTGRES_SCHEMA_VERSION
@@ -278,7 +279,7 @@ def verify_env(
     toml_opts = dict(toml_options) if toml_options else {}
     cleaned_toml_target = _optional_text(toml_target, name="toml target")
     password = _password_text(
-        config.get("BROKER_BACKEND_PASSWORD", ""),
+        canonical_config(config).get("backend_password", ""),
         name="BROKER_BACKEND_PASSWORD",
     )
 
@@ -287,7 +288,9 @@ def verify_env(
     elif cleaned_toml_target:
         schema_source = "simplebroker_pg_v1"
     else:
-        schema_source = config.get("BROKER_BACKEND_SCHEMA", "simplebroker_pg_v1")
+        schema_source = canonical_config(config).get(
+            "backend_schema", "simplebroker_pg_v1"
+        )
     schema = require_schema_name({"schema": schema_source})
 
     if cleaned_toml_target:
@@ -303,7 +306,7 @@ def verify_env(
         )
 
     env_target = _optional_text(
-        config.get("BROKER_BACKEND_TARGET", ""),
+        canonical_config(config).get("backend_target", ""),
         name="BROKER_BACKEND_TARGET",
     )
     if env_target:
@@ -321,17 +324,17 @@ def verify_env(
     return VerifiedPostgresEnv(
         target_mode="parts",
         host=_require_text(
-            config.get("BROKER_BACKEND_HOST", "localhost"),
+            canonical_config(config).get("backend_host", "localhost"),
             name="BROKER_BACKEND_HOST",
         ),
-        port=_require_port(config.get("BROKER_BACKEND_PORT", 5432)),
+        port=_require_port(canonical_config(config).get("backend_port", 5432)),
         user=_require_text(
-            config.get("BROKER_BACKEND_USER", "postgres"),
+            canonical_config(config).get("backend_user", "postgres"),
             name="BROKER_BACKEND_USER",
         ),
         password=password or None,
         database=_require_text(
-            config.get("BROKER_BACKEND_DATABASE", "simplebroker"),
+            canonical_config(config).get("backend_database", "simplebroker"),
             name="BROKER_BACKEND_DATABASE",
         ),
         target=None,
@@ -366,7 +369,7 @@ def _run_vacuum_body(
     """Delete claimed rows and run maintenance while the session lock is held."""
 
     had_claimed_messages = False
-    batch_size = int(config["BROKER_VACUUM_BATCH_SIZE"])
+    batch_size = int(canonical_config(config)["vacuum_batch_size"])
     while True:
         runner.begin_immediate()
         batch_step = capture_pg_step(

@@ -45,6 +45,7 @@ from ._retry_policy import (
     execute_setup_with_retry,
     setup_busy_timeout_ms,
 )
+from .config import canonical_config, legacy_config
 
 # A file below the 16-byte SQLite magic header cannot be a database.
 _SQLITE_HEADER_MIN_BYTES = 16
@@ -333,7 +334,7 @@ class SQLiteRunner:
             if getattr(self._thread_local, "setup_busy_timeout", False):
                 connect_timeout_ms = setup_busy_timeout_ms(self._config)
             else:
-                connect_timeout_ms = int(self._config["BROKER_BUSY_TIMEOUT"])
+                connect_timeout_ms = int(canonical_config(self._config)["busy_timeout"])
 
             # Create new connection for this thread with autocommit mode
             # This is crucial for proper transaction handling
@@ -374,7 +375,7 @@ class SQLiteRunner:
         """Apply per-connection settings that don't require exclusive locks."""
         self._backend.apply_connection_settings(
             conn,
-            config=self._config,
+            config=legacy_config(self._config),
             optimization_complete=SetupPhase.OPTIMIZATION in self._completed_phases,
         )
         if SetupPhase.OPTIMIZATION in self._completed_phases:
@@ -393,7 +394,7 @@ class SQLiteRunner:
         execute_setup_with_retry(
             lambda: self._backend.setup_connection_phase(
                 self._db_path,
-                config=self._config,
+                config=legacy_config(self._config),
                 busy_timeout_ms=setup_busy_timeout_ms(self._config),
             ),
             phase=str(SetupPhase.CONNECTION.value),
@@ -411,7 +412,9 @@ class SQLiteRunner:
 
     def _apply_optimization_settings(self, conn: sqlite3.Connection) -> None:
         """Apply optimization settings to a connection."""
-        self._backend.apply_optimization_settings(conn, config=self._config)
+        self._backend.apply_optimization_settings(
+            conn, config=legacy_config(self._config)
+        )
 
     @contextlib.contextmanager
     def _setup_operation_context(self) -> Iterator[None]:
@@ -435,7 +438,7 @@ class SQLiteRunner:
             if hasattr(self._thread_local, "conn"):
                 self._apply_busy_timeout(
                     self._thread_local.conn,
-                    int(self._config["BROKER_BUSY_TIMEOUT"]),
+                    int(canonical_config(self._config)["busy_timeout"]),
                 )
 
     def _apply_busy_timeout(self, conn: sqlite3.Connection, timeout_ms: int) -> None:
@@ -445,7 +448,7 @@ class SQLiteRunner:
         cursor.close()
 
     def _transaction_wait_deadline(self) -> float:
-        timeout_ms = max(0, int(self._config["BROKER_BUSY_TIMEOUT"]))
+        timeout_ms = max(0, int(canonical_config(self._config)["busy_timeout"]))
         return time.monotonic() + (timeout_ms / 1000)
 
     def _raise_if_transaction_unusable(self) -> None:
@@ -766,7 +769,7 @@ class SQLiteRunner:
         try:
             conn.close()
         except sqlite3.Error as exc:
-            if self._config["BROKER_LOGGING_ENABLED"]:
+            if canonical_config(self._config)["logging_enabled"]:
                 logger.warning("Error closing SQLite connection: %s", exc)
             return False
         return True

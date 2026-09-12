@@ -87,6 +87,7 @@ from ._message_id import format_message_id
 from ._retry import interruptible_sleep
 from ._retry_policy import _execute_watcher_operational_retry
 from ._targets import BrokerTarget
+from .config import canonical_config
 from .db import BrokerDB
 from .sbqueue import Queue, _close_iterator
 
@@ -230,7 +231,7 @@ def config_aware_default_error_handler(
     Returns:
         True to continue processing (don't stop the watcher)
     """
-    if config["BROKER_LOGGING_ENABLED"]:
+    if canonical_config(config)["logging_enabled"]:
         return default_error_handler(exc, message, timestamp)
     return True
 
@@ -458,10 +459,10 @@ class BaseWatcher(ABC):
         effective_config = _overlay_config(self._config, config)
         return PollingStrategy(
             stop_event=self._stop_event,
-            initial_checks=effective_config["BROKER_INITIAL_CHECKS"],
-            max_interval=effective_config["BROKER_MAX_INTERVAL"],
-            burst_sleep=effective_config["BROKER_BURST_SLEEP"],
-            jitter_factor=effective_config["BROKER_JITTER_FACTOR"],
+            initial_checks=canonical_config(effective_config)["initial_checks"],
+            max_interval=canonical_config(effective_config)["max_interval"],
+            burst_sleep=canonical_config(effective_config)["burst_sleep"],
+            jitter_factor=canonical_config(effective_config)["jitter_factor"],
         )
 
     def _create_activity_waiter(self, queue: Queue) -> ActivityWaiter | None:
@@ -541,7 +542,7 @@ class BaseWatcher(ABC):
             return process_func()
 
         def _log_retry(state: Any, exc: Exception, wait: float) -> None:
-            if effective_config["BROKER_LOGGING_ENABLED"]:
+            if canonical_config(effective_config)["logging_enabled"]:
                 logger.debug(
                     f"OperationalError during {operation_name} "
                     f"(retry {state.tries}/{max_retries}): {exc}. "
@@ -559,7 +560,7 @@ class BaseWatcher(ABC):
         except StopException:
             raise StopWatching from None
         except OperationalError as e:
-            if effective_config["BROKER_LOGGING_ENABLED"]:
+            if canonical_config(effective_config)["logging_enabled"]:
                 logger.log(
                     logging.ERROR,
                     f"Failed after {max_retries} operational errors: {e}",
@@ -606,7 +607,7 @@ class BaseWatcher(ABC):
             raise StopWatching from stop_error
         except Exception as eh_error:
             # Error handler itself failed
-            if effective_config["BROKER_LOGGING_ENABLED"]:
+            if canonical_config(effective_config)["logging_enabled"]:
                 logger.log(
                     logging.ERROR,
                     f"Error handler failed: {eh_error}\nOriginal error: {e}",
@@ -1010,7 +1011,7 @@ class BaseWatcher(ABC):
             but the original oversized message will be discarded.
         """
         resolved_config = _overlay_config(self._config, config)
-        max_message_size = int(resolved_config["BROKER_MAX_MESSAGE_SIZE"])
+        max_message_size = int(canonical_config(resolved_config)["max_message_size"])
 
         # Validate message size.
         message_size = len(message.encode("utf-8"))
@@ -1019,7 +1020,7 @@ class BaseWatcher(ABC):
                 f"Message size ({message_size} bytes) exceeds "
                 f"{max_message_size} byte limit"
             )
-            if resolved_config["BROKER_LOGGING_ENABLED"]:
+            if canonical_config(resolved_config)["logging_enabled"]:
                 logger.error(error_msg)
             # Use error handler if available
             if self._error_handler:
@@ -1214,7 +1215,7 @@ class BaseWatcher(ABC):
         try:
             self.stop()
         except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
-            if self._config["BROKER_LOGGING_ENABLED"]:
+            if canonical_config(self._config)["logging_enabled"]:
                 logger.warning(f"Error during stop in __exit__: {e}")
 
     def _setup_finalizer(self) -> None:
@@ -1311,15 +1312,17 @@ class SignalHandlerContext:
 # These public signature defaults must move together with the canonical
 # ambient-free configuration contract in [SB-API-6].
 _POLLING_CANONICAL_DEFAULTS = resolve_isolated_config({})
-_POLLING_INITIAL_CHECKS_DEFAULT: int = _POLLING_CANONICAL_DEFAULTS[
-    "BROKER_INITIAL_CHECKS"
+_POLLING_INITIAL_CHECKS_DEFAULT: int = canonical_config(_POLLING_CANONICAL_DEFAULTS)[
+    "initial_checks"
 ]
-_POLLING_MAX_INTERVAL_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS[
-    "BROKER_MAX_INTERVAL"
+_POLLING_MAX_INTERVAL_DEFAULT: float = canonical_config(_POLLING_CANONICAL_DEFAULTS)[
+    "max_interval"
 ]
-_POLLING_BURST_SLEEP_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS["BROKER_BURST_SLEEP"]
-_POLLING_JITTER_FACTOR_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS[
-    "BROKER_JITTER_FACTOR"
+_POLLING_BURST_SLEEP_DEFAULT: float = canonical_config(_POLLING_CANONICAL_DEFAULTS)[
+    "burst_sleep"
+]
+_POLLING_JITTER_FACTOR_DEFAULT: float = canonical_config(_POLLING_CANONICAL_DEFAULTS)[
+    "jitter_factor"
 ]
 
 
@@ -1738,7 +1741,7 @@ class QueueWatcher(BaseWatcher):
         self._pending_found_by_db_check = False
 
         # Two-phase detection configuration
-        self._skip_idle_check = self._config["BROKER_SKIP_IDLE_CHECK"]
+        self._skip_idle_check = canonical_config(self._config)["skip_idle_check"]
 
     def _has_pending_messages(self) -> bool:
         """Fast check if queue has unclaimed messages.
@@ -2128,7 +2131,7 @@ class QueueMoveWatcher(BaseWatcher):
 
             # Check max messages limit
             if self._max_messages and self._move_count >= self._max_messages:
-                if self._config["BROKER_LOGGING_ENABLED"]:
+                if canonical_config(self._config)["logging_enabled"]:
                     logger.info(f"Reached max_messages limit ({self._max_messages})")
                 self._stop_event.set()
                 raise StopWatching

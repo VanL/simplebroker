@@ -52,6 +52,94 @@ marker when passing config to Queue, discovery, watchers, runners, brokers, or
 load. Converting it to
 `dict` discards the no-ambient-reread guarantee at the next public seam.
 
+## Shared configuration for embedders
+
+`build_config()` selects one external namespace and returns a complete,
+immutable `ConfigSnapshot` with unprefixed internal keys. Supply the environment
+explicitly: omitting `env` reads no process environment. Fields absent from
+all supplied sources remain available through their schema defaults.
+
+```python
+import os
+from simplebroker import CONFIG_DEFAULTS, ConfigField, Queue, build_config
+
+
+def retention_days(value):
+    if type(value) is not int or value < 0:
+        raise ValueError("expected a nonnegative integer")
+    return value
+
+
+APP_DEFAULTS = CONFIG_DEFAULTS.derive(
+    defaults={"cache_mb": 20},
+    fields={
+        "retention_days": ConfigField(
+            default=7,
+            description="Days to retain application records",
+            validator=retention_days,
+            parser=int,
+        ),
+    },
+)
+config = build_config("APP", env=os.environ, defaults=APP_DEFAULTS)
+assert config["cache_mb"] == config["APP_CACHE_MB"]
+with Queue("tasks", db_path=".app.db", config=config) as queue:
+    queue.write("work")
+```
+
+`APP_RETENTION_DAYS` is available through the same loader as inherited broker
+fields. `BROKER_*` cannot override an APP build. Unknown external names are
+ignored; malformed recognized values fail. The same snapshot carries app and
+broker fields into handles, without another ambient read or broker-only copy.
+`ConfigSchema({...})` also supports independent schemas with no broker fields;
+only snapshots passed into broker consumers need the complete broker schema.
+
+A `ConfigField` validator returns its canonical value or raises `ValueError` or
+`TypeError`; its optional parser converts external env/TOML input first. Use
+`dependencies=("other_field",)` and `default_factory=lambda values: ...` when a
+missing value depends on another resolved field. Cyclic or missing dependencies
+are schema errors. `with_options()` recomputes affected derived defaults only
+while they still have default provenance; it preserves explicitly supplied values.
+Schema derivation copies declarations, so customizing an embedder does not mutate
+`CONFIG_DEFAULTS`. Adding a field under an inherited name is an error: use
+`defaults={...}` or `parsers={...}` for intentional overrides.
+
+External TOML settings use the same namespaced spellings as environment values:
+
+```toml
+version = 1
+backend = "sqlite"
+target = ".app.db"
+APP_CACHE_MB = 24
+APP_RETENTION_DAYS = 14
+```
+
+Call `build_config("APP", env=os.environ, config_file=".app.toml",
+defaults=APP_DEFAULTS)` to activate these settings. A parsed root-table mapping
+is accepted too. Existing project target fields and tables keep their existing
+parser and precedence. Merely adding namespaced settings to a discovered
+`.broker.toml` does **not** activate them for the existing CLI. File settings
+are read only when this additive API receives `config_file=` explicitly.
+
+The default builder order is typed `options` > file > env > defaults. Options
+are a sparse mapping of canonical names, such as `{"cache_mb": 30}`, not argv
+or parser-generated defaults. Canonical defaults/options are validated without
+reapplying external unit conversion. The broker schema preserves ambient-base
+validation: an invalid selected file/env base value still fails before an
+ordinary option is applied. A higher-priority file value may shadow its env
+value. A schema can derive `source_order=("options", "env", "file")` and
+`validate_base=False` for an embedder whose documented policy selects the
+winning value before validation.
+The loader never changes target selection or a caller's external alias policy.
+
+`snapshot.with_options({...})` applies an ambient-free overlay.
+`snapshot.to_values()` exports detached canonical data for process transport;
+`ConfigSnapshot.from_values(values, schema=APP_DEFAULTS, prefix="APP")` validates a complete
+payload without env or default filling. Keep the snapshot marker across broker
+handoffs. New snapshots iterate canonical names once; namespaced lookup, `get`,
+and membership are aliases. Existing `ResolvedConfig` and legacy resolver
+mapping spellings, iteration, opaque extras, and subclass behavior are preserved.
+
 ## Environment variables
 
 **Core Settings:**

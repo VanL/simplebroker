@@ -22,6 +22,7 @@ Quick pointers to the key guidance documents in this repository.
 | Path | Purpose |
 |------|---------|
 | `simplebroker/` | The package: CLI (`__main__.py`), broker session, delivery, backends (`_backends/`), constants, maintenance |
+| `simplebroker/config.py` | Shared extensible schema, prefix selection, immutable config receipts and legacy naming views; `_constants.py` retains ordinary constants and compatibility exports |
 | `simplebroker/_broker_session.py` | Process-session identity, registry/refcount, admission and drain, per-thread core cache |
 | `simplebroker/_message_id.py` | Exact message-ID normalization and canonical JSON-string formatting |
 | `simplebroker/sbqueue.py` | Public named-queue handle, backend identity, Queue operation leases, and activity-waiter binding |

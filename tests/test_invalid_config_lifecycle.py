@@ -11,13 +11,13 @@ from typing import Any
 
 import pytest
 
+import simplebroker.config as config_module
 from simplebroker import BrokerTarget, commands
 from simplebroker._constants import (
-    _CONFIG_FIELDS,
-    _ConfigField,
     load_config,
     resolve_config,
 )
+from simplebroker.config import CONFIG_DEFAULTS
 from simplebroker.ext import InvalidConfigError
 
 pytestmark = [pytest.mark.shared]
@@ -71,8 +71,8 @@ def test_load_config_reports_invalid_environment_field(
 
 
 def test_every_recognized_config_field_has_an_expected_form() -> None:
-    assert len(_CONFIG_FIELDS) == 32
-    assert all(field.expected.strip() for field in _CONFIG_FIELDS.values())
+    assert len(CONFIG_DEFAULTS) == 32
+    assert all(field.description.strip() for field in CONFIG_DEFAULTS.values())
 
 
 def test_override_failure_reports_source_and_handles_hostile_repr() -> None:
@@ -129,10 +129,10 @@ def test_sensitive_config_failure_redacts_before_formatting(
     def reject(_value: Any) -> str:
         raise ValueError("rejected")
 
-    monkeypatch.setitem(
-        _CONFIG_FIELDS,
-        "BROKER_BACKEND_TARGET",
-        _ConfigField("", reject, "a backend target string"),
+    monkeypatch.setattr(
+        config_module,
+        "CONFIG_DEFAULTS",
+        CONFIG_DEFAULTS.derive(parsers={"backend_target": reject}),
     )
     monkeypatch.setenv("BROKER_BACKEND_TARGET", secret)
 
@@ -344,6 +344,8 @@ def test_direct_commands_raise_when_their_path_consumes_invalid_config(
 import tempfile
 import simplebroker.commands as commands
 from simplebroker.ext import InvalidConfigError
+from simplebroker.config import CONFIG_DEFAULTS
+import simplebroker.config as config_module
 path = tempfile.mktemp(suffix='.db')
 try:
     {call}

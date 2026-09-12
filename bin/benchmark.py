@@ -22,7 +22,6 @@ from typing import Any, Protocol, cast
 
 from simplebroker import Queue, __version__
 from simplebroker._backend_plugins import get_backend_plugin
-from simplebroker._constants import _CONFIG_FIELDS
 from simplebroker._scripts import (
     _cleanup_container,
     _start_postgres_container,
@@ -30,6 +29,7 @@ from simplebroker._scripts import (
     _verify_postgres_test_dsn,
 )
 from simplebroker._targets import BrokerTarget, redact_backend_target
+from simplebroker.config import CONFIG_DEFAULTS, resolve_isolated_config
 
 BACKENDS = ("sqlite", "pg", "redis")
 ACCESS_TYPES = ("cli", "api", "optimized-api")
@@ -363,17 +363,12 @@ def _benchmark_config(
     overrides: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return canonical defaults, independent of ambient broker settings."""
-    config = {
-        key: field.normalize(field.default) for key, field in _CONFIG_FIELDS.items()
-    }
-    config["BROKER_AUTO_VACUUM"] = 0
-    for key, value in (overrides or {}).items():
-        try:
-            field = _CONFIG_FIELDS[key]
-        except KeyError:
-            raise ValueError(f"unknown benchmark config override: {key}") from None
-        config[key] = field.normalize(value)
-    return config
+    values = {"BROKER_AUTO_VACUUM": 0, **(overrides or {})}
+    known = {"BROKER_" + name.upper() for name in CONFIG_DEFAULTS}
+    for key in values:
+        if key not in known:
+            raise ValueError(f"unknown benchmark config override: {key}")
+    return dict(resolve_isolated_config(values))
 
 
 def _cli_environment(target: BrokerTarget) -> dict[str, str]:
