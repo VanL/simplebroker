@@ -6,7 +6,7 @@ import pytest
 
 from .peek_pagination_benchmark import dataset, sqlite_steps
 
-pytestmark = [pytest.mark.sqlite_only]
+pytestmark = [pytest.mark.sqlite_only, pytest.mark.isolated_gate]
 
 
 def test_public_peek_doubled_rows_have_linear_vm_work() -> None:

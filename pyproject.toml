@@ -103,11 +103,11 @@ exclude = [
 [tool.pytest.ini_options]
 minversion = "9.1.1"
 testpaths = ["tests"]
-addopts = "-ra -q --strict-markers -m 'not benchmark and not nested_xdist' -n auto --dist loadgroup"
+addopts = "-ra -q --strict-markers -m 'not benchmark and not isolated_gate' -n auto --dist loadgroup"
 filterwarnings = ["error"]
 markers = [
     "benchmark: performance measurement; never gates CI -- run locally with '-m benchmark' or the full '-m \"\"' suite",
-    "nested_xdist: process-topology integration tests; run as a top-level -n0 gate because the test creates its own xdist pool",
+    "isolated_gate: sensitive process-topology or instrumentation tests; run as a top-level -n0 gate without competing suite workers",
     "shared: backend-agnostic black-box tests that should pass across supported backends",
     "sqlite_only: tests that validate built-in SQLite-specific behavior",
     "pg_only: tests that validate the Postgres extension package",

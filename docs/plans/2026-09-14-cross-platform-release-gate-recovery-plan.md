@@ -111,6 +111,18 @@ gates passing, and all three expected artifacts appearing on PyPI and GitHub.
   dedicated top-level `-n0` gate in the local release and CI workflows. Its
   nested command retains two xdist workers, pytest-cov, two child processes,
   and the original 30-second subprocess deadline.
+- Exact-SHA core run `34854252187` showed that 100-instruction sampling was
+  still insufficient under broad Windows suite load: Python 3.11, 3.12, 3.13,
+  and coverage-enabled 3.14 all killed the keyset worker at the unchanged
+  180-second bound. The detector therefore joins the dedicated top-level `-n0`
+  gate. Dataset sizes, the complete public scan and ordered-ID check, VM
+  progress sampling, and the 2.8 ratio remain unchanged; only unrelated
+  competing suite workers are removed.
+- The SQLite name grammar contracts accepted public input. After that effect
+  and the governing plan's default-major rule were surfaced explicitly, the
+  owner directed continuation of the prepared coordinated 8.2.0/4.2.0/4.2.0
+  release. This records the required owner-selected version exception; it does
+  not redefine the normal SemVer classification of such a contraction.
 
 ## Tasks
 
@@ -118,6 +130,9 @@ gates passing, and all three expected artifacts appearing on PyPI and GitHub.
    - Count fixed-size VM instruction blocks rather than crossing into Python
      for every instruction; retain dataset sizes, complete ID validation, and
      the 2.8 ratio.
+   - Run the proof in the dedicated top-level `-n0` gate if fixed-size sampling
+     still exceeds the broad Windows bound; do not change its inputs or
+     discriminator.
 2. Make coverage lifecycle probes deterministic and narrow.
    - Synchronize the readable-shard replacement to the combiner's first
      inspection in-process; keep separate script integration coverage.

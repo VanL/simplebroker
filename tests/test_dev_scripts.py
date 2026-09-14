@@ -1598,7 +1598,7 @@ def test_pytest_cov_defers_child_data_to_a_separate_basename(
     assert os.environ["COVERAGE_FILE"] == f"{data_file}-subprocess"
 
 
-@pytest.mark.nested_xdist
+@pytest.mark.isolated_gate
 def test_xdist_worker_coverage_stays_in_pytest_cov_lifecycle(
     tmp_path: Path,
 ) -> None:

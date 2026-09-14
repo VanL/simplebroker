@@ -1039,7 +1039,7 @@ def test_windows_tests_keep_default_xdist_contention() -> None:
             "    - name:", 1
         )[0]
         assert re.findall(r'-m\s+"([^"]+)"', step) == [
-            "not benchmark and not nested_xdist"
+            "not benchmark and not isolated_gate"
         ]
         assert step.count("-n auto") == 1
         assert "-n 2" not in step
@@ -1048,13 +1048,20 @@ def test_windows_tests_keep_default_xdist_contention() -> None:
         assert "--timeout-method=thread" in step
         assert "--max-worker-restart=0" in step
 
-    nested_step = matrix_job.split("    - name: Run nested xdist lifecycle gate", 1)[
-        1
-    ].split("    - name:", 1)[0]
-    assert 'PYTEST_ADDOPTS: ""' in nested_step
-    assert '-m "nested_xdist"' in nested_step
-    assert "-n0" in nested_step
-    assert "--timeout=180" in nested_step
+    isolated_step = matrix_job.split(
+        "    - name: Run isolated topology and instrumentation gates", 1
+    )[1].split("    - name:", 1)[0]
+    assert 'PYTEST_ADDOPTS: ""' in isolated_step
+    assert '-m "isolated_gate"' in isolated_step
+    assert "-n0" in isolated_step
+    assert "--timeout=180" in isolated_step
+    assert "\n      if:" not in isolated_step
+    assert "@pytest.mark.isolated_gate" in (
+        ROOT / "tests" / "test_dev_scripts.py"
+    ).read_text(encoding="utf-8")
+    assert "pytest.mark.isolated_gate" in (
+        ROOT / "tests" / "test_peek_keyset_scaling.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_coverage_diagnostics_can_run_one_suite_from_gh() -> None:

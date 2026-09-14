@@ -190,6 +190,11 @@ main database. A migration requires stopped clients and separately reviewed
 operator instructions. Version policy for publication must acknowledge this
 input contraction (a major release unless the owner explicitly chooses an
 exception); authorization of the grammar is not a choice of release version.
+On 2026-09-14, after this compatibility effect was surfaced explicitly, the
+owner directed continuation of the already prepared coordinated release and
+chose the exception: publish the contraction in SimpleBroker 8.2.0, with both
+extensions at 4.2.0. This is a deliberate project version-policy decision, not
+a claim that the input change is SemVer-compatible by default.
 
 Source rollback is possible without a storage migration but restores the
 respective bugs and old input policy. Rolling back F1 is not a safe service
