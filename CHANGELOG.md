@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.1] - 2026-09-14
+
 ### Added
 
 - Config supports normal Python pickle, preserving values, namespace and field
@@ -17,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and resolved values as JSON. Receivers supply their own field declarations and
   validators without reading environment or TOML settings; live resources and
   callables are not serialized.
+
+### Changed
+
+- SimpleBroker 8.2.1, `simplebroker-pg` 4.2.1, and `simplebroker-redis` 4.2.1
+  are the coordinated release set. Both extensions require SimpleBroker 8.2.1
+  or newer, and the core `pg` and `redis` extras require the matching 4.2.1
+  extension or newer, so new installations select the complete release set.
 
 ### Fixed
 
