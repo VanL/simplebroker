@@ -73,7 +73,6 @@ registry.
 | `simplebroker/_backends/sqlite/schema.py:179` | `ensure_schema_v3` (12) | P3 | Retain transaction, repair, rollback, and version publication together. |
 | `simplebroker/_backends/sqlite/validation.py:14` | `validate_database` (19) | P3 | Retain the ordered database-validation checklist. |
 | `simplebroker/_constants.py:279` | `_validate_safe_path_components` (17) | P1 | Extract same-file component and dangerous-character helpers; preserve error order. |
-| `simplebroker/_constants.py:532` | `load_config` (19) | P1 | Use one private field schema for environment and override coercion. |
 | `simplebroker/_dump.py:155` | `load_lines` (19) | P3 | Retain streaming parse order and partial durable mutation semantics; add transition coverage. |
 | `simplebroker/_phaselock.py:137` | `_darwin_xattr_provider` (13) | P3 | Retain provider discovery, ERANGE handling, and process cache initialization together. |
 | `simplebroker/_phaselock.py:282` | `_AdvisoryLock.acquire` (12) | P2 | Name local lock-wait decisions while preserving cancellation and diagnostics ordering. |
@@ -199,10 +198,12 @@ carries the prefix plus ordinary values, rebuilt as a namespaced override with
 receiver-owned field declarations. Config retains namespace and declarations
 for derived overrides; both participate in session identity.
 
-No ambient input is parsed at module import. An existing Config is retained
-across ownership boundaries; a fresh handle explicitly supplies environment
-when its public seam owns ambient selection. The CLI remains the process-level
-translator for InvalidConfigError diagnostics. Complete configuration values
+No environment is read at module import. An existing Config is retained
+across ownership boundaries; a handle without one resolves defaults with
+`resolve_config()`. Only the process entry reads the environment: `cli.main()`
+calls `resolve_config(env=os.environ)` once and prints its warnings as
+`simplebroker: warning:` lines. The CLI remains the process-level translator
+for InvalidConfigError diagnostics. Complete configuration values
 participate in session identity, including custom fields.
 
 Numeric OverflowError joins TypeError/ValueError in the one `_validated_value`
@@ -223,7 +224,7 @@ remain separate. open_broker admission precedes DBConnection's retry wrapper so
 invalid names retain the public ValueError boundary instead of a retry error.
 
 Queue, discovery, command, CLI, watcher, load, broker-context, and direct
-runner seams sample once at their published ownership event. They pass the
+runner seams resolve once at their published ownership event. They pass the
 same marker through target selection, `DBConnection`, process-session keys and
 factories, `BrokerCore`, first-party backend plugins, runners, and cleanup.
 Lazy resource acquisition is not a second configuration time. A watcher given

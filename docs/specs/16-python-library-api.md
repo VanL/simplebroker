@@ -213,7 +213,8 @@ without a declaration: strip the prefix and preserve the value unchanged.
 Registered built-in and user-provided validators are called through the same
 path. A near-miss name whose uppercase suffix matches a declared field warns
 with its source and suggested field, then is ignored; external name selection does
-not reject input. Invalid registered values raise `InvalidConfigError` with
+not reject input. An invalid registered value warns as its source is applied;
+if it is still in effect after all sources, `InvalidConfigError` is raised with
 key, source, expected form and safely redacted value metadata.
 
 `override` uses the same namespaced selection and field validators as external
@@ -231,8 +232,7 @@ valid value replaces it. If any invalid value remains after all sources,
 all sources, one whole-config check validates combined project path/name depth
 on the final values; its error reports the source of the final
 `PROJECT_CONFIG_NAME`.
-Checks skip absent broker fields. Invalid lower-priority inputs fail
-before a higher-priority override can hide them. `VACUUM_THRESHOLD` stores a
+Checks skip absent broker fields. `VACUUM_THRESHOLD` stores a
 percentage in 0–100: `10` and `"10"` mean ten percent; `0.1` means 0.1 percent.
 Integers, floats and numeric strings are accepted for this percentage field;
 booleans and boolean strings such as `"true"` are rejected.

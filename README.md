@@ -38,9 +38,9 @@ dependencies and stores its state in one SQLite database.
 - **Coding agents that need a queue primitive.** The CLI gives agents a durable
   coordination point without an MCP server, daemon, or project-specific setup.
 - **Library and tool authors embedding queue semantics.** Use a small client or
-  context object over SimpleBroker, translate your app settings into `BROKER_*`
-  config, and hand out queues bound to one resolved broker target. Weft is the
-  reference implementation of this pattern.
+  context object over SimpleBroker, resolve your settings into one `Config`
+  (under your own prefix if you like), and hand out queues bound to one
+  resolved broker target. Weft is the reference implementation of this pattern.
 - **Event-driven workflows** via the built-in real-time watcher.
 
 **Not for:** Broker fleets, pub/sub, distributed task frameworks, or applications
@@ -96,9 +96,11 @@ The SimpleBroker API is designed to mirror the CLI: `broker write tasks "hi"`
 and `Queue("tasks").write("hi")` mean the same queue operation over the same 
 resolved target.
 
-The same configuration and tuning capabilities are resolved from the environment
-or configuration files (`BROKER_*` keys) and passed into functions and classes.
-Embedders translate their own settings into those keys to avoid name clashes.
+The CLI reads its configuration and tuning settings from `BROKER_*` environment
+variables once at startup. In Python, the same settings live in one read-only
+`Config` built with `resolve_config()` and passed to functions and classes;
+`resolve_config(env=os.environ)` reads the same variables. Embedders can use
+their own prefix, such as `APP_CACHE_MB`, to avoid name clashes.
 
 The public API consists of the names exported from `simplebroker`,
 `simplebroker.ext`, and the `simplebroker.commands.__all__` command layer
@@ -984,7 +986,10 @@ sensitivity table without expanding the default matrix.
 
 ### Environment Variables
 
-Most users will not need to adjust any settings. If tuning is desired, the most likely settings will be: 
+Most users will not need to adjust any settings. The `broker` command reads
+these variables at startup; a Python program honors them by passing
+`resolve_config(env=os.environ)` to its handles. If tuning is desired, the most
+likely settings will be:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
