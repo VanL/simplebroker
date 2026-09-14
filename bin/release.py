@@ -130,12 +130,24 @@ ROOT_TEST_PYTEST_ARGS: Final[tuple[str, ...]] = (
     "-v",
     "--tb=short",
     "-m",
-    "not benchmark",
+    "not benchmark and not nested_xdist",
     "--override-ini=addopts=-ra -q --strict-markers",
     "-n",
     str(LOCAL_PYTEST_WORKERS),
     "--dist",
     "loadgroup",
+)
+ROOT_NESTED_XDIST_PYTEST_ARGS: Final[tuple[str, ...]] = (
+    "pytest",
+    "-v",
+    "--tb=short",
+    "-m",
+    "nested_xdist",
+    "--override-ini=addopts=-ra -q --strict-markers",
+    "-n",
+    "0",
+    "--timeout=180",
+    "--timeout-method=thread",
 )
 ROOT_BENCHMARK_PYTEST_ARGS: Final[tuple[str, ...]] = (
     "pytest",
@@ -974,7 +986,11 @@ def _is_root_test_command(command: tuple[str, ...]) -> bool:
 
     return command[: len(ROOT_TEST_COMMAND_PREFIX)] == ROOT_TEST_COMMAND_PREFIX and any(
         command[-len(pytest_args) :] == pytest_args
-        for pytest_args in (ROOT_TEST_PYTEST_ARGS, ROOT_BENCHMARK_PYTEST_ARGS)
+        for pytest_args in (
+            ROOT_TEST_PYTEST_ARGS,
+            ROOT_NESTED_XDIST_PYTEST_ARGS,
+            ROOT_BENCHMARK_PYTEST_ARGS,
+        )
     )
 
 
@@ -999,10 +1015,11 @@ def _root_test_command(
 
 
 def _root_test_commands() -> tuple[tuple[str, ...], ...]:
-    """Run functional tests in parallel, then benchmarks without suite load."""
+    """Run the broad suite, nested-xdist gate, then unloaded benchmarks."""
 
     return (
         _root_test_command(ROOT_TEST_PYTEST_ARGS),
+        _root_test_command(ROOT_NESTED_XDIST_PYTEST_ARGS),
         _root_test_command(ROOT_BENCHMARK_PYTEST_ARGS),
     )
 

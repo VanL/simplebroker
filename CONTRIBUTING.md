@@ -19,8 +19,10 @@ cd simplebroker
 uv sync --all-extras
 
 # Run tests
-uv run pytest              # Fast tests only
-uv run pytest -m ""        # All tests including benchmarks
+uv run pytest              # Broad suite; excludes benchmarks and nested process-topology tests
+uv run pytest -m benchmark -n0  # Benchmarks without competing suite load
+uv run pytest -m nested_xdist -n0  # Nested xdist lifecycle gate from a serial parent
+uv run --locked python bin/release.py all  # Aggregate local gate used for a coordinated release
 PHASELOCK_ENABLE_XATTRS=0 uv run pytest tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
 uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
 uv run ./bin/pytest-redis  # All Redis-backed tests with automatic Docker setup/teardown (Valkey)

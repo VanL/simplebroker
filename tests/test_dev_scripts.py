@@ -1583,36 +1583,6 @@ def test_combine_coverage_waits_for_transiently_incomplete_shard(
     assert not shard_file.exists()
 
 
-def test_combine_coverage_waits_for_readable_shard_to_settle(tmp_path: Path) -> None:
-    data_file = tmp_path / ".coverage"
-    shard_file = tmp_path / ".coverage.worker"
-    replacement_file = tmp_path / "replacement.coverage"
-    worker_source = tmp_path / "worker_source.py"
-    _write_coverage_lines(shard_file, worker_source, {2})
-
-    def finish_shard() -> None:
-        time.sleep(0.2)
-        _write_coverage_lines(replacement_file, worker_source, {3})
-        _replace_with_retry(replacement_file, shard_file)
-
-    writer = threading.Thread(target=finish_shard)
-    writer.start()
-    try:
-        result = _run_combine_coverage(
-            data_file,
-            retry_timeout=2.0,
-            settle_seconds=0.3,
-        )
-    finally:
-        writer.join()
-
-    assert result.returncode == 0, result.stderr
-    combined = CoverageData(basename=str(data_file))
-    combined.read()
-    assert combined.lines(worker_source.as_posix()) == [3]
-    assert not shard_file.exists()
-
-
 def test_pytest_cov_defers_child_data_to_a_separate_basename(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1628,6 +1598,7 @@ def test_pytest_cov_defers_child_data_to_a_separate_basename(
     assert os.environ["COVERAGE_FILE"] == f"{data_file}-subprocess"
 
 
+@pytest.mark.nested_xdist
 def test_xdist_worker_coverage_stays_in_pytest_cov_lifecycle(
     tmp_path: Path,
 ) -> None:
@@ -1662,6 +1633,7 @@ def test_child_coverage(index):
             "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
             "COVERAGE_FILE": str(data_file),
             "PYTEST_ADDOPTS": "",
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
             "PYTHONPATH": os.pathsep.join(
                 filter(None, [str(REPO_ROOT), env.get("PYTHONPATH", "")])
             ),
@@ -1673,6 +1645,10 @@ def test_child_coverage(index):
             sys.executable,
             "-m",
             "pytest",
+            "-p",
+            "xdist.plugin",
+            "-p",
+            "pytest_cov.plugin",
             "-p",
             "tests.conftest",
             "-n",

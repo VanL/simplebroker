@@ -132,11 +132,15 @@ def test_release_gate_isolates_benchmarks_from_parallel_suite_load() -> None:
         command for command in commands if release._is_root_test_command(command)
     ]
 
-    assert len(root_pytest_commands) == 2
-    functional, benchmarks = root_pytest_commands
-    _exactly_once_pair(tuple(functional), "-m", "not benchmark")
+    assert len(root_pytest_commands) == 3
+    functional, nested_xdist, benchmarks = root_pytest_commands
+    _exactly_once_pair(tuple(functional), "-m", "not benchmark and not nested_xdist")
     _exactly_once_pair(tuple(functional), "-n", str(release.LOCAL_PYTEST_WORKERS))
     _exactly_once_pair(tuple(functional), "--dist", "loadgroup")
+    _exactly_once_pair(tuple(nested_xdist), "-m", "nested_xdist")
+    _exactly_once_pair(tuple(nested_xdist), "-n", "0")
+    assert "--timeout=180" in nested_xdist
+    assert "--timeout-method=thread" in nested_xdist
     _exactly_once_pair(tuple(benchmarks), "-m", "benchmark")
     _exactly_once_pair(tuple(benchmarks), "-n", "0")
 
@@ -144,7 +148,7 @@ def test_release_gate_isolates_benchmarks_from_parallel_suite_load() -> None:
 def test_release_gate_worker_modes_override_ambient_pytest_addopts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    functional, benchmarks = release._root_test_commands()
+    functional, nested_xdist, benchmarks = release._root_test_commands()
 
     monkeypatch.setenv("PYTEST_ADDOPTS", "-n 0")
     functional_env = release._merge_command_env(
@@ -158,6 +162,12 @@ def test_release_gate_worker_modes_override_ambient_pytest_addopts(
         "--dist",
         "loadgroup",
     )
+
+    nested_env = release._merge_command_env(
+        release._precheck_env_overrides(nested_xdist)
+    )
+    assert nested_env is not None
+    _exactly_once_pair(tuple(nested_xdist), "-n", "0")
 
     monkeypatch.setenv("PYTEST_ADDOPTS", "-n auto")
     benchmark_env = release._merge_command_env(
@@ -521,7 +531,7 @@ def test_batch_prechecks_deduplicate_shared_checks() -> None:
 
     assert sum("./bin/pytest-pg" in command for command in command_lines) == 1
     assert sum("./bin/pytest-redis" in command for command in command_lines) == 1
-    assert sum(" pytest " in f" {command} " for command in command_lines) == 3
+    assert sum(" pytest " in f" {command} " for command in command_lines) == 4
     assert (
         sum(
             f"pytest -n {release.LOCAL_PYTEST_WORKERS} examples" in command

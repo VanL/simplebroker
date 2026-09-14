@@ -14,6 +14,7 @@ def test_public_peek_doubled_rows_have_linear_vm_work() -> None:
     for count in (10000, 20000):
         with dataset("sqlite", count, None) as (queue, runner, _version):
             steps.append(sqlite_steps(queue, runner, count))
-    # OFFSET is about 3.4x here; keyset is about 2x. Fixture construction and
-    # teardown are outside the progress callback, and every ordered ID is checked.
+    # OFFSET is about 3.4x here; keyset is about 2x. Fixed-size VM sampling
+    # avoids making Python callback overhead the Windows bottleneck. Fixture
+    # construction and teardown are outside it, and every ordered ID is checked.
     assert steps[1] < steps[0] * 2.8, steps

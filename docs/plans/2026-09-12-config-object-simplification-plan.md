@@ -1,6 +1,6 @@
 # Config simplification: one defaults table, one function, one object
 
-Status: active
+Status: completed
 Class: 5 — normative spec text added by `f213b12` in
 `docs/specs/16-python-library-api.md` is replaced (exports, builder, key
 spelling, precedence). Promotion strategy **A** (in-file text-first).
@@ -897,3 +897,14 @@ substituted: explicit `--file` permits absolute and nested paths while
 per-value rules and existing diagnostic timing; command/action flags continue
 selecting functions and their arguments. No arbitrary mapping or raw argv input
 returns to the resolver.
+
+### Landing and closeout (2026-09-14)
+
+The implementation, tests, specs, and this plan landed together in commit
+`8c3abe8` after the full root, PostgreSQL, Redis, example, packaging, static,
+and documentation gates and the independent reviews recorded above passed.
+The later commits `10c89f3` and `c4819a7` prepared and documented the
+coordinated 8.2.0/4.2.0/4.2.0 release set. Earlier statements that the work was
+uncommitted describe the pre-landing checkpoints at which they were written;
+they are retained as history and are no longer current status. Publication is
+owned by the cross-platform release-gate recovery plan.

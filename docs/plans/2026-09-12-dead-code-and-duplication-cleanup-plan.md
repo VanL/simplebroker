@@ -509,5 +509,16 @@ baseline `f213b12` unchanged for the governing specs).
 - [x] No task weakens caller-owned lifecycle, target identity, fork safety,
   cleanup exhaustion, or direct construction.
 - [x] Review findings, deviations, and residual risks are fully dispositioned.
-- [ ] The index row and final evidence reflect completed work, not transient
+- [x] The index row and final evidence reflect completed work, not transient
   worktree state.
+
+### Landing and closeout (2026-09-14)
+
+The cleanup implementation, tests, documentation, and this plan landed in
+commit `8c3abe8`, together with the overlapping configuration work that made
+file-list staging unsafe. The full root, managed PostgreSQL, managed Valkey,
+example, packaging, static, and documentation gates and the independent final
+review recorded above had passed before landing. Earlier statements that the
+work remained uncommitted describe those pre-landing checkpoints and are
+retained as history. This repository-internal cleanup is complete and does not
+own publication.

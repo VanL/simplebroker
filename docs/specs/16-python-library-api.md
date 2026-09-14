@@ -213,7 +213,10 @@ without a declaration: strip the prefix and preserve the value unchanged.
 Registered built-in and user-provided validators are called through the same
 path. A near-miss name whose uppercase suffix matches a declared field warns
 with its source and suggested field, then is ignored; external name selection does
-not reject input. An invalid registered value warns as its source is applied;
+not reject input. This rule applies when the supplied source mapping preserves
+spelling. A case-insensitive operating system may canonicalize environment keys
+before the process can inspect them; callers can use an explicit case-sensitive
+`env` mapping when original spelling is significant. An invalid registered value warns as its source is applied;
 if it is still in effect after all sources, `InvalidConfigError` is raised with
 key, source, expected form and safely redacted value metadata.
 

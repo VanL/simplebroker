@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.0] - 2026-09-14
+
+### Added
+
+- A single `resolve_config()` with explicit namespace, TOML, environment,
+  override sources; read-only `Config`, `DEFAULT_CONFIG` and
+  embedder-defined validators. Selected custom fields are retained without
+  registration.
+
 ### Changed
 
 - SQLite database names now admit only ASCII letters, digits, dot, dash, and
@@ -19,35 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Redis Queues bind their effective namespace at construction. Invalid Redis
   namespace/schema or unknown options now raise `DatabaseError` at construction
   rather than first use.
-
-### Fixed
-
-- Redis stale-batch recovery no longer releases a newer batch's reservations,
-  which could duplicate a moved message and later lose its body. Quiesce and
-  upgrade every client sharing an affected namespace; this prevents new
-  corruption and does not repair existing damage.
-- Moves and activity-waiter grouping reject Queues with different effective
-  Redis namespaces, including namespaces supplied through Config. Waiters
-  subscribe to the same namespace used by storage.
-- Malformed PostgreSQL target errors suppress password-bearing driver text;
-  malformed URI display still applies conservative password redaction.
-- Inherited persistent SQL Queues reject operations before waiting on a
-  parent-owned session lock. Redis Queues recover child-owned session state;
-  child cleanup does not finalize inherited resources.
-- Numeric configuration overflow follows the normal warning and final-value
-  validation path, so a valid later override can replace an invalid value.
-
-## [8.2.0] - 2026-09-13
-
-### Added
-
-- A single `resolve_config()` with explicit namespace, TOML, environment,
-  override sources; read-only `Config`, `DEFAULT_CONFIG` and
-  embedder-defined validators. Selected custom fields are retained without
-  registration.
-
-### Changed
-
 - SimpleBroker 8.2.0, `simplebroker-pg` 4.2.0, and `simplebroker-redis` 4.2.0
   are the coordinated release set. Both extensions now require SimpleBroker
   8.2.0 or newer, and the core `pg` and `redis` extras require the matching
@@ -95,6 +75,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eligible rows. Exact-ID streams return at most one row. Streams remain live
   observations: older IDs inserted or moved behind the cursor may be missed,
   buffered rows may outlive removal, and an empty or short page ends the scan.
+
+### Fixed
+
+- Redis stale-batch recovery no longer releases a newer batch's reservations,
+  which could duplicate a moved message and later lose its body. Quiesce and
+  upgrade every client sharing an affected namespace; this prevents new
+  corruption and does not repair existing damage.
+- Moves and activity-waiter grouping reject Queues with different effective
+  Redis namespaces, including namespaces supplied through Config. Waiters
+  subscribe to the same namespace used by storage.
+- Malformed PostgreSQL target errors suppress password-bearing driver text;
+  malformed URI display still applies conservative password redaction.
+- Inherited persistent SQL Queues reject operations before waiting on a
+  parent-owned session lock. Redis Queues recover child-owned session state;
+  child cleanup does not finalize inherited resources.
+- Numeric configuration overflow follows the normal warning and final-value
+  validation path, so a valid later override can replace an invalid value.
 
 ## [8.1.1] - 2026-09-07
 

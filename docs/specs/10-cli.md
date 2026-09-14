@@ -69,7 +69,10 @@ as well. Command syntax, target-selection precedence, and the post-parse JSON er
 unchanged. Internal field names are uppercase and unprefixed; env diagnostics retain the
 external `BROKER_*` spelling. Well-formed custom namespaced keys are retained;
 near-miss capitalization of a registered field warns with its source and
-expected spelling, while the malformed name is ignored. Each invalid value also
+expected spelling, while the malformed name is ignored. This applies when the
+supplied environment mapping preserves the source spelling; a case-insensitive
+operating system may canonicalize that spelling before the process can inspect
+it. Each invalid value also
 warns as its source is applied. Configuration warnings are printed on stderr as
 one `simplebroker: warning: <message>` line each, without Python warning
 formatting; an invalid final value is then reported by the exit-1 error.

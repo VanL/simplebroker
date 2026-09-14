@@ -94,12 +94,18 @@ jobs:
     - name: Run tests with pytest
       if: matrix.os != 'windows-latest'
       run: |
-        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0"
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark and not nested_xdist" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0"
 
     - name: Run Windows tests with pytest
       if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
       run: |
-        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0"
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark and not nested_xdist" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0"
+
+    - name: Run nested xdist lifecycle gate
+      env:
+        PYTEST_ADDOPTS: ""
+      run: |
+        uv run --frozen --no-sync pytest -n0 -q --timeout=180 --timeout-method=thread -m "nested_xdist"
 
     - name: Run SQLite cross-thread finalization probe
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
@@ -118,7 +124,7 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        uv run --frozen --no-sync pytest --tb=short -m "not benchmark" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
+        uv run --frozen --no-sync pytest --tb=short -m "not benchmark and not nested_xdist" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
 
     - name: Run phaselock fallback-path gate
       if: matrix.os != 'windows-latest' || matrix.python-version != '3.14'
@@ -302,7 +308,7 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        uv run --frozen --no-sync pytest --cov=simplebroker --cov-append --cov-report= --cov-fail-under=0 -m "not benchmark"
+        uv run --frozen --no-sync pytest --cov=simplebroker --cov-append --cov-report= --cov-fail-under=0 -m "not benchmark and not nested_xdist"
         uv run --frozen --no-sync python .github/scripts/combine_coverage.py
         uv run --frozen --no-sync python -c "from pathlib import Path; Path('.coverage').replace('.coverage.linux')"
 

@@ -187,7 +187,20 @@ def test_cli_reports_invalid_environment_before_parsing(args: tuple[str, ...]) -
     assert "Traceback" not in result.stderr
 
 
-def test_cli_prints_misspelled_environment_name_as_one_warning_line() -> None:
+def test_resolver_warns_for_case_sensitive_near_miss_mapping() -> None:
+    with pytest.warns(
+        UserWarning,
+        match=(
+            "ignoring BROKER_busy_timeout from the environment: "
+            "did you mean BROKER_BUSY_TIMEOUT"
+        ),
+    ):
+        config = resolve_config(env={"BROKER_busy_timeout": "5"})
+
+    assert config["BUSY_TIMEOUT"] == DEFAULT_CONFIG["BUSY_TIMEOUT"].default
+
+
+def test_cli_prints_misspelled_environment_name_when_os_preserves_case() -> None:
     env = os.environ.copy()
     env["BROKER_busy_timeout"] = "5"
     result = subprocess.run(
@@ -200,6 +213,11 @@ def test_cli_prints_misspelled_environment_name_as_one_warning_line() -> None:
     )
 
     assert result.returncode == 0
+    if os.name == "nt":
+        # Windows canonicalizes environment names before the child can inspect
+        # their original spelling, so this arrives as the valid canonical key.
+        assert result.stderr == ""
+        return
     assert result.stderr == (
         "simplebroker: warning: ignoring BROKER_busy_timeout from the environment: "
         "did you mean BROKER_BUSY_TIMEOUT? (value '5')\n"

@@ -318,7 +318,7 @@ class TestDatabasePathResolution:
 
         abs_path = tmp_path / "absolute.db"
         args = argparse.Namespace(file=str(abs_path), dir=Path.cwd(), command="write")
-        absolute_path = os.sep.join([os.sep + "some", "otherpath"])
+        absolute_path = str(tmp_path / "otherpath")
         config = resolve_config(
             override={
                 "BROKER_DEFAULT_DB_LOCATION": absolute_path,
@@ -356,7 +356,7 @@ class TestDatabasePathResolution:
                 dir=sub_dir,  # real discovery starts here and walks up
                 command="write",
             )
-            absolute_path = os.sep.join([os.sep + "env", "default", "path"])
+            absolute_path = str(tmp_path / "env" / "default" / "path")
             config = resolve_config(
                 override={
                     "BROKER_DEFAULT_DB_LOCATION": absolute_path,

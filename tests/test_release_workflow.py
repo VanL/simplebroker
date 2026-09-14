@@ -1038,13 +1038,23 @@ def test_windows_tests_keep_default_xdist_contention() -> None:
         step = matrix_job.split(f"    - name: {step_name}", 1)[1].split(
             "    - name:", 1
         )[0]
-        assert re.findall(r'-m\s+"([^"]+)"', step) == ["not benchmark"]
+        assert re.findall(r'-m\s+"([^"]+)"', step) == [
+            "not benchmark and not nested_xdist"
+        ]
         assert step.count("-n auto") == 1
         assert "-n 2" not in step
         assert "--dist loadgroup" in step
         assert "--timeout=180" in step
         assert "--timeout-method=thread" in step
         assert "--max-worker-restart=0" in step
+
+    nested_step = matrix_job.split("    - name: Run nested xdist lifecycle gate", 1)[
+        1
+    ].split("    - name:", 1)[0]
+    assert 'PYTEST_ADDOPTS: ""' in nested_step
+    assert '-m "nested_xdist"' in nested_step
+    assert "-n0" in nested_step
+    assert "--timeout=180" in nested_step
 
 
 def test_coverage_diagnostics_can_run_one_suite_from_gh() -> None:

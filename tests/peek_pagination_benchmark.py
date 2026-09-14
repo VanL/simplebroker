@@ -38,6 +38,7 @@ from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore
 
 QUEUE = "weft.log.tasks"
+SQLITE_PROGRESS_INTERVAL = 100
 
 
 def payload(index: int) -> str:
@@ -146,21 +147,26 @@ def scan(queue: Queue, count: int) -> dict[str, Any]:
 
 
 def sqlite_steps(queue: Queue, runner: Any, count: int) -> int:
-    """Count exact VM instructions on the connection executing the public scan."""
-    steps = 0
+    """Count fixed-size VM instruction blocks during the public scan.
+
+    Crossing from SQLite into Python for every opcode makes the observer itself
+    dominate on Windows. The returned estimate is within one interval of the
+    executed instruction count, which is far below the linearity test's margin.
+    """
+    callbacks = 0
 
     def progress() -> int:
-        nonlocal steps
-        steps += 1
+        nonlocal callbacks
+        callbacks += 1
         return 0
 
     connection = runner.get_connection()
-    connection.set_progress_handler(progress, 1)
+    connection.set_progress_handler(progress, SQLITE_PROGRESS_INTERVAL)
     try:
         scan(queue, count)
     finally:
         connection.set_progress_handler(None, 0)
-    return steps
+    return callbacks * SQLITE_PROGRESS_INTERVAL
 
 
 def pg_plans(runner: Any, count: int, batch_size: int) -> dict[str, Any]:
