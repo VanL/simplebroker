@@ -254,6 +254,7 @@ def test_one_public_configuration_surface() -> None:
 
     assert not (Path(simplebroker.__file__).parent / "config.py").exists()
     assert isinstance(resolve_config(), Config)
+    assert {"serialize_config", "deserialize_config"} <= set(simplebroker.__all__)
     assert set(ConfigField.__dataclass_fields__) == {
         "default",
         "description",

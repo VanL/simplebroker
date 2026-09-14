@@ -7,7 +7,9 @@ from ._constants import (
     Config,
     ConfigField,
     __version__,
+    deserialize_config,
     resolve_config,
+    serialize_config,
 )
 from ._dump import DumpClockSkewWarning, LoadResult, dump_lines, load_lines
 from ._message_id import format_message_id
@@ -49,6 +51,7 @@ __all__ = [
     "broker_root",
     "create_activity_waiter_for_queues",
     "deserialize_broker_target",
+    "deserialize_config",
     "dump_lines",
     "format_message_id",
     "load_lines",
@@ -56,6 +59,7 @@ __all__ = [
     "resolve_broker_target",
     "resolve_config",
     "serialize_broker_target",
+    "serialize_config",
     "target_for_directory",
 ]
 

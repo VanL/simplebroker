@@ -167,7 +167,8 @@ including disagreement between session identity and the values used by a session
 ### Shared configuration resolution
 
 The package root exports `resolve_config`, `Config`, `DEFAULT_CONFIG`,
-and `ConfigField`. Field-specific validators are private implementation details;
+`ConfigField`, `serialize_config`, and `deserialize_config`. Field-specific
+validators are private implementation details;
 embedders reuse a field record or supply their own validator. Definitions live
 together in
 `simplebroker/_constants.py`; there is no separate public configuration module.
@@ -243,11 +244,73 @@ Maintenance callers divide by 100 when passing a fractional threshold.
 `JITTER_FACTOR` remains fractional.
 
 `Config` exposes uppercase unprefixed keys only, with no namespaced or
-case-folded aliases. Top-level mutation is prevented. For process transport, send
-`config.prefix` alongside `dict(config)`, namespace those values on reconstruction,
-and use `resolve_config(prefix, defaults=fields, override=payload)`. Custom field
-declarations belong to the receiving application; callables are not serialized.
-Stored units do not change in transport.
+case-folded aliases. Top-level mutation is prevented.
+
+`serialize_config(config: Config) -> str` returns JSON text containing
+`{"prefix": config.prefix, "values": {...}}`. Values use the existing uppercase
+unprefixed Config names. The payload contains all resolved values, including
+custom fields and values equal to their defaults. The field-declarations
+table, validators, Python class identity, module/import paths and process
+resources do not travel. Export does not run field validators.
+
+Supported values are JSON null, booleans, integers, finite floats, strings,
+lists, and objects with string keys, recursively. Subclasses representing
+these JSON types may be accepted as their JSON value; custom attributes do not
+travel. Tuples, sets, bytes, datetime objects, arbitrary objects, and non-string
+object keys are unsupported. No stringification, tagged codec, or lossy
+key/tuple conversion is performed. Unsupported types raise `TypeError`;
+non-finite floats and cyclic containers raise `ValueError`. These restrictions
+apply only to transport, not to in-process Config values.
+
+`deserialize_config(payload: str | Mapping[str, Any], *,
+defaults: Mapping[str, ConfigField] = DEFAULT_CONFIG) -> Config` accepts JSON
+text or its decoded object. The envelope requires a string `prefix` and an
+object `values`; additional envelope keys are ignored and cannot select code
+or field declarations. Missing or incorrectly typed envelope members and a
+non-object root raise `ValueError`; unsupported values follow the same JSON
+type rules as export. Malformed JSON raises `ValueError` (including its
+standard JSONDecodeError subclass). The prefix follows existing resolver
+semantics; this transport adds no new namespace grammar.
+
+Reception prefixes each top-level value name with the transmitted namespace
+and passes the resulting mapping to `resolve_config(prefix, defaults=defaults,
+override=values)`, without environment, TOML, or an existing Config. Receiver
+declarations supply defaults, sensitivity metadata and validators. Built-in
+declarations are the default; applications supply their own extended or
+application-only table explicitly. Declared custom fields use the same
+validator path as built-ins; undeclared well-formed custom fields remain
+pass-through values. Invalid field names and values retain resolver error and
+warning behavior, including `InvalidConfigError` (a `ValueError` subclass)
+when receiver field validation remains invalid. This is distinct from
+transport-shape `TypeError` and `ValueError`. Missing declared fields receive
+receiver defaults. A
+reconstructed Config is a new ordinary Config, not a restored subclass or
+the sender's object. Later overrides use its receiver-owned declarations.
+
+For the same field semantics, built-in values and documented units round-trip
+unchanged. Custom validators run locally on received values and may normalize
+or reject them; applications own consistent declarations across processes.
+No cross-version compatibility or declaration-equivalence guarantee is added.
+In-process configuration and session ownership behavior are unchanged.
+
+The payload is lossless data transport and may contain credentials; do not log
+it or treat it as a redacted diagnostic. Transport-shape errors must not echo
+rejected values. Resolver validation retains its existing safe diagnostics.
+
+`Config` also supports ordinary Python pickle, including direct arguments to
+`multiprocessing.spawn`. Pickle preserves resolved values, prefix, field
+records and normally picklable subclass state. Mapping proxies are restored
+on unpickling; validators are not rerun and no environment or TOML is read.
+Subsequent overrides retain the restored field declarations and validators.
+Unlike JSON transport, pickle follows Python's ordinary rules for values,
+classes and callable references: their definitions must be importable in the
+receiver. Lambdas, local functions and other unpicklable members fail normally;
+validators are never silently dropped. Picklable non-JSON values are supported.
+Use JSON transport when the receiver must supply its own declarations. Pickle
+is for trusted bytes, including controlled parent-to-child spawn arguments;
+repository membership alone does not establish that trust. No cross-version
+pickle compatibility or live-resource transport guarantee is added.
+
 
 A Config handed to Queue, watcher, target discovery, broker, session, runner,
 command or load code is retained without re-resolution or ambient reads,
@@ -951,7 +1014,7 @@ _Implementation mapping_:
 | Clause | Firing evidence |
 |--------|-----------------|
 | [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`, `::test_api_moved_message_is_package_root_public`, `::test_api_closeable_peek_iterator_contract`; `tests/test_queue_typing_contract.py`; `tests/test_dev_scripts.py` (isolated root wheel/sdist import and published-artifact verification); `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
-| [SB-API-2] | `tests/test_config_builder.py`; `tests/test_config_coexistence.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`; `tests/test_project_config.py` (recursive plugin-owned options, TOML-native normalization/rejection, target serialization, and SQLite rejection); `tests/test_process_broker_session.py` (type/opaque identity, one recursive key/factory snapshot, and all SQLite public option paths); `tests/test_activity_waiter_api.py::test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers`; `tests/test_config_builder.py::test_numeric_coercion_failure_uses_warning_and_final_value_policy`; `tests/test_connection_config.py`; `tests/test_constants.py`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_queue_move_rejects_config_derived_namespaces` |
+| [SB-API-2] | `tests/test_config_transport.py`; `tests/test_config_builder.py`; `tests/test_config_coexistence.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`; `tests/test_project_config.py` (recursive plugin-owned options, TOML-native normalization/rejection, target serialization, and SQLite rejection); `tests/test_process_broker_session.py` (type/opaque identity, one recursive key/factory snapshot, and all SQLite public option paths); `tests/test_activity_waiter_api.py::test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers`; `tests/test_config_builder.py::test_numeric_coercion_failure_uses_warning_and_final_value_policy`; `tests/test_connection_config.py`; `tests/test_constants.py`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_queue_move_rejects_config_derived_namespaces` |
 | [SB-API-3] | `tests/test_connection_config.py::test_explicit_config_is_retained_at_constructor`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_backend_plugin_resolution.py` (built-in, third-party, and injected-runner backend identity without target I/O); `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_timestamp_selection_contract_sb_select.py::test_bounded_one_and_many_order_matrix`, `::test_invalid_or_unbounded_order_fails_before_target_acquisition`, `::test_generator_signatures_do_not_expose_order`; `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py` (high-level `all_messages=True` path); `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`, `::test_queue_delete_explicit_none_is_rejected_without_mutation`, `::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py::test_api_write_keep_newest_signatures_and_public_validator`; `tests/test_keep_newest.py`; delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_closeable_peek_iterator_contract`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_retains_explicit_config_on_first_iteration`; Queue generator / `*_many` suites |

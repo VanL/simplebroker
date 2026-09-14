@@ -116,14 +116,60 @@ different `prefix` or `defaults` alongside it raises `ValueError`.
 CLI arguments are parsed and validated by `cli.py`, not the resolver. The resolver
 has no `args` parameter. Existing CLI command and target options are unchanged.
 
-Config is read-only at its top level. For transport, send `config.prefix` and
-`dict(config)` separately; the receiver reconstructs a namespaced override map
-and supplies its field declarations:
+Config is read-only at its top level. For process transport, serialize its
+namespace and resolved values as JSON. The receiving application supplies its
+own field declarations and validators:
 
 ```python
-payload = {f"{prefix}_{key}": value for key, value in values.items()}
-restored = resolve_config(prefix, defaults=fields, override=payload)
+# Sender, using the config resolved above:
+from simplebroker import serialize_config
+
+payload = serialize_config(config)
+
+# Receiver: fields is declared locally, as in the example above.
+from simplebroker import deserialize_config
+
+restored = deserialize_config(payload, defaults=fields)
+assert restored.prefix == "APP"
+assert restored["CACHE_MB"] == config["CACHE_MB"]
 ```
+
+The envelope is `{"prefix": "APP", "values": {...}}`, with uppercase unprefixed
+value names. Pass the JSON string as a trusted spawn argument or through the
+application's JSON startup channel. `deserialize_config()` also accepts a
+decoded envelope mapping. It runs the receiver's normal resolver validation,
+without environment or TOML input; omitted fields use receiver defaults.
+Built-in declarations are used when `defaults` is omitted. Custom fields not
+in the receiver's declarations remain pass-through values, so supply local
+validators when validation is needed. Later overrides use those same local
+declarations. Callables, class identity, and process resources do not travel.
+
+Transport accepts JSON null, booleans, integers, finite floats, strings, lists,
+and objects with string keys, recursively. Tuples, sets, bytes, datetime values,
+and arbitrary objects raise `TypeError`; non-finite floats and cycles raise
+`ValueError`. These limits apply only to transport. Invalid envelopes raise
+`ValueError`, while invalid fields follow normal resolver warnings and errors.
+The payload may contain credentials and must not be logged. Sender and receiver
+must agree on field meaning and units; no cross-version compatibility is implied.
+
+For trusted Python process transport, Config also supports normal pickle:
+
+```python
+import pickle
+
+restored = pickle.loads(pickle.dumps(config))
+assert dict(restored) == dict(config)
+```
+
+This preserves the prefix and field declarations, including importable validator
+references. Unpickling restores the read-only mappings without rerunning
+validators or reading environment/TOML. Later overrides use the restored
+validators. Values and subclass state follow normal pickle rules, including
+support for picklable non-JSON values. Lambdas, local functions and other
+unpicklable members raise normal pickle errors. A Config can be passed directly
+as a `multiprocessing.spawn` argument when all its members are picklable. Use
+the JSON helpers when the receiver should supply declarations. Only unpickle
+trusted bytes; controlled parent-to-child arguments are an ordinary use.
 
 Pass the Config object itself through Queue/watcher handoffs to retain the same
 snapshot. Mutating nested containers is unsupported.

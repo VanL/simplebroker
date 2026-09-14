@@ -256,6 +256,22 @@ projections are absent. Verify `tests/test_process_broker_session.py` and the
 shared configuration tests: equal broker fields alone do not justify merging
 distinct application configurations.
 
+`serialize_config()` transports resolved values and namespace as JSON, not field
+records or process resources ([SB-API-2]). `deserialize_config()` reconstructs
+through `resolve_config()` using receiver-owned declarations. This keeps one
+field-validation path and avoids importing code selected by payload data.
+Receivers establish their own declaration identities and process sessions;
+transport never promises shared session identity across processes. Reuse local
+field declarations across child handles as within any one process. Verify
+`tests/test_config_transport.py` and `tests/test_config_coexistence.py` when
+changing this boundary, including real child-process broker use.
+
+For ordinary pickle, Config converts its two mapping proxies to plain dict state
+and restores them on reception. Python owns callable and subclass reconstruction;
+resolved values are not revalidated. This preserves declaration behavior for
+later overrides without adding a separate import registry. JSON remains the
+choice for receiver-supplied declarations. Neither path transfers sessions.
+
 Ordinary configuration inputs are detached at capture; acquisition detaches
 supported option containers
 once. The registry key and the lazy factory both derive from that same detached

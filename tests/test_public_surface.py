@@ -49,3 +49,12 @@ def test_commands_all_exact_public_surface() -> None:
     # Every exported name is actually importable from the module.
     for name in expected:
         assert hasattr(commands, name), f"{name} missing from simplebroker.commands"
+
+
+def test_configuration_transport_helpers_are_public() -> None:
+    import simplebroker
+    from simplebroker import deserialize_config, resolve_config, serialize_config
+
+    assert {"serialize_config", "deserialize_config"} <= set(simplebroker.__all__)
+    config = resolve_config("WEFT")
+    assert deserialize_config(serialize_config(config)).prefix == "WEFT"

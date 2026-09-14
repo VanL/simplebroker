@@ -6,6 +6,8 @@ unprefixed; values retain the units declared in DEFAULT_CONFIG.
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import platform
 import re
@@ -711,6 +713,25 @@ class Config(Mapping[str, Any]):
         # Keep a shallow declaration snapshot, not another configuration object.
         self._defaults = MappingProxyType(dict(defaults))
 
+    def __getstate__(self) -> Any:
+        """Use ordinary pickle for values, declarations and subclass state."""
+        state = super().__getstate__()
+        attributes, slots = state if isinstance(state, tuple) else (state, None)
+        attributes = dict(attributes)
+        attributes["_values"] = dict(self._values)
+        attributes["_defaults"] = dict(self._defaults)
+        return attributes if slots is None else (attributes, slots)
+
+    def __setstate__(self, state: Any) -> None:
+        attributes, slots = state if isinstance(state, tuple) else (state, None)
+        attributes = dict(attributes)
+        attributes["_values"] = MappingProxyType(attributes["_values"])
+        attributes["_defaults"] = MappingProxyType(attributes["_defaults"])
+        self.__dict__.update(attributes)
+        if slots is not None:
+            for name, value in slots.items():
+                setattr(self, name, value)
+
     @property
     def prefix(self) -> str:
         """External namespace inherited by an explicitly derived configuration."""
@@ -1038,3 +1059,69 @@ def _resolve_sources(
         defaults=defaults,
     )
     return Config(values, prefix=prefix, defaults=defaults)
+
+
+def _check_json_value(value: Any, active: set[int]) -> None:
+    """Reject values that JSON would coerce, lose, or cannot represent."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("config transport requires finite floats")
+        return
+    if not isinstance(value, (list, dict)):
+        raise TypeError("config transport contains an unsupported JSON value")
+    identity = id(value)
+    if identity in active:
+        raise ValueError("config transport contains a cyclic container")
+    active.add(identity)
+    try:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise TypeError("config transport requires string object keys")
+                _check_json_value(item, active)
+        else:
+            for item in value:
+                _check_json_value(item, active)
+    finally:
+        active.remove(identity)
+
+
+def serialize_config(config: Config) -> str:
+    """Transport all resolved values and their prefix as JSON, without validators.
+
+    The payload may contain credentials. It is not a redacted diagnostic.
+    """
+    payload = {"prefix": config.prefix, "values": dict(config)}
+    _check_json_value(payload, set())
+    return json.dumps(payload, allow_nan=False, sort_keys=True, separators=(",", ":"))
+
+
+def deserialize_config(
+    payload: str | Mapping[str, Any],
+    *,
+    defaults: Mapping[str, ConfigField] = DEFAULT_CONFIG,
+) -> Config:
+    """Rebuild JSON config data using receiver-owned fields and validators.
+
+    No ambient environment or TOML is read. Additional envelope metadata is
+    ignored; it cannot select declarations or executable code.
+    """
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if not isinstance(payload, Mapping):
+        raise ValueError("config transport requires an object envelope")  # noqa: TRY004 approved [DOM-10.1.1] [RUFF-SUP-038] exception
+    prefix = payload.get("prefix")
+    values = payload.get("values")
+    if not isinstance(prefix, str) or not isinstance(values, Mapping):
+        raise ValueError(  # noqa: TRY004 approved [DOM-10.1.1] [RUFF-SUP-038] exception
+            "config transport requires a string prefix and object values"
+        )
+    values = dict(values)
+    _check_json_value(values, set())
+    return resolve_config(
+        prefix,
+        defaults=defaults,
+        override={prefix + "_" + key: value for key, value in values.items()},
+    )

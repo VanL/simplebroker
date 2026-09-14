@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Config supports normal Python pickle, preserving values, namespace and field
+  declarations for trusted process arguments. Validators and subclass state
+  follow normal Python picklability rules.
+
+- `serialize_config()` and `deserialize_config()` transport a Config's namespace
+  and resolved values as JSON. Receivers supply their own field declarations and
+  validators without reading environment or TOML settings; live resources and
+  callables are not serialized.
+
 ### Fixed
 
 - Path-validation errors show rejected names and paths only through their first

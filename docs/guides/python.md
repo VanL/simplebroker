@@ -1034,6 +1034,21 @@ backend-option values. `serialize_broker_target()` is different: it is a
 lossless process-transport payload, may contain credentials, and must not be
 logged or exposed.
 
+For a child process, use `serialize_config(config)` to send JSON and
+`deserialize_config(payload, defaults=fields)` to rebuild configuration with the
+child's local declarations. Both helpers are exported from `simplebroker`.
+The receiver preserves the namespace and validates values without reading env
+or TOML. Pass declarations explicitly for application-specific validation;
+JSON transport excludes validators and live Queue/session resources. Recreate handles in
+the child using the restored Config and separately transported BrokerTarget.
+See [configuration transport](configuration.md#shared-configuration-for-embedders)
+for the sender/receiver example and supported JSON values. Config transport,
+like target transport, may carry credentials and must not be logged.
+
+For trusted Python spawn arguments, Config also supports ordinary pickle,
+preserving declarations and importable validator references without revalidation.
+Lambdas and local functions remain unpicklable under normal Python rules.
+
 ### Command layer
 
 Normative: `[SB-API-10]` in

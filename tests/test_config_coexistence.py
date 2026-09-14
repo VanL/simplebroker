@@ -11,7 +11,15 @@ from typing import Any, cast
 
 import pytest
 
-from simplebroker import DEFAULT_CONFIG, Config, ConfigField, Queue, resolve_config
+from simplebroker import (
+    DEFAULT_CONFIG,
+    Config,
+    ConfigField,
+    Queue,
+    deserialize_config,
+    resolve_config,
+    serialize_config,
+)
 from simplebroker.db import DBConnection
 from simplebroker.watcher import QueueWatcher
 
@@ -29,14 +37,10 @@ def defaults() -> dict[str, ConfigField]:
     return fields
 
 
-def spawn_consumer(values: dict[str, Any], path: str, sender: Connection) -> None:
+def spawn_consumer(payload: str, path: str, sender: Connection) -> None:
     try:
         os.environ["BROKER_CACHE_MB"] = "invalid"
-        config = resolve_config(
-            "WEFT",
-            defaults=defaults(),
-            override={"WEFT_" + key: value for key, value in (values).items()},
-        )
+        config = deserialize_config(payload, defaults=defaults())
         with Queue("spawn", db_path=path, persistent=True, config=config) as queue:
             queue.write("child")
             with queue.sidecar() as session:
@@ -112,7 +116,8 @@ def test_spawn_round_trip_uses_declared_units(tmp_path: Path) -> None:
     context = multiprocessing.get_context("spawn")
     receiver, sender = context.Pipe(duplex=False)
     child = context.Process(
-        target=spawn_consumer, args=(dict(config), str(tmp_path / "spawn.db"), sender)
+        target=spawn_consumer,
+        args=(serialize_config(config), str(tmp_path / "spawn.db"), sender),
     )
     child.start()
     sender.close()
@@ -159,3 +164,45 @@ def test_per_call_config_must_be_a_config(tmp_path: Path) -> None:
             connection.get_connection(config=_plain_mapping())
     finally:
         connection.close()
+
+
+def direct_config_consumer(config: Config, path: str, sender: Connection) -> None:
+    try:
+        os.environ["BROKER_CACHE_MB"] = "invalid"
+        os.environ["WEFT_RETENTION_DAYS"] = "invalid"
+        continued = resolve_config(
+            config=config, override={"WEFT_RETENTION_DAYS": "10"}
+        )
+        with Queue("spawn", db_path=path, persistent=True, config=continued) as queue:
+            queue.write("direct")
+            with queue.sidecar() as session:
+                cache = next(iter(session.run("PRAGMA cache_size", fetch=True)))[0]
+            sender.send(
+                (continued.prefix, continued["RETENTION_DAYS"], cache, queue.read())
+            )
+    finally:
+        sender.close()
+
+
+def test_direct_config_spawn_preserves_declarations_and_sqlite_settings(
+    tmp_path: Path,
+) -> None:
+    config = resolve_config("WEFT", defaults=defaults(), override={"WEFT_CACHE_MB": 22})
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    child = context.Process(
+        target=direct_config_consumer,
+        args=(config, str(tmp_path / "direct.db"), sender),
+    )
+    child.start()
+    sender.close()
+    try:
+        assert receiver.poll(20), "spawned Config consumer did not return"
+        assert receiver.recv() == ("WEFT", 10, -22 * 1024, "direct")
+        child.join(10)
+        assert child.exitcode == 0
+    finally:
+        receiver.close()
+        if child.is_alive():
+            child.terminate()
+        child.join(10)

@@ -53,7 +53,8 @@ Shared semantics does **not** mean identical packaging:
 
 Public package surface is intentionally small: see `simplebroker.__all__`
 (`Queue`, watchers, `BrokerTarget` helpers, `open_broker`, `resolve_config`,
-`Config`, `DEFAULT_CONFIG`, `ConfigField`, `MovedMessage`, dump/load), plus
+`Config`, `DEFAULT_CONFIG`, `ConfigField`, `serialize_config`,
+`deserialize_config`, `MovedMessage`, dump/load), plus
 `simplebroker.ext` and the command layer. Prefer those over private `_`
 modules.
 
@@ -387,6 +388,17 @@ Normative public surfaces and packaging:
   `broker_target` + `broker_config` handoff (sibling repos).
 
 ## Reuse handles; recreate across processes
+
+Send `serialize_config(config)` as JSON; in the receiver call
+`deserialize_config(payload, defaults=local_fields)` before constructing handles.
+The namespace and values travel; validators come from receiver-local declarations,
+and no env/TOML read occurs. Omit `defaults` only when built-in declarations are
+sufficient. Transport broker targets separately and recreate Queue/session
+resources in the child. Config payloads can contain credentials: do not log them.
+
+For trusted Python spawn arguments, Config may also be passed directly: normal
+pickle preserves its declarations and importable validators. Local functions and
+lambdas remain subject to normal pickle errors. Recreate live resources below.
 
 - Hot paths: reuse queue handles (`persistent=True` or a small client/context
   cache), not a new `Queue(...)` per message.
