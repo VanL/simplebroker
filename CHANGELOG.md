@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- SimpleBroker 8.2.0, `simplebroker-pg` 4.2.0, and `simplebroker-redis` 4.2.0
+  are the coordinated release set. Both extensions now require SimpleBroker
+  8.2.0 or newer, and the core `pg` and `redis` extras require the matching
+  4.2.0 extension or newer, because the configuration and live-peek changes
+  span the shared backend contract.
 - Configuration now uses uppercase unprefixed keys, with no aliases. Removed
   the old snapshot/isolated/builder APIs and separate config module. Resolver
   env input is explicit; precedence is defaults, TOML, env, override.
@@ -29,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolution raises only if an invalid value remains after all sources. A
   relative `DEFAULT_DB_LOCATION` is now an invalid value rather than being
   ignored with a warning.
+- The CLI prints configuration warnings as one `simplebroker: warning: ...`
+  line each, naming the setting and where it came from, instead of Python's
+  warning format.
 - Consumer `config=` parameters take resolved `Config` objects. Explicit
   per-call configurations replace the inherited snapshot; callers build partial
   overlays with `resolve_config(config=base, override=namespaced_changes)`. Field validators
