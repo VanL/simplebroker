@@ -54,7 +54,7 @@ Winning contracts and rationale:
   `docs/implementation/09-storage-schema-and-claim-lifecycle.md`: transition
   and cleanup owners; `docs/guides/configuration.md`: user-facing names and
   redaction; `skills/interface-review/SKILL.md`: CLI/API review walk.
-- `docs/plans/2026-09-07-critical-review-remediation-plan.md`, Tasks 2/4:
+- `dbace84:docs/plans/2026-09-07-critical-review-remediation-plan.md`, Tasks 2/4:
   descriptor snapshots and fresh-child registry recovery.
 - `docs/plans/2026-09-12-config-object-simplification-plan.md`, especially
   “Invalid values raise only when final”: current owner-selected precedence.

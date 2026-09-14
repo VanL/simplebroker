@@ -347,8 +347,8 @@ _Implementation mapping_:
 
 - [Verified review remediation](../plans/2026-09-13-verified-review-remediation-plan.md): atomic stale-batch recovery and rejection of different effective targets.
 
-- retired: 2026-09-11-keyset-peek-pagination-plan — source `5e4bcb7`
-  (local-only pin); see the ledger in `docs/plans/README.md`. It owns
+- retired: 2026-09-11-keyset-peek-pagination-plan — source `3868d7a`;
+  see the ledger in `docs/plans/README.md`. It owns
   forward-only live traversal under [SB-DELIVERY-4].
 
 - retired: 2026-09-07-test-proof-quality-plan — source `646718f`; see the
