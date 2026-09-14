@@ -209,3 +209,25 @@ before the candidate is pushed.
   partial-insert BEGIN/ROLLBACK path with zero retained rows and no open
   transaction. Independent review confirmed the public scan and complexity
   sensitivity are unchanged.
+- Final candidate `0a40aba3f1750796e2fc142fe991ba1e1ca4e3d5` passed exact-SHA
+  Test run `34857232537`, Test Postgres Extension run `34857232564`, and Test
+  Redis Extension run `34857232552`. All four Windows lanes passed with the
+  keyset detector in their normal broad suite; CodeQL run `34857232429` and
+  OSSF Scorecard run `34857232588` also passed.
+- `uv run --locked python bin/release.py all` passed the complete local gate:
+  3,703 core tests, the dedicated nested-xdist lifecycle test, 20 benchmarks,
+  1,692 PostgreSQL-backed shared tests plus 323 extension tests, 1,684
+  Redis-backed shared tests plus 360 extension tests, 140 examples, Ruff,
+  format, all mypy partitions, lock regeneration checks, and Python 3.11 wheel
+  and sdist artifact smoke.
+- Immutable tags `v8.2.0`, `simplebroker_pg/v4.2.0`, and
+  `simplebroker_redis/v4.2.0` all resolve to the exact candidate SHA. Redis
+  release run `34859883545` succeeded on attempt 1. Core run `34859889583` and
+  PostgreSQL run `34859875438` each encountered the same GitHub OIDC endpoint
+  HTTP 503 before upload; PyPI absence and staged-draft state were verified,
+  then failed-job reruns succeeded on attempt 2 without changing tags or
+  Trusted Publishing configuration.
+- PyPI serves `simplebroker==8.2.0`, `simplebroker-pg==4.2.0`, and
+  `simplebroker-redis==4.2.0`, each with wheel and sdist. Their GitHub Releases
+  are non-draft and immutable and contain matching wheel, sdist, and Sigstore
+  bundle assets. The release and recovery plan are complete.
