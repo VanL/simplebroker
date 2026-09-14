@@ -133,14 +133,14 @@ def test_release_gate_isolates_benchmarks_from_parallel_suite_load() -> None:
     ]
 
     assert len(root_pytest_commands) == 3
-    functional, isolated_gate, benchmarks = root_pytest_commands
-    _exactly_once_pair(tuple(functional), "-m", "not benchmark and not isolated_gate")
+    functional, nested_xdist, benchmarks = root_pytest_commands
+    _exactly_once_pair(tuple(functional), "-m", "not benchmark and not nested_xdist")
     _exactly_once_pair(tuple(functional), "-n", str(release.LOCAL_PYTEST_WORKERS))
     _exactly_once_pair(tuple(functional), "--dist", "loadgroup")
-    _exactly_once_pair(tuple(isolated_gate), "-m", "isolated_gate")
-    _exactly_once_pair(tuple(isolated_gate), "-n", "0")
-    assert "--timeout=180" in isolated_gate
-    assert "--timeout-method=thread" in isolated_gate
+    _exactly_once_pair(tuple(nested_xdist), "-m", "nested_xdist")
+    _exactly_once_pair(tuple(nested_xdist), "-n", "0")
+    assert "--timeout=180" in nested_xdist
+    assert "--timeout-method=thread" in nested_xdist
     _exactly_once_pair(tuple(benchmarks), "-m", "benchmark")
     _exactly_once_pair(tuple(benchmarks), "-n", "0")
 
@@ -148,7 +148,7 @@ def test_release_gate_isolates_benchmarks_from_parallel_suite_load() -> None:
 def test_release_gate_worker_modes_override_ambient_pytest_addopts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    functional, isolated_gate, benchmarks = release._root_test_commands()
+    functional, nested_xdist, benchmarks = release._root_test_commands()
 
     monkeypatch.setenv("PYTEST_ADDOPTS", "-n 0")
     functional_env = release._merge_command_env(
@@ -163,11 +163,11 @@ def test_release_gate_worker_modes_override_ambient_pytest_addopts(
         "loadgroup",
     )
 
-    isolated_env = release._merge_command_env(
-        release._precheck_env_overrides(isolated_gate)
+    nested_env = release._merge_command_env(
+        release._precheck_env_overrides(nested_xdist)
     )
-    assert isolated_env is not None
-    _exactly_once_pair(tuple(isolated_gate), "-n", "0")
+    assert nested_env is not None
+    _exactly_once_pair(tuple(nested_xdist), "-n", "0")
 
     monkeypatch.setenv("PYTEST_ADDOPTS", "-n auto")
     benchmark_env = release._merge_command_env(

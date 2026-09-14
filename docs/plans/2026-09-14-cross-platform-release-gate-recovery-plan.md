@@ -114,10 +114,17 @@ gates passing, and all three expected artifacts appearing on PyPI and GitHub.
 - Exact-SHA core run `34854252187` showed that 100-instruction sampling was
   still insufficient under broad Windows suite load: Python 3.11, 3.12, 3.13,
   and coverage-enabled 3.14 all killed the keyset worker at the unchanged
-  180-second bound. The detector therefore joins the dedicated top-level `-n0`
-  gate. Dataset sizes, the complete public scan and ordered-ID check, VM
-  progress sampling, and the 2.8 ratio remain unchanged; only unrelated
-  competing suite workers are removed.
+  180-second bound. A follow-up candidate put the detector in the dedicated
+  top-level `-n0` gate to distinguish load coupling from intrinsic fixture
+  cost; that was diagnostic, not accepted as the final repair.
+- Exact-SHA run `34856068218` then timed out the isolated Windows 3.14 gate.
+  The captured main-thread stack was inside the raw SQLite `executemany()`
+  fixture seeding, before the public scan and VM-work measurement. The fixture
+  used a `SQLiteRunner` autocommit connection, so every one of 10,000 setup
+  rows was its own durable transaction. The repair is one explicit bulk setup
+  transaction with rollback on failure. The keyset detector returns to the
+  normal parallel suite with its dataset sizes, full ordered-ID scan, sampled
+  VM work, 2.8 ratio, and 180-second ceiling unchanged.
 - The SQLite name grammar contracts accepted public input. After that effect
   and the governing plan's default-major rule were surfaced explicitly, the
   owner directed continuation of the prepared coordinated 8.2.0/4.2.0/4.2.0
@@ -130,9 +137,10 @@ gates passing, and all three expected artifacts appearing on PyPI and GitHub.
    - Count fixed-size VM instruction blocks rather than crossing into Python
      for every instruction; retain dataset sizes, complete ID validation, and
      the 2.8 ratio.
-   - Run the proof in the dedicated top-level `-n0` gate if fixed-size sampling
-     still exceeds the broad Windows bound; do not change its inputs or
-     discriminator.
+   - Seed each raw SQLite fixture in one explicit transaction because the
+     production runner connection is intentionally autocommit. Prove the
+     transaction boundary with a real SQLite trace and keep the detector in
+     the normal parallel suite.
 2. Make coverage lifecycle probes deterministic and narrow.
    - Synchronize the readable-shard replacement to the combiner's first
      inspection in-process; keep separate script integration coverage.
@@ -193,3 +201,11 @@ before the candidate is pushed.
   invalid-config lifecycle, and project-scoping modules; and five consecutive
   keyset-scaling runs with the unchanged 10,000/20,000 datasets and 2.8 ratio.
   Ruff, format, DOM-15 fixture, plan-context, and diff-whitespace checks passed.
+- After correcting fixture transaction ownership, the complete keyset module
+  finished in 0.85 seconds locally. A representative four-worker contention
+  selection passed, followed by the full logical-plus-one broad suite: 3,702
+  passed and 19 skipped in 65.08 seconds with the keyset detector included.
+  Real SQLite trace tests prove both the single BEGIN/COMMIT success path and a
+  partial-insert BEGIN/ROLLBACK path with zero retained rows and no open
+  transaction. Independent review confirmed the public scan and complexity
+  sensitivity are unchanged.

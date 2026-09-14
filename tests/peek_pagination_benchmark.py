@@ -56,6 +56,26 @@ def payload(index: int) -> str:
     )
 
 
+def seed_sqlite_messages(connection: sqlite3.Connection, count: int) -> None:
+    """Seed one benchmark dataset in a single explicit transaction.
+
+    SQLiteRunner connections intentionally use autocommit. Without this
+    boundary, executemany durably commits every fixture row, which turns setup
+    into thousands of filesystem syncs on Windows.
+    """
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        connection.executemany(
+            "INSERT INTO messages(queue, body, ts) VALUES (?, ?, ?)",
+            ((QUEUE, payload(i), i) for i in range(1, count + 1)),
+        )
+        connection.execute("ANALYZE")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+
+
 @contextmanager
 def dataset(
     backend: str, count: int, dsn: str | None
@@ -82,11 +102,7 @@ def dataset(
                 list(queue.peek_generator())
                 if backend == "sqlite":
                     connection = runner.get_connection()
-                    connection.executemany(
-                        "INSERT INTO messages(queue, body, ts) VALUES (?, ?, ?)",
-                        ((QUEUE, payload(i), i) for i in range(1, count + 1)),
-                    )
-                    connection.execute("ANALYZE")
+                    seed_sqlite_messages(connection, count)
                     version = sqlite3.sqlite_version
                 else:
                     import psycopg

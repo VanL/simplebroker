@@ -19,9 +19,9 @@ cd simplebroker
 uv sync --all-extras
 
 # Run tests
-uv run pytest              # Broad suite; excludes benchmarks and isolated gates
+uv run pytest              # Broad suite; excludes benchmarks and nested process-topology tests
 uv run pytest -m benchmark -n0  # Benchmarks without competing suite load
-uv run pytest -m isolated_gate -n0  # Process-topology and instrumentation gates from a serial parent
+uv run pytest -m nested_xdist -n0  # Nested xdist lifecycle gate from a serial parent
 uv run --locked python bin/release.py all  # Aggregate local gate used for a coordinated release
 PHASELOCK_ENABLE_XATTRS=0 uv run pytest tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
 uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
