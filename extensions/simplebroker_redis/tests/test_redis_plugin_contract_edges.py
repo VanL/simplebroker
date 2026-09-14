@@ -467,3 +467,63 @@ def test_target_mutations_refuse_foreign_namespace(
             "redis://example/0",
             backend_options={"namespace": "tenant"},
         )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"unknown": 1},
+        {"namespace": "one", "schema": "two"},
+        {"namespace": "invalid space"},
+    ],
+)
+def test_queue_normalization_rejects_invalid_options_before_io(
+    monkeypatch: pytest.MonkeyPatch, options: dict[str, Any]
+) -> None:
+    from simplebroker import BrokerTarget, Queue
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Queue construction must not allocate backend resources")
+
+    monkeypatch.setattr(RedisBackendPlugin, "create_runner", forbidden)
+    monkeypatch.setattr(redis_plugin_module.redis.Redis, "from_url", forbidden)
+    monkeypatch.setattr(redis_plugin_module, "_SharedRedisActivityListener", forbidden)
+    with pytest.raises(DatabaseError):
+        Queue("queue", db_path=BrokerTarget("redis", "redis://unused/0", options))
+
+
+def test_queue_normalization_keeps_explicit_target_and_metadata_without_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from simplebroker import BrokerTarget, Queue
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Queue construction must not allocate backend resources")
+
+    monkeypatch.setattr(RedisBackendPlugin, "create_runner", forbidden)
+    monkeypatch.setattr(redis_plugin_module.redis.Redis, "from_url", forbidden)
+    monkeypatch.setattr(redis_plugin_module, "_SharedRedisActivityListener", forbidden)
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_SCHEMA": "tenant",
+            "BROKER_BACKEND_TARGET": "redis://ambient/0",
+        }
+    )
+    target = BrokerTarget(
+        "redis",
+        "",
+        {"schema": "selected"},
+        project_root=tmp_path,
+        config_path=tmp_path / "project.toml",
+        used_project_scope=True,
+    )
+    with Queue("queue", db_path=target, config=config) as queue:
+        bound = queue.db_target
+        assert isinstance(bound, BrokerTarget)
+        assert bound.target == ""
+        assert bound.backend_options == {"namespace": "selected"}
+        assert bound.project_root == target.project_root
+        assert bound.config_path == target.config_path
+        assert bound.used_project_scope is True
+        assert target.backend_options == {"schema": "selected"}
+        assert queue._config is config

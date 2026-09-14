@@ -238,6 +238,8 @@ Global options must appear before the command, for example `broker -f queue.db r
 
 - `-d, --dir PATH` - Use PATH instead of current directory
 - `-f, --file NAME` - Database filename or absolute path (default: `.broker.db`)
+  - SQLite names use ASCII letters, digits, dot, dash, and underscore; existing
+    traversal and platform checks also apply. See [filename rules](docs/specs/10-cli.md#stdout-and-stderr-sb-cli-2).
   - If an absolute path is provided, the directory is extracted automatically
   - Cannot be used with `-d` if the directories don't match
 - `-q, --quiet` - Suppress non-error human commentary, including the plain

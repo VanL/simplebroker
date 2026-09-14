@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
@@ -286,3 +288,253 @@ def test_find_message_ids_skips_active_reserved_batch(
         searching_core.shutdown()
         core.shutdown()
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        "fresh",
+        "missing",
+        "malformed",
+        "no-source",
+        "no-created",
+        "cutoff",
+        "older",
+        "disabled",
+    ],
+)
+def test_recovery_age_and_metadata_admission(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: str,
+) -> None:
+    import time
+
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    generator = None
+    try:
+        core.write("jobs", "payload")
+        generator = core.claim_generator(
+            "jobs",
+            delivery_guarantee="at_least_once",
+            batch_size=1,
+            with_timestamps=False,
+        )
+        assert next(generator) == "payload"
+        (meta_key,) = list(
+            redis_runner.client.scan_iter(keys.key("batches", "*", "meta"))
+        )
+        now = time.time_ns()
+        cutoff = now - 300_000_000_000
+        client = redis_runner.client
+        if metadata == "missing":
+            client.delete(meta_key)
+        elif metadata == "no-source":
+            client.hdel(meta_key, "source")
+        elif metadata == "no-created":
+            client.hdel(meta_key, "created_ns")
+        else:
+            value = {
+                "fresh": str(cutoff + 1),
+                "malformed": "not-a-number",
+                "cutoff": str(cutoff),
+                "older": str(cutoff - 1),
+                "disabled": str(cutoff - 1),
+            }[metadata]
+            client.hset(meta_key, "created_ns", value)
+        monkeypatch.setattr("simplebroker_redis.core.time.time_ns", lambda: now)
+        expected = int(metadata in {"cutoff", "older"})
+        assert (
+            core.recover_stale_batches(
+                max_age_seconds=-1 if metadata == "disabled" else 300
+            )
+            == expected
+        )
+        assert client.zcard(keys.reserved("jobs")) == 1 - expected
+        assert (
+            core.recover_stale_batches(
+                max_age_seconds=-1 if metadata == "disabled" else 300
+            )
+            == 0
+        )
+    finally:
+        if generator is not None:
+            generator.close()
+        core.close()
+
+
+@pytest.mark.parametrize("change", ["source", "created_ns", "deleted"])
+def test_recovery_revalidates_metadata_after_scan(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    generator = None
+    try:
+        core.write("jobs", "payload")
+        generator = core.claim_generator(
+            "jobs",
+            delivery_guarantee="at_least_once",
+            batch_size=1,
+            with_timestamps=False,
+        )
+        assert next(generator) == "payload"
+        (meta_key,) = list(
+            redis_runner.client.scan_iter(keys.key("batches", "*", "meta"))
+        )
+        # Adjacent integers above 2**53 must remain different, even in Lua.
+        redis_runner.client.hset(meta_key, "created_ns", "1000000000000000000")
+        real_hgetall = redis_runner.client.hgetall
+
+        def change_after_snapshot(key: Any) -> Any:
+            result = real_hgetall(key)
+            if key == meta_key:
+                if change == "deleted":
+                    redis_runner.client.delete(key)
+                else:
+                    redis_runner.client.hset(
+                        key,
+                        change,
+                        "other" if change == "source" else "1000000000000000001",
+                    )
+            return result
+
+        monkeypatch.setattr(redis_runner.client, "hgetall", change_after_snapshot)
+        assert core.recover_stale_batches(max_age_seconds=300) == 0
+        assert redis_runner.client.zcard(keys.reserved("jobs")) == 1
+    finally:
+        if generator is not None:
+            generator.close()
+        core.close()
+
+
+@pytest.mark.parametrize("operation", ["claim", "move"])
+@pytest.mark.parametrize("first", ["commit", "recovery", "rollback"])
+def test_recovery_and_batch_completion_order(
+    redis_runner: RedisRunner,
+    operation: str,
+    first: str,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    generator = None
+    try:
+        core.write("jobs", "payload")
+        factory = core.claim_generator if operation == "claim" else core.move_generator
+        args = ("jobs",) if operation == "claim" else ("jobs", "dest")
+        generator = factory(
+            *args,
+            delivery_guarantee="at_least_once",
+            batch_size=1,
+            with_timestamps=False,
+        )
+        assert next(generator) == "payload"
+        if first == "commit":
+            assert list(generator) == []
+            assert core.recover_stale_batches(max_age_seconds=0) == 0
+            assert core.peek_one("jobs", with_timestamps=False) is None
+            assert redis_runner.client.zcard(keys.claimed("jobs")) == int(
+                operation == "claim"
+            )
+            assert core.peek_one("dest", with_timestamps=False) == (
+                "payload" if operation == "move" else None
+            )
+        elif first == "rollback":
+            generator.close()
+            assert core.recover_stale_batches(max_age_seconds=0) == 0
+            assert core.peek_one("jobs", with_timestamps=False) == "payload"
+        else:
+            assert core.recover_stale_batches(max_age_seconds=0) == 1
+            with pytest.raises(OperationalError, match="stale or invalid"):
+                list(generator)
+            assert core.peek_one("jobs", with_timestamps=False) == "payload"
+            assert core.peek_one("dest", with_timestamps=False) is None
+        assert redis_runner.client.zcard(keys.reserved("jobs")) == 0
+    finally:
+        if generator is not None:
+            generator.close()
+        core.close()
+
+
+def test_concurrent_recovery_counts_live_ids_once(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import concurrent.futures
+    import threading
+
+    from simplebroker_redis import scripts
+
+    core = RedisBrokerCore(redis_runner)
+    generator = None
+    ready = threading.Barrier(2)
+    real_eval = redis_runner.client.eval
+
+    def simultaneous_recovery(script: str, *args: Any, **kwargs: Any) -> Any:
+        if script == scripts.RECOVER_STALE_BATCH:
+            ready.wait(timeout=10)
+        return real_eval(script, *args, **kwargs)
+
+    try:
+        core.write("jobs", "one")
+        core.write("jobs", "two")
+        generator = core.claim_generator(
+            "jobs",
+            delivery_guarantee="at_least_once",
+            batch_size=2,
+            with_timestamps=False,
+        )
+        assert next(generator) == "one"
+        monkeypatch.setattr(redis_runner.client, "eval", simultaneous_recovery)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(core.recover_stale_batches, max_age_seconds=0)
+                for _ in range(2)
+            ]
+            assert sorted(f.result(timeout=15) for f in futures) == [0, 2]
+        assert core.recover_stale_batches(max_age_seconds=0) == 0
+        assert core.peek_many("jobs", limit=10, with_timestamps=False) == ["one", "two"]
+    finally:
+        if generator is not None:
+            generator.close()
+        core.close()
+
+
+def test_recovery_preserves_neighbor_namespace(
+    redis_url: str,
+    redis_namespace: str,
+) -> None:
+    namespace_other = redis_namespace + "_other"
+    runners = [
+        RedisRunner(redis_url, namespace=namespace)
+        for namespace in (redis_namespace, namespace_other)
+    ]
+    cores = [RedisBrokerCore(runner) for runner in runners]
+    generators = []
+    try:
+        for core in cores:
+            core.write("jobs", "payload")
+            generator = core.claim_generator(
+                "jobs",
+                delivery_guarantee="at_least_once",
+                batch_size=1,
+                with_timestamps=False,
+            )
+            generators.append(generator)
+            assert next(generator) == "payload"
+        assert cores[0].recover_stale_batches(max_age_seconds=0) == 1
+        assert cores[0].peek_one("jobs", with_timestamps=False) == "payload"
+        assert cores[1].peek_one("jobs", with_timestamps=False) == "payload"
+        assert runners[1].client.zcard(RedisKeys(namespace_other).reserved("jobs")) == 1
+    finally:
+        for generator in generators:
+            generator.close()
+        for core in cores:
+            core.shutdown()
+        for namespace in (redis_namespace, namespace_other):
+            get_backend_plugin().cleanup_target(
+                redis_url, backend_options={"namespace": namespace}
+            )

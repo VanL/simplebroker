@@ -14,6 +14,7 @@ from ._constants import (
     MAX_PROJECT_TRAVERSAL_DEPTH,
     Config,
     _validate_safe_path_components,
+    _validate_sqlite_filename,
     resolve_config,
 )
 from ._targets import BrokerTarget, _backend_target_has_password
@@ -214,7 +215,9 @@ def resolve_project_target(
     _require_lossless_backend_options(backend_name, backend_options)
 
     if backend_name == "sqlite":
+        _validate_sqlite_filename(target, f"{config_path} sqlite target")
         resolved_target = (config_path.parent / target).expanduser().resolve()
+        _validate_sqlite_filename(str(resolved_target), f"{config_path} sqlite target")
         _validate_safe_path_components(
             str(resolved_target), f"{config_path} sqlite target"
         )

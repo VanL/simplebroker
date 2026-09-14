@@ -604,3 +604,105 @@ def test_redis_recover_stale_batches_ignores_unrecoverable_metadata(
         assert core.recover_stale_batches(max_age_seconds=0) == 0
     finally:
         core.close()
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+@pytest.mark.parametrize("method", ["move", "move_one", "move_many", "move_generator"])
+def test_queue_move_rejects_config_derived_namespaces(
+    redis_url: str, redis_namespace: str, persistent: bool, method: str
+) -> None:
+    other = f"{redis_namespace}_other"
+    plugin = get_backend_plugin()
+    try:
+        with ExitStack() as stack:
+            source = stack.enter_context(
+                Queue(
+                    "source",
+                    db_path=BrokerTarget("redis", redis_url),
+                    persistent=persistent,
+                    config=resolve_config(
+                        override={"BROKER_BACKEND_SCHEMA": redis_namespace}
+                    ),
+                )
+            )
+            destination = stack.enter_context(
+                Queue(
+                    "destination",
+                    db_path=BrokerTarget("redis", redis_url),
+                    persistent=persistent,
+                    config=resolve_config(override={"BROKER_BACKEND_SCHEMA": other}),
+                )
+            )
+            wrong_destination = stack.enter_context(
+                Queue(
+                    "destination",
+                    db_path=BrokerTarget(
+                        "redis", redis_url, {"namespace": redis_namespace}
+                    ),
+                )
+            )
+            message_id = source.write("namespace-owned payload")
+            with pytest.raises(ValueError, match="different broker targets"):
+                if method == "move_many":
+                    source.move_many(destination, 1)
+                elif method == "move_generator":
+                    list(source.move_generator(destination))
+                else:
+                    getattr(source, method)(destination)
+            assert source.peek_one(with_timestamps=True) == (
+                "namespace-owned payload",
+                message_id,
+            )
+            assert destination.peek() is None
+            assert wrong_destination.peek() is None
+    finally:
+        for namespace in (redis_namespace, other):
+            plugin.cleanup_target(redis_url, backend_options={"namespace": namespace})
+
+
+@pytest.mark.parametrize(
+    "options", [{}, {"schema": "selected"}, {"namespace": "selected"}]
+)
+def test_queue_effective_namespace_matches_explicit_target(
+    redis_url: str, redis_namespace: str, options: dict[str, str]
+) -> None:
+    selected = dict.fromkeys(options, redis_namespace)
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_SCHEMA": redis_namespace
+            if not selected
+            else f"{redis_namespace}_ignored",
+            "BROKER_CACHE_MB": 11,
+        }
+    )
+    original = BrokerTarget("redis", redis_url, selected)
+    try:
+        with (
+            Queue("source", db_path=original, config=config) as source,
+            Queue(
+                "destination",
+                db_path=BrokerTarget(
+                    "redis", redis_url, {"namespace": redis_namespace}
+                ),
+                config=resolve_config(override={"BROKER_CACHE_MB": 17}),
+            ) as destination,
+        ):
+            assert source._config is config
+            bound = source.db_target
+            assert isinstance(bound, BrokerTarget)
+            assert bound.backend_options == {"namespace": redis_namespace}
+            assert original.backend_options == selected
+            bound.backend_options["namespace"] = "detached"
+            message_id = source.write("same namespace")
+            assert source.move(destination) == {
+                "message": "same namespace",
+                "timestamp": message_id,
+            }
+            assert destination.peek_one(with_timestamps=True) == (
+                "same namespace",
+                message_id,
+            )
+    finally:
+        get_backend_plugin().cleanup_target(
+            redis_url, backend_options={"namespace": redis_namespace}
+        )

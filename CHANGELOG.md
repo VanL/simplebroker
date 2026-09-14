@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- SQLite database names now admit only ASCII letters, digits, dot, dash, and
+  underscore, together with the existing traversal and platform checks.
+  Compound defaults and relative CLI filenames apply this rule to each name
+  component; explicit Python paths and absolute CLI paths retain their parent
+  directory rules. Previously accepted database names containing other
+  characters are rejected before mutation. An explicitly empty database-name
+  setting is also invalid. Existing databases are not renamed.
+- Redis Queues bind their effective namespace at construction. Invalid Redis
+  namespace/schema or unknown options now raise `DatabaseError` at construction
+  rather than first use.
+
+### Fixed
+
+- Redis stale-batch recovery no longer releases a newer batch's reservations,
+  which could duplicate a moved message and later lose its body. Quiesce and
+  upgrade every client sharing an affected namespace; this prevents new
+  corruption and does not repair existing damage.
+- Moves and activity-waiter grouping reject Queues with different effective
+  Redis namespaces, including namespaces supplied through Config. Waiters
+  subscribe to the same namespace used by storage.
+- Malformed PostgreSQL target errors suppress password-bearing driver text;
+  malformed URI display still applies conservative password redaction.
+- Inherited persistent SQL Queues reject operations before waiting on a
+  parent-owned session lock. Redis Queues recover child-owned session state;
+  child cleanup does not finalize inherited resources.
+- Numeric configuration overflow follows the normal warning and final-value
+  validation path, so a valid later override can replace an invalid value.
+
 ## [8.2.0] - 2026-09-13
 
 ### Added

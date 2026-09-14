@@ -451,7 +451,7 @@ def test_posix_punctuation_works_across_explicit_status_and_cleanup_paths(
 ) -> None:
     path_dir = tmp_path / "shell #$`'\"(){};&!^|<> dir"
     path_dir.mkdir()
-    db_name = "queue #$`'\"(){};&!^|<>.db"
+    db_name = "queue.db"
     db_path = path_dir / db_name
     env = {"BROKER_TEST_BACKEND": "sqlite", "PHASELOCK_ENABLE_XATTRS": "0"}
 
@@ -489,7 +489,7 @@ def test_posix_punctuation_works_across_explicit_status_and_cleanup_paths(
 @pytest.mark.skipif(os.name != "posix", reason="POSIX pathname contract")
 @pytest.mark.sqlite_only
 def test_posix_punctuation_works_for_init_and_project_discovery(tmp_path: Path) -> None:
-    init_name = "init#$(){};&!^|<>.db"
+    init_name = "init.db"
     env = {
         "BROKER_TEST_BACKEND": "sqlite",
         "BROKER_DEFAULT_DB_NAME": init_name,
@@ -505,7 +505,7 @@ def test_posix_punctuation_works_for_init_and_project_discovery(tmp_path: Path) 
     project = tmp_path / "project#$(){};&!^|<>"
     child = project / "child"
     child.mkdir(parents=True)
-    project_db_name = "project#$(){};&!^|<>.db"
+    project_db_name = "project.db"
     (project / ".broker.toml").write_text(
         f'version = 1\nbackend = "sqlite"\ntarget = "{project_db_name}"\n',
         encoding="utf-8",

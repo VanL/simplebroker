@@ -138,3 +138,72 @@ class TestDatabaseTargetValidation:
         assert "database" in err.lower()
         assert "valid" in err.lower()
         assert "traceback" not in err.lower()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--help",),
+        ("--version",),
+        ("write", "jobs", "payload"),
+        ("-f", "safe.db", "read", "jobs"),
+    ],
+)
+def test_invalid_default_database_name_fails_before_parser(tmp_path, args):
+    code, out, err = run_cli(
+        *args,
+        cwd=tmp_path,
+        env={"BROKER_TEST_BACKEND": "sqlite", "BROKER_DEFAULT_DB_NAME": "100%.db"},
+    )
+    assert code == 1
+    assert out == ""
+    assert "ASCII" in err
+    assert "Traceback" not in err
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "100%.db",
+        "my dir/broker.db",
+        "café.db",
+        "dir//broker.db",
+        "dir/./broker.db",
+        "dir\\bad%.db",
+    ],
+)
+def test_invalid_explicit_database_name_is_clean_json_error(tmp_path, name):
+    import json
+
+    code, out, err = run_cli(
+        "-f",
+        name,
+        "write",
+        "jobs",
+        "payload",
+        "--json",
+        cwd=tmp_path,
+        env={"BROKER_TEST_BACKEND": "sqlite"},
+    )
+    assert code == 1
+    assert out == ""
+    assert json.loads(err)["error"] == "INVALID_ARGUMENT"
+    assert "ASCII" in err
+    assert "Traceback" not in err
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("separator", ["/", "\\"])
+def test_relative_cli_compound_database_name_normalizes_separators(tmp_path, separator):
+    (tmp_path / "data").mkdir()
+    name = f"data{separator}broker.db"
+    env = {"BROKER_TEST_BACKEND": "sqlite"}
+    code, out, err = run_cli(
+        "-f", name, "write", "jobs", "payload", cwd=tmp_path, env=env
+    )
+    assert code == 0, err
+    assert (tmp_path / "data" / "broker.db").exists()
+    code, out, err = run_cli("-f", name, "read", "jobs", cwd=tmp_path, env=env)
+    assert code == 0, err
+    assert out == "payload"

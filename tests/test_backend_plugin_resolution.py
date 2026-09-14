@@ -175,7 +175,12 @@ def test_queue_backend_name_preserves_first_party_extension_name_without_io(
     monkeypatch: pytest.MonkeyPatch,
     backend_name: str,
 ) -> None:
-    plugin = ValidDummyPlugin()
+    class InitializablePlugin(ValidDummyPlugin):
+        def init_backend(self, config: Any, **kwargs: Any) -> dict[str, Any]:
+            assert self.name == "redis", "other plugin initializers must stay lazy"
+            return {"target": kwargs["toml_target"], "backend_options": {}}
+
+    plugin = InitializablePlugin()
     plugin.name = backend_name
     _install_entry_point(monkeypatch, backend_name, plugin)
     queue = Queue(

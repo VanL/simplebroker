@@ -25,6 +25,7 @@ from ._constants import (
     DEFAULT_DB_NAME,
     PEEK_BATCH_SIZE,
     Config,
+    _validate_sqlite_filename,
     resolve_config,
 )
 from ._delivery import (
@@ -132,9 +133,24 @@ def _display_broker_target(target: str | BrokerTarget) -> str:
     return str(target)
 
 
-def _canonicalize_queue_target(target: str | BrokerTarget) -> str | BrokerTarget:
+def _canonicalize_queue_target(
+    target: str | BrokerTarget, *, config: Config, runner: SQLRunner | None
+) -> str | BrokerTarget:
     """Bind Queue storage and identity to one target snapshot [SB-API-2]."""
+    sqlite_path = target.target if isinstance(target, BrokerTarget) else str(target)
+    if runner is None and (
+        not isinstance(target, BrokerTarget) or target.backend_name == "sqlite"
+    ):
+        _validate_sqlite_filename(sqlite_path)
+        _validate_sqlite_filename(normalize_sqlite_target(sqlite_path))
     if isinstance(target, BrokerTarget):
+        options = cast(dict[str, Any], snapshot_key_material(target.backend_options))
+        if target.backend_name == "redis" and runner is None:
+            # Resolve namespace defaults once for storage, moves and waiters.
+            # Other plugins' init hooks have different target-enrichment rules.
+            options = target.plugin.init_backend(
+                config, toml_target=target.target, toml_options=options
+            )["backend_options"]
         return replace(
             target,
             target=(
@@ -142,9 +158,7 @@ def _canonicalize_queue_target(target: str | BrokerTarget) -> str | BrokerTarget
                 if target.backend_name == "sqlite"
                 else target.target
             ),
-            backend_options=cast(
-                dict[str, Any], snapshot_key_material(target.backend_options)
-            ),
+            backend_options=cast(dict[str, Any], snapshot_key_material(options)),
         )
     return normalize_sqlite_target(str(target))
 
@@ -244,7 +258,9 @@ class Queue:
         else:
             assert db_path is not None
             resolved_db_path = db_path
-        self._db_path: str | BrokerTarget = _canonicalize_queue_target(resolved_db_path)
+        self._db_path: str | BrokerTarget = _canonicalize_queue_target(
+            resolved_db_path, config=self._config, runner=runner
+        )
         self._stop_event: threading.Event | None = None
 
         # Create DBConnection for persistent queues and injected-runner queues.

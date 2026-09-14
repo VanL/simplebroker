@@ -23,6 +23,7 @@ from ._backends import sqlite as sqlite_backend
 from ._constants import (
     SCHEMA_VERSION,
     Config,
+    _validate_sqlite_filename,
     resolve_config,
 )
 from ._exceptions import (
@@ -45,6 +46,7 @@ from ._retry_policy import (
     execute_setup_with_retry,
     setup_busy_timeout_ms,
 )
+from ._targets import normalize_sqlite_target
 
 # A file below the 16-byte SQLite magic header cannot be a database.
 _SQLITE_HEADER_MIN_BYTES = 16
@@ -213,6 +215,9 @@ class SQLiteRunner:
     _instance_counter = itertools.count()  # Unique instance ID for debugging
 
     def __init__(self, db_path: str, *, config: Config | None = None) -> None:
+        if db_path not in {"", ":memory:"}:
+            _validate_sqlite_filename(db_path)
+            _validate_sqlite_filename(normalize_sqlite_target(db_path))
         self.instance_id = next(self._instance_counter)
         self._db_path = db_path
         self._config = resolve_config(config=config)

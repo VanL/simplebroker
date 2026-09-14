@@ -97,6 +97,8 @@ validated, and each invalid value produces a warning as its source is applied.
 If an invalid value is still in effect after all sources, resolution raises;
 a later valid value replaces it. Combined path constraints are checked on the
 final values.
+Numeric conversion overflow follows this same rule, including TOML `inf` or
+`-inf` supplied for an integer field.
 Application-only defaults skip absent broker fields.
 
 Config retains its namespace as `config.prefix`, separate from its values. Pass an
@@ -230,6 +232,28 @@ remains the right place for secret material (see Precedence rules).
 - Corresponds to the -f/--file command line argument
 - Can be a compound path including a single directory (e.g., ".subdirectory/broker.db")
 - Applies to all scopes
+
+SQLite database-name components use only ASCII letters, digits, dot, dash,
+and underscore. The grammar is combined with existing traversal, reserved-name,
+and containment checks. Both components of a compound default or relative CLI
+`--file` must qualify. An absolute CLI path or explicit Python filesystem path
+constrains only the database filename, so a Python path such as
+`my dir/broker.db` is allowed while that same spelling as `DEFAULT_DB_NAME`
+is rejected. Supplied and symlink-resolved filenames are checked before
+creation or mutation. These restrictions do not apply to PostgreSQL database
+names, Redis namespaces, or project-config filenames. Existing databases with
+disallowed names are not renamed automatically; plan any operator migration
+with clients stopped and the full database/companion-file lifecycle considered.
+
+Redis Queues without an injected runner bind namespace options from explicit
+`namespace`/`schema` first, otherwise from the retained Config's
+`BACKEND_SCHEMA`. Their reported target, storage, move compatibility and
+activity waiters share that binding. Invalid options raise `DatabaseError`
+at construction without contacting Redis. Moves across targets remain unsupported.
+
+Malformed PostgreSQL connection syntax produces a fixed diagnostic rather than
+echoing driver parse text, which may contain a password. Target displays also
+redact recognizable credentials when the URI cannot be parsed.
 
 **Project Config Naming:**
 - `BROKER_PROJECT_CONFIG_NAME` - project config filename (default: .broker.toml)

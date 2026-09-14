@@ -113,6 +113,21 @@ redacted. This pre-parse failure applies to all argv shapes, including help,
 version, and raw `--json`; `[SB-CLI-4]`'s JSON error guarantee begins only
 after argument parsing establishes JSON mode.
 
+SQLite database names use only ASCII letters (`a-z`, `A-Z`), digits (`0-9`),
+dot (`.`), dash (`-`), and underscore (`_`). Each name component is nonempty
+and matches `[A-Za-z0-9._-]+`; the special traversal components `.` and `..`
+remain invalid. The grammar is necessary but not sufficient: it is ANDed
+with existing traversal, containment, platform-specific reserved-name and
+length checks. `DEFAULT_DB_NAME` and relative `--file` names retain their
+existing single optional directory component, with this grammar applied to
+each component. Path separators delimit components and are not admitted by
+the component grammar. For absolute `--file` paths, the grammar applies to
+the terminal filename; parent-directory paths retain their existing rules.
+Invalid names are rejected before target creation or mutation, with the
+allowed character set in the diagnostic. A bad environment default retains
+the preparse exit-1 rule; a bad explicit filename uses the established plain
+or JSON error dialect. No existing database is renamed automatically.
+
 For an ordinary relative legacy-SQLite target, the CLI must establish the
 target's physical containment within the selected working directory before
 backend command dispatch or a target-opening `--status`, `--vacuum`, or
@@ -130,9 +145,10 @@ selected path and its directories are protected by the operating-system
 permissions and ACLs chosen by the operator; they do not claim protection
 against concurrent replacement in a directory another principal may modify.
 
-Path admission is based on hazards in an actual SimpleBroker or operating-
-system consumer, not on characters a shell would interpret if a path were
-later copied into an unquoted command. On POSIX, shell-only punctuation such
+Except for the SQLite filename grammar above, path admission is based on
+hazards in an actual SimpleBroker or operating-system consumer, not on
+characters a shell would interpret if a path were later copied into an
+unquoted command. On POSIX, parent-directory shell-only punctuation such
 as `#`, `$`, backtick, single/double quotes, parentheses, braces, semicolon,
 ampersand, exclamation, caret, pipe, and angle brackets is accepted when the
 filesystem accepts it.
@@ -409,6 +425,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- [Verified review remediation](../plans/2026-09-13-verified-review-remediation-plan.md): database-name grammar and safe malformed-target diagnostics.
+
 - [Shared configuration loader and unprefixed snapshots](../plans/2026-09-11-shared-configuration-loader-plan.md): shared configuration internals with preserved CLI behavior.
 
 - retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
@@ -480,6 +498,8 @@ _Implementation mapping_:
   see the ledger in `docs/plans/README.md`
 
 ## Verification
+
+- `[SB-CLI-2]` filename admission and malformed-target diagnostics: `tests/test_malformed_target_diagnostics.py`; `tests/test_cli_validation.py`; `tests/test_cli_contract_sb_cli.py`; `tests/test_cleanup.py::test_cleanup_cli_rejects_percent_filename_without_mutation`.
 
 - `[SB-CLI-2]` invalid-environment import and pre-parse diagnostics:
   `tests/test_invalid_config_lifecycle.py::test_cli_reports_invalid_environment_before_parsing`

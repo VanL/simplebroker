@@ -20,7 +20,11 @@ _ASCII_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def _redact_parsed_url_password(target: str) -> str:
-    parsed = urlsplit(target)
+    try:
+        parsed = urlsplit(target)
+    except ValueError:
+        # Malformed authorities still need raw-userinfo/conninfo masking.
+        return target
     if not parsed.scheme or not parsed.netloc or not parsed.password:
         return target
 
@@ -43,6 +47,9 @@ def _redact_raw_url_userinfo(target: str) -> str:
     authority_start = scheme_end + 3
     whitespace = _WHITESPACE_RE.search(target, authority_start)
     authority_end = whitespace.start() if whitespace else len(target)
+    # Invalid URI passwords may contain whitespace, including neutralized
+    # controls. Keep masking through the last possible userinfo delimiter.
+    authority_end = max(authority_end, target.rfind("@") + 1)
     authority = target[authority_start:authority_end]
 
     colon_index = authority.find(":")

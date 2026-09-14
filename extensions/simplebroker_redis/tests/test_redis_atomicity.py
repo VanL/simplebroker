@@ -1712,3 +1712,97 @@ def test_patternless_broadcast_retries_when_queue_set_outgrows_timestamp_batch(
     finally:
         writer.close()
         broadcaster.close()
+
+
+@pytest.mark.parametrize("expiry", [300, 1])
+@pytest.mark.parametrize("competitor", ["claim", "move"])
+def test_stale_recovery_cannot_release_a_new_batch(
+    redis_url: str,
+    redis_namespace: str,
+    monkeypatch: pytest.MonkeyPatch,
+    expiry: int,
+    competitor: str,
+) -> None:
+    """Pause real recovery dispatch while the original token is replaced."""
+    import time
+
+    from simplebroker_redis import get_backend_plugin
+
+    from simplebroker import Queue
+
+    runners = [
+        RedisRunner(redis_url, namespace=redis_namespace, stale_batch_seconds=expiry)
+        for _ in range(4)
+    ]
+    queues = [
+        Queue("unrelated" if i == 2 else "source", runner=r, persistent=True)
+        for i, r in enumerate(runners)
+    ]
+    old = fresh = None
+    paused, resume = threading.Event(), threading.Event()
+    try:
+        message_id = queues[0].write("payload")
+        old = queues[0].move_generator("old", delivery_guarantee="at_least_once")
+        assert next(old) == "payload"
+        if expiry == 300:
+            meta_keys = list(
+                runners[0].client.scan_iter(
+                    RedisKeys(redis_namespace).key("batches", "*", "meta")
+                )
+            )
+            assert len(meta_keys) == 1
+            runners[0].client.hset(
+                meta_keys[0], "created_ns", str(time.time_ns() - 301_000_000_000)
+            )
+        else:
+            time.sleep(1.1)
+        real_eval = runners[2].client.eval
+
+        def pause_before_recovery(script: str, *args: Any, **kwargs: Any) -> Any:
+            if script == scripts.RECOVER_STALE_BATCH:
+                paused.set()
+                assert resume.wait(10)
+            return real_eval(script, *args, **kwargs)
+
+        monkeypatch.setattr(runners[2].client, "eval", pause_before_recovery)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            recovery = executor.submit(queues[2].read)
+            try:
+                assert paused.wait(10)
+                old.close()
+                old = None
+                fresh = queues[1].move_generator(
+                    "winner", delivery_guarantee="at_least_once"
+                )
+                assert next(fresh) == "payload"
+            finally:
+                resume.set()
+            assert recovery.result(timeout=10) is None
+        if competitor == "claim":
+            assert queues[3].read() is None
+        else:
+            assert queues[3].move("loser") is None
+        assert list(fresh) == []
+        fresh = None
+        with Queue("loser", runner=runners[3]) as loser:
+            assert loser.peek_many(10) == []
+            loser.delete()
+        with Queue("winner", runner=runners[3]) as winner:
+            assert winner.peek_many(10, with_timestamps=True) == [
+                ("payload", message_id)
+            ]
+            assert winner.stats().pending == 1
+        assert queues[3].peek_many(10) == []
+        assert queues[3].stats().pending == 0
+    finally:
+        resume.set()
+        for generator in (old, fresh):
+            if generator is not None:
+                generator.close()
+        for queue in queues:
+            queue.close()
+        for runner in runners:
+            runner.shutdown()
+        get_backend_plugin().cleanup_target(
+            redis_url, backend_options={"namespace": redis_namespace}
+        )

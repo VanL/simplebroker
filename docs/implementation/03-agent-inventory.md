@@ -33,12 +33,15 @@ To refresh this inventory:
 
 ## Current Observed Availability
 
-Last refreshed: 2026-08-06 (Claude 2.1.207 passed a bounded liveness probe and
-completed the class-4 access/backend benchmark plan review with a PASS verdict)
+Last refreshed: 2026-09-13 (Claude completed the six-finding remediation plan
+review and scoped verification read-only in 296.4 and 127.6 seconds, both PASS;
+implementation slice review and final integrated review completed in 272.8 and
+495.3 seconds with no blockers; findings and dispositions
+are recorded in `docs/plans/2026-09-13-verified-review-remediation-plan.md`)
 
 | Agent family | Status | Notes |
 |--------------|--------|-------|
-| Claude | live, long-review timeout observed | harness-level containment probed 2026-07-14; short review completed 2026-08-06; configuration implementation review timed out at 540 seconds without a verdict on 2026-09-12, so a separate in-session review supplied that gate |
+| Claude | live, bounded plan and implementation reviews completed | harness-level containment probed 2026-07-14; remediation plan and implementation reviews completed within their 540-second bounds on 2026-09-13; the separate configuration implementation review timed out at 540 seconds without a verdict on 2026-09-12, so retain explicit bounds for long reviews |
 | Codex | live | OS-enforced read-only sandbox; probed 2026-07-14 |
 | Grok | live, degraded | Read-only sandbox held on 2026-07-29, but a long plan review inspected sources without producing a final verdict after bounded follow-ups; not currently suitable as the sole gate |
 | Qwen | blocked | API 404 / paid-slug config as of 2026-07-14 |

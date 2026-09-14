@@ -6,6 +6,8 @@ import os
 import signal
 import threading
 import time
+from pathlib import Path
+from types import FrameType
 from typing import Any, cast
 
 import pytest
@@ -466,3 +468,126 @@ def test_activity_waiter_does_not_consume_command_pool_slot(
         waiter.close()
         core.shutdown()
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize("held", ["admission", "project", "none"])
+def test_public_persistent_queue_recovers_child_owned_session(
+    redis_url: str, redis_namespace: str, tmp_path: Path, held: str
+) -> None:
+    import inspect
+    import select
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+
+    from simplebroker import BrokerTarget, Queue
+    from simplebroker._broker_session import _ProcessBrokerSession
+    from simplebroker.db import DBConnection
+
+    config_path = tmp_path / "project.toml"
+    config_path.write_text("version = 1\n")
+    target = BrokerTarget(
+        "redis", redis_url, {"namespace": redis_namespace}, config_path=config_path
+    )
+    paused = threading.Event()
+    resume = threading.Event()
+    method = (
+        DBConnection._ensure_project_target_initialized
+        if held == "project"
+        else _ProcessBrokerSession._begin_operation
+    )
+    source, first_line = inspect.getsourcelines(method)
+    fragment = (
+        "if self._project_setup_complete:"
+        if held == "project"
+        else "if self._closed or self._closing:"
+    )
+    line_number = first_line + next(
+        i for i, line in enumerate(source) if line.strip() == fragment
+    )
+
+    def trace(frame: FrameType, event: str, arg: object) -> Any:
+        if (
+            event == "line"
+            and frame.f_code is method.__code__
+            and frame.f_lineno == line_number
+        ):
+            paused.set()
+            assert resume.wait(15)
+        return trace
+
+    try:
+        with Queue("fork_jobs", db_path=target, persistent=True) as queue:
+            if held != "project":
+                queue.write("before")
+                assert queue.read() == "before"
+            assert queue.conn is not None
+            inherited = queue.conn._shared_session
+            inherited_key = queue.conn._shared_key
+            assert inherited is not None
+
+            def parent_write() -> None:
+                try:
+                    if held != "none":
+                        sys.settrace(trace)
+                    else:
+                        paused.set()
+                    queue.write("parent")
+                finally:
+                    sys.settrace(None)
+
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(parent_write)
+            read_fd, write_fd = os.pipe()
+            child_pid = None
+            try:
+                assert paused.wait(5)
+                if held == "none":
+                    future.result(timeout=5)
+                child_pid = os.fork()
+                if child_pid == 0:
+                    os.close(read_fd)
+                    status = 1
+                    try:
+                        # Cleanup alone must not acquire or finalize an inherited session.
+                        queue.conn.cleanup()
+                        message_id = queue.write("child")
+                        assert queue.conn._shared_key != inherited_key
+                        assert queue.conn._shared_key is not None
+                        assert queue.conn._shared_key.pid == os.getpid()
+                        assert queue.conn._shared_session is not inherited
+                        assert queue.peek_one(exact_timestamp=message_id) == "child"
+                        assert queue.read_one(exact_timestamp=message_id) == "child"
+                        queue.conn.get_core()
+                        queue.conn.cleanup()
+                        queue.close()
+                        assert not inherited._closed
+                        os.write(write_fd, b"child session recovered")
+                        status = 0
+                    finally:
+                        os._exit(status)
+                os.close(write_fd)
+                write_fd = -1
+                ready, _, _ = select.select([read_fd], [], [], 5)
+                assert ready, "Redis Queue waited on inherited manager/session state"
+                assert os.read(read_fd, 4096) == b"child session recovered"
+                _, status = os.waitpid(child_pid, 0)
+                child_pid = None
+                assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+            finally:
+                if child_pid is not None:
+                    os.kill(child_pid, signal.SIGKILL)
+                    os.waitpid(child_pid, 0)
+                os.close(read_fd)
+                if write_fd != -1:
+                    os.close(write_fd)
+                resume.set()
+                executor.shutdown(wait=True)
+            future.result(timeout=5)
+            queue.write("after")
+            assert queue.read_many(3) == ["parent", "after"]
+    finally:
+        get_backend_plugin().cleanup_target(
+            redis_url, backend_options={"namespace": redis_namespace}
+        )

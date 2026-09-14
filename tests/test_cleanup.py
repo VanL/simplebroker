@@ -365,7 +365,11 @@ def test_cleanup_validates_literal_uri_metacharacters(tmp_path, filename):
     """[SB-OPS-7] Validation URI encoding preserves the literal main filename."""
     db_path = tmp_path / filename
     plugin = get_backend_plugin("sqlite")
-    plugin.initialize_target(str(db_path))
+    # Model a closed database created before the filename restriction. The
+    # low-level cleanup hook still must interpret its literal URI safely.
+    seed = tmp_path / "seed.db"
+    plugin.initialize_target(str(seed))
+    seed.rename(db_path)
     assert db_path.exists()
 
     assert plugin.cleanup_target(str(db_path)) is True
@@ -374,17 +378,18 @@ def test_cleanup_validates_literal_uri_metacharacters(tmp_path, filename):
 
 
 @pytest.mark.sqlite_only
-def test_cleanup_cli_accepts_literal_percent_filename(workdir):
-    """[SB-OPS-7] The CLI cleans a safe percent-bearing SQLite filename."""
+def test_cleanup_cli_rejects_percent_filename_without_mutation(workdir):
+    """[SB-CLI-2] Invalid names fail before cleanup touches existing files."""
     filename = "broker%25.db"
-    rc, _, err = run_cli("-f", filename, "write", "test", "message", cwd=workdir)
-    assert rc == 0, err
+    path = workdir / filename
+    path.write_bytes(b"existing state")
 
     rc, out, err = run_cli("-f", filename, "--cleanup", cwd=workdir)
 
-    assert rc == 0, err
+    assert rc == 1, err
     assert out == ""
-    assert not (workdir / filename).exists()
+    assert "ASCII" in err
+    assert path.read_bytes() == b"existing state"
 
 
 @pytest.mark.sqlite_only

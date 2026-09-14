@@ -98,7 +98,7 @@ EVIDENCE_MANIFESTS = {
             "test_cleanup_aggregates_multiple_cli_failures_and_json_error",
             "test_cleanup_windows_open_handle_refusal_is_clean_and_nonrollback",
             "test_cleanup_validates_literal_uri_metacharacters",
-            "test_cleanup_cli_accepts_literal_percent_filename",
+            "test_cleanup_cli_rejects_percent_filename_without_mutation",
             "test_cleanup_cli_retains_unsafe_metacharacter_rejection",
             "test_cleanup_no_namespace_targets_are_noops_without_creation_or_open",
             "test_cleanup_path_derivation_error_is_a_clean_database_error",

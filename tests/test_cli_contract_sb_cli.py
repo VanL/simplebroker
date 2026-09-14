@@ -850,3 +850,35 @@ def test_sb_cli_7_contract_help_and_literal_escape(workdir: Path) -> None:
             "--keep-newest=3",
             "--keep-newest",
         ]
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize("invalid_link", [False, True])
+@pytest.mark.parametrize(
+    "action", [("write", "jobs", "payload", "--json"), ("--cleanup", "--json")]
+)
+def test_sqlite_filename_policy_rejects_symlinks_before_mutation(
+    tmp_path, invalid_link, action
+):
+    real = tmp_path / ("valid.db" if invalid_link else "invalid%.db")
+    real.write_bytes(b"untouched")
+    link = tmp_path / ("invalid%.db" if invalid_link else "valid.db")
+    link.symlink_to(real)
+    code, out, err = run_cli("-f", str(link), *action, cwd=tmp_path)
+    assert code == 1
+    assert out == ""
+    assert "ASCII" in json.loads(err)["message"]
+    assert "Traceback" not in err
+    assert real.read_bytes() == b"untouched"
+    assert set(tmp_path.iterdir()) == {real, link}
+
+
+@pytest.mark.sqlite_only
+def test_sqlite_filename_policy_allows_absolute_parent_punctuation(tmp_path):
+    parent = tmp_path / "my dir (archive)"
+    parent.mkdir()
+    path = parent / "AZaz09._-.db"
+    assert run_cli("-f", path, "write", "jobs", "payload", cwd=tmp_path)[0] == 0
+    code, out, err = run_cli("-f", path, "read", "jobs", cwd=tmp_path)
+    assert code == 0, err
+    assert out == "payload"

@@ -257,8 +257,11 @@ def _validated_target(target: str, *, password: str | None = None) -> str:
         if password:
             return conninfo.make_conninfo(target, password=password)
         conninfo.make_conninfo(target)
-    except ProgrammingError as exc:
-        raise DatabaseError(f"Invalid Postgres target: {exc}") from exc
+    except ProgrammingError:
+        # Driver parse text can quote the entire password-bearing input.
+        raise DatabaseError(
+            "Invalid Postgres target: check the connection URI or conninfo syntax"
+        ) from None
     return target
 
 

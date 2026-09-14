@@ -746,3 +746,21 @@ end
 redis.call('DEL', batch_ids, batch_meta)
 return #ids
 """
+
+
+RECOVER_STALE_BATCH = """
+local reserved = KEYS[1]
+local batch_ids = KEYS[2]
+local batch_meta = KEYS[3]
+-- Python qualified age with exact integers. Keep the raw timestamp comparison:
+-- Lua numbers cannot preserve nanosecond precision. UUID tokens are not reused.
+if redis.call('HGET', batch_meta, 'source') ~= ARGV[1] or redis.call('HGET', batch_meta, 'created_ns') ~= ARGV[2] then
+  return 0
+end
+local ids = redis.call('SMEMBERS', batch_ids)
+for _, id in ipairs(ids) do
+  redis.call('ZREM', reserved, id)
+end
+redis.call('DEL', batch_ids, batch_meta)
+return #ids
+"""

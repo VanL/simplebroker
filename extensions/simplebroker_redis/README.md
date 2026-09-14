@@ -43,6 +43,21 @@ lookup and removal and are not rewritten automatically.
 
 ## Concurrency semantics
 
+Stale at-least-once batches are recovered after `stale_batch_seconds` (default
+300; negative disables recovery). Recovery qualifies age using exact integer
+nanoseconds, then atomically rechecks that token's source and creation timestamp,
+reads its live IDs, releases reservations, and removes its token keys. A token
+that committed, rolled back, disappeared, or changed after the scan is skipped.
+This prevents an old recovery scan from releasing a newer batch's reservations
+for the same message. The count is the number of live token IDs processed.
+
+This repair changes no storage keys or backend API version. Quiesce clients for
+each affected namespace and upgrade all of them: an older client can still run
+the unsafe recovery sequence. The fix prevents new corruption; it does not
+repair previously duplicated IDs or missing bodies. Rolling back restores the
+race and is not a safe service fallback.
+
+
 Queue deletion is atomic per queue. `delete()` first snapshots the queue
 registry, then one Lua invocation per selected queue rechecks active
 at-least-once reservations and removes that queue's pending, claimed, body,

@@ -19,7 +19,9 @@ from ._constants import (
     PROG_NAME,
     Config,
     InvalidConfigError,
+    _db_name_path,
     _validate_safe_path_components,
+    _validate_sqlite_filename,
     resolve_config,
 )
 from ._delivery import MAX_KEEP_NEWEST
@@ -1283,7 +1285,7 @@ def _resolve_database_path(
 
     file_explicitly_provided = getattr(args, "_file_explicitly_provided", False)
     if file_explicitly_provided:
-        return args.dir / file_path, False
+        return args.dir / args.file.replace("\\", "/"), False
 
     # 2. Project scope search
     # Determine working dir and filename with env defaults
@@ -1315,7 +1317,7 @@ def _resolve_database_path(
         args, "_dir_explicitly_provided", False
     ):
         working_dir = Path(config["DEFAULT_DB_LOCATION"])
-    return working_dir / db_filename, False
+    return working_dir / db_filename.replace("\\", "/"), False
 
 
 def _build_sqlite_target(
@@ -1494,6 +1496,20 @@ def _validate_cli_path_components(value: str, label: str) -> None:
         raise _ArgumentValidationError(str(error)) from error
 
 
+def _validate_cli_database_filename(value: str) -> None:
+    """Keep relative CLI names compound and absolute parent paths unrestricted."""
+    try:
+        if Path(value).is_absolute():
+            _validate_sqlite_filename(value)
+            _validate_safe_path_components(value, "Database filename")
+        else:
+            _db_name_path(value)
+    except ValueError as error:
+        raise _ArgumentValidationError(
+            f"{error}; database names use only ASCII letters, digits, dot, dash, and underscore"
+        ) from error
+
+
 def _run_cleanup(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
@@ -1509,7 +1525,9 @@ def _run_cleanup(
                 str(args.dir), "Directory argument (-d/--dir)"
             )
             if not resolved_target.used_project_scope:
-                _validate_cli_path_components(args.file, "Database filename")
+                _validate_cli_database_filename(args.file)
+            _validate_sqlite_filename(str(db_path))
+            _validate_sqlite_filename(str(db_path.resolve()))
 
             file_existed = resolved_target.plugin.cleanup_target(
                 str(db_path),
@@ -1643,15 +1661,19 @@ def _validate_legacy_sqlite_target(
                 config["DEFAULT_DB_NAME"],
             )
         else:
-            db_path = working_dir / args.file
+            db_path = working_dir / args.file.replace("\\", "/")
     if not used_project_scope:
-        _validate_cli_path_components(args.file, "Database filename")
+        _validate_cli_database_filename(args.file)
 
     db_path = _resolve_legacy_sqlite_path(
         db_path,
         working_dir=working_dir,
         containment_required=containment_required,
     )
+    try:
+        _validate_sqlite_filename(str(db_path))
+    except ValueError as error:
+        raise _ArgumentValidationError(str(error)) from error
 
     _validate_database_parent_directory(db_path)
     # ``--vacuum`` is a root action, not a subcommand: it arrives here with

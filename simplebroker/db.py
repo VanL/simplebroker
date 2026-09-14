@@ -38,6 +38,7 @@ from typing import (
     cast,
 )
 
+from . import _broker_session
 from ._aliases import resolve_queue_operand
 from ._backend_plugins import (
     BackendPlugin,
@@ -56,6 +57,7 @@ from ._constants import (
     PEEK_BATCH_SIZE,
     SIMPLEBROKER_MAGIC,
     Config,
+    _validate_sqlite_filename,
     resolve_config,
 )
 from ._delivery import (
@@ -109,7 +111,7 @@ from ._runner import (
 from ._selection import SelectionOrder, validate_selection_order
 from ._sidecar import SidecarSession
 from ._sql import BackendSQLNamespace, RetrieveQuerySpec
-from ._targets import BrokerTarget
+from ._targets import BrokerTarget, normalize_sqlite_target
 from ._timestamp import (
     TimestampGenerator,
     decode_hybrid_timestamp,
@@ -917,9 +919,39 @@ class DBConnection:
         assert self._shared_session is not None
         return self._shared_session
 
+    def _has_inherited_shared_session(self) -> bool:
+        return (
+            self._shared_key is not None
+            and self._shared_key.pid != _broker_session._getpid()
+        )
+
+    def _ensure_shared_process_owner(self) -> None:
+        """Respect backend fork policy before entering parent-owned locks."""
+        if not self._has_inherited_shared_session():
+            return
+        if not _is_direct_backend(self._backend_plugin):
+            raise RuntimeError(
+                "Queue used in forked process. SQL connections cannot be shared "
+                "across processes. Create a new Queue in the child process."
+            )
+
+        # The registry retains the inherited graph before replacing its locks.
+        # Do not close parent resources or carry its operation leases forward.
+        key, session = acquire_process_broker_session(
+            self._db_path_arg,
+            config=self._config,
+            factory_builder=_build_process_session_core_factory,
+        )
+        self._project_setup_lock = threading.Lock()
+        self._project_setup_complete = False
+        self._thread_local = threading.local()
+        self._shared_key, self._shared_session = key, session
+        self._shared_released = False
+
     def _get_shared_connection(
         self, *, config: Config | None = None
     ) -> BrokerConnection:
+        self._ensure_shared_process_owner()
         if self._stop_event.is_set():
             raise StopException("Connection interrupted")
 
@@ -973,6 +1005,8 @@ class DBConnection:
         Returns:
             BrokerCore instance
         """
+        if self._share_in_process:
+            self._ensure_shared_process_owner()
         self._ensure_project_target_initialized()
         if self._share_in_process:
             session = self._ensure_shared_session()
@@ -1079,7 +1113,11 @@ class DBConnection:
         )
 
         if self._share_in_process:
-            if self._shared_session is not None and not self._shared_released:
+            if (
+                not self._has_inherited_shared_session()
+                and self._shared_session is not None
+                and not self._shared_released
+            ):
                 self._shared_session.cleanup_current_thread()
             return
 
@@ -1124,6 +1162,8 @@ class DBConnection:
         """Release transient pooled resources after one queue operation."""
 
         if self._share_in_process:
+            if self._has_inherited_shared_session():
+                return
             session = self._pop_shared_operation_session()
             if session is not None:
                 session.release_current_thread_connection()
@@ -1183,6 +1223,14 @@ def open_broker(
     """Open a backend-agnostic broker connection for the lifetime of a context."""
 
     resolved_config = resolve_config(config=config)
+    if runner is None and (
+        not isinstance(db_target, BrokerTarget) or db_target.backend_name == "sqlite"
+    ):
+        path = (
+            db_target.target if isinstance(db_target, BrokerTarget) else str(db_target)
+        )
+        _validate_sqlite_filename(path)
+        _validate_sqlite_filename(normalize_sqlite_target(path))
     with DBConnection(db_target, runner, config=resolved_config) as connection:
         yield connection.get_connection()
 
@@ -4061,6 +4109,7 @@ class BrokerDB(BrokerCore):
         """
         resolved_config = resolve_config(config=config)
 
+        _validate_sqlite_filename(db_path)
         # Handle Path.resolve() edge cases on exotic filesystems
         try:
             self.db_path = Path(db_path).expanduser().resolve()
@@ -4071,6 +4120,7 @@ class BrokerDB(BrokerCore):
                 f"Could not resolve path {db_path}: {e}", RuntimeWarning, stacklevel=2
             )
 
+        _validate_sqlite_filename(str(self.db_path))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Create SQLite runner

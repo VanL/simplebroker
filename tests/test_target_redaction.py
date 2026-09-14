@@ -136,3 +136,32 @@ def test_resolved_target_repr_redacts_connection_and_backend_option_values() -> 
 
     assert representations[0].index("password") < representations[0].index("schema")
     assert representations[1].index("password") < representations[1].index("schema")
+
+
+@pytest.mark.parametrize(
+    "raw_target",
+    [
+        "postgresql://audit:FAKE_PASSWORD@[bad/db",
+        "postgresql://audit:FAKE_PASSWORD extra@[bad/db",
+        "postgresql://audit:FAKE_PASSWORD\textra@[bad/db",
+        "postgresql://audit:FAKE_PASSWORD@bad]/db",
+        "postgresql://audit:FAKE_PASSWORD@[not-ipv6]/db",
+        "postgresql://audit:FAKE_PASSWORD@host：123/db",
+        "postgresql://audit:FAKE_PASSWORD@[bad/db password=SECOND_MARKER",
+    ],
+)
+def test_malformed_url_redaction_remains_display_safe(raw_target: str) -> None:
+    target = BrokerTarget("postgres", raw_target)
+    for display in (
+        redact_backend_target(raw_target),
+        target.display_target,
+        repr(target),
+    ):
+        assert "FAKE_PASSWORD" not in display
+        assert "SECOND_MARKER" not in display
+        assert "***" in display
+
+
+@pytest.mark.parametrize("target", ["postgresql://[bad/db", "postgresql://bad]/db", ""])
+def test_malformed_password_free_target_redaction_is_total(target: str) -> None:
+    assert redact_backend_target(target) == target

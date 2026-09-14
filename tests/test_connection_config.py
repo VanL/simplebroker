@@ -496,3 +496,109 @@ def test_explicit_config_is_retained_at_constructor(
             }
         finally:
             watcher.stop()
+
+
+@pytest.mark.parametrize("boundary", ["queue", "persistent", "broker", "runner"])
+@pytest.mark.parametrize(
+    "name", ["100%.db", "my db.db", "café.db", "bad!.db", ":memory:"]
+)
+def test_sqlite_filename_grammar_rejects_before_parent_creation(
+    tmp_path, boundary, name
+):
+    target = str(tmp_path / "absent" / name)
+    with pytest.raises(ValueError, match="ASCII"):
+        if boundary in {"queue", "persistent"}:
+            with Queue(
+                "jobs", db_path=target, persistent=boundary == "persistent"
+            ) as queue:
+                queue.write("payload")
+        elif boundary == "broker":
+            with open_broker(target) as broker:
+                broker.write("jobs", "payload")
+        else:
+            SQLiteRunner(target)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("boundary", ["queue", "broker", "runner"])
+@pytest.mark.parametrize("invalid_link", [False, True])
+def test_sqlite_filename_grammar_checks_symlink_and_effective_name(
+    tmp_path, boundary, invalid_link
+):
+    real = tmp_path / ("valid.db" if invalid_link else "invalid%.db")
+    real.write_bytes(b"untouched")
+    link = tmp_path / ("invalid%.db" if invalid_link else "valid.db")
+    link.symlink_to(real)
+    with pytest.raises(ValueError, match="ASCII"):
+        if boundary == "queue":
+            Queue("jobs", db_path=str(link))
+        elif boundary == "broker":
+            with open_broker(str(link)):
+                pass
+        else:
+            SQLiteRunner(str(link))
+    assert real.read_bytes() == b"untouched"
+    assert set(tmp_path.iterdir()) == {real, link}
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_explicit_python_sqlite_target_preserves_parent_directory_names(
+    tmp_path, monkeypatch, relative
+):
+    monkeypatch.chdir(tmp_path)
+    path = Path("my dir") / "deep" / "AZaz09._-.db"
+    if not relative:
+        path = tmp_path / path
+    target = f"./{path}" if relative else str(path)
+    with Queue("jobs", db_path=target) as queue:
+        queue.write("payload")
+        assert queue.read() == "payload"
+    with open_broker(target) as broker:
+        broker.write("jobs", "second")
+        message = broker.claim_one("jobs")
+        assert isinstance(message, tuple)
+        assert message[0] == "second"
+
+
+@pytest.mark.parametrize("sentinel", ["", ":memory:"])
+def test_sqlite_runner_retains_nonfile_sentinels(tmp_path, monkeypatch, sentinel):
+    monkeypatch.chdir(tmp_path)
+    runner = SQLiteRunner(sentinel)
+    try:
+        assert runner.run("SELECT 1", fetch=True) == [(1,)]
+    finally:
+        runner.close()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_injected_sqlite_runner_ignores_decorative_invalid_filename(tmp_path):
+    runner = SQLiteRunner(str(tmp_path / "actual.db"))
+    try:
+        with Queue("jobs", db_path="ignored%.db", runner=runner) as queue:
+            queue.write("payload")
+            assert queue.read() == "payload"
+        with open_broker("ignored%.db", runner=runner) as broker:
+            broker.write("jobs", "second")
+            message = broker.claim_one("jobs")
+            assert isinstance(message, tuple)
+            assert message[0] == "second"
+    finally:
+        runner.close()
+    assert not (tmp_path / "ignored%.db").exists()
+
+
+@pytest.mark.parametrize("boundary", ["queue", "broker", "runner"])
+@pytest.mark.parametrize("suffix", ["/.", "/"])
+def test_sqlite_raw_terminal_component_is_not_normalized_away(
+    tmp_path, boundary, suffix
+):
+    target = str(tmp_path / "absent" / "broker.db") + suffix
+    with pytest.raises(ValueError, match="ASCII"):
+        if boundary == "queue":
+            Queue("jobs", db_path=target)
+        elif boundary == "broker":
+            with open_broker(target):
+                pass
+        else:
+            SQLiteRunner(target)
+    assert list(tmp_path.iterdir()) == []

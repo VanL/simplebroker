@@ -1908,14 +1908,19 @@ class RedisBrokerCore:
             if created_ns > cutoff_ns:
                 continue
             ids_key = self._keys.batch_ids(token)
-            ids = list(response_set(self._client.smembers(ids_key)))
-            with self._client.pipeline(transaction=True) as pipe:
-                if ids:
-                    pipe.zrem(self._keys.reserved(source), *ids)
-                pipe.delete(ids_key)
-                pipe.delete(meta_key)
-                pipe.execute()
-            recovered += len(ids)
+            # [SB-DELIVERY-3]: revalidate ownership and release inside one command.
+            # A Python ID snapshot could outlive rollback and clear a new batch.
+            recovered += response_int(
+                self._client.eval(
+                    scripts.RECOVER_STALE_BATCH,
+                    3,
+                    self._keys.reserved(source),
+                    ids_key,
+                    meta_key,
+                    source,
+                    str(created_raw),
+                )
+            )
         return recovered
 
     def _maybe_recover_stale_batches(self) -> None:

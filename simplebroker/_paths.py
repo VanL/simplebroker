@@ -6,12 +6,13 @@ before any file is opened, so a rejected path never reaches a backend.
 """
 
 import os
-from pathlib import Path, PurePath
+from pathlib import Path
 
 from ._backends import sqlite as sqlite_backend
 from ._constants import (
     COMPOUND_DB_NAME_PARTS,
     MAX_PROJECT_TRAVERSAL_DEPTH,
+    _validate_db_name_component,
     _validate_safe_path_components,
 )
 from ._exceptions import _ArgumentValidationError
@@ -175,8 +176,9 @@ def _is_compound_db_name(db_name: str) -> tuple[bool, list[str]]:
     _validate_safe_path_components(db_name, "Database name")
 
     db_name = db_name.replace("\\", "/")  # Normalize path separators
-    pure_path = PurePath(db_name)
-    parts = list(pure_path.parts)
+    parts = db_name.split("/")
+    for part in parts:
+        _validate_db_name_component(part, "Database name")
 
     # Check for nested directories (more than 2 parts)
     if len(parts) > COMPOUND_DB_NAME_PARTS:

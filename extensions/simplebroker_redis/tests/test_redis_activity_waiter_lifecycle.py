@@ -392,3 +392,90 @@ def test_redis_multi_waiter_base_exception_is_terminal_and_stops_cleanup(
     assert events == ["unregister:first:alpha"]
     waiter.close()
     assert events == ["unregister:first:alpha"]
+
+
+@pytest.mark.parametrize("multi", [False, True])
+def test_config_derived_namespace_wakes_public_waiter(
+    redis_url: str, redis_namespace: str, multi: bool
+) -> None:
+    from simplebroker_redis import get_backend_plugin
+
+    from simplebroker import (
+        BrokerTarget,
+        Queue,
+        create_activity_waiter_for_queues,
+        resolve_config,
+    )
+
+    config = resolve_config(override={"BROKER_BACKEND_SCHEMA": redis_namespace})
+    target = BrokerTarget("redis", redis_url)
+    try:
+        with (
+            Queue("alpha", db_path=target, config=config) as first,
+            Queue(
+                "beta",
+                db_path=target,
+                config=resolve_config(config=config, override={"BROKER_CACHE_MB": 17}),
+            ) as second,
+        ):
+            waiter = (
+                create_activity_waiter_for_queues(
+                    [first, second], stop_event=threading.Event()
+                )
+                if multi
+                else first.create_activity_waiter(stop_event=threading.Event())
+            )
+            assert waiter is not None
+            try:
+                assert waiter.wait(0) is False
+                message_id = (second if multi else first).write(
+                    "wake in bound namespace"
+                )
+                assert waiter.wait(2), (
+                    "real write did not wake the bound-namespace listener"
+                )
+                assert (second if multi else first).peek_one(with_timestamps=True) == (
+                    "wake in bound namespace",
+                    message_id,
+                )
+            finally:
+                waiter.close()
+    finally:
+        get_backend_plugin().cleanup_target(
+            redis_url, backend_options={"namespace": redis_namespace}
+        )
+
+
+def test_config_derived_namespaces_cannot_share_waiter(
+    redis_url: str, redis_namespace: str
+) -> None:
+    from simplebroker import (
+        BrokerTarget,
+        Queue,
+        create_activity_waiter_for_queues,
+        resolve_config,
+    )
+
+    target = BrokerTarget("redis", redis_url)
+    with (
+        Queue(
+            "alpha",
+            db_path=target,
+            config=resolve_config(
+                override={
+                    "BROKER_BACKEND_SCHEMA": redis_namespace,
+                }
+            ),
+        ) as first,
+        Queue(
+            "beta",
+            db_path=target,
+            config=resolve_config(
+                override={
+                    "BROKER_BACKEND_SCHEMA": f"{redis_namespace}_other",
+                }
+            ),
+        ) as second,
+        pytest.raises(ValueError, match="cannot safely share"),
+    ):
+        create_activity_waiter_for_queues([first, second], stop_event=threading.Event())

@@ -205,6 +205,23 @@ when its public seam owns ambient selection. The CLI remains the process-level
 translator for InvalidConfigError diagnostics. Complete configuration values
 participate in session identity, including custom fields.
 
+Numeric OverflowError joins TypeError/ValueError in the one `_validated_value`
+translation path. Warnings, source labels, sensitive-value metadata and final
+override decisions therefore have one owner; unrelated validator exceptions
+still propagate. PostgreSQL target parsing separately replaces driver parse
+text with a fixed DatabaseError and suppresses its formatted cause. The existing
+target redactor falls back to conservative raw credential masking on malformed
+URLs instead of failing before masking.
+
+SQLite filename admission reuses the private component grammar in `_constants`.
+Compound defaults and relative CLI filenames select every name component;
+explicit filesystem paths select only the terminal filename. Queue binding,
+project resolution, open_broker, BrokerDB before mkdir, and SQLiteRunner apply
+the shared validator before their first side effect. Supplied and resolved
+names both qualify; generic directory validation and target identity normalization
+remain separate. open_broker admission precedes DBConnection's retry wrapper so
+invalid names retain the public ValueError boundary instead of a retry error.
+
 Queue, discovery, command, CLI, watcher, load, broker-context, and direct
 runner seams sample once at their published ownership event. They pass the
 same marker through target selection, `DBConnection`, process-session keys and
@@ -358,7 +375,7 @@ that seven-module slice, so adding rows to those tables does not change 74.
 | `SM-DARWIN-XATTR` (confirmed) | `simplebroker/_phaselock.py` Darwin-provider cache | `tests/test_phaselock.py` | `tests/test_phaselock.py` | Process-cached discovery success or failure controls later xattr reads; ERANGE changes the probe/read transition. |
 | `SM-PHASE-LOCK` (confirmed) | `simplebroker/_phaselock.py::PhaseLockService` | `tests/test_phaselock.py` | `tests/test_phaselock.py` | Advisory ownership and durable markers determine whether later processes wait, run, skip, cancel, or fail. |
 | `SM-CONNECTION` (confirmed) | `simplebroker/db.py::DBConnection` | `tests/test_db_connection_lifecycle.py` | connection lifecycle, fork, and process-session suites | Registry, thread-local handle, runner/core ownership, and closed state govern reuse and cleanup across threads and calls. |
-| `SM-PROCESS-SESSION` (confirmed) | `simplebroker/_broker_session.py::_ProcessBrokerSession` and `_ProcessBrokerSessionRegistry` | `tests/test_process_broker_session.py` | `tests/test_process_broker_session.py`; held-lock fork/control in `tests/test_fork_safety.py` | Session lifecycle and runner leases constrain connection creation, reuse, release, and post-close calls across threads. Registry PID recovery precedes acquire/release/shutdown locks; child recovery retains inherited entries without finalization and starts empty. The separate retry diagnostic guard in `_retry.py` follows the same pre-lock PID rule, proved in `tests/test_retry.py`. |
+| `SM-PROCESS-SESSION` (confirmed) | `simplebroker/_broker_session.py::_ProcessBrokerSession` and `_ProcessBrokerSessionRegistry` | `tests/test_process_broker_session.py` | `tests/test_process_broker_session.py`; held-lock fork/control in `tests/test_fork_safety.py` | Session lifecycle and runner leases constrain connection creation, reuse, release, and post-close calls across threads. Registry PID recovery precedes acquire/release/shutdown locks; child recovery retains inherited entries without finalization and starts empty. DBConnection checks its session-key PID before project setup/admission and ignores inherited cleanup leases; SQL rejects while Redis obtains a child session, proved through real fork in `tests/test_fork_safety.py` and `extensions/simplebroker_redis/tests/test_redis_pool.py`. The separate retry diagnostic guard in `_retry.py` follows the same pre-lock PID rule, proved in `tests/test_retry.py`. |
 | `SM-SETUP-BUDGET` (confirmed) | `simplebroker/_retry_policy.py::SetupProgressBudget` | `tests/test_retry_policy_coverage.py` | retry-policy coverage and runner setup/error suites | Last-progress time and idle budget persist across setup operations and choose wait, refresh, timeout, or cancellation. |
 | `SM-DELIVERY-POISON` (confirmed) | `simplebroker/db.py` sidecar and transactional-generator ownership | `tests/test_cross_thread_finalization_poisoning.py` | cross-thread poisoning, generator, and released-backend probe suites | Owner identity, suspended transaction, poison, and first cause govern legal `next`, `throw`, `close`, commit, and rollback effects across threads and yields. |
 | `SM-POLLING` (confirmed) | `simplebroker/watcher.py::PollingStrategy` | `tests/test_watcher.py` | watcher, burst-mode, edge-case, stop, and race suites | Waiter identity, burst/backoff phase, activity hints, and stop state persist across waits and callbacks. As required by `[SB-API-6]`, all four direct constructor defaults come from one ambient-free canonical config snapshot; `BaseWatcher` passes its retained resolved values explicitly. |

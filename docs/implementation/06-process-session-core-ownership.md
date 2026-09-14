@@ -51,6 +51,14 @@ Backend packages do not implement it, and it is not exported through
 
 ### Lifecycle scope and activity waiters
 
+Queue target binding uses Redis's existing `init_backend` normalization to
+resolve Config-derived namespaces before any runner or listener is created.
+Only normalized options are retained; the supplied target string and project
+metadata stay intact. The detached descriptor supplies storage, move rejection
+and waiter grouping. Whole Config values still govern session sharing, but
+unrelated Config tuning is not move identity. Other plugins keep their existing
+initialization timing; their target-enrichment rules are not interchangeable.
+
 Lifecycle verbs describe the receiver's ownership scope, not a global type
 hierarchy. `close()` releases resources owned by a handle or runner.
 `shutdown()` is an optional stronger runner operation when that receiver owns
@@ -173,6 +181,16 @@ finalizing backend resources, then creates an empty registry and a fresh lock.
 Child shutdown touches only child-owned entries. The retry hot-loop diagnostic
 guard also resets its lock and counters before acquisition; its warning remains
 process-wide. Both use the existing single-threaded first-child-access rule.
+
+A persistent Queue's DBConnection also checks its retained session-key PID
+before project setup or session admission. It reads the registry's `_getpid`
+seam, so the ownership fact and current-process comparison cannot diverge.
+SQL acquisition rejects the inherited manager before retry or lock acquisition.
+Direct backends such as Redis acquire child-owned state through the registry,
+then reset manager-local project setup and operation bookkeeping. Cleanup and
+release ignore inherited operation leases; close uses the registry's stale-PID
+release path. The registry retains old graphs without finalization. This does
+not transfer parent generators or change injected runners' backend fork policy.
 
 Transaction-owner progress belongs to the runner, not the process session.
 When several thread-local cores share one runner, their separate core locks do

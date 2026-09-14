@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -927,3 +928,64 @@ def test_every_bare_constant_declaration_carries_an_explanation() -> None:
         "constants without an adjacent explanation (add a comment naming "
         f"meaning or units): {missing}"
     )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "100%.db",
+        "my dir/broker.db",
+        "café.db",
+        "bad!.db",
+        "",
+        ".",
+        "..",
+        "a/./b.db",
+        "a//b.db",
+        "a/b/c.db",
+        "a\\b\\c.db",
+    ],
+)
+@pytest.mark.parametrize("source", ["env", "override", "toml"])
+def test_database_name_grammar_rejects_invalid_config_sources(name, source, tmp_path):
+    import json
+
+    values = {"BROKER_DEFAULT_DB_NAME": name}
+    kwargs: dict[str, Any] = {"env": {}}
+    if source == "toml":
+        path = tmp_path / "config.toml"
+        path.write_text(f"BROKER_DEFAULT_DB_NAME = {json.dumps(name)}\n")
+        kwargs["toml"] = path
+    else:
+        kwargs[source] = values
+    with pytest.raises(ValueError, match="ASCII"):
+        resolve_config(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["AZaz09._-.db", ".config/broker.db", "dir-name/broker_09.db", "dir\\broker.db"],
+)
+def test_database_name_grammar_accepts_ascii_components(name):
+    assert (
+        resolve_config(env={}, override={"BROKER_DEFAULT_DB_NAME": name})[
+            "DEFAULT_DB_NAME"
+        ]
+        == name
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["bad?.db", "bad\x00.db", "bad\n.db", "bad\x7f.db", "bad\u0085.db", "x" * 256],
+)
+def test_database_name_grammar_preserves_control_and_length_rejection(name):
+    with pytest.raises(ValueError, match="ASCII"):
+        resolve_config(env={}, override={"BROKER_DEFAULT_DB_NAME": name})
+
+
+@pytest.mark.parametrize("name", ["CON.db", "nul", "COM1.db", "LPT9.db"])
+def test_database_name_grammar_preserves_windows_reserved_names(monkeypatch, name):
+    monkeypatch.setattr("simplebroker._constants.platform.system", lambda: "Windows")
+    with pytest.raises(ValueError, match="ASCII"):
+        resolve_config(env={}, override={"BROKER_DEFAULT_DB_NAME": name})

@@ -492,3 +492,68 @@ def test_invalid_values_warn_as_applied_and_raise_only_when_final() -> None:
         resolve_config(env={"BROKER_DEFAULT_DB_LOCATION": "relative"})
     assert error.value.source == "environment"
     assert error.value.key == "BROKER_DEFAULT_DB_LOCATION"
+
+
+@pytest.mark.parametrize("literal", ["inf", "-inf", "nan", '"invalid"'])
+@pytest.mark.parametrize("overridden", [False, True])
+def test_numeric_coercion_failure_uses_warning_and_final_value_policy(
+    tmp_path: Path, literal: str, overridden: bool
+) -> None:
+    path = tmp_path / "numeric.toml"
+    path.write_text(f"BROKER_CACHE_MB = {literal}\n")
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        if overridden:
+            config = resolve_config(toml=path, override={"BROKER_CACHE_MB": 32})
+            assert config["CACHE_MB"] == 32
+        else:
+            with pytest.raises(InvalidConfigError) as caught:
+                resolve_config(toml=path)
+            assert caught.value.key == "BROKER_CACHE_MB"
+            assert caught.value.source == "file"
+        assert len(seen) == 1
+        assert "BROKER_CACHE_MB" in str(seen[0].message)
+        assert "the TOML file" in str(seen[0].message)
+
+
+def test_override_numeric_overflow_retains_typed_error() -> None:
+    with (
+        pytest.warns(UserWarning, match="overrides"),
+        pytest.raises(InvalidConfigError) as caught,
+    ):
+        resolve_config(override={"BROKER_CACHE_MB": float("inf")})
+    assert caught.value.source == "override"
+    assert caught.value.key == "BROKER_CACHE_MB"
+
+
+def test_sensitive_validator_overflow_keeps_safe_metadata() -> None:
+    secret = "numeric-test-secret"
+
+    def overflow(value: Any) -> int:
+        if isinstance(value, int):
+            return value
+        raise OverflowError(f"untrusted parse detail: {value}")
+
+    defaults = {"TOKEN": ConfigField(1, "numeric token", overflow, sensitive=True)}
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        with pytest.raises(InvalidConfigError) as caught:
+            resolve_config(defaults=defaults, override={"BROKER_TOKEN": secret})
+    assert secret not in str(caught.value)
+    assert secret not in caught.value.value_display
+    assert len(seen) == 1
+    assert secret not in str(seen[0].message)
+
+
+def test_custom_runtime_error_is_not_invalid_configuration() -> None:
+    failure = RuntimeError("application validator failed")
+
+    def fail(value: Any) -> int:
+        raise failure
+
+    with pytest.raises(RuntimeError) as caught:
+        resolve_config(
+            defaults={"CUSTOM": ConfigField(1, "custom", fail)},
+            override={"BROKER_CUSTOM": 2},
+        )
+    assert caught.value is failure

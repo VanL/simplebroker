@@ -230,15 +230,17 @@ def test_queue_repr_representation():
         assert repr(queue4) == expected
 
         # Test with special characters in name and path
-        special_queue = Queue("test-queue_123", db_path="/tmp/my db.sqlite")
+        special_queue = Queue("test-queue_123", db_path="/tmp/my dir/db.sqlite")
         expected = (
             "Queue('test-queue_123', "
-            f"db_path={str(Path('/tmp/my db.sqlite').resolve())!r})"
+            f"db_path={str(Path('/tmp/my dir/db.sqlite').resolve())!r})"
         )
         assert repr(special_queue) == expected
 
         # Test Windows-style paths are escaped the way Python repr escapes them
-        windows_path = r"C:\Users\RUNNER~1\AppData\Local\Temp\tmp123\test.db"
+        windows_path = str(
+            Path(r"C:\Users\RUNNER~1\AppData\Local\Temp\tmp123") / "test.db"
+        )
         windows_queue = Queue("windows", db_path=windows_path)
         expected = f"Queue('windows', db_path={str(Path(windows_path).resolve())!r})"
         assert repr(windows_queue) == expected
@@ -258,8 +260,9 @@ def test_queue_repr_redacts_resolved_targets_and_uses_python_quoting() -> None:
     assert "postgresql://user:***@db.example.com/app" in representation
     assert repr("tasks") in representation
 
-    sqlite_representation = repr(Queue("tasks", db_path="/tmp/broker's data.sqlite"))
+    sqlite_representation = repr(Queue("tasks", db_path="/tmp/broker's data/db.sqlite"))
     assert repr("tasks") in sqlite_representation
     assert (
-        repr(str(Path("/tmp/broker's data.sqlite").resolve())) in sqlite_representation
+        repr(str(Path("/tmp/broker's data/db.sqlite").resolve()))
+        in sqlite_representation
     )

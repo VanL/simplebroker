@@ -1559,3 +1559,33 @@ def test_cli_explicit_file_beats_env_backend_selection(workdir: Path) -> None:
     )
     assert code == 0, stderr
     assert stdout == "hello"
+
+
+@pytest.mark.parametrize("invalid_link", [None, False, True])
+def test_sqlite_project_target_rejects_raw_and_resolved_invalid_filename(
+    tmp_path, invalid_link
+):
+    target = tmp_path / "invalid%.db"
+    expected: set[Path] = set()
+    if invalid_link is not None:
+        real = tmp_path / ("valid.db" if invalid_link else "invalid%.db")
+        real.write_bytes(b"untouched")
+        target = tmp_path / ("invalid%.db" if invalid_link else "valid.db")
+        target.symlink_to(real)
+        expected.update((target, real))
+    config_path = tmp_path / ".broker.toml"
+    _write_project_config(config_path, backend="sqlite", target=target.name)
+    expected.add(config_path)
+    with pytest.raises(ValueError, match="ASCII"):
+        resolve_broker_target(tmp_path, config=resolve_config(env={}))
+    assert set(tmp_path.iterdir()) == expected
+    if invalid_link is not None:
+        assert real.read_bytes() == b"untouched"
+
+
+def test_sqlite_project_filename_rule_preserves_parent_and_config_names(tmp_path):
+    config_path = tmp_path / "project config.toml"
+    _write_project_config(config_path, backend="sqlite", target="my dir/deep/broker.db")
+    target = resolve_project_target(config_path, config=resolve_config(env={}))
+    assert target.target_path == tmp_path / "my dir" / "deep" / "broker.db"
+    assert list(tmp_path.iterdir()) == [config_path]

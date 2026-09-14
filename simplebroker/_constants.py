@@ -516,15 +516,34 @@ def _db_location_path(value: Any) -> str:
     return result
 
 
+def _validate_db_name_component(name: str, context: str = "Database name") -> None:
+    """Admit one SQLite name component under [SB-CLI-2], including old checks."""
+    allowed = "use only ASCII letters, digits, dot, dash, and underscore"
+    try:
+        _validate_safe_path_components(name, context)
+    except ValueError as error:
+        raise ValueError(f"{error}; {allowed}") from error
+    if re.fullmatch(r"[A-Za-z0-9._-]+", name) is None:
+        raise ValueError(f"{context} must {allowed}: {name!r}")
+
+
+def _validate_sqlite_filename(path: str, context: str = "Database filename") -> None:
+    """Validate a filesystem target's terminal name, without constraining parents."""
+    # Unlike Path.name, basename preserves a terminal '.' or empty component.
+    _validate_db_name_component(os.path.basename(path), context)
+
+
 def _db_name_path(value: Any) -> str:
     """Accept a database filename with at most one relative directory."""
     result = str(value)
-    if result:
-        _validate_safe_path_components(result, "DEFAULT_DB_NAME")
-        if os.path.isabs(result):
-            raise ValueError("database name must be relative")
-        if len(PurePath(result).parts) > COMPOUND_DB_NAME_PARTS:
-            raise ValueError("database name must not contain nested directories")
+    _validate_safe_path_components(result, "DEFAULT_DB_NAME")
+    if os.path.isabs(result):
+        raise ValueError("database name must be relative")
+    parts = result.replace("\\", "/").split("/")
+    for part in parts:
+        _validate_db_name_component(part, "DEFAULT_DB_NAME")
+    if len(parts) > COMPOUND_DB_NAME_PARTS:
+        raise ValueError("database name must not contain nested directories")
     return result
 
 
@@ -627,7 +646,7 @@ DEFAULT_CONFIG: Final[Mapping[str, ConfigField]] = MappingProxyType(
         ),
         "DEFAULT_DB_NAME": ConfigField(
             DEFAULT_DB_NAME,
-            "a relative database path with at most one directory",
+            "a relative database path with at most one directory; components use only ASCII letters, digits, dot, dash, and underscore",
             _db_name_path,
         ),
         "PROJECT_CONFIG_PATH": ConfigField(
@@ -754,7 +773,7 @@ def _validated_value(field: ConfigField, value: Any, *, key: str, source: str) -
         # formatting a parse error. Keep diagnostics owned here.
         normalized = str.__str__(value) if isinstance(value, str) else value
         return field.validator(normalized)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise InvalidConfigError(
             key=key,
             source=source,

@@ -193,6 +193,17 @@ state sets have applied the same bounds. Generator batches retain their
 ascending cursor and expose no reverse control.
 
 **Message Lifecycle:**
+
+Redis stale-batch recovery qualifies creation age in Python with exact integer
+nanoseconds. Its Lua mutation rechecks the token's source and raw creation
+timestamp, reads live token IDs, releases their reservations, and deletes token
+keys atomically. A snapshot taken before rollback can no longer clear a later
+reservation for the same message. String equality preserves timestamps beyond
+Lua's numeric precision. Existing UUID tokens and atomic commit/rollback suffice;
+no ownership keys or storage migration are added. Recovery reports the number
+of live token IDs processed. Old recoverers remain unsafe, so clients sharing a
+namespace must be quiesced and upgraded together; prior damage is not repaired.
+
 1. **Write Phase**: Message inserted with unique timestamp; optional keep may claim older pending rows atomically
 2. **Claim Phase**: Read, or an explicit keep-write, marks a message as "claimed" (fast, logical delete)
 3. **Maintenance Phase**: Explicit `--vacuum` or a due opportunistic check permanently removes claimed messages

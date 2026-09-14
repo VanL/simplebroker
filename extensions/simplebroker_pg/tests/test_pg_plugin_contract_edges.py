@@ -428,3 +428,33 @@ def test_activity_waiters_accept_structural_runner_and_explicit_target(
         ("postgresql://runner/test", "runner_schema", ("jobs", "other")),
         ("postgresql://target/test", "target_schema", ("jobs",)),
     ]
+
+
+@pytest.mark.parametrize("separate_password", [None, "SEPARATE_MARKER"])
+def test_invalid_target_parser_error_suppresses_raw_driver_context(
+    separate_password: str | None,
+) -> None:
+    import traceback
+
+    target = "postgresql://audit:FAKE_PASSWORD@[bad/db"
+    with pytest.raises(DatabaseError, match="Invalid Postgres target") as caught:
+        pg_plugin_module._validated_target(target, password=separate_password)
+    formatted = "".join(traceback.format_exception(caught.value))
+    assert "FAKE_PASSWORD" not in formatted
+    assert "SEPARATE_MARKER" not in formatted
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["postgresql://audit@localhost/db", "host=localhost user=audit dbname=db"],
+)
+def test_valid_target_parser_preserves_target_and_password_override(
+    target: str,
+) -> None:
+    from psycopg.conninfo import conninfo_to_dict
+
+    assert pg_plugin_module._validated_target(target) == target
+    result = pg_plugin_module._validated_target(target, password="SEPARATE_MARKER")
+    assert conninfo_to_dict(result)["password"] == "SEPARATE_MARKER"

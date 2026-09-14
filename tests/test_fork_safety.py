@@ -6,6 +6,7 @@ import select
 import signal
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -549,3 +550,111 @@ def test_fork_recovery_runs_before_operation_lock(workdir: Path) -> None:
             release_lock.set()
             holder.join(timeout=5.0)
             runner.close()
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize("operation", ["write", "read", "get_core"])
+@pytest.mark.parametrize(
+    "hold_admission", [True, False], ids=["held-admission", "control"]
+)
+def test_inherited_queue_rejects_before_parent_session_lock(
+    workdir: Path, operation: str, hold_admission: bool
+) -> None:
+    import inspect
+    from concurrent.futures import ThreadPoolExecutor
+
+    from simplebroker import Queue
+    from simplebroker._broker_session import _ProcessBrokerSession
+
+    admitted = threading.Event()
+    resume = threading.Event()
+    code = _ProcessBrokerSession._begin_operation.__code__
+    lines, start = inspect.getsourcelines(_ProcessBrokerSession._begin_operation)
+    held_line = start + next(
+        i for i, line in enumerate(lines) if "if self._closed or self._closing" in line
+    )
+
+    def trace(frame, event, arg):
+        if event == "line" and frame.f_code is code and frame.f_lineno == held_line:
+            admitted.set()
+            assert resume.wait(15), "parent admission pause was not released"
+        return trace
+
+    with Queue(
+        "parent", db_path=str(workdir / "fork-parent.db"), persistent=True
+    ) as queue:
+        queue.write("before")
+        assert queue.conn is not None
+        inherited_session = queue.conn._shared_session
+        assert inherited_session is not None
+
+        def parent_write() -> None:
+            try:
+                if hold_admission:
+                    sys.settrace(trace)
+                else:
+                    admitted.set()
+                queue.write("during")
+            finally:
+                sys.settrace(None)
+
+        # Retain an ordinary operation in the forking thread too. The child
+        # must not release this inherited lease from Queue's finally block.
+        with queue.get_connection():
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(parent_write)
+            read_fd, write_fd = os.pipe()
+            child_pid = None
+            try:
+                assert admitted.wait(5)
+                if not hold_admission:
+                    future.result(timeout=5)
+                child_pid = os.fork()
+                if child_pid == 0:
+                    os.close(read_fd)
+                    status = 1
+                    try:
+                        with pytest.raises(RuntimeError, match="forked process"):
+                            actions: dict[str, Callable[[], object]] = {
+                                "get_core": queue.conn.get_core,
+                                "write": lambda: queue.write("must not write"),
+                                "read": queue.read,
+                            }
+                            actions[operation]()
+                        queue.conn.release_connection_after_use()
+                        queue.conn.cleanup()
+                        queue.close()
+                        assert not inherited_session._closed
+                        with Queue(
+                            "fresh",
+                            db_path=str(workdir / "fresh-child.db"),
+                            persistent=True,
+                        ) as fresh:
+                            fresh.write("owned")
+                            assert fresh.read() == "owned"
+                        os.write(write_fd, b"rejected and cleaned")
+                        status = 0
+                    finally:
+                        os._exit(status)
+                os.close(write_fd)
+                write_fd = -1
+                ready, _, _ = select.select([read_fd], [], [], 3)
+                assert ready, "inherited Queue hung before fork rejection/cleanup"
+                assert os.read(read_fd, 4096) == b"rejected and cleaned"
+                _, status = os.waitpid(child_pid, 0)
+                child_pid = None
+                assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+            finally:
+                if child_pid is not None:
+                    os.kill(child_pid, signal.SIGKILL)
+                    os.waitpid(child_pid, 0)
+                os.close(read_fd)
+                if write_fd != -1:
+                    os.close(write_fd)
+                resume.set()
+                executor.shutdown(wait=True)
+            future.result(timeout=5)
+        queue.write("after")
+        assert queue.read_many(4) == ["before", "during", "after"]
