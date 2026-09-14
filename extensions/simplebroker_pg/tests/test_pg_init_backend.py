@@ -10,6 +10,7 @@ from psycopg import conninfo as pg_conninfo
 from simplebroker_pg.plugin import PostgresBackendPlugin, verify_env
 from simplebroker_pg.validation import connect
 
+from simplebroker import resolve_config
 from simplebroker._exceptions import DatabaseError
 from simplebroker.ext import BACKEND_API_VERSION
 
@@ -24,15 +25,17 @@ def test_backend_plugin_declares_backend_api_version() -> None:
 
 def test_init_backend_constructs_dsn_from_individual_vars() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_HOST": "db.example.com",
-        "BROKER_BACKEND_PORT": 5433,
-        "BROKER_BACKEND_USER": "myuser",
-        "BROKER_BACKEND_PASSWORD": "secret",
-        "BROKER_BACKEND_DATABASE": "mydb",
-        "BROKER_BACKEND_SCHEMA": "app_v1",
-        "BROKER_BACKEND_TARGET": "",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_HOST": "db.example.com",
+            "BROKER_BACKEND_PORT": 5433,
+            "BROKER_BACKEND_USER": "myuser",
+            "BROKER_BACKEND_PASSWORD": "secret",
+            "BROKER_BACKEND_DATABASE": "mydb",
+            "BROKER_BACKEND_SCHEMA": "app_v1",
+            "BROKER_BACKEND_TARGET": "",
+        }
+    )
 
     result = plugin.init_backend(config)
 
@@ -42,15 +45,17 @@ def test_init_backend_constructs_dsn_from_individual_vars() -> None:
 
 def test_init_backend_percent_encodes_reserved_characters() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_HOST": "db.example.com",
-        "BROKER_BACKEND_PORT": 5432,
-        "BROKER_BACKEND_USER": "user:name",
-        "BROKER_BACKEND_PASSWORD": "p@ss/w:rd",
-        "BROKER_BACKEND_DATABASE": "db/name",
-        "BROKER_BACKEND_SCHEMA": "app_v1",
-        "BROKER_BACKEND_TARGET": "",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_HOST": "db.example.com",
+            "BROKER_BACKEND_PORT": 5432,
+            "BROKER_BACKEND_USER": "user:name",
+            "BROKER_BACKEND_PASSWORD": "p@ss/w:rd",
+            "BROKER_BACKEND_DATABASE": "db/name",
+            "BROKER_BACKEND_SCHEMA": "app_v1",
+            "BROKER_BACKEND_TARGET": "",
+        }
+    )
 
     result = plugin.init_backend(config)
 
@@ -61,15 +66,17 @@ def test_init_backend_percent_encodes_reserved_characters() -> None:
 
 def test_init_backend_omits_password_when_empty() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_HOST": "localhost",
-        "BROKER_BACKEND_PORT": 5432,
-        "BROKER_BACKEND_USER": "postgres",
-        "BROKER_BACKEND_PASSWORD": "",
-        "BROKER_BACKEND_DATABASE": "simplebroker",
-        "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
-        "BROKER_BACKEND_TARGET": "",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_HOST": "localhost",
+            "BROKER_BACKEND_PORT": 5432,
+            "BROKER_BACKEND_USER": "postgres",
+            "BROKER_BACKEND_PASSWORD": "",
+            "BROKER_BACKEND_DATABASE": "simplebroker",
+            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+            "BROKER_BACKEND_TARGET": "",
+        }
+    )
 
     result = plugin.init_backend(config)
 
@@ -78,11 +85,13 @@ def test_init_backend_omits_password_when_empty() -> None:
 
 def test_init_backend_merges_password_into_existing_target() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_TARGET": "postgresql://myuser@db.example.com:5432/mydb",
-        "BROKER_BACKEND_PASSWORD": "secret",
-        "BROKER_BACKEND_SCHEMA": "app_v1",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_TARGET": "postgresql://myuser@db.example.com:5432/mydb",
+            "BROKER_BACKEND_PASSWORD": "secret",
+            "BROKER_BACKEND_SCHEMA": "app_v1",
+        }
+    )
 
     result = plugin.init_backend(config)
     parsed = pg_conninfo.conninfo_to_dict(result["target"])
@@ -94,44 +103,48 @@ def test_init_backend_merges_password_into_existing_target() -> None:
     assert result["backend_options"] == {"schema": "app_v1"}
 
 
-def test_verify_env_rejects_invalid_schema(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BROKER_BACKEND_SCHEMA", "not-valid!")
-
+def test_verify_env_rejects_invalid_schema() -> None:
     with pytest.raises(DatabaseError, match="schema"):
         verify_env(
-            {
-                "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
-                "BROKER_BACKEND_SCHEMA": "not-valid!",
-            }
+            resolve_config(
+                override={
+                    "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
+                    "BROKER_BACKEND_SCHEMA": "not-valid!",
+                }
+            )
         )
 
 
 def test_verify_env_rejects_invalid_port() -> None:
     with pytest.raises(DatabaseError, match="BROKER_BACKEND_PORT"):
         verify_env(
-            {
-                "BROKER_BACKEND_HOST": "db.example.com",
-                "BROKER_BACKEND_PORT": 70000,
-                "BROKER_BACKEND_USER": "postgres",
-                "BROKER_BACKEND_PASSWORD": "",
-                "BROKER_BACKEND_DATABASE": "simplebroker",
-                "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
-                "BROKER_BACKEND_TARGET": "",
-            }
+            resolve_config(
+                override={
+                    "BROKER_BACKEND_HOST": "db.example.com",
+                    "BROKER_BACKEND_PORT": 70000,
+                    "BROKER_BACKEND_USER": "postgres",
+                    "BROKER_BACKEND_PASSWORD": "",
+                    "BROKER_BACKEND_DATABASE": "simplebroker",
+                    "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+                    "BROKER_BACKEND_TARGET": "",
+                }
+            )
         )
 
 
 def test_init_backend_target_overrides_individual_vars() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_HOST": "ignored",
-        "BROKER_BACKEND_PORT": 9999,
-        "BROKER_BACKEND_USER": "ignored",
-        "BROKER_BACKEND_PASSWORD": "",
-        "BROKER_BACKEND_DATABASE": "ignored",
-        "BROKER_BACKEND_SCHEMA": "my_schema",
-        "BROKER_BACKEND_TARGET": "postgresql://real@realhost:5432/realdb",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_HOST": "ignored",
+            "BROKER_BACKEND_PORT": 9999,
+            "BROKER_BACKEND_USER": "ignored",
+            "BROKER_BACKEND_PASSWORD": "",
+            "BROKER_BACKEND_DATABASE": "ignored",
+            "BROKER_BACKEND_SCHEMA": "my_schema",
+            "BROKER_BACKEND_TARGET": "postgresql://real@realhost:5432/realdb",
+        }
+    )
 
     result = plugin.init_backend(config)
 
@@ -141,15 +154,17 @@ def test_init_backend_target_overrides_individual_vars() -> None:
 
 def test_init_backend_uses_defaults() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_TARGET": "",
-        "BROKER_BACKEND_HOST": "localhost",
-        "BROKER_BACKEND_PORT": 5432,
-        "BROKER_BACKEND_USER": "postgres",
-        "BROKER_BACKEND_PASSWORD": "",
-        "BROKER_BACKEND_DATABASE": "simplebroker",
-        "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_TARGET": "",
+            "BROKER_BACKEND_HOST": "localhost",
+            "BROKER_BACKEND_PORT": 5432,
+            "BROKER_BACKEND_USER": "postgres",
+            "BROKER_BACKEND_PASSWORD": "",
+            "BROKER_BACKEND_DATABASE": "simplebroker",
+            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+        }
+    )
 
     result = plugin.init_backend(config)
 
@@ -159,10 +174,12 @@ def test_init_backend_uses_defaults() -> None:
 
 def test_init_backend_toml_target_used_as_fallback() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_TARGET": "",
-        "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_TARGET": "",
+            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+        }
+    )
 
     result = plugin.init_backend(
         config,
@@ -174,10 +191,12 @@ def test_init_backend_toml_target_used_as_fallback() -> None:
 
 def test_init_backend_toml_target_overrides_env_target() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_TARGET": "postgresql://env@envhost/envdb",
-        "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_TARGET": "postgresql://env@envhost/envdb",
+            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+        }
+    )
 
     result = plugin.init_backend(
         config,
@@ -192,11 +211,13 @@ def test_init_backend_individual_env_parts_do_not_rewrite_toml_target(
 ) -> None:
     monkeypatch.setenv("BROKER_BACKEND_HOST", "envhost")
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_TARGET": "",
-        "BROKER_BACKEND_HOST": "envhost",
-        "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_TARGET": "",
+            "BROKER_BACKEND_HOST": "envhost",
+            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+        }
+    )
 
     result = plugin.init_backend(
         config,
@@ -208,10 +229,12 @@ def test_init_backend_individual_env_parts_do_not_rewrite_toml_target(
 
 def test_init_backend_toml_schema_preserved_when_env_not_set() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
-        "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
+            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+        }
+    )
 
     result = plugin.init_backend(
         config,
@@ -223,10 +246,12 @@ def test_init_backend_toml_schema_preserved_when_env_not_set() -> None:
 
 def test_init_backend_toml_schema_overrides_env() -> None:
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
-        "BROKER_BACKEND_SCHEMA": "from_env",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
+            "BROKER_BACKEND_SCHEMA": "from_env",
+        }
+    )
 
     result = plugin.init_backend(
         config,
@@ -240,10 +265,12 @@ def test_init_backend_toml_target_uses_default_schema_when_toml_schema_missing()
     None
 ):
     plugin = PostgresBackendPlugin()
-    config = {
-        "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
-        "BROKER_BACKEND_SCHEMA": "from_env",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
+            "BROKER_BACKEND_SCHEMA": "from_env",
+        }
+    )
 
     result = plugin.init_backend(
         config,

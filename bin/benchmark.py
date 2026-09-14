@@ -18,10 +18,11 @@ from contextlib import contextmanager, redirect_stdout, suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from simplebroker import Queue, __version__
 from simplebroker._backend_plugins import get_backend_plugin
+from simplebroker._constants import DEFAULT_CONFIG, Config, resolve_config
 from simplebroker._scripts import (
     _cleanup_container,
     _start_postgres_container,
@@ -29,7 +30,6 @@ from simplebroker._scripts import (
     _verify_postgres_test_dsn,
 )
 from simplebroker._targets import BrokerTarget, redact_backend_target
-from simplebroker.config import CONFIG_DEFAULTS, resolve_isolated_config
 
 BACKENDS = ("sqlite", "pg", "redis")
 ACCESS_TYPES = ("cli", "api", "optimized-api")
@@ -255,23 +255,23 @@ class _QueueAccess:
         target: BrokerTarget,
         *,
         persistent: bool,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         self._queue = Queue(
             QUEUE_NAME,
             db_path=target,
             persistent=persistent,
-            config=_benchmark_config() if config is None else dict(config),
+            config=_benchmark_config() if config is None else config,
         )
 
     def write(self, message: str) -> None:
         self._queue.write(message)
 
     def read(self) -> str | None:
-        return cast(str | None, self._queue.read_one())
+        return self._queue.read_one()
 
     def peek(self) -> str | None:
-        return cast(str | None, self._queue.peek_one())
+        return self._queue.peek_one()
 
     def close(self) -> None:
         self._queue.close()
@@ -361,14 +361,14 @@ def _validate_choices(
 
 def _benchmark_config(
     overrides: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> Config:
     """Return canonical defaults, independent of ambient broker settings."""
     values = {"BROKER_AUTO_VACUUM": 0, **(overrides or {})}
-    known = {"BROKER_" + name.upper() for name in CONFIG_DEFAULTS}
+    known = {"BROKER_" + name.upper() for name in DEFAULT_CONFIG}
     for key in values:
         if key not in known:
             raise ValueError(f"unknown benchmark config override: {key}")
-    return dict(resolve_isolated_config(values))
+    return resolve_config(env=values)
 
 
 def _cli_environment(target: BrokerTarget) -> dict[str, str]:
@@ -474,7 +474,7 @@ def _provision_backend(backend: str) -> Iterator[BackendService]:
 def _trial_target(
     service: BackendService,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> Iterator[BrokerTarget]:
     """Create and clean one benchmark-owned SQLite file/schema/namespace."""
     with tempfile.TemporaryDirectory(prefix="simplebroker-benchmark-") as temp_dir:
@@ -538,7 +538,7 @@ def _make_access(
     target: BrokerTarget,
     *,
     command_timeout: float,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> _Access:
     if access_type == "cli":
         return _CliAccess(target, command_timeout=command_timeout)
@@ -555,7 +555,7 @@ def _seed(
     operations: int,
     body: str,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> None:
     count = operations if workload == "reads" else 1 if workload == "peeks" else 0
     if count == 0:
@@ -564,7 +564,7 @@ def _seed(
         QUEUE_NAME,
         db_path=target,
         persistent=True,
-        config=_benchmark_config() if config is None else dict(config),
+        config=_benchmark_config() if config is None else config,
     ) as queue:
         for _ in range(count):
             queue.write(body)
@@ -616,7 +616,7 @@ def _verify_trial(
     body: str,
     observed: Sequence[tuple[str, str | None]],
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> None:
     unexpected = [(action, value) for action, value in observed if value != body]
     if unexpected:
@@ -626,7 +626,7 @@ def _verify_trial(
         QUEUE_NAME,
         db_path=target,
         persistent=True,
-        config=_benchmark_config() if config is None else dict(config),
+        config=_benchmark_config() if config is None else config,
     ) as queue:
         pending = len(queue.peek_many(limit=operations + 1))
     expected = _expected_pending(workload, operations)

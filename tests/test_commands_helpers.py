@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from simplebroker import commands
+from simplebroker import commands, resolve_config
 from simplebroker._constants import EXIT_SUCCESS
 from simplebroker._exceptions import MessageError
 from simplebroker.commands import (
@@ -58,7 +58,7 @@ class TestGetMessageContent:
         )
         monkeypatch.setattr(commands, "_read_from_stdin", lambda *_args: "from stdin")
 
-        assert _get_message_content(None) == "from stdin"
+        assert _get_message_content(None, config=resolve_config()) == "from stdin"
 
     def test_rejects_omitted_message_when_stdin_is_tty(
         self, monkeypatch: pytest.MonkeyPatch
@@ -68,11 +68,14 @@ class TestGetMessageContent:
         )
 
         with pytest.raises(MessageError, match="message is required"):
-            _get_message_content(None)
+            _get_message_content(None, config=resolve_config())
 
     def test_uses_configured_message_size_limit(self) -> None:
         with pytest.raises(MessageError, match="maximum size of 3 bytes"):
-            _get_message_content("toolong", config={"BROKER_MAX_MESSAGE_SIZE": 3})
+            _get_message_content(
+                "toolong",
+                config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 3}),
+            )
 
     def test_retypes_non_utf8_stdin_as_message_error(
         self, monkeypatch: pytest.MonkeyPatch
@@ -88,7 +91,7 @@ class TestGetMessageContent:
 
     def test_retypes_nonencodable_direct_message_as_message_error(self) -> None:
         with pytest.raises(MessageError, match="not valid UTF-8"):
-            _get_message_content("\ud800")
+            _get_message_content("\ud800", config=resolve_config())
 
 
 class TestProcessQueueFetch:

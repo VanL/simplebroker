@@ -12,9 +12,9 @@ import pytest
 import simplebroker
 import simplebroker.sbqueue as sbqueue_module
 from simplebroker import (
+    Config,
     DumpClockSkewWarning,
     Queue,
-    ResolvedConfig,
     commands,
     dump_lines,
     ext,
@@ -22,7 +22,6 @@ from simplebroker import (
     load_lines,
     open_broker,
     project,
-    snapshot_config,
 )
 from simplebroker._exceptions import QueueNameError
 
@@ -97,10 +96,11 @@ def test_api_public_message_id_formatter_contract() -> None:
     assert "format_message_id" not in ext.__all__
 
 
-def test_api_snapshot_factory_is_package_root_public() -> None:
-    assert "snapshot_config" in simplebroker.__all__
-    assert simplebroker.snapshot_config is snapshot_config
-    assert "snapshot_config" not in ext.__all__
+def test_api_config_resolver_is_package_root_public() -> None:
+    assert "resolve_config" in simplebroker.__all__
+    assert "Config" in simplebroker.__all__
+    assert "DEFAULT_CONFIG" in simplebroker.__all__
+    assert "ConfigField" in simplebroker.__all__
 
 
 def test_api_moved_message_is_package_root_public() -> None:
@@ -147,7 +147,7 @@ def test_api_queue_rejects_alias_sigil_before_config_or_target_setup(
     def config_setup_must_not_run(_config: object) -> object:
         raise AssertionError("invalid queue reached config/target setup")
 
-    monkeypatch.setattr(sbqueue_module, "snapshot_config", config_setup_must_not_run)
+    monkeypatch.setattr(sbqueue_module, "resolve_config", config_setup_must_not_run)
     with pytest.raises(QueueNameError):
         Queue("@alias", persistent=True)
 
@@ -174,11 +174,11 @@ def test_api_project_config_helpers_on_ext_and_project() -> None:
 
 def test_api_isolated_config_surface_is_root_importable() -> None:
     body = _section("SB-API-2")
-    assert "resolve_isolated_config" in body
-    assert "ResolvedConfig" in body
-    assert "resolve_isolated_config" in simplebroker.__all__
-    assert "ResolvedConfig" in simplebroker.__all__
-    assert simplebroker.ResolvedConfig is ResolvedConfig
+    assert "resolve_config" in body
+    assert "Config" in body
+    assert "resolve_config" in simplebroker.__all__
+    assert "Config" in simplebroker.__all__
+    assert simplebroker.Config is Config
 
 
 def test_api_queue_lifecycle_and_library_shape_language() -> None:
@@ -243,12 +243,12 @@ def test_api_polling_strategy_defaults_match_canonical_config() -> None:
     """[SB-API-6] binds all public constructor defaults to canonical config."""
     watch = _section("SB-API-6")
     parameter_keys = {
-        "initial_checks": "BROKER_INITIAL_CHECKS",
-        "max_interval": "BROKER_MAX_INTERVAL",
-        "burst_sleep": "BROKER_BURST_SLEEP",
-        "jitter_factor": "BROKER_JITTER_FACTOR",
+        "initial_checks": "INITIAL_CHECKS",
+        "max_interval": "MAX_INTERVAL",
+        "burst_sleep": "BURST_SLEEP",
+        "jitter_factor": "JITTER_FACTOR",
     }
-    config = simplebroker.resolve_isolated_config({})
+    config = simplebroker.resolve_config()
     parameters = inspect.signature(ext.PollingStrategy).parameters
 
     assert list(parameters) == ["stop_event", *parameter_keys]
@@ -282,7 +282,7 @@ def test_api_command_layer_and_advanced_language() -> None:
     assert "simplebroker.commands" in commands_section
     assert "cmd_" in commands_section
     assert "exit" in commands_section.lower()
-    assert "explicit target" in commands_section.lower()
+    assert "do not read the environment" in commands_section.lower()
     assert "InvalidConfigError" in commands_section
     advanced = _section("SB-API-11")
     assert "BACKEND_API_VERSION" in advanced or "backend" in advanced.lower()

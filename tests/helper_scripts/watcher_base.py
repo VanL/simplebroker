@@ -2,7 +2,6 @@
 
 import contextlib
 import threading
-import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -130,57 +129,3 @@ class WatcherTestBase:
                 else:
                     # No thread started, just stop
                     watcher.stop()
-
-    def run_watcher_until_messages(
-        self,
-        watcher: QueueWatcher | QueueMoveWatcher,
-        collector: Any,  # MessageCollector instance
-        expected_count: int,
-        timeout: float = 5.0,
-    ) -> threading.Thread:
-        """Run watcher until expected messages are collected.
-
-        Args:
-            watcher: The watcher to run
-            collector: MessageCollector instance tracking messages
-            expected_count: Number of messages to wait for
-            timeout: Maximum time to wait
-
-        Returns:
-            The watcher thread
-
-        Raises:
-            pytest.fail: If timeout is reached before collecting expected messages
-        """
-        thread = watcher.run_in_thread()
-
-        # Wait for messages to be collected
-        if not collector.wait_for_messages(expected_count, timeout=timeout):
-            watcher.stop()
-            thread.join(timeout=self.STOP_TIMEOUT)
-            pytest.fail(
-                f"Timeout waiting for {expected_count} messages. "
-                f"Got {len(collector.get_messages())} messages"
-            )
-
-        return thread
-
-    def assert_watcher_stops_quickly(
-        self, watcher: QueueWatcher | QueueMoveWatcher, max_stop_time: float = 0.5
-    ) -> None:
-        """Assert that watcher stops within expected time.
-
-        Args:
-            watcher: The watcher to stop
-            max_stop_time: Maximum acceptable stop time
-        """
-        start_time = time.monotonic()
-        watcher.stop()
-
-        # If watcher was running in thread, wait for it
-        # (In real test, we'd track the thread)
-        stop_time = time.monotonic() - start_time
-
-        assert stop_time < max_stop_time, (
-            f"Watcher took {stop_time:.2f}s to stop, expected < {max_stop_time}s"
-        )

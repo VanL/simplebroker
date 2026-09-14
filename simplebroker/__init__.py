@@ -3,21 +3,14 @@
 # Import main components
 from ._backend_plugins import ActivityWaiter
 from ._constants import (
-    ResolvedConfig,
+    DEFAULT_CONFIG,
+    Config,
+    ConfigField,
     __version__,
     resolve_config,
-    resolve_isolated_config,
-    snapshot_config,
 )
 from ._dump import DumpClockSkewWarning, LoadResult, dump_lines, load_lines
 from ._message_id import format_message_id
-from .config import (
-    CONFIG_DEFAULTS,
-    ConfigField,
-    ConfigSchema,
-    ConfigSnapshot,
-    build_config,
-)
 from .db import open_broker
 from .metadata import QueueRenameResult, QueueStats
 from .project import (
@@ -38,13 +31,12 @@ from .watcher import QueueMoveWatcher, QueueWatcher
 
 # Only export the new API
 __all__ = [
-    "CONFIG_DEFAULTS",
+    "DEFAULT_CONFIG",
     "ActivityWaiter",
     "BrokerTarget",
     "CloseableIterator",
+    "Config",
     "ConfigField",
-    "ConfigSchema",
-    "ConfigSnapshot",
     "DumpClockSkewWarning",
     "LoadResult",
     "MovedMessage",
@@ -53,10 +45,8 @@ __all__ = [
     "QueueRenameResult",
     "QueueStats",
     "QueueWatcher",
-    "ResolvedConfig",
     "__version__",
     "broker_root",
-    "build_config",
     "create_activity_waiter_for_queues",
     "deserialize_broker_target",
     "dump_lines",
@@ -65,9 +55,7 @@ __all__ = [
     "open_broker",
     "resolve_broker_target",
     "resolve_config",
-    "resolve_isolated_config",
     "serialize_broker_target",
-    "snapshot_config",
     "target_for_directory",
 ]
 

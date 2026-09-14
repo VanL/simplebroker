@@ -15,7 +15,7 @@ from simplebroker import Queue
 from simplebroker._runner import SQLiteRunner
 from simplebroker.db import BrokerCore, DBConnection
 
-from .conftest import _test_backend_name
+from .helper_scripts.broker_factory import active_backend
 from .helper_scripts.timing import scale_timeout_for_ci
 
 pytestmark = [pytest.mark.shared]
@@ -30,7 +30,7 @@ def _skip_sqlite_ephemeral_variant(*, persistent: bool) -> None:
     ``test_sqlite_ephemeral_early_close_subprocess_probe`` where a hard
     death fails one test. Non-SQLite lanes keep the in-process variant.
     """
-    if not persistent and _test_backend_name() == "sqlite":
+    if not persistent and active_backend() == "sqlite":
         pytest.skip("sqlite ephemeral variant runs in the subprocess probe")
 
 

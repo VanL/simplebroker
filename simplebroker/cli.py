@@ -1,8 +1,10 @@
 """CLI entry point for SimpleBroker."""
 
 import argparse
+import os
 import sys
-from collections.abc import Callable, Mapping
+import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NoReturn, cast
@@ -15,14 +17,15 @@ from ._constants import (
     EXIT_INTERRUPTED,
     EXIT_SUCCESS,
     PROG_NAME,
-    ResolvedConfig,
-    snapshot_config,
+    Config,
+    InvalidConfigError,
+    _validate_safe_path_components,
+    resolve_config,
 )
 from ._delivery import MAX_KEEP_NEWEST
 from ._exceptions import (
     DatabaseError,
     IntegrityError,
-    InvalidConfigError,
     MessageError,
     QueueNameError,
     TimestampError,
@@ -34,7 +37,6 @@ from ._paths import (
     _resolve_symlinks_safely,
     _validate_database_parent_directory,
     _validate_path_containment,
-    _validate_safe_path_components,
     _validate_sqlite_database,
     _validate_working_directory,
     ensure_compound_db_path,
@@ -44,7 +46,6 @@ from ._project_config import (
     resolve_project_target,
 )
 from ._targets import BrokerTarget
-from .config import canonical_config, legacy_config
 from .project import _configured_backend_target, resolve_broker_target
 
 _TIMESTAMP_BOUND_LIMIT = (
@@ -379,14 +380,13 @@ class _PreparseGrammarBuilder:
 
 def _build_cli_parser(
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config,
 ) -> _CliParserBundle:
     """Create the parser and its preparse metadata from one registration path.
 
     Returns:
         Parser and immutable metadata used to normalize its arguments.
     """
-    resolved_config = snapshot_config(config)
     grammar_builder = _PreparseGrammarBuilder()
     parser = CustomArgumentParser(
         prog=PROG_NAME,
@@ -422,12 +422,11 @@ def _build_cli_parser(
 
     # Add global arguments with environment-aware defaults
     default_dir = (
-        Path(canonical_config(resolved_config)["default_db_location"])
-        if canonical_config(resolved_config)["default_db_location"]
-        and canonical_config(resolved_config).get("backend", "sqlite") == "sqlite"
+        Path(config["DEFAULT_DB_LOCATION"])
+        if config["DEFAULT_DB_LOCATION"] and config["BACKEND"] == "sqlite"
         else Path.cwd()
     )
-    default_file = canonical_config(resolved_config)["default_db_name"]
+    default_file = config["DEFAULT_DB_NAME"]
 
     # Custom action to track when -d was explicitly provided
     class DirectoryAction(argparse.Action):
@@ -1238,13 +1237,13 @@ class ArgumentProcessor:
 
 
 def _resolve_database_path(
-    args: argparse.Namespace, *, config: Mapping[str, Any]
+    args: argparse.Namespace, *, config: Config
 ) -> tuple[Path, bool]:
     """Resolve final database path using precedence rules and project scoping.
 
     Args:
         args: Parsed command line arguments from argparse
-        config: Configuration dictionary
+        config: Resolved configuration snapshot
 
     Returns:
         tuple of (resolved_db_path, used_project_scope)
@@ -1290,10 +1289,10 @@ def _resolve_database_path(
     # Determine working dir and filename with env defaults
     working_dir = args.dir
     db_filename = args.file
-    if args.file == DEFAULT_DB_NAME and canonical_config(config)["default_db_name"]:
-        db_filename = canonical_config(config)["default_db_name"]
+    if args.file == DEFAULT_DB_NAME and config["DEFAULT_DB_NAME"]:
+        db_filename = config["DEFAULT_DB_NAME"]
 
-    if canonical_config(config)["project_scope"] and args.command != "init":
+    if config["PROJECT_SCOPE"] and args.command != "init":
         # Use resolved working directory, not Path.cwd(), to account for -d flag
         search_start_dir = working_dir
         _validate_working_directory(search_start_dir)
@@ -1312,10 +1311,10 @@ def _resolve_database_path(
     # -d/--dir wins over BROKER_DEFAULT_DB_LOCATION; the parser already
     # defaults args.dir to that location when -d is absent, so this override
     # only applies when the directory was not explicitly chosen.
-    if canonical_config(config)["default_db_location"] and not getattr(
+    if config["DEFAULT_DB_LOCATION"] and not getattr(
         args, "_dir_explicitly_provided", False
     ):
-        working_dir = Path(canonical_config(config)["default_db_location"])
+        working_dir = Path(config["DEFAULT_DB_LOCATION"])
     return working_dir / db_filename, False
 
 
@@ -1339,9 +1338,7 @@ def _build_sqlite_target(
     )
 
 
-def _resolve_target(
-    args: argparse.Namespace, *, config: Mapping[str, Any]
-) -> BrokerTarget:
+def _resolve_target(args: argparse.Namespace, *, config: Config) -> BrokerTarget:
     """Resolve the backend target for the current CLI invocation."""
     if getattr(args, "_dir_explicitly_provided", False) and not args.cleanup:
         _validate_working_directory(Path(args.dir).expanduser())
@@ -1355,7 +1352,7 @@ def _resolve_target(
             legacy_sqlite_path_mode=True,
         )
 
-    if canonical_config(config)["project_scope"]:
+    if config["PROJECT_SCOPE"]:
         discovered_target = resolve_broker_target(root, config=config)
         if discovered_target is not None:
             return discovered_target
@@ -1381,7 +1378,7 @@ def _resolve_target(
         return configured_target
 
     if args.command == "init":
-        init_filename = canonical_config(config)["default_db_name"]
+        init_filename = config["DEFAULT_DB_NAME"]
         return _build_sqlite_target(
             Path.cwd() / init_filename,
             used_project_scope=False,
@@ -1485,7 +1482,12 @@ def _require_legacy_sqlite_path(resolved_target: BrokerTarget) -> Path:
 
 
 def _validate_cli_path_components(value: str, label: str) -> None:
-    """Retype only CLI-owned unsafe path input as an argument failure."""
+    """Reuse config path validation, translating only CLI-owned failures.
+
+    --dir/--file select a target, rather than changing config defaults. In
+    particular --file permits absolute paths, unlike DEFAULT_DB_NAME, so share
+    the component validator without applying the field's relative-path rule.
+    """
     try:
         _validate_safe_path_components(value, label)
     except ValueError as error:
@@ -1497,7 +1499,7 @@ def _run_cleanup(
     resolved_target: BrokerTarget,
     *,
     status_json_output: bool,
-    config: Mapping[str, Any],
+    config: Config,
 ) -> int:
     """Clean the resolved target under the CLI diagnostic policy."""
     try:
@@ -1512,7 +1514,7 @@ def _run_cleanup(
             file_existed = resolved_target.plugin.cleanup_target(
                 str(db_path),
                 backend_options=resolved_target.backend_options,
-                config=legacy_config(config),
+                config=config,
             )
 
             if file_existed and not args.quiet:
@@ -1524,7 +1526,7 @@ def _run_cleanup(
             existed = resolved_target.plugin.cleanup_target(
                 resolved_target.target,
                 backend_options=resolved_target.backend_options,
-                config=legacy_config(config),
+                config=config,
             )
             if not args.quiet:
                 if existed:
@@ -1547,7 +1549,7 @@ def _run_vacuum(
     resolved_target: BrokerTarget,
     *,
     status_json_output: bool,
-    config: ResolvedConfig,
+    config: Config,
 ) -> int:
     """Vacuum the resolved target under the CLI diagnostic policy."""
     db_path = resolved_target.target_path
@@ -1581,7 +1583,7 @@ def _run_target_action(
     parser: argparse.ArgumentParser,
     *,
     status_json_output: bool,
-    config: ResolvedConfig,
+    config: Config,
 ) -> int | None:
     """Run a target-wide action, returning None for command dispatch."""
     if args.command == "init":
@@ -1616,7 +1618,7 @@ def _validate_legacy_sqlite_target(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
     *,
-    config: Mapping[str, Any],
+    config: Config,
 ) -> BrokerTarget:
     """Validate the legacy SQLite path without changing target precedence."""
     if not resolved_target.legacy_sqlite_path_mode:
@@ -1634,11 +1636,11 @@ def _validate_legacy_sqlite_target(
         if (
             not getattr(args, "_file_explicitly_provided", False)
             and args.file == DEFAULT_DB_NAME
-            and canonical_config(config)["default_db_name"]
+            and config["DEFAULT_DB_NAME"]
         ):
             db_path = ensure_compound_db_path(
                 working_dir,
-                canonical_config(config)["default_db_name"],
+                config["DEFAULT_DB_NAME"],
             )
         else:
             db_path = working_dir / args.file
@@ -1705,7 +1707,7 @@ def _validate_command_target(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
     *,
-    config: Mapping[str, Any],
+    config: Config,
 ) -> None:
     """Validate an initialized non-SQLite target before read-like commands."""
     if (
@@ -1717,7 +1719,7 @@ def _validate_command_target(
             resolved_target.target,
             backend_options=resolved_target.backend_options,
             verify_initialized=True,
-            config=legacy_config(config),
+            config=config,
         )
 
 
@@ -1726,7 +1728,7 @@ def _dispatch_message_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: Mapping[str, Any],
+    config: Config,
 ) -> int:
     """Dispatch write, read, or peek."""
     if args.command == "write":
@@ -1774,7 +1776,7 @@ def _dispatch_queue_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: ResolvedConfig,
+    config: Config,
 ) -> int:
     """Dispatch queue inspection and mutation commands."""
     if args.command == "list":
@@ -1840,7 +1842,7 @@ def _dispatch_alias_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: ResolvedConfig,
+    config: Config,
 ) -> int:
     """Dispatch one alias subcommand."""
     subcommand = getattr(args, "alias_command", None)
@@ -1873,7 +1875,7 @@ def _run_load_command(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
     *,
-    config: ResolvedConfig,
+    config: Config,
 ) -> int:
     """Translate direct load exceptions into the load CLI's diagnostic dialect."""
     try:
@@ -1911,7 +1913,7 @@ def _dispatch_admin_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: ResolvedConfig,
+    config: Config,
 ) -> int:
     """Dispatch rename, broadcast, dump/load, alias, or watch."""
     if args.command == "rename":
@@ -1965,7 +1967,7 @@ def _dispatch_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: ResolvedConfig,
+    config: Config,
 ) -> int:
     """Dispatch the parsed command through its command family."""
     if args.command in {"write", "read", "peek"}:
@@ -2048,7 +2050,7 @@ def _run_preparation_exempt_target_action(
     parser: argparse.ArgumentParser,
     *,
     status_json_output: bool,
-    config: ResolvedConfig,
+    config: Config,
 ) -> int | None:
     """Run target actions that keep their separate preparation path."""
     action_is_exempt = (
@@ -2067,7 +2069,7 @@ def _run_preparation_exempt_target_action(
     )
 
 
-def _main(*, config: ResolvedConfig) -> int:
+def _main(*, config: Config) -> int:
     """Run one CLI invocation after configuration error translation."""
     bundle = _build_cli_parser(config=config)
     parser = bundle.parser
@@ -2134,10 +2136,21 @@ def _main(*, config: ResolvedConfig) -> int:
         )
 
 
-def main(*, config: Mapping[str, Any] | None = None) -> int:
+def _resolve_process_config(config: Config | None) -> Config:
+    """Read the environment once, printing its warnings as CLI diagnostics."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            return resolve_config(env=os.environ, config=config)
+        finally:
+            for warning in caught:
+                print(f"{PROG_NAME}: warning: {warning.message}", file=sys.stderr)
+
+
+def main(*, config: Config | None = None) -> int:
     """Run one CLI invocation and return its exit code."""
     try:
-        return _main(config=snapshot_config(config))
+        return _main(config=_resolve_process_config(config))
     except InvalidConfigError as error:
         print(f"{PROG_NAME}: {error}", file=sys.stderr)
         return EXIT_ERROR

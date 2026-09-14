@@ -24,7 +24,6 @@ import logging
 import sys
 import tempfile
 import time
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multi_queue_watcher import MultiQueueWatcher
 
-from simplebroker import Queue
+from simplebroker import Config, Queue
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -338,7 +337,7 @@ def pattern_5_monitoring() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SU
                 message: str,
                 timestamp: int,
                 *,
-                config: Mapping[str, Any] | None = None,
+                config: Config | None = None,
             ) -> bool | None:
                 """Override to collect metrics."""
                 start_time = time.time()

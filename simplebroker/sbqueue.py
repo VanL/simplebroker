@@ -7,7 +7,7 @@ queues without managing the underlying database connection.
 import logging
 import threading
 import weakref
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -24,8 +24,8 @@ from ._backend_plugins import (
 from ._constants import (
     DEFAULT_DB_NAME,
     PEEK_BATCH_SIZE,
-    ResolvedConfig,
-    snapshot_config,
+    Config,
+    resolve_config,
 )
 from ._delivery import (
     DeliveryGuarantee,
@@ -39,8 +39,7 @@ from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
 from ._selection import validate_bounded_order, validate_selection_order
 from ._sidecar import SidecarSession
-from ._targets import BrokerTarget
-from .config import canonical_config
+from ._targets import BrokerTarget, normalize_sqlite_target
 from .db import DBConnection, _validate_queue_name_cached
 from .metadata import QueueStats
 from .project import target_for_directory
@@ -133,21 +132,13 @@ def _display_broker_target(target: str | BrokerTarget) -> str:
     return str(target)
 
 
-def _normalize_sqlite_waiter_target(target: str) -> str:
-    path = Path(target).expanduser()
-    try:
-        return str(path.resolve())
-    except (OSError, ValueError):
-        return str(path)
-
-
 def _canonicalize_queue_target(target: str | BrokerTarget) -> str | BrokerTarget:
     """Bind Queue storage and identity to one target snapshot [SB-API-2]."""
     if isinstance(target, BrokerTarget):
         return replace(
             target,
             target=(
-                _normalize_sqlite_waiter_target(target.target)
+                normalize_sqlite_target(target.target)
                 if target.backend_name == "sqlite"
                 else target.target
             ),
@@ -155,16 +146,15 @@ def _canonicalize_queue_target(target: str | BrokerTarget) -> str | BrokerTarget
                 dict[str, Any], snapshot_key_material(target.backend_options)
             ),
         )
-    return _normalize_sqlite_waiter_target(str(target))
+    return normalize_sqlite_target(str(target))
 
 
-def _default_target_from_config(config: Mapping[str, Any]) -> BrokerTarget:
+def _default_target_from_config(config: Config) -> BrokerTarget:
     """Resolve the implicit Queue target from caller-provided configuration."""
 
     root = (
-        Path(str(canonical_config(config)["default_db_location"]))
-        if canonical_config(config).get("default_db_location")
-        and canonical_config(config).get("backend", "sqlite") == "sqlite"
+        Path(str(config["DEFAULT_DB_LOCATION"]))
+        if config.get("DEFAULT_DB_LOCATION") and config["BACKEND"] == "sqlite"
         else Path.cwd()
     )
     return target_for_directory(root, config=config)
@@ -225,7 +215,7 @@ class Queue:
         db_path: str | BrokerTarget | None = None,
         persistent: bool = False,
         runner: SQLRunner | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ):
         """Initialize a Queue instance.
 
@@ -245,7 +235,7 @@ class Queue:
         self.name = name
         self._persistent = persistent
         self._runner = runner
-        self._config = snapshot_config(config)
+        self._config = resolve_config(config=config)
         self._uses_config_default_target = db_path is None or db_path == ""
         if self._uses_config_default_target:
             resolved_db_path: str | BrokerTarget = _default_target_from_config(
@@ -1887,7 +1877,7 @@ class Queue:
             plugin = self._db_path.plugin
             target = self._db_path.target
             target_key = (
-                _normalize_sqlite_waiter_target(target)
+                normalize_sqlite_target(target)
                 if self._db_path.backend_name == "sqlite"
                 else target
             )
@@ -1914,7 +1904,7 @@ class Queue:
         return _ActivityWaiterIdentity(
             plugin=get_backend_plugin("sqlite"),
             backend_name="sqlite",
-            target_key=f"sqlite:{_normalize_sqlite_waiter_target(target)}",
+            target_key=f"sqlite:{normalize_sqlite_target(target)}",
             backend_options_key=freeze_key_material({}),
             runner_id=None,
             target_arg=target,
@@ -2078,14 +2068,14 @@ class Queue:
 
         def cleanup(
             conn: DBConnection | None,
-            config: ResolvedConfig,
+            config: Config,
         ) -> None:
             """Cleanup function called by finalizer."""
             try:
                 if conn:
                     conn.close()
             except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
-                if canonical_config(config).get("logging_enabled", True):
+                if config["LOGGING_ENABLED"]:
                     logger.warning(f"Error during Queue finalizer cleanup: {e}")
 
         # Install finalizer with reference to connection

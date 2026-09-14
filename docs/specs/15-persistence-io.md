@@ -92,9 +92,11 @@ fnmatch-style globs against **queue names** (case-sensitive).
   `DumpClockSkewWarning` (`from simplebroker import DumpClockSkewWarning`).
   Skew at most `BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS` (default 300) proceeds;
   greater skew raises `ValueError` unless `force=True`, which still warns.
-  The config follows `load_config()` environment defaults plus
-  `resolve_config(config)` typed overrides; `.broker.toml` remains limited to
-  backend-target configuration. Force bypasses only this skew refusal.
+  An explicit `Config` is used directly; when omitted, load uses defaults
+  (`resolve_config()`). Callers build typed
+  overrides with `resolve_config(config=base, override=namespaced_changes)` before passing
+  the Config. Discovered `.broker.toml` files remain limited to backend-target
+  configuration. Force bypasses only this skew refusal.
   SimpleBroker's five-minute default is an operational availability/safety
   choice informed by
   [MIT Kerberos's conventional 300-second default allowable clock skew](https://web.mit.edu/kerberos/www/krb5-1.21/doc/admin/conf_files/krb5_conf.html),

@@ -27,7 +27,7 @@ import asyncio
 import contextvars
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,7 +43,7 @@ except ImportError:
         "Install with: pip install aiosqlite aiosqlitepool"
     ) from None
 
-from simplebroker import ResolvedConfig, open_broker, snapshot_config
+from simplebroker import Config, open_broker, resolve_config
 
 # ADVANCED: Import SimpleBroker internals for low-level SQLite compatibility.
 # Standard applications should use Queue, QueueWatcher, or async_wrapper.py.
@@ -85,7 +85,7 @@ from simplebroker.ext import (
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
 
 
-def _setup_canonical_broker(db_path: str, config: ResolvedConfig) -> None:
+def _setup_canonical_broker(db_path: str, config: Config) -> None:
     """Run production SQLite admission and migration before async pool use."""
     with open_broker(db_path, config=config):
         pass
@@ -154,12 +154,12 @@ class PooledAsyncSQLiteRunner:
         pool_size: int = 10,
         max_connections: int = 20,
         *,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ):
         self.db_path = db_path
         self.pool_size = pool_size
         self.max_connections = max_connections
-        self._config = snapshot_config(config)
+        self._config = resolve_config(config=config)
         self._pool: SQLiteConnectionPool | None = None
         self._transaction_state: contextvars.ContextVar[_TransactionState | None] = (
             contextvars.ContextVar("transaction_state", default=None)
@@ -197,13 +197,13 @@ class PooledAsyncSQLiteRunner:
                 )
 
         # Apply all pragmas
-        busy_timeout = int(self._config["BROKER_BUSY_TIMEOUT"])
+        busy_timeout = int(self._config["BUSY_TIMEOUT"])
         await conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
 
-        cache_mb = int(self._config["BROKER_CACHE_MB"])
+        cache_mb = int(self._config["CACHE_MB"])
         await conn.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
 
-        sync_mode = str(self._config["BROKER_SYNC_MODE"])
+        sync_mode = str(self._config["SYNC_MODE"])
         await conn.execute(f"PRAGMA synchronous={sync_mode}")
 
         # Enable WAL mode
@@ -212,7 +212,7 @@ class PooledAsyncSQLiteRunner:
         if result and result[0].lower() != "wal":
             raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
 
-        wal_autocheckpoint = int(self._config["BROKER_WAL_AUTOCHECKPOINT"])
+        wal_autocheckpoint = int(self._config["WAL_AUTOCHECKPOINT"])
         await conn.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
 
     async def _run_on_connection(
@@ -444,15 +444,15 @@ class AsyncBrokerCore:
         self,
         runner: AsyncSQLRunner,
         *,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ):
         self._runner = runner
-        self._config = snapshot_config(config)
+        self._config = resolve_config(config=config)
         self._lock = asyncio.Lock()
         self._timestamp_gen: AsyncTimestampGenerator | None = None
         self._write_count = 0
-        self._vacuum_interval = int(self._config["BROKER_AUTO_VACUUM_INTERVAL"])
-        self._max_message_size = int(self._config["BROKER_MAX_MESSAGE_SIZE"])
+        self._vacuum_interval = int(self._config["AUTO_VACUUM_INTERVAL"])
+        self._max_message_size = int(self._config["MAX_MESSAGE_SIZE"])
         self._initialized = False
         self._batch_transaction_open = False
 
@@ -553,7 +553,7 @@ class AsyncBrokerCore:
         )
 
         # Check if vacuum needed
-        if int(self._config["BROKER_AUTO_VACUUM"]) == 1:
+        if int(self._config["AUTO_VACUUM"]) == 1:
             self._write_count += 1
             if self._write_count >= self._vacuum_interval:
                 self._write_count = 0
@@ -910,12 +910,12 @@ class AsyncBrokerCore:
             return vacuum_is_eligible(
                 claimed_count=int(claimed_count),
                 total_count=int(total_count),
-                threshold=float(self._config["BROKER_VACUUM_THRESHOLD"]),
+                threshold=float(self._config["VACUUM_THRESHOLD"]) / 100,
             )
 
     async def _vacuum_claimed_messages(self) -> None:
         """Delete claimed messages in batches."""
-        batch_size = int(self._config["BROKER_VACUUM_BATCH_SIZE"])
+        batch_size = int(self._config["VACUUM_BATCH_SIZE"])
 
         while True:
             async with self._lock:
@@ -1038,10 +1038,10 @@ async def async_broker(
     *,
     pool_size: int = 10,
     max_connections: int = 20,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> AsyncIterator[AsyncBrokerCore]:
     """Context manager for async broker with connection pooling."""
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     setup_task = asyncio.create_task(
         asyncio.to_thread(
             _setup_canonical_broker,

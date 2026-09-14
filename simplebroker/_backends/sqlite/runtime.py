@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import sqlite3
 import warnings
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from ..._constants import Config
 from ..._exceptions import DatabaseError, OperationalError
 from ..._sql.sqlite import SELECT_SQLITE_VERSION, SET_AUTO_VACUUM_INCREMENTAL
-from ...config import canonical_config
 from .validation import is_valid_database
 
 
@@ -52,14 +51,14 @@ def check_version() -> None:
 def apply_connection_settings(
     conn: sqlite3.Connection,
     *,
-    config: Mapping[str, Any],
+    config: Config,
     optimization_complete: bool = False,
 ) -> None:
     """Apply per-connection SQLite settings that do not require exclusive locks."""
-    busy_timeout = canonical_config(config)["busy_timeout"]
+    busy_timeout = config["BUSY_TIMEOUT"]
     _execute_and_close(conn, f"PRAGMA busy_timeout={busy_timeout}")
 
-    wal_autocheckpoint = canonical_config(config)["wal_autocheckpoint"]
+    wal_autocheckpoint = config["WAL_AUTOCHECKPOINT"]
     if wal_autocheckpoint < 0:
         warnings.warn(
             f"Invalid BROKER_WAL_AUTOCHECKPOINT '{wal_autocheckpoint}', "
@@ -73,28 +72,19 @@ def apply_connection_settings(
         apply_optimization_settings(conn, config=config)
 
 
-def apply_optimization_settings(
-    conn: sqlite3.Connection, *, config: Mapping[str, Any]
-) -> None:
+def apply_optimization_settings(conn: sqlite3.Connection, *, config: Config) -> None:
     """Apply SQLite performance tuning settings to a connection."""
-    cache_mb = canonical_config(config)["cache_mb"]
+    cache_mb = config["CACHE_MB"]
     _execute_and_close(conn, f"PRAGMA cache_size=-{cache_mb * 1024}")
 
-    sync_mode = canonical_config(config)["sync_mode"]
-    if sync_mode not in ("FULL", "NORMAL", "OFF"):
-        warnings.warn(
-            f"Invalid BROKER_SYNC_MODE '{sync_mode}', defaulting to FULL",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        sync_mode = "FULL"
+    sync_mode = config["SYNC_MODE"]
     _execute_and_close(conn, f"PRAGMA synchronous={sync_mode}")
 
 
 def setup_connection_phase(
     db_path: str,
     *,
-    config: Mapping[str, Any],
+    config: Config,
     busy_timeout_ms: int | None = None,
 ) -> None:
     """Validate and initialize SQLite connection-wide setup such as WAL mode."""
@@ -108,7 +98,7 @@ def setup_connection_phase(
             f"File at {db_path} exists but is not a valid SQLite database"
         )
 
-    configured_busy_timeout = int(canonical_config(config)["busy_timeout"])
+    configured_busy_timeout = int(config["BUSY_TIMEOUT"])
     setup_busy_timeout = (
         configured_busy_timeout if busy_timeout_ms is None else busy_timeout_ms
     )

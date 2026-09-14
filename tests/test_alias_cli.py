@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from simplebroker import commands
+from simplebroker import commands, resolve_config
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerDB, _suppress_alias_shadow_warning
 from tests.conftest import run_cli
@@ -161,16 +161,20 @@ def test_resolve_alias_name_direct(workdir: Path) -> None:
     with BrokerDB(str(db_path)) as db:
         db.add_alias("alias_queue", "real_queue")
 
-    queue, alias = commands._resolve_alias_name(str(db_path), "real_queue")
+    queue, alias = commands._resolve_alias_name(
+        str(db_path), "real_queue", config=resolve_config()
+    )
     assert queue == "real_queue"
     assert alias is None
 
-    queue, alias = commands._resolve_alias_name(str(db_path), "@alias_queue")
+    queue, alias = commands._resolve_alias_name(
+        str(db_path), "@alias_queue", config=resolve_config()
+    )
     assert queue == "real_queue"
     assert alias == "alias_queue"
 
     with pytest.raises(ValueError):
-        commands._resolve_alias_name(str(db_path), "@missing")
+        commands._resolve_alias_name(str(db_path), "@missing", config=resolve_config())
 
 
 def test_alias_resolution_for_peek_and_move(workdir: Path) -> None:

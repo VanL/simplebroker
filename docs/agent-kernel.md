@@ -53,7 +53,7 @@ Shared semantics does **not** mean identical packaging:
 
 Public package surface is intentionally small: see `simplebroker.__all__`
 (`Queue`, watchers, `BrokerTarget` helpers, `open_broker`, `resolve_config`,
-`resolve_isolated_config`, `ResolvedConfig`, `MovedMessage`, dump/load), plus
+`Config`, `DEFAULT_CONFIG`, `ConfigField`, `MovedMessage`, dump/load), plus
 `simplebroker.ext` and the command layer. Prefer those over private `_`
 modules.
 
@@ -366,17 +366,19 @@ Normative public surfaces and packaging:
 
 ## Resolve once, stamp every handle
 
-- Resolve a `BrokerTarget` + `BROKER_*` config **once** (or take them from a
-  host that already resolved them).
-- If the host owns a separate environment namespace, translate its complete
-  input to `BROKER_*` and use `resolve_isolated_config()`. Preserve the returned
-  `ResolvedConfig`; converting it to an ordinary dict restores ambient
-  SimpleBroker inheritance.
-- If several handles should intentionally share the current ambient
-  SimpleBroker configuration, call `snapshot_config()` once and stamp that
-  receipt onto each handle. Without explicit reuse, each new public handle or
-  invocation samples at its own documented boundary; existing handles stay
-  fixed.
+- Resolve a `BrokerTarget` and `Config` once, or take them from the host.
+- Config retains its namespace as `config.prefix`; derive settings with
+  `resolve_config(config=config, override={f"{config.prefix}_CACHE_MB": 20})`.
+  Overrides use external namespaced names and reject malformed or wrong-prefix
+  keys. CLI argv parsing is separate from config resolution.
+- For a separate environment namespace, call `resolve_config("WEFT",
+  env=os.environ, defaults=fields)`. External names carry the prefix; Config
+  keys are uppercase and unprefixed. Copy `DEFAULT_CONFIG` to customize defaults
+  and validators; undeclared selected values pass through unchanged.
+- The library never reads the environment; handles without a Config use
+  defaults. To honor `BROKER_*` settings as the CLI does, call
+  `resolve_config(env=os.environ)` once at startup and pass the returned Config
+  to each handle. Handles retain the Config they are given.
 - Construct all `Queue` / watcher / `open_broker` calls with that target and
   config. Do not re-walk cwd/project discovery on every hot-path call.
 - Shape (language-agnostic): hold `{target, config}` on a context/client

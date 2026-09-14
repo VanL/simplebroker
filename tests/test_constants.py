@@ -22,7 +22,6 @@ from simplebroker._constants import (
     # Project scoping constants
     MAX_QUEUE_NAME_LENGTH,
     # Watcher
-    PHYSICAL_TIME_BITS,
     # Program
     SCHEMA_VERSION,
     SIMPLEBROKER_MAGIC,
@@ -30,18 +29,18 @@ from simplebroker._constants import (
     # Timestamp constants
     TIMESTAMP_EXACT_NUM_DIGITS,
     UNIX_NATIVE_BOUNDARY,
-    ConnectionPhase,
     # Version
     __version__,
-    _parse_bool,
     # Functions
-    load_config,
     resolve_config,
 )
 
 from .helper_scripts import create_dangerous_path
 
-pytestmark = [pytest.mark.shared]
+pytestmark = [
+    pytest.mark.shared,
+    pytest.mark.filterwarnings("ignore:.*ignoring invalid"),
+]
 
 
 class TestConstants:
@@ -96,83 +95,72 @@ class TestConstants:
     def test_timestamp_constants(self) -> None:
         """Bit-layout invariants of the 64-bit hybrid timestamp: these
         fail when one number changes without preserving the encoding
-        relationships. 19 digits and the bit split are wire contract."""
+        relationships. 19 digits and the low counter bits are wire contract."""
         assert TIMESTAMP_EXACT_NUM_DIGITS == 19
-        assert PHYSICAL_TIME_BITS == 52
         assert LOGICAL_COUNTER_BITS == 12
         assert LOGICAL_COUNTER_MASK == (1 << LOGICAL_COUNTER_BITS) - 1
         assert MAX_LOGICAL_COUNTER == 1 << LOGICAL_COUNTER_BITS
         assert UNIX_NATIVE_BOUNDARY == 2**44
         assert SQLITE_MAX_INT64 == 2**63
-        assert PHYSICAL_TIME_BITS + LOGICAL_COUNTER_BITS <= 64
-
-    def test_connection_phase_constants(self) -> None:
-        """Test database connection phase constants."""
-        assert hasattr(ConnectionPhase, "CONNECTION")
-        assert hasattr(ConnectionPhase, "SCHEMA")
-        assert hasattr(ConnectionPhase, "OPTIMIZATION")
-        assert ConnectionPhase.CONNECTION == "connection"
-        assert ConnectionPhase.SCHEMA == "schema"
-        assert ConnectionPhase.OPTIMIZATION == "optimization"
 
 
 class TestLoadConfig:
-    """Test the load_config function with various environment configurations."""
+    """Test explicit environment resolution with various environment configurations."""
 
     def test_default_config(self) -> None:
-        """Test load_config returns expected defaults when no env vars are set."""
+        """Test resolution returns expected defaults when no env vars are set."""
         with patch.dict(os.environ, {}, clear=True):
-            config = load_config()
+            config = resolve_config(env=os.environ)
 
             # SQLite settings
-            assert config["BROKER_BUSY_TIMEOUT"] == 5000
-            assert config["BROKER_CACHE_MB"] == 10
-            assert config["BROKER_SYNC_MODE"] == "FULL"
-            assert config["BROKER_WAL_AUTOCHECKPOINT"] == 1000
+            assert config["BUSY_TIMEOUT"] == 5000
+            assert config["CACHE_MB"] == 10
+            assert config["SYNC_MODE"] == "FULL"
+            assert config["WAL_AUTOCHECKPOINT"] == 1000
 
             # Message processing
-            assert config["BROKER_MAX_MESSAGE_SIZE"] == MAX_MESSAGE_SIZE
-            assert config["BROKER_READ_COMMIT_INTERVAL"] == 1
+            assert config["MAX_MESSAGE_SIZE"] == MAX_MESSAGE_SIZE
+            assert config["READ_COMMIT_INTERVAL"] == 1
             assert (
-                config["BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS"]
+                config["LOAD_MAX_FUTURE_SKEW_SECONDS"]
                 == DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS
             )
 
             # Vacuum settings
-            assert config["BROKER_AUTO_VACUUM"] == 1
-            assert config["BROKER_AUTO_VACUUM_INTERVAL"] == 100
-            assert config["BROKER_VACUUM_THRESHOLD"] == 0.1  # 10%
-            assert config["BROKER_VACUUM_BATCH_SIZE"] == 1000
+            assert config["AUTO_VACUUM"] == 1
+            assert config["AUTO_VACUUM_INTERVAL"] == 100
+            assert config["VACUUM_THRESHOLD"] == 10  # 10%
+            assert config["VACUUM_BATCH_SIZE"] == 1000
 
             # Watcher settings
-            assert config["BROKER_SKIP_IDLE_CHECK"] is False
-            assert config["BROKER_JITTER_FACTOR"] == 0.15
-            assert config["BROKER_INITIAL_CHECKS"] == 100
-            assert config["BROKER_MAX_INTERVAL"] == 0.1
-            assert config["BROKER_BURST_SLEEP"] == 0.00001
+            assert config["SKIP_IDLE_CHECK"] is False
+            assert config["JITTER_FACTOR"] == 0.15
+            assert config["INITIAL_CHECKS"] == 100
+            assert config["MAX_INTERVAL"] == 0.1
+            assert config["BURST_SLEEP"] == 0.00001
 
             # Debug
-            assert config["BROKER_DEBUG"] is False
+            assert config["DEBUG"] is False
 
             # Logging
-            assert config["BROKER_LOGGING_ENABLED"] is False
+            assert config["LOGGING_ENABLED"] is False
 
             # Project scoping (new)
-            assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
-            assert config["BROKER_DEFAULT_DB_NAME"] == DEFAULT_DB_NAME
-            assert config["BROKER_PROJECT_CONFIG_PATH"] == ""
-            assert config["BROKER_PROJECT_CONFIG_NAME"] == DEFAULT_PROJECT_CONFIG_NAME
-            assert config["BROKER_PROJECT_SCOPE"] is False
+            assert config["DEFAULT_DB_LOCATION"] == ""
+            assert config["DEFAULT_DB_NAME"] == DEFAULT_DB_NAME
+            assert config["PROJECT_CONFIG_PATH"] == ""
+            assert config["PROJECT_CONFIG_NAME"] == DEFAULT_PROJECT_CONFIG_NAME
+            assert config["PROJECT_SCOPE"] is False
 
             # Backend selection
-            assert config["BROKER_BACKEND"] == "sqlite"
-            assert config["BROKER_BACKEND_HOST"] == "localhost"
-            assert config["BROKER_BACKEND_PORT"] == 5432
-            assert config["BROKER_BACKEND_USER"] == "postgres"
-            assert config["BROKER_BACKEND_PASSWORD"] == ""
-            assert config["BROKER_BACKEND_DATABASE"] == "simplebroker"
-            assert config["BROKER_BACKEND_SCHEMA"] == "simplebroker_pg_v1"
-            assert config["BROKER_BACKEND_TARGET"] == ""
+            assert config["BACKEND"] == "sqlite"
+            assert config["BACKEND_HOST"] == "localhost"
+            assert config["BACKEND_PORT"] == 5432
+            assert config["BACKEND_USER"] == "postgres"
+            assert config["BACKEND_PASSWORD"] == ""
+            assert config["BACKEND_DATABASE"] == "simplebroker"
+            assert config["BACKEND_SCHEMA"] == "simplebroker_pg_v1"
+            assert config["BACKEND_TARGET"] == ""
 
     def test_backend_selection_reads_from_env(self) -> None:
         """Test backend-selection environment variables."""
@@ -188,17 +176,17 @@ class TestLoadConfig:
         }
 
         with patch.dict(os.environ, env_vars, clear=True):
-            config = load_config()
+            config = resolve_config(env=os.environ)
 
-            assert config["BROKER_BACKEND"] == "postgres"
-            assert config["BROKER_BACKEND_HOST"] == "db.example.com"
-            assert config["BROKER_BACKEND_PORT"] == 5433
-            assert config["BROKER_BACKEND_USER"] == "broker"
-            assert config["BROKER_BACKEND_PASSWORD"] == "secret"
-            assert config["BROKER_BACKEND_DATABASE"] == "simplebroker_app"
-            assert config["BROKER_BACKEND_SCHEMA"] == "broker_schema"
+            assert config["BACKEND"] == "postgres"
+            assert config["BACKEND_HOST"] == "db.example.com"
+            assert config["BACKEND_PORT"] == 5433
+            assert config["BACKEND_USER"] == "broker"
+            assert config["BACKEND_PASSWORD"] == "secret"
+            assert config["BACKEND_DATABASE"] == "simplebroker_app"
+            assert config["BACKEND_SCHEMA"] == "broker_schema"
             assert (
-                config["BROKER_BACKEND_TARGET"]
+                config["BACKEND_TARGET"]
                 == "postgresql://broker@db.example.com/simplebroker"
             )
 
@@ -212,30 +200,30 @@ class TestLoadConfig:
         }
 
         with patch.dict(os.environ, env_vars):
-            config = load_config()
+            config = resolve_config(env=os.environ)
 
-            assert config["BROKER_BUSY_TIMEOUT"] == 10000
-            assert config["BROKER_CACHE_MB"] == 50
-            assert config["BROKER_SYNC_MODE"] == "NORMAL"
-            assert config["BROKER_WAL_AUTOCHECKPOINT"] == 2000
+            assert config["BUSY_TIMEOUT"] == 10000
+            assert config["CACHE_MB"] == 50
+            assert config["SYNC_MODE"] == "NORMAL"
+            assert config["WAL_AUTOCHECKPOINT"] == 2000
 
     def test_sync_mode_validation(self) -> None:
         """Test BROKER_SYNC_MODE validation."""
         # Valid modes
         for mode in ["FULL", "NORMAL", "OFF"]:
             with patch.dict(os.environ, {"BROKER_SYNC_MODE": mode}):
-                config = load_config()
-                assert config["BROKER_SYNC_MODE"] == mode
+                config = resolve_config(env=os.environ)
+                assert config["SYNC_MODE"] == mode
 
         # Invalid mode should default to FULL
         with patch.dict(os.environ, {"BROKER_SYNC_MODE": "INVALID"}):
-            config = load_config()
-            assert config["BROKER_SYNC_MODE"] == "FULL"
+            config = resolve_config(env=os.environ)
+            assert config["SYNC_MODE"] == "FULL"
 
         # Case sensitivity
         with patch.dict(os.environ, {"BROKER_SYNC_MODE": "full"}):
-            config = load_config()
-            assert config["BROKER_SYNC_MODE"] == "FULL"
+            config = resolve_config(env=os.environ)
+            assert config["SYNC_MODE"] == "FULL"
 
     def test_message_settings(self) -> None:
         """Test message-related environment variables."""
@@ -245,10 +233,10 @@ class TestLoadConfig:
         }
 
         with patch.dict(os.environ, env_vars):
-            config = load_config()
+            config = resolve_config(env=os.environ)
 
-            assert config["BROKER_MAX_MESSAGE_SIZE"] == 5242880
-            assert config["BROKER_READ_COMMIT_INTERVAL"] == 100
+            assert config["MAX_MESSAGE_SIZE"] == 5242880
+            assert config["READ_COMMIT_INTERVAL"] == 100
 
     def test_vacuum_settings(self) -> None:
         """Test vacuum-related environment variables."""
@@ -260,32 +248,32 @@ class TestLoadConfig:
         }
 
         with patch.dict(os.environ, env_vars):
-            config = load_config()
+            config = resolve_config(env=os.environ)
 
-            assert config["BROKER_AUTO_VACUUM"] == 0
-            assert config["BROKER_AUTO_VACUUM_INTERVAL"] == 50
-            assert config["BROKER_VACUUM_THRESHOLD"] == 0.2  # Converted to decimal
-            assert config["BROKER_VACUUM_BATCH_SIZE"] == 500
+            assert config["AUTO_VACUUM"] == 0
+            assert config["AUTO_VACUUM_INTERVAL"] == 50
+            assert config["VACUUM_THRESHOLD"] == 20  # Declared percent
+            assert config["VACUUM_BATCH_SIZE"] == 500
 
     @pytest.mark.parametrize(
         ("raw_value", "expected"),
         [
-            ("0.5", 0.005),
+            ("0.5", 0.5),
             (0.5, 0.5),
-            ("50", 0.5),
-            (50, 0.5),
+            ("50", 50),
+            (50, 50),
         ],
     )
-    def test_vacuum_threshold_preserves_input_representation_semantics(
+    def test_vacuum_threshold_preserves_declared_percentage(
         self,
         raw_value: str | float,
         expected: float,
     ) -> None:
         with patch.dict(os.environ, {}, clear=True):
             assert (
-                resolve_config({"BROKER_VACUUM_THRESHOLD": raw_value})[
-                    "BROKER_VACUUM_THRESHOLD"
-                ]
+                resolve_config(
+                    env=os.environ, override={"BROKER_VACUUM_THRESHOLD": raw_value}
+                )["VACUUM_THRESHOLD"]
                 == expected
             )
 
@@ -296,13 +284,7 @@ class TestLoadConfig:
             .split()
         )
 
-        required_phrases = (
-            "String and environment values are percentages",
-            '`"0.5"` becomes `0.005`',
-            "Typed numeric values from 0 through 1 are ratios",
-            "`0.5` remains `0.5`",
-            "more than 10,000 claimed messages",
-        )
+        required_phrases = ("VACUUM_THRESHOLD", "percentage", "0", "100")
         for phrase in required_phrases:
             assert phrase in guide
 
@@ -317,60 +299,60 @@ class TestLoadConfig:
         }
 
         with patch.dict(os.environ, env_vars):
-            config = load_config()
+            config = resolve_config(env=os.environ)
 
-            assert config["BROKER_SKIP_IDLE_CHECK"] is True
-            assert config["BROKER_JITTER_FACTOR"] == 0.25
-            assert config["BROKER_INITIAL_CHECKS"] == 200
-            assert config["BROKER_MAX_INTERVAL"] == 0.5
-            assert config["BROKER_BURST_SLEEP"] == 0.0001
+            assert config["SKIP_IDLE_CHECK"] is True
+            assert config["JITTER_FACTOR"] == 0.25
+            assert config["INITIAL_CHECKS"] == 200
+            assert config["MAX_INTERVAL"] == 0.5
+            assert config["BURST_SLEEP"] == 0.0001
 
     def test_debug_setting(self) -> None:
         """Test debug environment variable."""
         # Any non-empty value should enable debug
         for value in ["1", "true", "yes", "debug"]:
             with patch.dict(os.environ, {"BROKER_DEBUG": value}):
-                config = load_config()
-                assert config["BROKER_DEBUG"] is True
+                config = resolve_config(env=os.environ)
+                assert config["DEBUG"] is True
 
         # Empty or missing should be False
         with patch.dict(os.environ, {"BROKER_DEBUG": ""}):
-            config = load_config()
-            assert config["BROKER_DEBUG"] is False
+            config = resolve_config(env=os.environ)
+            assert config["DEBUG"] is False
 
         with patch.dict(os.environ, {}, clear=True):
-            config = load_config()
-            assert config["BROKER_DEBUG"] is False
+            config = resolve_config(env=os.environ)
+            assert config["DEBUG"] is False
 
     def test_logging_setting(self) -> None:
         """Test logging environment variable."""
         # Only "1" should enable logging
         with patch.dict(os.environ, {"BROKER_LOGGING_ENABLED": "1"}):
-            config = load_config()
-            assert config["BROKER_LOGGING_ENABLED"] is True
+            config = resolve_config(env=os.environ)
+            assert config["LOGGING_ENABLED"] is True
 
         # Any other value should be False
         for value in ["0", "true", "yes", "enabled", ""]:
             with patch.dict(os.environ, {"BROKER_LOGGING_ENABLED": value}):
-                config = load_config()
-                assert config["BROKER_LOGGING_ENABLED"] is False
+                config = resolve_config(env=os.environ)
+                assert config["LOGGING_ENABLED"] is False
 
         # Missing should be False
         with patch.dict(os.environ, {}, clear=True):
-            config = load_config()
-            assert config["BROKER_LOGGING_ENABLED"] is False
+            config = resolve_config(env=os.environ)
+            assert config["LOGGING_ENABLED"] is False
 
     def test_boolean_conversion(self) -> None:
         """Test boolean environment variable conversion."""
         # BROKER_SKIP_IDLE_CHECK should only be True for "1"
         with patch.dict(os.environ, {"BROKER_SKIP_IDLE_CHECK": "1"}):
-            config = load_config()
-            assert config["BROKER_SKIP_IDLE_CHECK"] is True
+            config = resolve_config(env=os.environ)
+            assert config["SKIP_IDLE_CHECK"] is True
 
         for value in ["0", "false", "no", ""]:
             with patch.dict(os.environ, {"BROKER_SKIP_IDLE_CHECK": value}):
-                config = load_config()
-                assert config["BROKER_SKIP_IDLE_CHECK"] is False
+                config = resolve_config(env=os.environ)
+                assert config["SKIP_IDLE_CHECK"] is False
 
     def test_invalid_numeric_values(self) -> None:
         """Test handling of invalid numeric environment values."""
@@ -379,7 +361,7 @@ class TestLoadConfig:
             patch.dict(os.environ, {"BROKER_BUSY_TIMEOUT": "not_a_number"}),
             pytest.raises(ValueError),
         ):
-            load_config()
+            resolve_config(env=os.environ)
 
     @pytest.mark.parametrize(
         ("key", "raw_value", "expected"),
@@ -393,7 +375,7 @@ class TestLoadConfig:
             ("BROKER_GENERATOR_BATCH_SIZE", "50", 50),
             ("BROKER_AUTO_VACUUM", "0", 0),
             ("BROKER_AUTO_VACUUM_INTERVAL", "25", 25),
-            ("BROKER_VACUUM_THRESHOLD", "25", 0.25),
+            ("BROKER_VACUUM_THRESHOLD", "25", 25),
             ("BROKER_VACUUM_BATCH_SIZE", "250", 250),
             ("BROKER_SKIP_IDLE_CHECK", "1", True),
             ("BROKER_JITTER_FACTOR", "0.2", 0.2),
@@ -429,9 +411,17 @@ class TestLoadConfig:
     ) -> None:
         """Every declared key must use one coercion rule on both input paths."""
         with patch.dict(os.environ, {key: raw_value}, clear=True):
-            environment_value = load_config()[key]
+            environment_value = resolve_config(env=os.environ)[
+                key.removeprefix("BROKER_")
+            ]
         with patch.dict(os.environ, {}, clear=True):
-            override_value = resolve_config({key: raw_value})[key]
+            override_value = resolve_config(
+                env=os.environ,
+                override={
+                    "BROKER_" + key: value
+                    for key, value in ({key.removeprefix("BROKER_"): raw_value}).items()
+                },
+            )[key.removeprefix("BROKER_")]
 
         assert environment_value == expected
         assert override_value == expected
@@ -466,20 +456,26 @@ class TestLoadConfig:
             patch.dict(os.environ, {key: "invalid"}, clear=True),
             pytest.raises(ValueError),
         ):
-            load_config()
+            resolve_config(env=os.environ)
         with patch.dict(os.environ, {}, clear=True), pytest.raises(ValueError):
-            resolve_config({key: "invalid"})
+            resolve_config(
+                env=os.environ,
+                override={
+                    "BROKER_" + key: value
+                    for key, value in ({key.removeprefix("BROKER_"): "invalid"}).items()
+                },
+            )
 
         # Invalid floats should raise ValueError
         with (
             patch.dict(os.environ, {"BROKER_JITTER_FACTOR": "invalid"}),
             pytest.raises(ValueError),
         ):
-            load_config()
+            resolve_config(env=os.environ)
 
     def test_all_config_keys_present(self) -> None:
         """Test that all expected configuration keys are present."""
-        config = load_config()
+        config = resolve_config(env=os.environ)
 
         expected_keys = {
             # SQLite settings
@@ -524,22 +520,25 @@ class TestLoadConfig:
             "BROKER_BACKEND_TARGET",
         }
 
-        assert set(config.keys()) == expected_keys
+        assert {key.removeprefix("BROKER_") for key in expected_keys} <= set(config)
+        if "BROKER_TEST_BACKEND" in os.environ:
+            assert config["TEST_BACKEND"] == os.environ["BROKER_TEST_BACKEND"]
 
     def test_config_immutability(self) -> None:
         """Test that modifying returned config doesn't affect subsequent calls."""
-        config1 = load_config()
-        original_timeout = config1["BROKER_BUSY_TIMEOUT"]
+        config1 = resolve_config(env=os.environ)
+        original_timeout = config1["BUSY_TIMEOUT"]
 
         # Modify the returned config
-        config1["BROKER_BUSY_TIMEOUT"] = 99999
+        with pytest.raises(TypeError):
+            config1["BUSY_TIMEOUT"] = 99999  # type: ignore[index]
 
         # Get a new config
-        config2 = load_config()
+        config2 = resolve_config(env=os.environ)
 
         # Should have original value, not modified one
-        assert config2["BROKER_BUSY_TIMEOUT"] == original_timeout
-        assert config2["BROKER_BUSY_TIMEOUT"] != 99999
+        assert config2["BUSY_TIMEOUT"] == original_timeout
+        assert config2["BUSY_TIMEOUT"] != 99999
 
     def test_project_scoping_settings(self) -> None:
         """Test project scoping environment variables."""
@@ -560,53 +559,37 @@ class TestLoadConfig:
             }
 
             with patch.dict(os.environ, env_vars):
-                config = load_config()
+                config = resolve_config(env=os.environ)
 
-                assert config["BROKER_DEFAULT_DB_LOCATION"] == test_path
-                assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
-                assert config["BROKER_PROJECT_CONFIG_PATH"] == ".weft"
-                assert config["BROKER_PROJECT_CONFIG_NAME"] == "broker.toml"
-                assert config["BROKER_PROJECT_SCOPE"] is True
+                assert config["DEFAULT_DB_LOCATION"] == test_path
+                assert config["DEFAULT_DB_NAME"] == "custom.db"
+                assert config["PROJECT_CONFIG_PATH"] == ".weft"
+                assert config["PROJECT_CONFIG_NAME"] == "broker.toml"
+                assert config["PROJECT_SCOPE"] is True
 
     def test_project_scope_boolean_parsing(self) -> None:
         """Test BROKER_PROJECT_SCOPE boolean parsing."""
         # Test true values
         for value in ["1", "true", "TRUE", "True", "yes", "YES", "on", "ON"]:
             with patch.dict(os.environ, {"BROKER_PROJECT_SCOPE": value}):
-                config = load_config()
-                assert config["BROKER_PROJECT_SCOPE"] is True, (
-                    f"Failed for value: {value}"
-                )
+                config = resolve_config(env=os.environ)
+                assert config["PROJECT_SCOPE"] is True, f"Failed for value: {value}"
 
         # Test false values
         for value in ["0", "false", "FALSE", "no", "NO", "off", "OFF", "", "invalid"]:
             with patch.dict(os.environ, {"BROKER_PROJECT_SCOPE": value}):
-                config = load_config()
-                assert config["BROKER_PROJECT_SCOPE"] is False, (
-                    f"Failed for value: {value}"
-                )
+                config = resolve_config(env=os.environ)
+                assert config["PROJECT_SCOPE"] is False, f"Failed for value: {value}"
 
-    def test_relative_db_location_warning_and_ignore(self) -> None:
-        """Test that relative BROKER_DEFAULT_DB_LOCATION issues warning and is ignored."""
+    def test_relative_db_location_is_invalid(self) -> None:
+        """A relative BROKER_DEFAULT_DB_LOCATION is an invalid value."""
         import warnings
 
-        # Use a simple relative path that's unambiguous on all platforms
-        test_path = "testdir"
         with (
-            patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}),
-            warnings.catch_warnings(record=True) as w,
+            patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "testdir"}),
+            pytest.raises(ValueError, match="BROKER_DEFAULT_DB_LOCATION"),
         ):
-            warnings.simplefilter("always")  # Catch all warnings
-            config = load_config()
-
-            # Should issue a warning
-            assert len(w) == 1
-            assert issubclass(w[0].category, UserWarning)
-            assert "must be an absolute path" in str(w[0].message)
-            assert "testdir" in str(w[0].message)
-
-            # Should be reset to empty string
-            assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
+            resolve_config(env=os.environ)
 
         # Absolute paths should remain unchanged
         import tempfile
@@ -619,43 +602,73 @@ class TestLoadConfig:
                 warnings.catch_warnings(record=True) as w,
             ):
                 warnings.simplefilter("always")
-                config = load_config()
+                config = resolve_config(env=os.environ)
 
                 # Should not issue a warning for absolute paths
                 assert len(w) == 0
-                assert config["BROKER_DEFAULT_DB_LOCATION"] == absolute_path
+                assert config["DEFAULT_DB_LOCATION"] == absolute_path
 
 
 class TestParseBool:
-    """Test the _parse_bool helper function."""
+    """Test the project_scope helper function."""
 
     def test_true_values(self) -> None:
-        """Test _parse_bool recognizes true values correctly."""
+        """Test project_scope recognizes true values correctly."""
         true_values = ["1", "true", "TRUE", "True", "yes", "YES", "on", "ON"]
         for value in true_values:
-            assert _parse_bool(value) is True, f"Failed for value: {value}"
+            assert (
+                resolve_config(override={"BROKER_PROJECT_SCOPE": value})[
+                    "PROJECT_SCOPE"
+                ]
+                is True
+            ), f"Failed for value: {value}"
 
     def test_false_values(self) -> None:
-        """Test _parse_bool recognizes false values correctly."""
+        """Test project_scope recognizes false values correctly."""
         false_values = ["0", "false", "FALSE", "no", "off", "OFF", "", "invalid"]
         for value in false_values:
-            assert _parse_bool(value) is False, f"Failed for value: {value}"
+            assert (
+                resolve_config(override={"BROKER_PROJECT_SCOPE": value})[
+                    "PROJECT_SCOPE"
+                ]
+                is False
+            ), f"Failed for value: {value}"
 
     def test_whitespace_handling(self) -> None:
-        """Test _parse_bool handles whitespace correctly."""
-        assert _parse_bool(" 1 ") is True
-        assert _parse_bool(" true ") is True
-        assert _parse_bool("\ttrue\n") is True
-        assert _parse_bool("  ") is False
+        """Test project_scope handles whitespace correctly."""
+        assert (
+            resolve_config(override={"BROKER_PROJECT_SCOPE": " 1 "})["PROJECT_SCOPE"]
+            is True
+        )
+        assert (
+            resolve_config(override={"BROKER_PROJECT_SCOPE": " true "})["PROJECT_SCOPE"]
+            is True
+        )
+        assert (
+            resolve_config(override={"BROKER_PROJECT_SCOPE": "\ttrue\n"})[
+                "PROJECT_SCOPE"
+            ]
+            is True
+        )
+        assert (
+            resolve_config(override={"BROKER_PROJECT_SCOPE": "  "})["PROJECT_SCOPE"]
+            is False
+        )
 
     def test_empty_and_none_values(self) -> None:
-        """Test _parse_bool handles empty and None-like values."""
-        assert _parse_bool("") is False
-        assert _parse_bool(" ") is False
+        """Test project_scope handles empty and None-like values."""
+        assert (
+            resolve_config(override={"BROKER_PROJECT_SCOPE": ""})["PROJECT_SCOPE"]
+            is False
+        )
+        assert (
+            resolve_config(override={"BROKER_PROJECT_SCOPE": " "})["PROJECT_SCOPE"]
+            is False
+        )
 
 
 class TestConfigValidation:
-    """Test config validation in load_config."""
+    """Test configuration field validation."""
 
     def test_load_future_skew_reads_non_negative_env_value(self) -> None:
         with patch.dict(
@@ -663,7 +676,7 @@ class TestConfigValidation:
             {"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "42"},
             clear=True,
         ):
-            assert load_config()["BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS"] == 42
+            assert resolve_config(env=os.environ)["LOAD_MAX_FUTURE_SKEW_SECONDS"] == 42
 
     def test_load_future_skew_rejects_negative_value(self) -> None:
         with (
@@ -677,12 +690,14 @@ class TestConfigValidation:
                 match="expected a non-negative integer number of seconds",
             ),
         ):
-            load_config()
+            resolve_config(env=os.environ)
         with pytest.raises(
             ValueError,
             match="expected a non-negative integer number of seconds",
         ):
-            resolve_config({"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": -1})
+            resolve_config(
+                env=os.environ, override={"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": -1}
+            )
 
     @pytest.mark.parametrize("value", [True, 1.0, 1.9])
     def test_load_future_skew_rejects_non_integer_type(self, value: object) -> None:
@@ -690,14 +705,18 @@ class TestConfigValidation:
             ValueError,
             match="expected a non-negative integer number of seconds",
         ):
-            resolve_config({"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": value})
+            resolve_config(
+                env=os.environ, override={"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": value}
+            )
 
     def test_load_future_skew_rejects_non_integer_string(self) -> None:
         with pytest.raises(
             ValueError,
             match="expected a non-negative integer number of seconds",
         ):
-            resolve_config({"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "1.9"})
+            resolve_config(
+                env=os.environ, override={"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "1.9"}
+            )
 
     def test_broker_default_db_name_absolute_path_raises_error(self) -> None:
         """Test that absolute paths in BROKER_DEFAULT_DB_NAME raise an error."""
@@ -715,7 +734,7 @@ class TestConfigValidation:
                     match="expected a relative database path with at most one directory",
                 ),
             ):
-                load_config()
+                resolve_config(env=os.environ)
 
     def test_broker_default_db_name_windows_absolute_path_raises_error(self) -> None:
         """Test that Windows absolute paths in BROKER_DEFAULT_DB_NAME raise an error."""
@@ -736,7 +755,7 @@ class TestConfigValidation:
                 match="expected a relative database path with at most one directory",
             ),
         ):
-            load_config()
+            resolve_config(env=os.environ)
 
     def test_broker_default_db_name_nested_directories_raises_error(self) -> None:
         """Test that nested directories in BROKER_DEFAULT_DB_NAME raise an error."""
@@ -747,19 +766,19 @@ class TestConfigValidation:
                 match="expected a relative database path with at most one directory",
             ),
         ):
-            load_config()
+            resolve_config(env=os.environ)
 
     def test_broker_default_db_name_valid_compound_path(self) -> None:
         """Test that valid compound paths are accepted."""
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": ".config/broker.db"}):
-            config = load_config()
-            assert config["BROKER_DEFAULT_DB_NAME"] == ".config/broker.db"
+            config = resolve_config(env=os.environ)
+            assert config["DEFAULT_DB_NAME"] == ".config/broker.db"
 
     def test_broker_default_db_name_simple_path(self) -> None:
         """Test that simple database names work correctly."""
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "simple.db"}):
-            config = load_config()
-            assert config["BROKER_DEFAULT_DB_NAME"] == "simple.db"
+            config = resolve_config(env=os.environ)
+            assert config["DEFAULT_DB_NAME"] == "simple.db"
 
     def test_broker_default_db_location_dangerous_characters_raises_error(self) -> None:
         """Test that dangerous characters in BROKER_DEFAULT_DB_LOCATION raise an error."""
@@ -776,7 +795,7 @@ class TestConfigValidation:
                     match="expected an absolute directory path or empty string",
                 ),
             ):
-                load_config()
+                resolve_config(env=os.environ)
 
     def test_broker_default_db_location_valid_absolute_path(self) -> None:
         """Test that valid absolute paths in BROKER_DEFAULT_DB_LOCATION are accepted."""
@@ -788,13 +807,13 @@ class TestConfigValidation:
             test_path = str(Path(temp_dir) / "valid_path")
 
             with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}):
-                config = load_config()
-                assert config["BROKER_DEFAULT_DB_LOCATION"] == test_path
+                config = resolve_config(env=os.environ)
+                assert config["DEFAULT_DB_LOCATION"] == test_path
 
     def test_broker_default_db_name_dangerous_characters_in_compound(self) -> None:
         """Test that dangerous characters are caught in compound database names at config load time."""
         # Since we now validate dangerous characters at config load time,
-        # this should fail during load_config() itself
+        # this should fail during resolve_config() itself
         with (
             patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "test*dir/broker.db"}),
             pytest.raises(
@@ -802,15 +821,15 @@ class TestConfigValidation:
                 match="expected a relative database path with at most one directory",
             ),
         ):
-            load_config()
+            resolve_config(env=os.environ)
 
     def test_broker_project_config_name_valid_compound_path(self) -> None:
         """Test that valid project config compound paths are accepted."""
         with patch.dict(
             os.environ, {"BROKER_PROJECT_CONFIG_NAME": ".weft/broker.toml"}
         ):
-            config = load_config()
-            assert config["BROKER_PROJECT_CONFIG_NAME"] == ".weft/broker.toml"
+            config = resolve_config(env=os.environ)
+            assert config["PROJECT_CONFIG_NAME"] == ".weft/broker.toml"
 
     def test_broker_project_config_name_absolute_path_raises_error(self) -> None:
         """Test that absolute paths in BROKER_PROJECT_CONFIG_NAME raise an error."""
@@ -827,13 +846,13 @@ class TestConfigValidation:
                     match="expected a relative config path with at most one directory",
                 ),
             ):
-                load_config()
+                resolve_config(env=os.environ)
 
     def test_broker_project_config_path_accepts_relative_directory(self) -> None:
         """Test that project config path can namespace discovery under a project."""
         with patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_PATH": ".weft"}):
-            config = load_config()
-            assert config["BROKER_PROJECT_CONFIG_PATH"] == ".weft"
+            config = resolve_config(env=os.environ)
+            assert config["PROJECT_CONFIG_PATH"] == ".weft"
 
     def test_broker_project_config_path_nested_relative_path_raises_error(
         self,
@@ -846,7 +865,7 @@ class TestConfigValidation:
                 match="expected an absolute directory or one relative directory",
             ),
         ):
-            load_config()
+            resolve_config(env=os.environ)
 
     def test_broker_project_config_combined_nested_path_raises_error(self) -> None:
         """Test that path and name cannot combine into nested directories."""
@@ -860,10 +879,10 @@ class TestConfigValidation:
             ),
             pytest.raises(
                 ValueError,
-                match="expected a relative config path with at most one directory",
+                match="combine into nested directories",
             ),
         ):
-            load_config()
+            resolve_config(env=os.environ)
 
 
 def test_every_bare_constant_declaration_carries_an_explanation() -> None:
@@ -873,7 +892,7 @@ def test_every_bare_constant_declaration_carries_an_explanation() -> None:
     must carry meaning or units: a comment directly above it (or above
     its contiguous constant block), an inline trailing comment, or the
     file's house-style docstring on the following line.
-    _CONFIG_FIELDS entries are separately gated by their non-empty
+    DEFAULT_CONFIG entries are separately gated by their non-empty
     ``expected`` form in test_invalid_config_lifecycle.
     """
     import re

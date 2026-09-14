@@ -2,7 +2,7 @@
 
 import asyncio
 import sqlite3
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator
 from contextlib import AbstractContextManager, closing
 from pathlib import Path
 from typing import Any, cast
@@ -12,7 +12,7 @@ import async_pooled_broker as pooled_module
 import pytest
 from async_pooled_broker import AsyncQueue, PooledAsyncSQLiteRunner, async_broker
 
-from simplebroker import Queue, open_broker
+from simplebroker import Config, Queue, open_broker, resolve_config
 from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker.ext import BrokerConnection
 
@@ -211,7 +211,7 @@ def test_async_context_uses_canonical_setup_and_preserves_sidecar(
     def traced_open_broker(
         target: str,
         *,
-        config: Mapping[str, Any],
+        config: Config,
     ) -> AbstractContextManager[BrokerConnection]:
         setup_configs.append(config)
         return real_open_broker(target, config=config)
@@ -220,7 +220,7 @@ def test_async_context_uses_canonical_setup_and_preserves_sidecar(
         def __init__(
             self,
             *args: Any,
-            config: Mapping[str, Any],
+            config: Config,
             **kwargs: Any,
         ) -> None:
             runtime_configs.append(config)
@@ -238,7 +238,7 @@ def test_async_context_uses_canonical_setup_and_preserves_sidecar(
         for _ in range(2):
             async with async_broker(
                 str(db_path),
-                config={"BROKER_BUSY_TIMEOUT": 4321},
+                config=resolve_config(override={"BROKER_BUSY_TIMEOUT": 4321}),
             ):
                 pass
 

@@ -10,8 +10,8 @@ from urllib.parse import quote
 
 from psycopg import ProgrammingError, conninfo
 
+from simplebroker import Config, resolve_config
 from simplebroker._backend_plugins import ActivityWaiter, BackendPlugin
-from simplebroker._constants import snapshot_config
 from simplebroker._exceptions import DatabaseError
 from simplebroker._runner import (
     SQLRunner,
@@ -19,7 +19,6 @@ from simplebroker._runner import (
     release_runner_thread_connection,
 )
 from simplebroker._sql import BackendSQLNamespace, ensure_backend_sql_namespace
-from simplebroker.config import canonical_config
 
 from . import _sql as pg_sql
 from ._constants import POSTGRES_SCHEMA_VERSION
@@ -264,7 +263,7 @@ def _validated_target(target: str, *, password: str | None = None) -> str:
 
 
 def verify_env(
-    config: Mapping[str, Any],
+    config: Config,
     *,
     toml_target: str = "",
     toml_options: Mapping[str, Any] | None = None,
@@ -279,7 +278,7 @@ def verify_env(
     toml_opts = dict(toml_options) if toml_options else {}
     cleaned_toml_target = _optional_text(toml_target, name="toml target")
     password = _password_text(
-        canonical_config(config).get("backend_password", ""),
+        config["BACKEND_PASSWORD"],
         name="BROKER_BACKEND_PASSWORD",
     )
 
@@ -288,9 +287,7 @@ def verify_env(
     elif cleaned_toml_target:
         schema_source = "simplebroker_pg_v1"
     else:
-        schema_source = canonical_config(config).get(
-            "backend_schema", "simplebroker_pg_v1"
-        )
+        schema_source = config["BACKEND_SCHEMA"]
     schema = require_schema_name({"schema": schema_source})
 
     if cleaned_toml_target:
@@ -306,7 +303,7 @@ def verify_env(
         )
 
     env_target = _optional_text(
-        canonical_config(config).get("backend_target", ""),
+        config["BACKEND_TARGET"],
         name="BROKER_BACKEND_TARGET",
     )
     if env_target:
@@ -324,17 +321,17 @@ def verify_env(
     return VerifiedPostgresEnv(
         target_mode="parts",
         host=_require_text(
-            canonical_config(config).get("backend_host", "localhost"),
+            config["BACKEND_HOST"],
             name="BROKER_BACKEND_HOST",
         ),
-        port=_require_port(canonical_config(config).get("backend_port", 5432)),
+        port=_require_port(config["BACKEND_PORT"]),
         user=_require_text(
-            canonical_config(config).get("backend_user", "postgres"),
+            config["BACKEND_USER"],
             name="BROKER_BACKEND_USER",
         ),
         password=password or None,
         database=_require_text(
-            canonical_config(config).get("backend_database", "simplebroker"),
+            config["BACKEND_DATABASE"],
             name="BROKER_BACKEND_DATABASE",
         ),
         target=None,
@@ -364,12 +361,12 @@ def _run_vacuum_body(
     runner: SQLRunner,
     *,
     compact: bool,
-    config: Mapping[str, Any],
+    config: Config,
 ) -> None:
     """Delete claimed rows and run maintenance while the session lock is held."""
 
     had_claimed_messages = False
-    batch_size = int(canonical_config(config)["vacuum_batch_size"])
+    batch_size = int(config["VACUUM_BATCH_SIZE"])
     while True:
         runner.begin_immediate()
         batch_step = capture_pg_step(
@@ -413,7 +410,7 @@ def _run_vacuum_before_release(
     *,
     lock_key: int,
     compact: bool,
-    config: Mapping[str, Any],
+    config: Config,
 ) -> BaseException | None:
     """Run every vacuum phase before logical lease release and select failure."""
 
@@ -480,7 +477,7 @@ class PostgresBackendPlugin:
 
     def init_backend(
         self,
-        config: Mapping[str, Any],
+        config: Config,
         *,
         toml_target: str = "",
         toml_options: Mapping[str, Any] | None = None,
@@ -527,7 +524,7 @@ class PostgresBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> PostgresRunner:
         del config
         schema = require_schema_name(backend_options)
@@ -538,9 +535,9 @@ class PostgresBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
-        resolved_config = snapshot_config(config)
+        resolved_config = resolve_config(config=config)
         inspection = inspect_schema(target, backend_options=backend_options)
         validate_schema_inspection(inspection, verify_initialized=False)
 
@@ -574,7 +571,7 @@ class PostgresBackendPlugin:
         *,
         backend_options: Mapping[str, Any] | None = None,
         verify_initialized: bool = True,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         del config
         validate_target(
@@ -588,7 +585,7 @@ class PostgresBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> bool:
         del config
         inspection = inspect_schema(target, backend_options=backend_options)
@@ -611,14 +608,12 @@ class PostgresBackendPlugin:
         self,
         conn: Any,
         *,
-        config: Mapping[str, Any],
+        config: Config,
         optimization_complete: bool = False,
     ) -> None:
         del conn, config, optimization_complete
 
-    def apply_optimization_settings(
-        self, conn: Any, *, config: Mapping[str, Any]
-    ) -> None:
+    def apply_optimization_settings(self, conn: Any, *, config: Config) -> None:
         del conn, config
 
     def setup_connection_phase(
@@ -626,7 +621,7 @@ class PostgresBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any],
+        config: Config,
     ) -> None:
         del config
         validate_target(
@@ -898,7 +893,7 @@ class PostgresBackendPlugin:
         runner: SQLRunner,
         *,
         compact: bool,
-        config: Mapping[str, Any],
+        config: Config,
     ) -> None:
         schema_name = cast("_SchemaAwareRunner", runner).schema
         lock_key = stable_lock_key("vacuum", schema_name)

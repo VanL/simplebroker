@@ -84,11 +84,8 @@ Public ways to bind a broker for library use:
   - `find_project_config` — upward search for project TOML
   - `project_config_path_for_directory` — configured path under an explicit root
   - `resolve_project_target` — TOML path → `BrokerTarget`
-- **`resolve_config`** / **`snapshot_config`** — resolve ordinary configuration
-  or retain one complete snapshot for handles and discovery.
-- **`ConfigField`**, **`ConfigSchema`**, **`ConfigSnapshot`**,
-  **`CONFIG_DEFAULTS`**, **`build_config`** — compose a schema, select one
-  external namespace, and retain canonical broker/application values together.
+- **`resolve_config`**, **`Config`**, **`DEFAULT_CONFIG`**, **`ConfigField`** — select an external namespace and resolve
+  broker and application settings in one read-only object.
 
 A `Queue` binds its effective target at construction. Supported mutable
 containers in a supplied target's backend options are recursively detached
@@ -125,120 +122,138 @@ supported option and configuration values. It does not merge distinct opaque
 values solely because their `repr()` strings match. When no stable value
 representation exists, process-local object identity is the safe fallback:
 creating an extra session is acceptable; sharing a session across distinct
-backend configuration is not. At session acquisition, supported mutable
-containers are recursively detached once, and the same detached snapshot is
-used for both registry identity and lazy factory construction. Later nested
-mutation of the source target or config cannot make a stored key describe
-different factory inputs.
+backend configuration is not. Namespace and field-declaration metadata also
+participate in session identity, since they determine later derived overrides.
+Target options are detached at session acquisition
+using the existing recursive key-material copy. Those same values supply registry
+identity and lazy factory construction. A supplied Config is retained
+as given: its top-level bindings are read-only, and nested custom values remain
+caller-owned under the light-freeze contract. Mutable containers inside a resolved
+Config can still change its values; mutating them, including through references
+retained by the caller, is unsupported and may result in unspecified behavior,
+including disagreement between session identity and the values used by a session.
 
-`load_config()` remains the strict complete environment parser.
-`resolve_config(None|ordinary_mapping)` performs a fresh strict read of the
-current environment/default base, applies ordinary overrides, preserves
-additional keys, and returns an ordinary `dict`. A supplied ordinary mapping
-does not bypass an invalid ambient base. A recognized environment or override
-value that cannot be parsed or validated raises `InvalidConfigError` with
-key, source, expected-form, and safe rejected-value metadata. Existing
-documented normalization and fallback cases remain unchanged.
+### Shared configuration resolution
 
-`ResolvedConfig` is a read-only complete snapshot. It contains every
-canonical SimpleBroker configuration key at minimum; canonical values are
-normalized and validated. Additional keys are preserved unchanged as opaque
-extension data. The core configuration layer does not interpret, normalize,
-or validate them as canonical settings; extensions may interpret their own
-keys. Extras nevertheless participate opaquely in the complete snapshot and
-process-session identity. Its top-level bindings are copied and cannot be
-reassigned; opaque extra values are not recursively copied or frozen.
-Construction fills omitted canonical keys from canonical defaults without
-reading ambient `BROKER_*`. Once constructed, a `ResolvedConfig` never
-consults ambient configuration again. `resolve_config()` given an exact
-`ResolvedConfig` returns that same object without reading ambient state;
-non-exact subclasses are revalidated rather than trusted as snapshots.
+The package root exports `resolve_config`, `Config`, `DEFAULT_CONFIG`,
+and `ConfigField`. Field-specific validators are private implementation details;
+embedders reuse a field record or supply their own validator. Definitions live
+together in
+`simplebroker/_constants.py`; there is no separate public configuration module.
+`DEFAULT_CONFIG` is a read-only mapping of uppercase unprefixed names to field
+records containing a default, description/unit, validator and sensitivity flag.
+Embedders copy the mapping, replace records or add their own fields. Defaults
+containing only application fields are supported.
 
-`resolve_isolated_config(overrides, *, preserve_unknown=False)` constructs a
-`ResolvedConfig` from canonical defaults plus explicit values without reading
-ambient `BROKER_*`. By default it rejects additional keys so downstream
-embedders can use it as a fail-closed canonical-schema check. With
-`preserve_unknown=True`, it instead copies additional keys unchanged as opaque
-extras. The flag never changes normalization or validation of recognized keys.
-`snapshot_config(config=None)` is the ambient-derived snapshot factory. For
-`None` or an ordinary mapping it calls the fresh environment-base resolution
-once and freezes the complete result; for an exact `ResolvedConfig` it returns
-that object unchanged. `snapshot_config()` preserves additional keys.
+`resolve_config(prefix=None, *, defaults=None, toml=None, env=None, override=None,
+config=None)` returns a read-only `Config`. Sources apply lowest to highest:
+defaults, TOML, environment, override. Declared defaults are initialized before
+source overlays. `env=None` means no ambient environment input. The function
+mutates none of its inputs. A source that is not a mapping raises `TypeError`.
 
-### Shared configuration builder
+`config=` takes an already-resolved `Config` and is the only way to start from
+one. When it is supplied, the resolver returns that object unchanged and reads
+neither TOML nor the environment, because the config absorbed them when it was
+built. With a non-empty `override` it derives a new Config: the supplied config's
+values, namespace and field declarations, with the override applied and
+validated. Values already resolved are not revalidated. A `config` value that is
+not a `Config` raises `TypeError`, and a `prefix` or `defaults` that differs from
+the supplied config's own raises `ValueError`; a config's namespace cannot be
+rebound.
 
-`simplebroker.config` adds ConfigField, ConfigSchema, ConfigSnapshot,
-CONFIG_DEFAULTS and build_config, also exported at package root. The immutable
-default schema declares canonical unprefixed fields, descriptions, defaults,
-parsers and validators. Embedders may derive defaults/input policies and add
-their own fields without changing SimpleBroker. Broker canonical validation
-cannot be weakened. Independent app-only schemas also work with the builder.
+`Config.prefix` retains namespace metadata separately from configurable values.
+The default namespace is declared once as `DEFAULT_PREFIX = "BROKER"` beside
+`DEFAULT_CONFIG`. A fresh config uses the explicit prefix or `DEFAULT_PREFIX`; a
+config derived through `config=` inherits the supplied config's prefix and field
+declarations, so custom validators continue to apply. The namespace is not an
+env/TOML/override setting.
 
-`build_config(prefix, env=None, config_file=None, options=None, *,
-defaults=CONFIG_DEFAULTS)` returns a complete canonical ConfigSnapshot.
-Canonical lookup and selected-prefix lookup name the same stored field:
-snapshot['cache_mb'] and snapshot['WEFT_CACHE_MB'] agree for a WEFT build.
-get and membership follow the same alias rule; canonical iteration/transport
-emits each new-snapshot field once. Existing public views retain their current
-spellings and serialization. Read aliases do not expand source-prefix selection.
-Explicit env and TOML root fields use PREFIX_FIELD names. Other prefixes and
-unprefixed external names are ignored. Unknown environment names retain the
-broker's ignore behavior; undeclared TOML names are likewise ignored. New file/options inputs validate selected fields
-under the supplied schema. TOML can contain both existing project-target fields
-and namespaced settings; the loader ignores unprefixed target fields and leaves
-their existing parser and precedence unchanged. No separate settings file,
-discovery, includes or interpolation is required or introduced.
+`args` is not a resolver input. `cli.py` owns argv parsing and validation;
+existing command and target options keep their documented precedence. Global
+`--dir` and `--file` reuse the config path-component validator, with their own
+flag-specific path rules rather than the distinct default-field constraints. No generic
+configuration flags are added. Programmatic callers use namespaced `override`
+values; they do not pass arbitrary mappings as command-line arguments.
 
-Existing precedence and validation timing remain. The shared engine supports
-declared source policies without moving app target/alias/lifetime logic into
-core. For new explicit file input, options > file > env > defaults. Existing
-public entry points acquire no new file lookup or precedence change. Putting a
-namespaced tuning key in discovered project TOML alone does not activate it;
-callers explicitly pass config_file to use the additive settings path.
+Env and an explicitly supplied TOML root select only the exact prefix followed
+by `_` and a suffix matching `[A-Z][A-Z0-9_]*`. Bare keys and other prefixes are
+ignored. No key is case-folded. Well-formed selected custom keys survive even
+without a declaration: strip the prefix and preserve the value unchanged.
+Registered built-in and user-provided validators are called through the same
+path. A near-miss name whose uppercase suffix matches a declared field warns
+with its source and suggested field, then is ignored; external name selection does
+not reject input. Invalid registered values raise `InvalidConfigError` with
+key, source, expected form and safely redacted value metadata.
 
-New snapshots recursively freeze declared values, retain safe source labels,
-and support ambient-free with_options overlays. Derived defaults recompute only
-while their provenance remains default/derived; supplied values remain supplied.
-to_values exports detached canonical transport data; from_values requires a
-complete schema-validated payload without reading env or filling defaults.
+`override` uses the same namespaced selection and field validators as external
+env/TOML values, but rejects a bare key, another prefix, or a malformed selected
+name with `ValueError` instead of ignoring or warning. Well-formed selected custom
+keys are preserved. For example, with prefix `WEFT`, `WEFT_CACHE_MB` sets internal
+`CACHE_MB`; `CACHE_MB`, `BROKER_CACHE_MB`, and `WEFT_cache_mb` raise. Selected
+custom `WEFT_SOMETHING_CUSTOM` becomes `SOMETHING_CUSTOM`, whether declared or not.
 
-Queue/watcher consumers accept a composed snapshot directly, retain its app
-fields and use core-owned validation for broker fields. One backing config
-supplies canonical internal access and legacy public compatibility views.
-Existing resolver exports, signatures, return types, prefixed lookup/iteration,
-opaque extras, preserve_unknown behavior, ResolvedConfig construction and
-subclass revalidation retain their contracts. New ConfigSnapshot subclasses
-are also accepted through value revalidation, not rejected for subclassing.
-No warning or deprecation is added.
+One validator per registered field accepts that field's documented input and
+returns its configuration unit. Every supplied value is validated; each invalid
+value emits a `UserWarning` naming its source as that source is applied. A later
+valid value replaces it. If any invalid value remains after all sources,
+`InvalidConfigError` is raised for it, naming the source that supplied it. A relative `DEFAULT_DB_LOCATION` is an invalid value. After
+all sources, one whole-config check validates combined project path/name depth
+on the final values; its error reports the source of the final
+`PROJECT_CONFIG_NAME`.
+Checks skip absent broker fields. Invalid lower-priority inputs fail
+before a higher-priority override can hide them. `VACUUM_THRESHOLD` stores a
+percentage in 0–100: `10` and `"10"` mean ten percent; `0.1` means 0.1 percent.
+Integers, floats and numeric strings are accepted for this percentage field;
+booleans and boolean strings such as `"true"` are rejected.
+Maintenance callers divide by 100 when passing a fractional threshold.
+`JITTER_FACTOR` remains fractional.
 
-Existing snapshot events, lazy acquisition, error types/metadata and plugin API
-version remain. Internal configuration field names are unprefixed. Existing
-public/plugin config views retain their current key spelling and extension
-access. Complete configuration identity, including opaque extras, remains the
-conservative pooling rule; namespacing adapters do not duplicate identity fields.
-New composed fields visible through plugin config also participate in identity.
-No plugin config_schema requirement, field-access restriction or new handshake
-is introduced. The same retained values back all config views.
+`Config` exposes uppercase unprefixed keys only, with no namespaced or
+case-folded aliases. Top-level mutation is prevented. For process transport, send
+`config.prefix` alongside `dict(config)`, namespace those values on reconstruction,
+and use `resolve_config(prefix, defaults=fields, override=payload)`. Custom field
+declarations belong to the receiving application; callables are not serialized.
+Stored units do not change in transport.
 
-Every public configuration-consuming handle or invocation converts `None` or
-an ordinary mapping to one `ResolvedConfig` at its ownership event in the
-table below. A supplied complete `ConfigSnapshot` follows the same retained
-receipt path without ambient resolution. The owner passes that snapshot through Queue,
-target/project discovery, broker, process-session, runner, watcher, command,
-load, and CLI dump's broker-opening path. Lower layers and later lazy resource
-acquisition do not reread ambient `BROKER_*`. Converting a marker to an
-ordinary mapping discards that guarantee if the mapping is later passed
-through an ambient-resolving public seam.
+A Config handed to Queue, watcher, target discovery, broker, session, runner,
+command or load code is retained without re-resolution or ambient reads,
+including at later lazy acquisition. Complete values, namespace and field
+declarations participate in session identity; no broker-only projection is used.
+
+TOML activation is explicit via `toml=`. A file may also contain existing
+unprefixed project-target fields, which this loader ignores. Target discovery,
+its parser and its precedence remain unchanged; merely adding tuning keys to a
+discovered project file does not activate them.
+
+The old `load_config`, `snapshot_config`, `resolve_isolated_config`,
+`build_config`, `ResolvedConfig`, `ConfigSnapshot`, `ConfigSchema` and
+`CONFIG_DEFAULTS` APIs are removed. There are no compatibility aliases or
+`preserve_unknown` flag. Backend API v9 handshake and factory signatures remain;
+in-repo plugins use the same uppercase unprefixed Config as core.
+
+Configuration-consuming functions take `Config`; public boundaries that permit
+omission accept `Config | None`. Callers resolve ordinary mappings explicitly
+with `resolve_config(override=namespaced_values)` before passing configuration onward. An absent
+config resolves once at its ownership event below with `resolve_config()`:
+defaults only, no environment. The environment is read once, by the process
+entry point: `cli.main()` for the CLI, or a program that calls
+`resolve_config(env=os.environ)` and passes the result on. A supplied `Config`
+is retained as given: consumers pass it through `resolve_config(config=...)`,
+which rejects anything that is not a `Config` with `TypeError` but neither copies
+nor revalidates it. Per-call
+config replaces the retained snapshot for that call; it is not a sparse overlay.
+To derive an overlay, callers use `resolve_config(config=config, override=namespaced_values)`
+first. Internal helpers take an already resolved `Config`.
 
 | Public surface | Snapshot event |
 |----------------|----------------|
-| `snapshot_config()` | During that call. |
+| `resolve_config()` | During that call, using only explicit sources. |
 | `Queue`, watcher, `DBConnection`, and other eager config-consuming constructors | During the constructor call, before owned resource side effects. |
 | Eager discovery and load functions | At the first config-consuming branch during the function call; config-independent validation that already precedes that branch keeps its existing order. |
 | `open_broker()` | On `__enter__` of the returned generator-based context manager, not when the context-manager object is created. The marker is retained through `__exit__`. |
-| Transactional generator per-call config | On first iteration of the configuration-consuming `at_least_once` path, when the Python generator body begins. The resulting overlay is retained until exhaustion or close. Creating the generator object alone does not inspect an ordinary override mapping. |
+| Transactional generator per-call config | On first iteration of the configuration-consuming `at_least_once` path, when the Python generator body begins. The supplied Config, or the broker snapshot when omitted, is retained until exhaustion or close. Creating the generator object alone does not read configuration. |
 | Direct `cmd_*` functions | At first actual config consumption after any contract-preserved config-independent early path; then once for the rest of that invocation. |
-| `cli.main()` | Once before parser construction and argument parsing, preserving the existing invalid-config-before-parsing rule. |
+| `cli.main()` | Once, from the process environment, before parser construction and argument parsing, preserving the existing invalid-config-before-parsing rule. |
 | `dump_lines()` | Never. It consumes an already-open broker and receives no config argument; CLI dump configuration belongs to its broker-opening path. |
 
 Environment variable and TOML field catalogs for project scoping remain in the
@@ -246,7 +261,6 @@ README residual where listed; this clause owns the **public callables**, not
 every config key.
 
 _Implementation mapping_:
-- `simplebroker/config.py`
 - `simplebroker/_constants.py`
 - `simplebroker/project.py`
 - `simplebroker/_project_config.py`
@@ -262,12 +276,10 @@ _Implementation mapping_:
   config) as documented on the type.
 - Prefer context-manager use or an explicit **`close`** when the handle owns
   resources; cleanup is part of the public lifecycle.
-- Queue construction converts omitted or ordinary configuration to one
-  `ResolvedConfig` and retains it as that instance's snapshot. Later ambient
-  changes do not affect that Queue, including ephemeral operations and later
-  lazy backend/core creation. A later Queue construction observes the
-  then-current ambient configuration. Any documented per-call override applies
-  to the retained snapshot without rereading the environment.
+- Queue construction resolves omitted configuration to one `Config`, or retains
+  the supplied `Config` directly as that instance's snapshot, including for
+  ephemeral operations and later lazy backend/core creation. Any documented
+  per-call config replaces the retained snapshot for that call.
 
 `Queue.backend_name` is a read-only string containing the resolved backend
 plugin name. Built-in names are `"sqlite"`, `"redis"`, and `"postgres"`;
@@ -368,11 +380,11 @@ before returning** their result lists. Generator modes that document
 `at_least_once` or batch commit intervals follow the delivery vertical, not a
 second library-only delivery model.
 
-For transactional `claim_generator` and `move_generator` calls, an ordinary
-per-call config mapping is overlaid on the broker's retained snapshot when the
-configuration-consuming `at_least_once` generator is first iterated. This is
-the normal Python generator-body boundary, not generator-object creation. The
-overlay remains fixed for that generator's lifetime and does not read ambient
+For transactional `claim_generator` and `move_generator` calls, the supplied
+per-call `Config` is selected, or the broker's retained snapshot when omitted,
+when the configuration-consuming `at_least_once` generator is first iterated.
+This is the normal Python generator-body boundary, not generator-object creation.
+That snapshot remains fixed for the generator's lifetime and does not read ambient
 configuration. A direct `batch_size` argument still takes precedence over its
 configured default.
 
@@ -404,14 +416,12 @@ and `close()`. This contract does not make `wait()` and `close()` safe to run
 concurrently, and it does not define `wait()` behavior after close.
 
 Watcher construction follows `[SB-API-3]` configuration timing: it retains one
-`ResolvedConfig`, and later polling, waiting, callback dispatch, runner
+`Config`, and later polling, waiting, callback dispatch, runner
 creation, and documented per-call overrides do not reread ambient
 configuration. A watcher constructed from an existing `Queue` adopts that
-Queue's retained snapshot when watcher config is omitted. An explicit ordinary
-watcher config mapping overlays the Queue snapshot without consulting the
-environment; an explicit complete `ResolvedConfig` replaces it for
-watcher-local policy. The supplied Queue remains governed by its own retained
-snapshot in either explicit-config case.
+Queue's retained snapshot when watcher config is omitted. An explicit `Config`
+replaces it for watcher-local policy without consulting the environment.
+The supplied Queue remains governed by its own retained snapshot.
 
 `PollingStrategy`'s `initial_checks`, `max_interval`, `burst_sleep`, and
 `jitter_factor` constructor defaults are the canonical normalized defaults of
@@ -556,15 +566,12 @@ listed in `ext.__all__`).
 `simplebroker.ext.InvalidConfigError` subclasses both `BrokerError` and
 `ValueError`. Its `key`, `source`, `expected`, and `value_display` attributes
 are public; it never retains a sensitive raw value. Importing `simplebroker`,
-`simplebroker.ext`, or `simplebroker.commands` does not parse ambient
-configuration or raise an import-time configuration exception. A public
-handle or invocation that needs ambient/default configuration samples it once
-at the ownership seam and raises a fresh `InvalidConfigError` before broker
-side effects when that sample is invalid. A successful `ResolvedConfig`
-remains fixed for the lifetime of its owning handle or invocation; later
-ambient changes, including invalid values, do not affect it. Direct
-`load_config()` and ordinary `resolve_config()` calls remain fresh strict
-environment reads.
+`simplebroker.ext`, or `simplebroker.commands` does not read the environment
+or raise an import-time configuration exception. Library handles and
+invocations without a `Config` use defaults and never read the environment.
+Each `resolve_config(env=os.environ)` call reads the environment strictly and
+raises a fresh `InvalidConfigError` for an invalid value; the resulting
+`Config` stays fixed for the lifetime of the handles it is passed to.
 
 - Library failure is signaled by **exceptions**, not by CLI process exit codes
   (`[SB-CLI-1]` applies to the CLI and [SB-API-10]).
@@ -575,6 +582,7 @@ environment reads.
   exceptions, not an exhaustive catch for every failure.
 
 _Implementation mapping_:
+- `simplebroker/_constants.py` (`BrokerError`, `InvalidConfigError`)
 - `simplebroker/_exceptions.py`
 - `simplebroker/ext.py`
 
@@ -612,17 +620,16 @@ shapes.
   In particular, `cmd_load` does not replace process-global warning hooks or
   filters while presenting its invocation's clock-skew notice.
 - A direct command-layer caller receives `InvalidConfigError` when that command
-  consumes an invalid ambient/default configuration; the integer exit-code
-  guarantee applies once command execution begins. A command invoked with an
-  explicit target that does not otherwise consume ambient configuration is not
-  rejected merely because unrelated ambient config is invalid. The CLI process
+  consumes an invalid configuration; the integer exit-code guarantee applies
+  once command execution begins. Direct `cmd_*` calls without `config` use
+  defaults and do not read the environment. The CLI process
   wrapper is the sole translator that turns a typed configuration-initialization
   failure into the `[SB-CLI-2]` stderr diagnostic and exit `1`.
 - Helpers listed in that module’s `__all__` (for example
   `parse_exact_message_id`) are part of this surface.
 
 Each direct `cmd_*` invocation that consumes configuration creates one
-invocation-scoped `ResolvedConfig` and reuses it through target selection,
+invocation-scoped `Config` and reuses it through target selection,
 Queue/broker construction, and operation execution. Repeated programmatic
 calls may therefore observe intentional environment changes between calls,
 while no call observes a change after its snapshot is created. Existing
@@ -900,15 +907,15 @@ _Implementation mapping_:
 | Clause | Firing evidence |
 |--------|-----------------|
 | [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`, `::test_api_moved_message_is_package_root_public`, `::test_api_closeable_peek_iterator_contract`; `tests/test_queue_typing_contract.py`; `tests/test_dev_scripts.py` (isolated root wheel/sdist import and published-artifact verification); `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
-| [SB-API-2] | `tests/test_config_builder.py`; `tests/test_config_coexistence.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_target_discovery_samples_environment_for_each_call`; `tests/test_project_config.py` (recursive plugin-owned options, TOML-native normalization/rejection, target serialization, and SQLite rejection); `tests/test_process_broker_session.py` (type/opaque identity, one recursive key/factory snapshot, and all SQLite public option paths); `tests/test_activity_waiter_api.py::test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
-| [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_backend_plugin_resolution.py` (built-in, third-party, and injected-runner backend identity without target I/O); `tests/test_connection_config.py::test_ephemeral_queue_keeps_constructor_snapshot_after_invalid_env_change`, `tests/test_connection_config.py::test_new_queue_observes_later_environment_while_existing_queue_stays_fixed`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
+| [SB-API-2] | `tests/test_config_builder.py`; `tests/test_config_coexistence.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`; `tests/test_project_config.py` (recursive plugin-owned options, TOML-native normalization/rejection, target serialization, and SQLite rejection); `tests/test_process_broker_session.py` (type/opaque identity, one recursive key/factory snapshot, and all SQLite public option paths); `tests/test_activity_waiter_api.py::test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
+| [SB-API-3] | `tests/test_connection_config.py::test_explicit_config_is_retained_at_constructor`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_backend_plugin_resolution.py` (built-in, third-party, and injected-runner backend identity without target I/O); `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_timestamp_selection_contract_sb_select.py::test_bounded_one_and_many_order_matrix`, `::test_invalid_or_unbounded_order_fails_before_target_acquisition`, `::test_generator_signatures_do_not_expose_order`; `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py` (high-level `all_messages=True` path); `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`, `::test_queue_delete_explicit_none_is_rejected_without_mutation`, `::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py::test_api_write_keep_newest_signatures_and_public_validator`; `tests/test_keep_newest.py`; delivery/id/select/bcast suites for meaning |
-| [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_closeable_peek_iterator_contract`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_reads_ordinary_override_on_first_iteration`; Queue generator / `*_many` suites |
-| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_watcher_start_stop_cleanup_ownership_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_polling_strategy_defaults_match_canonical_config`; `tests/test_watcher_error_handler_contract.py`, including `test_batch_iterator_close_failure_is_secondary_to_error_handler_failure`; `tests/test_watcher_stop_contract.py::test_stop_racing_start_has_one_cleanup_owner`, `test_join_timeout_does_not_transfer_cleanup_from_live_run`, `test_cleanup_failure_keeps_lifecycle_retryable`, `test_context_exit_suppresses_stop_failure_without_replacing_body_exception`, `test_context_exit_cleanup_failure_remains_retryable`, `test_context_exit_propagates_base_exception_from_stop`, `test_batch_iterators_close_once_on_exhaustion_after_handler_continuation`, `test_batch_iterator_close_failure_without_active_failure_surfaces`, `test_batch_iterator_close_failure_is_note_on_retryable_failure`, `test_batch_iterator_close_failure_during_clean_stop_is_terminal`, `test_batch_iterator_close_base_exception_keeps_cleanup_priority`; `tests/test_watcher_transition_tables.py::test_watcher_lifecycle_fires_transition_table`; `tests/test_watcher.py::TestPollingStrategy::test_defaults_use_ambient_free_canonical_config_snapshot`, `tests/test_watcher.py::TestPollingStrategy::test_all_defaults_derive_from_one_isolated_canonical_snapshot`; `tests/test_connection_config.py::test_watcher_instance_config_maps_into_strategy_fields`, `tests/test_connection_config.py::test_watcher_environment_config_maps_into_strategy_fields`, `tests/test_connection_config.py::test_polling_strategy_fields_determine_delay_schedule`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites |
+| [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_closeable_peek_iterator_contract`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_retains_explicit_config_on_first_iteration`; Queue generator / `*_many` suites |
+| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_watcher_start_stop_cleanup_ownership_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_polling_strategy_defaults_match_canonical_config`; `tests/test_watcher_error_handler_contract.py`, including `test_batch_iterator_close_failure_is_secondary_to_error_handler_failure`; `tests/test_watcher_stop_contract.py::test_stop_racing_start_has_one_cleanup_owner`, `test_join_timeout_does_not_transfer_cleanup_from_live_run`, `test_cleanup_failure_keeps_lifecycle_retryable`, `test_context_exit_suppresses_stop_failure_without_replacing_body_exception`, `test_context_exit_cleanup_failure_remains_retryable`, `test_context_exit_propagates_base_exception_from_stop`, `test_batch_iterators_close_once_on_exhaustion_after_handler_continuation`, `test_batch_iterator_close_failure_without_active_failure_surfaces`, `test_batch_iterator_close_failure_is_note_on_retryable_failure`, `test_batch_iterator_close_failure_during_clean_stop_is_terminal`, `test_batch_iterator_close_base_exception_keeps_cleanup_priority`; `tests/test_watcher_transition_tables.py::test_watcher_lifecycle_fires_transition_table`; `tests/test_watcher.py::TestPollingStrategy::test_defaults_use_ambient_free_canonical_config_snapshot`, `tests/test_watcher.py::TestPollingStrategy::test_all_defaults_derive_from_one_isolated_canonical_snapshot`; `tests/test_connection_config.py::test_watcher_instance_config_maps_into_strategy_fields`, `tests/test_connection_config.py::test_polling_strategy_fields_determine_delay_schedule`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites |
 | [SB-API-7] | `tests/test_python_library_api_contract_sb_api.py::test_api_generators_watchers_sidecar_io_errors_language`; `tests/test_sqlite_schema.py::test_schema_v6_migrates_despite_unsupported_caller_objects`; `extensions/simplebroker_pg/tests/test_pg_message_id_order.py::test_real_postgres_removed_key_dependency_rolls_back_v5_migration`; sidecar suites under tests / examples |
-| [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`, including `test_load_samples_environment_for_each_invocation` |
+| [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`, including `test_load_without_config_ignores_environment` |
 | [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_invalid_config_lifecycle.py::test_invalid_environment_does_not_break_package_import`, `tests/test_invalid_config_lifecycle.py::test_sensitive_config_failure_redacts_before_formatting`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
-| [SB-API-10] | `tests/test_timestamp_selection_contract_sb_select.py::test_direct_command_accepts_normalized_newest_order`, `::test_direct_command_rejects_newest_all_before_target_resolution`; `tests/test_commands_error_ownership.py` (direct invalid-input/operational exceptions, selector parity, delete no-mutation, queue/all delete result, and CLI-owned diagnostic boundary); `tests/test_commands_status.py`; `tests/test_commands_init.py`; `tests/test_cli_dump_load.py`; `tests/test_dump_load.py::test_quiet_cmd_load_does_not_hide_another_threads_clock_skew_warning`, `test_cmd_load_warning_policy_resets_after_success`, `test_cmd_load_warning_policy_resets_after_every_failure`, `test_load_warning_sink_restores_outer_nested_policy`; `tests/test_commands_stdout_delivery.py` (exact direct stdout inventory, write-versus-flush failures, mutation durability, and bare-stdout static gate); `tests/test_cli_main.py::test_keyboard_interrupt_handling`; `tests/test_cli_watch.py::TestWatchCommand::test_watch_sigint_remains_success`; `tests/test_cli_main.py::test_repeated_main_calls_rebuild_defaults_from_invocation_snapshot`; `tests/test_public_surface.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_write_keep_newest_signatures_and_public_validator`; `tests/test_cli_write_output.py` keep-window validation and output cases; `tests/test_invalid_config_lifecycle.py::test_direct_commands_raise_when_their_path_consumes_invalid_config`, `tests/test_invalid_config_lifecycle.py::test_direct_command_early_validation_can_remain_config_independent`, `tests/test_invalid_config_lifecycle.py::test_repeated_direct_command_calls_sample_current_environment` |
+| [SB-API-10] | `tests/test_timestamp_selection_contract_sb_select.py::test_direct_command_accepts_normalized_newest_order`, `::test_direct_command_rejects_newest_all_before_target_resolution`; `tests/test_commands_error_ownership.py` (direct invalid-input/operational exceptions, selector parity, delete no-mutation, queue/all delete result, and CLI-owned diagnostic boundary); `tests/test_commands_status.py`; `tests/test_commands_init.py`; `tests/test_cli_dump_load.py`; `tests/test_dump_load.py::test_quiet_cmd_load_does_not_hide_another_threads_clock_skew_warning`, `test_cmd_load_warning_policy_resets_after_success`, `test_cmd_load_warning_policy_resets_after_every_failure`, `test_load_warning_sink_restores_outer_nested_policy`; `tests/test_commands_stdout_delivery.py` (exact direct stdout inventory, write-versus-flush failures, mutation durability, and bare-stdout static gate); `tests/test_cli_main.py::test_keyboard_interrupt_handling`; `tests/test_cli_watch.py::TestWatchCommand::test_watch_sigint_remains_success`; `tests/test_cli_main.py::test_repeated_main_calls_rebuild_defaults_from_invocation_snapshot`; `tests/test_public_surface.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_write_keep_newest_signatures_and_public_validator`; `tests/test_cli_write_output.py` keep-window validation and output cases; `tests/test_invalid_config_lifecycle.py::test_direct_command_early_validation_can_remain_config_independent`, `tests/test_invalid_config_lifecycle.py::test_direct_command_calls_ignore_environment` |
 | [SB-API-11] | `tests/test_python_library_api_contract_sb_api.py::test_api_owned_runner_lifecycle_and_backend_v9_contract`, `::test_api_write_keep_newest_signatures_and_public_validator`, `::test_api_load_future_skew_surface_is_root_importable_and_keyword_only`, `::test_api_v6_cutover_contract_names_the_legacy_pg_exception`; `tests/test_sqlite_admission.py` (early version admission, factual migration receipts, scalar proof fast path, stale/missing/fault/concurrent proof cases); `tests/test_sqlite_schema.py` (semantic uniqueness and keep cutoff query plan); `tests/test_phaselock.py`; `tests/test_process_broker_session.py` (continued cleanup and diagnostics); `tests/test_custom_runner_integration.py::test_sql_borrowed_runner_masks_destructive_verbs_across_teardown`; `tests/test_core_persistence_transition_tables.py::test_sqlite_runner_fires_transition_table` (`CLOSE_REOPEN`); `tests/test_runner_lifecycle.py`; `tests/test_backend_plugin_resolution.py` (including v9 exact-version handshake and duplicate ambiguity before load); `extensions/simplebroker_pg/tests/test_pg_schema_validation_paths.py`, `test_pg_plugin_contract_edges.py`, `test_pg_ownership.py`; `extensions/simplebroker_redis/tests/test_redis_validation.py`, `test_redis_plugin_validation_paths.py`, `test_redis_plugin_contract_edges.py`; `tests/test_release_script.py::test_repository_backend_api_v9_handshake_and_floors_match`; `tests/test_dump_load.py::test_load_header_floor_persists_when_local_cache_is_ahead`, `tests/test_dump_load.py::test_load_header_floor_observes_concurrent_durable_winner`, `tests/test_dump_load.py::test_load_header_floor_final_read_failure_is_outcome_ambiguous`; `tests/test_timestamp_advance.py`; `extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py::test_postgres_missing_last_ts_row_fails_loudly`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval`; `tests/test_timestamp_bound_grammar.py` (public validator grammar and exact ISO conversion) |
 | [SB-API-12] | `tests/test_python_library_api_contract_sb_api.py` (matrix present); kernel CLI↔Python map |
 | [SB-API-13] | `tests/test_python_library_api_contract_sb_api.py::test_api_postgres_connection_inspection_contract`; `tests/test_backend_probe.py`; `extensions/simplebroker_pg/tests/test_connection_stats.py` (shape, ordinary role, cross-role/database, lifecycle, autovacuum, PG15, and PG18) |
@@ -917,11 +924,13 @@ _Implementation mapping_:
 
 - [Shared configuration loader and unprefixed snapshots](../plans/2026-09-11-shared-configuration-loader-plan.md): additive shared API with preserved legacy views and lifecycle.
 
-- [Critical review remediation](../plans/2026-09-07-critical-review-remediation-plan.md)
+- retired: 2026-09-07-critical-review-remediation-plan — source `dbace84`;
+  see the ledger in `docs/plans/README.md`.
 
-- active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
-  — extends [SB-API-4], [SB-API-10], [SB-API-11], and [SB-API-12] for the
-  write-time pending window and backend API v9
+- retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
+  see the ledger in `docs/plans/README.md`. It extends [SB-API-4],
+  [SB-API-10], [SB-API-11], and [SB-API-12] for the write-time pending window
+  and backend API v9.
 
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It aligns public,

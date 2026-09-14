@@ -231,15 +231,15 @@ selects an existing entry. The registry invokes the builder only when the key
 is new, so a repeated acquisition cannot allocate and discard an unused
 factory.
 
-Configuration receipts expose canonical internal access and compatible public
-name views over the same values ([SB-API-2]). Composed application fields and
-legacy opaque extras still participate in complete session identity. Namespaced
-read aliases must not create duplicate identity material; this refactor does not
-introduce subset-keyed pooling or a plugin handshake. When editing acquisition,
-verify `tests/test_process_broker_session.py` and the shared configuration tests:
-equal broker settings alone cannot justify merging distinct app configurations.
+Configuration is one read-only Config with uppercase unprefixed keys. The
+session key includes all values, including application fields, and an existing
+Config is retained without ambient resolution. Naming views and broker-only
+projections are absent. Verify `tests/test_process_broker_session.py` and the
+shared configuration tests: equal broker fields alone do not justify merging
+distinct application configurations.
 
-Acquisition recursively detaches supported option and configuration containers
+Ordinary configuration inputs are detached at capture; acquisition detaches
+supported option containers
 once. The registry key and the lazy factory both derive from that same detached
 snapshot, so later nested caller mutation cannot leave an old key describing
 new factory inputs. Key material preserves primitive and container type

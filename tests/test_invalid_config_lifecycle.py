@@ -11,16 +11,16 @@ from typing import Any
 
 import pytest
 
-import simplebroker.config as config_module
-from simplebroker import BrokerTarget, commands
+from simplebroker import DEFAULT_CONFIG, BrokerTarget, ConfigField, commands
 from simplebroker._constants import (
-    load_config,
     resolve_config,
 )
-from simplebroker.config import CONFIG_DEFAULTS
 from simplebroker.ext import InvalidConfigError
 
-pytestmark = [pytest.mark.shared]
+pytestmark = [
+    pytest.mark.shared,
+    pytest.mark.filterwarnings("ignore:.*ignoring invalid"),
+]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,6 +39,7 @@ def _run_python_with_invalid_config(code: str) -> subprocess.CompletedProcess[st
         text=True,
         capture_output=True,
         check=False,
+        timeout=60,
     )
 
 
@@ -51,6 +52,7 @@ def _run_cli_with_invalid_config(*args: str) -> subprocess.CompletedProcess[str]
         text=True,
         capture_output=True,
         check=False,
+        timeout=60,
     )
 
 
@@ -60,7 +62,7 @@ def test_load_config_reports_invalid_environment_field(
     monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "not-an-integer")
 
     with pytest.raises(InvalidConfigError) as raised:
-        load_config()
+        resolve_config(env=os.environ)
 
     error = raised.value
     assert isinstance(error, ValueError)
@@ -71,8 +73,8 @@ def test_load_config_reports_invalid_environment_field(
 
 
 def test_every_recognized_config_field_has_an_expected_form() -> None:
-    assert len(CONFIG_DEFAULTS) == 32
-    assert all(field.description.strip() for field in CONFIG_DEFAULTS.values())
+    assert len(DEFAULT_CONFIG) == 32
+    assert all(field.description.strip() for field in DEFAULT_CONFIG.values())
 
 
 def test_override_failure_reports_source_and_handles_hostile_repr() -> None:
@@ -81,7 +83,9 @@ def test_override_failure_reports_source_and_handles_hostile_repr() -> None:
             raise RuntimeError("repr failed")
 
     with pytest.raises(InvalidConfigError) as raised:
-        resolve_config({"BROKER_BUSY_TIMEOUT": HostileValue("bad")})
+        resolve_config(
+            env=os.environ, override={"BROKER_BUSY_TIMEOUT": HostileValue("bad")}
+        )
 
     error = raised.value
     assert error.source == "override"
@@ -96,13 +100,15 @@ def test_valid_scalar_subclasses_keep_existing_coercion() -> None:
         pass
 
     assert (
-        resolve_config({"BROKER_BUSY_TIMEOUT": NumericText("42")})[
-            "BROKER_BUSY_TIMEOUT"
-        ]
+        resolve_config(
+            env=os.environ, override={"BROKER_BUSY_TIMEOUT": NumericText("42")}
+        )["BUSY_TIMEOUT"]
         == 42
     )
     assert (
-        resolve_config({"BROKER_BUSY_TIMEOUT": NumericInt(43)})["BROKER_BUSY_TIMEOUT"]
+        resolve_config(
+            env=os.environ, override={"BROKER_BUSY_TIMEOUT": NumericInt(43)}
+        )["BUSY_TIMEOUT"]
         == 43
     )
 
@@ -111,7 +117,7 @@ def test_config_value_display_escapes_controls_and_is_bounded() -> None:
     hostile = "line\n" + "x" * 300 + "\x7f"
 
     with pytest.raises(InvalidConfigError) as raised:
-        resolve_config({"BROKER_BUSY_TIMEOUT": hostile})
+        resolve_config(env=os.environ, override={"BROKER_BUSY_TIMEOUT": hostile})
 
     display = raised.value.value_display
     assert "\n" not in display
@@ -126,19 +132,19 @@ def test_sensitive_config_failure_redacts_before_formatting(
 ) -> None:
     secret = "postgresql://user:top-secret@example.invalid/db"
 
-    def reject(_value: Any) -> str:
-        raise ValueError("rejected")
+    def reject(value: Any) -> str:
+        if value:
+            raise ValueError("rejected")
+        return ""
 
-    monkeypatch.setattr(
-        config_module,
-        "CONFIG_DEFAULTS",
-        CONFIG_DEFAULTS.derive(parsers={"backend_target": reject}),
-    )
+    fields = dict(DEFAULT_CONFIG)
+    fields["BACKEND_TARGET"] = ConfigField("", "target", reject, sensitive=True)
     monkeypatch.setenv("BROKER_BACKEND_TARGET", secret)
 
     with pytest.raises(InvalidConfigError) as raised:
-        load_config()
+        resolve_config(env=os.environ, defaults=fields)
 
+    assert raised.value.source == "environment"
     assert raised.value.value_display == "<redacted>"
     assert secret not in str(raised.value)
 
@@ -167,10 +173,37 @@ def test_cli_reports_invalid_environment_before_parsing(args: tuple[str, ...]) -
 
     assert result.returncode == 1
     assert result.stdout == ""
-    assert result.stderr.count("\n") == 1
+    assert result.stderr.splitlines()[0] == (
+        "simplebroker: warning: ignoring invalid BROKER_BUSY_TIMEOUT='not-an-integer' "
+        "from the environment (expected an integer number of milliseconds)"
+    )
+    assert "UserWarning" not in result.stderr
+    assert "warnings.warn" not in result.stderr
+    assert result.stderr.splitlines()[-1].startswith(
+        "simplebroker: invalid configuration"
+    )
     assert "BROKER_BUSY_TIMEOUT='not-an-integer'" in result.stderr
     assert "expected an integer number of milliseconds" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_cli_prints_misspelled_environment_name_as_one_warning_line() -> None:
+    env = os.environ.copy()
+    env["BROKER_busy_timeout"] = "5"
+    result = subprocess.run(
+        [sys.executable, "-m", "simplebroker.cli", "--version"],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == (
+        "simplebroker: warning: ignoring BROKER_busy_timeout from the environment: "
+        "did you mean BROKER_BUSY_TIMEOUT? (value '5')\n"
+    )
 
 
 @pytest.mark.parametrize(
@@ -209,7 +242,9 @@ def test_cli_invalid_config_matrix_fails_before_target_creation(
 
     assert result.returncode == 1
     assert result.stdout == ""
-    assert result.stderr.count("\n") == 1
+    assert result.stderr.splitlines()[-1].startswith(
+        "simplebroker: invalid configuration"
+    )
     assert expected_key in result.stderr
     assert "Traceback" not in result.stderr
     assert not target.exists()
@@ -218,13 +253,13 @@ def test_cli_invalid_config_matrix_fails_before_target_creation(
 def test_public_snapshots_are_explicit_and_fresh_across_calls() -> None:
     code = """
 import os
-from simplebroker import snapshot_config
-first = snapshot_config()
-print(first["BROKER_BUSY_TIMEOUT"])
+from simplebroker import resolve_config
+first = resolve_config(env=os.environ)
+print(first["BUSY_TIMEOUT"])
 os.environ["BROKER_BUSY_TIMEOUT"] = "37"
-print(first["BROKER_BUSY_TIMEOUT"])
-second = snapshot_config()
-print(second["BROKER_BUSY_TIMEOUT"])
+print(first["BUSY_TIMEOUT"])
+second = resolve_config(env=os.environ)
+print(second["BUSY_TIMEOUT"])
 print(first is second)
 """
     env = os.environ.copy()
@@ -244,7 +279,7 @@ print(first is second)
 def test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from simplebroker import snapshot_config
+    from simplebroker import resolve_config
 
     monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "not-an-integer")
     errors: list[InvalidConfigError] = []
@@ -252,7 +287,7 @@ def test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers(
 
     for _ in range(2):
         try:
-            snapshot_config()
+            resolve_config(env=os.environ)
         except InvalidConfigError as error:
             errors.append(error)
             frames: list[str] = []
@@ -267,7 +302,69 @@ def test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers(
     assert traceback_shapes[0] == traceback_shapes[1]
 
     monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "23")
-    assert snapshot_config()["BROKER_BUSY_TIMEOUT"] == 23
+    assert resolve_config(env=os.environ)["BUSY_TIMEOUT"] == 23
+
+
+def _import_time_ambient_resolutions(tree: ast.AST) -> list[int]:
+    """Return lines of import-time ``resolve_config`` calls lacking ``env={}``.
+
+    Import evaluates module and class bodies, decorators and default argument
+    values, so all of those are checked. Function and lambda bodies run later.
+    Only an empty dict literal proves the call is ambient-free, whatever the
+    resolver's ``env`` default is.
+    """
+    lines: list[int] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            evaluated = [*node.args.defaults, *node.args.kw_defaults]
+            if not isinstance(node, ast.Lambda):
+                evaluated.extend(node.decorator_list)
+            for expression in evaluated:
+                if expression is not None:
+                    visit(expression)
+            return
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = (
+                func.id
+                if isinstance(func, ast.Name)
+                else func.attr
+                if isinstance(func, ast.Attribute)
+                else None
+            )
+            ambient_free = any(
+                keyword.arg == "env"
+                and isinstance(keyword.value, ast.Dict)
+                and not keyword.value.keys
+                for keyword in node.keywords
+            )
+            if name == "resolve_config" and not ambient_free:
+                lines.append(node.lineno)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(tree)
+    return lines
+
+
+@pytest.mark.parametrize(
+    ("source", "flagged"),
+    [
+        ("X = resolve_config()", True),
+        ("resolve_config()", True),
+        ("X = _constants.resolve_config()", True),
+        ("X = resolve_config(env=os.environ)", True),
+        ("class A:\n    x = resolve_config()", True),
+        ("def f(config=resolve_config()):\n    pass", True),
+        ("@wrap(resolve_config())\ndef f():\n    pass", True),
+        ("X = resolve_config(env={})", False),
+        ("def f():\n    return resolve_config()", False),
+        ("F = lambda: resolve_config()", False),
+    ],
+)
+def test_import_time_resolution_detector(source: str, flagged: bool) -> None:
+    assert bool(_import_time_ambient_resolutions(ast.parse(source))) is flagged
 
 
 def test_config_consumers_do_not_resolve_ambient_config_at_module_scope() -> None:
@@ -288,21 +385,18 @@ def test_config_consumers_do_not_resolve_ambient_config_at_module_scope() -> Non
     assert "simplebroker/cli.py" in module_paths
     assert "extensions/simplebroker_redis/simplebroker_redis/pool.py" in module_paths
     assert len(module_paths) > 17
-    offenders: list[str] = []
-    for relative_path in module_paths:
-        tree = ast.parse((PROJECT_ROOT / relative_path).read_text(encoding="utf-8"))
-        for node in tree.body:
-            value = (
-                node.value if isinstance(node, (ast.Assign, ast.AnnAssign)) else None
-            )
-            if (
-                isinstance(value, ast.Call)
-                and isinstance(value.func, ast.Name)
-                and value.func.id in {"load_config", "snapshot_config"}
-            ):
-                offenders.append(relative_path)
+    offenders = [
+        f"{relative_path}:{line}"
+        for relative_path in module_paths
+        for line in _import_time_ambient_resolutions(
+            ast.parse((PROJECT_ROOT / relative_path).read_text(encoding="utf-8"))
+        )
+    ]
 
-    assert offenders == []
+    assert offenders == [], (
+        "import-time resolve_config() must pass env={} so importing never "
+        f"parses ambient configuration: {offenders}"
+    )
 
 
 def test_module_path_inventory_normalizes_windows_separators() -> None:
@@ -310,54 +404,6 @@ def test_module_path_inventory_normalizes_windows_separators() -> None:
         _canonical_module_path(PureWindowsPath(r"simplebroker\cli.py"))
         == "simplebroker/cli.py"
     )
-
-
-COMMAND_CALLS = {
-    "cmd_alias_add": "commands.cmd_alias_add(path, 'a', 'q')",
-    "cmd_alias_list": "commands.cmd_alias_list(path)",
-    "cmd_alias_remove": "commands.cmd_alias_remove(path, 'a')",
-    "cmd_broadcast": "commands.cmd_broadcast(path, 'body')",
-    "cmd_delete": "commands.cmd_delete(path, 'q')",
-    "cmd_dump": "commands.cmd_dump(path)",
-    "cmd_exists": "commands.cmd_exists(path, 'q')",
-    "cmd_init": "commands.cmd_init(path, True)",
-    "cmd_list": "commands.cmd_list(path)",
-    "cmd_load": "commands.cmd_load(path)",
-    "cmd_move": "commands.cmd_move(path, 'source', 'dest')",
-    "cmd_peek": "commands.cmd_peek(path, 'q')",
-    "cmd_read": "commands.cmd_read(path, 'q')",
-    "cmd_rename": "commands.cmd_rename(path, 'old', 'new')",
-    "cmd_stats": "commands.cmd_stats(path, 'q')",
-    "cmd_status": "commands.cmd_status(path)",
-    "cmd_vacuum": "commands.cmd_vacuum(path)",
-    "cmd_watch": "commands.cmd_watch(path, 'q', quiet=True)",
-    "cmd_write": "commands.cmd_write(path, 'q', 'body')",
-}
-
-
-@pytest.mark.parametrize(("name", "call"), COMMAND_CALLS.items())
-def test_direct_commands_raise_when_their_path_consumes_invalid_config(
-    name: str,
-    call: str,
-) -> None:
-    code = f"""
-import tempfile
-import simplebroker.commands as commands
-from simplebroker.ext import InvalidConfigError
-from simplebroker.config import CONFIG_DEFAULTS
-import simplebroker.config as config_module
-path = tempfile.mktemp(suffix='.db')
-try:
-    {call}
-except InvalidConfigError:
-    print({name!r})
-else:
-    raise SystemExit('command did not consume invalid configuration')
-"""
-    result = _run_python_with_invalid_config(code)
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == f"{name}\n"
 
 
 def test_cmd_load_consumes_invalid_config_before_interactive_stdin_guard(
@@ -372,7 +418,7 @@ def test_cmd_load_consumes_invalid_config_before_interactive_stdin_guard(
     with pytest.raises(InvalidConfigError):
         commands.cmd_load(
             "unused.db",
-            config={"BROKER_BUSY_TIMEOUT": "not-an-integer"},
+            config=resolve_config(override={"BROKER_BUSY_TIMEOUT": "not-an-integer"}),
         )
 
 
@@ -407,19 +453,59 @@ def test_direct_target_init_does_not_translate_invalid_config_to_exit_code(
         commands.cmd_init(
             target,
             quiet=True,
-            config={"BROKER_BUSY_TIMEOUT": "not-an-integer"},
+            config=resolve_config(override={"BROKER_BUSY_TIMEOUT": "not-an-integer"}),
         )
 
 
-def test_repeated_direct_command_calls_sample_current_environment(
+def test_direct_command_calls_ignore_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    target = str(tmp_path / "commands-snapshot.db")
     monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "5")
 
-    with pytest.raises(ValueError, match="maximum size of 5 bytes"):
-        commands.cmd_write(target, "jobs", "123456")
+    assert commands.cmd_write(str(tmp_path / "commands.db"), "jobs", "123456") == 0
 
-    monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "6")
-    assert commands.cmd_write(target, "jobs", "123456") == 0
+
+def _inline_config_fallbacks(tree: ast.AST) -> list[int]:
+    """Return lines of ``... if config is None else config`` seam expressions."""
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.IfExp)
+        and isinstance(node.orelse, ast.Name)
+        and node.orelse.id == "config"
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "config"
+        and len(node.test.ops) == 1
+        and isinstance(node.test.ops[0], ast.Is)
+        and isinstance(node.test.comparators[0], ast.Constant)
+        and node.test.comparators[0].value is None
+    ]
+
+
+def test_config_seams_route_supplied_configs_through_resolve_config() -> None:
+    module_paths = sorted(
+        _canonical_module_path(path.relative_to(PROJECT_ROOT))
+        for pattern in (
+            "simplebroker/**/*.py",
+            "extensions/simplebroker_pg/simplebroker_pg/**/*.py",
+            "extensions/simplebroker_redis/simplebroker_redis/**/*.py",
+            "examples/*.py",
+        )
+        for path in PROJECT_ROOT.glob(pattern)
+        if "__pycache__" not in path.parts
+    )
+    assert "simplebroker/db.py" in module_paths
+    offenders = [
+        f"{relative_path}:{line}"
+        for relative_path in module_paths
+        for line in _inline_config_fallbacks(
+            ast.parse((PROJECT_ROOT / relative_path).read_text(encoding="utf-8"))
+        )
+    ]
+
+    assert offenders == [], (
+        "a supplied config must pass through resolve_config(config=...) so a "
+        f"non-Config fails at the boundary: {offenders}"
+    )

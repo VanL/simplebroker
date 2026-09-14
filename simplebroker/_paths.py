@@ -8,7 +8,7 @@ before any file is opened, so a rejected path never reaches a backend.
 import os
 from pathlib import Path, PurePath
 
-from ._backends import get_backend
+from ._backends import sqlite as sqlite_backend
 from ._constants import (
     COMPOUND_DB_NAME_PARTS,
     MAX_PROJECT_TRAVERSAL_DEPTH,
@@ -55,12 +55,12 @@ def is_ancestor(possible_ancestor: str | Path, possible_descendant: str | Path) 
 
 def _validate_sqlite_database(file_path: Path, verify_magic: bool = True) -> None:
     """Compatibility wrapper for SQLite database validation."""
-    get_backend().validate_database(file_path, verify_magic)
+    sqlite_backend.validate_database(file_path, verify_magic)
 
 
 def _is_valid_sqlite_db(file_path: Path, verify_magic: bool = True) -> bool:
     """Compatibility wrapper for SQLite database validation checks."""
-    return get_backend().is_valid_database(file_path, verify_magic)
+    return sqlite_backend.is_valid_database(file_path, verify_magic)
 
 
 def _find_project_database(

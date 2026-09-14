@@ -928,14 +928,11 @@ covers the rest of the API surface:
 
 For embedded use, put a small project-level client or context object in
 front of SimpleBroker: resolve the broker target once, translate your
-application’s settings into `BROKER_*` keys, and hand out queues bound to
-that target. Use `resolve_isolated_config()` and preserve its immutable
-`ResolvedConfig` result when ambient `BROKER_*` must not affect the embedding
-application. Use `snapshot_config()` when several handles should deliberately
-share one ambient-derived configuration receipt. New handles otherwise sample
-current ambient configuration at their documented construction or invocation
-boundary; existing handles remain fixed. Weft is the reference implementation
-of the client shape.
+application’s namespaced settings into a Config, and hand out queues bound to
+that target. The library does not read `BROKER_*` environment variables on
+its own; call `resolve_config(env=os.environ)` once at startup to honor them, or
+`resolve_config()` for defaults only. Pass the read-only `Config` to every
+handle. Weft is the reference implementation of the client shape.
 
 The full pattern — client shape, configuration snapshots, redaction rules,
 and the `simplebroker.commands` command layer (`[SB-API-10]`, the

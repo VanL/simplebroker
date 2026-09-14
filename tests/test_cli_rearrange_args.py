@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from simplebroker._constants import resolve_isolated_config
+from simplebroker._constants import resolve_config
 from simplebroker.cli import (
     ArgumentParserError,
     ArgumentProcessor,
@@ -110,17 +110,17 @@ def _assert_preparse_grammar_matches_parser(bundle: _CliParserBundle) -> None:
 
 def _normalize_args(argv: list[str]) -> list[str]:
     """Run the exact production normalizer with ambient-free defaults."""
-    bundle = _build_cli_parser(config=resolve_isolated_config({}))
+    bundle = _build_cli_parser(config=resolve_config(override={}))
     return list(ArgumentProcessor(bundle.grammar).process(argv).normalized_argv)
 
 
 def test_preparse_grammar_matches_constructed_parser() -> None:
     """Every preparse-sensitive parser registration reaches the sidecar grammar."""
-    _assert_preparse_grammar_matches_parser(_build_cli_parser())
+    _assert_preparse_grammar_matches_parser(_build_cli_parser(config=resolve_config()))
 
 
 def test_preparse_conservation_rejects_uncaptured_write_option() -> None:
-    bundle = _build_cli_parser()
+    bundle = _build_cli_parser(config=resolve_config())
     subparsers_action = next(
         action
         for action in bundle.parser._actions
@@ -135,7 +135,7 @@ def test_preparse_conservation_rejects_uncaptured_write_option() -> None:
 
 
 def test_preparse_conservation_rejects_uncaptured_broadcast_selector() -> None:
-    bundle = _build_cli_parser()
+    bundle = _build_cli_parser(config=resolve_config())
     subparsers_action = next(
         action
         for action in bundle.parser._actions
@@ -238,7 +238,7 @@ class TestArgumentProcessor:
             ["--keep-newest", "5"],
             ["--keep-newest=5"],
         )
-        args = _build_cli_parser().parser.parse_args(normalized)
+        args = _build_cli_parser(config=resolve_config()).parser.parse_args(normalized)
 
         assert args.queue == "queue"
         assert args.message == "message"

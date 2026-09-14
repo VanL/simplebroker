@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
-from simplebroker import Queue
+from simplebroker import Config, Queue
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore
 
@@ -72,7 +72,7 @@ def make_target(
 def make_broker(
     target: BrokerTarget,
     *,
-    config: dict[str, Any] | None = None,
+    config: Config | None = None,
 ) -> BrokerCore:
     """Create a ``BrokerCore`` from a resolved target."""
     plugin = target.plugin
@@ -105,7 +105,7 @@ def make_queue(
     target: BrokerTarget,
     *,
     persistent: bool = True,
-    config: dict[str, Any] | None = None,
+    config: Config | None = None,
 ) -> Queue:
     """Create a ``Queue`` bound to the resolved target."""
     return Queue(name, db_path=target, persistent=persistent, config=config)

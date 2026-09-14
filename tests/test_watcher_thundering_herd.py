@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import threading
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -11,7 +12,7 @@ from typing import Any
 import pytest
 
 from simplebroker import CloseableIterator, Queue
-from simplebroker._constants import load_config
+from simplebroker._constants import resolve_config
 from simplebroker.watcher import QueueWatcher
 
 from .helper_scripts.broker_factory import make_broker
@@ -217,7 +218,7 @@ def test_skip_idle_check_environment_controls_main_loop(
     watcher = QueueWatcher(
         queue,
         lambda _message, _timestamp: None,
-        config=load_config(),
+        config=resolve_config(env=os.environ),
     )
     try:
         watcher.run_in_thread()

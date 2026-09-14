@@ -21,7 +21,14 @@ from typing import Any, cast
 import pytest
 
 import simplebroker._broker_session as broker_session_module
-from simplebroker import Queue, open_broker, resolve_isolated_config
+from simplebroker import (
+    DEFAULT_CONFIG,
+    Config,
+    ConfigField,
+    Queue,
+    open_broker,
+    resolve_config,
+)
 from simplebroker._backend_plugins import BACKEND_ENTRY_POINT_GROUP
 from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
 from simplebroker._broker_session import (
@@ -33,7 +40,11 @@ from simplebroker._broker_session import (
 )
 from simplebroker._runner import SQLiteRunner
 from simplebroker._targets import BrokerTarget
-from simplebroker.db import BrokerCore, _build_process_session_core_factory
+from simplebroker.db import (
+    BrokerCore,
+    DBConnection,
+    _build_process_session_core_factory,
+)
 from tests.helper_scripts import drive_until, scale_timeout_for_ci
 
 # External liveness valve for Event waits, joins, and barriers. Deadlock
@@ -129,7 +140,7 @@ class CountingBackendPlugin:
         target: str,
         *,
         backend_options: dict[str, Any] | None = None,
-        config: dict[str, Any] | None = None,
+        config: Config | None = None,
     ) -> CountingSQLiteRunner:
         self.create_runner_calls += 1
         self.runner_backend_options.append(dict(backend_options or {}))
@@ -332,11 +343,11 @@ def counting_target(
 def build_process_session(
     db_path: str | BrokerTarget,
     *,
-    config: dict[str, Any] | None = None,
+    config: Config | None = None,
 ) -> _ProcessBrokerSession:
     spec = _session_spec(
         db_path,
-        resolve_isolated_config({} if config is None else config),
+        resolve_config() if config is None else config,
     )
     return _ProcessBrokerSession(_build_process_session_core_factory(spec))
 
@@ -568,7 +579,7 @@ def test_opaque_session_identity_retains_its_object() -> None:
     retained = weakref.ref(opaque)
     key = _session_key(
         BrokerTarget("sqlite", "opaque-key.db", {"opaque": opaque}),
-        resolve_isolated_config({}),
+        resolve_config(override={}),
     )
 
     del opaque
@@ -640,10 +651,7 @@ def test_session_key_and_lazy_factory_share_one_recursive_snapshot(
         opaque=opaque,
     )
     metadata = {"labels": ["original"]}
-    config = resolve_isolated_config(
-        {"BROKER_EMBEDDER_METADATA": metadata},
-        preserve_unknown=True,
-    )
+    config = resolve_config(override={"BROKER_EMBEDDER_METADATA": metadata})
     queue_a = Queue(
         "a",
         db_path=target,
@@ -652,16 +660,16 @@ def test_session_key_and_lazy_factory_share_one_recursive_snapshot(
     )
 
     target.backend_options["pool"]["hosts"].append("mutated")
-    config["BROKER_EMBEDDER_METADATA"]["labels"].append("mutated")
+    # Config is lightly frozen; callers retain ownership of nested application data.
+    # Only target options are captured recursively by session acquisition.
 
     original_target = counting_target(
         tmp_path,
         pool={"hosts": ["primary"]},
         opaque=opaque,
     )
-    original_config = resolve_isolated_config(
-        {"BROKER_EMBEDDER_METADATA": {"labels": ["original"]}},
-        preserve_unknown=True,
+    original_config = resolve_config(
+        override={"BROKER_EMBEDDER_METADATA": {"labels": ["original"]}}
     )
     queue_b = Queue(
         "b",
@@ -680,7 +688,7 @@ def test_session_key_and_lazy_factory_share_one_recursive_snapshot(
     assert counting_backend.create_runner_calls == 1
     assert counting_backend.runner_backend_options[0]["pool"] == {"hosts": ["primary"]}
     assert counting_backend.runner_backend_options[0]["opaque"] is opaque
-    assert counting_backend.runner_configs[0]["BROKER_EMBEDDER_METADATA"] == {
+    assert counting_backend.runner_configs[0]["EMBEDDER_METADATA"] == {
         "labels": ["original"]
     }
 
@@ -722,7 +730,7 @@ def test_persistent_queues_different_config_do_not_share_backend_runner(
                 "a",
                 db_path=target,
                 persistent=True,
-                config={"BROKER_BUSY_TIMEOUT": 1000},
+                config=resolve_config(override={"BROKER_BUSY_TIMEOUT": 1000}),
             )
         )
         queue_b = stack.enter_context(
@@ -730,7 +738,7 @@ def test_persistent_queues_different_config_do_not_share_backend_runner(
                 "b",
                 db_path=target,
                 persistent=True,
-                config={"BROKER_BUSY_TIMEOUT": 2000},
+                config=resolve_config(override={"BROKER_BUSY_TIMEOUT": 2000}),
             )
         )
         queue_a.write("one")
@@ -744,14 +752,8 @@ def test_type_distinct_config_extras_do_not_share_process_session(
     counting_backend: CountingBackendPlugin,
 ) -> None:
     target = counting_target(tmp_path, schema="same")
-    config_a = resolve_isolated_config(
-        {"BROKER_EMBEDDER_METADATA": True},
-        preserve_unknown=True,
-    )
-    config_b = resolve_isolated_config(
-        {"BROKER_EMBEDDER_METADATA": 1},
-        preserve_unknown=True,
-    )
+    config_a = resolve_config(override={"BROKER_EMBEDDER_METADATA": True})
+    config_b = resolve_config(override={"BROKER_EMBEDDER_METADATA": 1})
 
     with contextlib.ExitStack() as stack:
         queue_a = stack.enter_context(
@@ -771,14 +773,8 @@ def test_opaque_extra_participates_in_process_session_identity(
     counting_backend: CountingBackendPlugin,
 ) -> None:
     target = counting_target(tmp_path, schema="same")
-    config_a = resolve_isolated_config(
-        {"BROKER_EMBEDDER_METADATA": "a"},
-        preserve_unknown=True,
-    )
-    config_b = resolve_isolated_config(
-        {"BROKER_EMBEDDER_METADATA": "b"},
-        preserve_unknown=True,
-    )
+    config_a = resolve_config(override={"BROKER_EMBEDDER_METADATA": "a"})
+    config_b = resolve_config(override={"BROKER_EMBEDDER_METADATA": "b"})
 
     with contextlib.ExitStack() as stack:
         queue_a = stack.enter_context(
@@ -953,6 +949,29 @@ def test_persistent_sqlite_queues_normalize_same_file_target(
         queue_b.write("two")
 
     assert len(set(runner_ids)) == 1
+
+
+def test_shared_db_connections_bind_relative_target_before_cwd_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    construction_dir = tmp_path / "construction"
+    later_dir = tmp_path / "later"
+    construction_dir.mkdir()
+    later_dir.mkdir()
+    absolute_target = construction_dir / "sqlite.db"
+
+    monkeypatch.chdir(construction_dir)
+    relative = DBConnection("sqlite.db", share_in_process=True)
+    try:
+        monkeypatch.chdir(later_dir)
+        absolute = DBConnection(str(absolute_target), share_in_process=True)
+        try:
+            assert relative._shared_session is absolute._shared_session
+        finally:
+            absolute.close()
+    finally:
+        relative.close()
 
 
 def test_persistent_sqlite_queues_keep_thread_local_connection_isolation(
@@ -1212,9 +1231,9 @@ def test_process_session_key_includes_pid(
     target = counting_target(tmp_path, schema="same")
 
     monkeypatch.setattr("simplebroker._broker_session._getpid", lambda: 1000)
-    parent_key = _session_key(target, resolve_isolated_config({}))
+    parent_key = _session_key(target, resolve_config(override={}))
     monkeypatch.setattr("simplebroker._broker_session._getpid", lambda: 1001)
-    child_key = _session_key(target, resolve_isolated_config({}))
+    child_key = _session_key(target, resolve_config(override={}))
 
     assert parent_key != child_key
 
@@ -1453,7 +1472,7 @@ def test_registry_shutdown_closes_live_sessions_and_tolerates_late_release(
     registry = _ProcessBrokerSessionRegistry()
     key, session = registry.acquire(
         str(tmp_path / "registry.db"),
-        config=resolve_isolated_config({}),
+        config=resolve_config(override={}),
         factory_builder=_build_process_session_core_factory,
     )
 
@@ -1483,7 +1502,7 @@ def test_registry_shutdown_attempts_every_session_after_cleanup_exceptions(
             raise RuntimeError(f"{self.label} session close failed")
 
     registry = _ProcessBrokerSessionRegistry()
-    config = resolve_isolated_config({})
+    config = resolve_config(override={})
 
     def build_factory(spec: Any) -> FailingFactory:
         return FailingFactory(Path(spec.target).name)
@@ -1524,12 +1543,12 @@ def test_registry_builds_factory_only_for_new_session_key(tmp_path: Path) -> Non
 
     key_a, session_a = registry.acquire(
         str(tmp_path / "registry.db"),
-        config=resolve_isolated_config({}),
+        config=resolve_config(override={}),
         factory_builder=build_factory,
     )
     key_b, session_b = registry.acquire(
         str(tmp_path / "registry.db"),
-        config=resolve_isolated_config({}),
+        config=resolve_config(override={}),
         factory_builder=build_factory,
     )
 
@@ -1879,7 +1898,7 @@ def test_closed_factory_rejects_runner_creation(
         lambda db_path: ("closed-factory", str(db_path), {}, plugin),
     )
     factory = _build_process_session_core_factory(
-        _session_spec("target", resolve_isolated_config({}))
+        _session_spec("target", resolve_config(override={}))
     )
     factory.close()
     factory.close()
@@ -1888,3 +1907,45 @@ def test_closed_factory_rejects_runner_creation(
         factory.create(None)
 
     assert plugin.create_runner_calls == 0
+
+
+@pytest.mark.parametrize("difference", ["prefix", "validator"])
+def test_config_metadata_separates_sessions(
+    tmp_path: Path, counting_backend: CountingBackendPlugin, difference: str
+) -> None:
+    fields = dict(DEFAULT_CONFIG)
+    fields["CUSTOM"] = ConfigField(1, "custom", int)
+    first = resolve_config("APP", defaults=fields)
+    if difference == "prefix":
+        second = resolve_config("OTHER", defaults=fields)
+    else:
+        changed_fields = dict(fields)
+        # A behaviorally identical but distinct validator is still different
+        # field-declaration metadata, so the sessions stay separate.
+        changed_fields["CUSTOM"] = ConfigField(1, "custom", lambda value: int(value))
+        second = resolve_config("APP", defaults=changed_fields)
+    assert dict(first) == dict(second)
+    target = counting_target(tmp_path)
+    with (
+        Queue("first", db_path=target, persistent=True, config=first) as left,
+        Queue("second", db_path=target, persistent=True, config=second) as right,
+    ):
+        left.write("one")
+        right.write("two")
+        assert counting_backend.create_runner_calls == 2
+
+
+def test_derived_config_with_same_metadata_shares_session(
+    tmp_path: Path, counting_backend: CountingBackendPlugin
+) -> None:
+    first = resolve_config("APP")
+    second = resolve_config(config=first, override={"APP_CACHE_MB": first["CACHE_MB"]})
+    assert second is not first
+    target = counting_target(tmp_path)
+    with (
+        Queue("first", db_path=target, persistent=True, config=first) as left,
+        Queue("second", db_path=target, persistent=True, config=second) as right,
+    ):
+        left.write("one")
+        right.write("two")
+        assert counting_backend.create_runner_calls == 1

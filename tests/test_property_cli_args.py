@@ -9,14 +9,14 @@ from typing import Literal
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from simplebroker._constants import resolve_isolated_config
+from simplebroker._constants import resolve_config
 from simplebroker.cli import (
     ArgumentParserError,
     ArgumentProcessor,
     _build_cli_parser,
 )
 
-_BUNDLE = _build_cli_parser(config=resolve_isolated_config({}))
+_BUNDLE = _build_cli_parser(config=resolve_config(override={}))
 _GRAMMAR = _BUNDLE.grammar
 _REGISTERED_WITHOUT_HELP = sorted(_GRAMMAR.registered_options - {"-h", "--help"})
 _REGISTERED_LONG = sorted(

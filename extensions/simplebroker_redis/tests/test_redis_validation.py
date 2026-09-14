@@ -20,6 +20,7 @@ from simplebroker_redis.validation import (
     validate_target,
 )
 
+from simplebroker import resolve_config
 from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError
 from simplebroker._targets import BrokerTarget
@@ -55,7 +56,7 @@ def test_two_project_initializers_share_the_config_phase_lock(
 
     def initialize() -> None:
         ready.wait()
-        _initialize_project_backend_target(target, config={})
+        _initialize_project_backend_target(target, config=resolve_config(override={}))
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:

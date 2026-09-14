@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import Queue, resolve_config
 from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._phaselock import PhaseLockService
 from simplebroker.db import BrokerDB
@@ -22,7 +22,10 @@ def test_queue_uses_configured_default_db_name_when_db_path_omitted(
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    queue = Queue("probe", config={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"})
+    queue = Queue(
+        "probe",
+        config=resolve_config(override={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"}),
+    )
     queue.generate_timestamp()
 
     assert (tmp_path / ".weft" / "broker.db").is_file()
@@ -43,7 +46,7 @@ def test_queue_empty_db_path_uses_configured_default(
     queue = Queue(
         "probe",
         db_path="",
-        config={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"},
+        config=resolve_config(override={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"}),
     )
     queue.generate_timestamp()
 
@@ -63,10 +66,12 @@ def test_queue_uses_configured_default_db_location(
 
     queue = Queue(
         "probe",
-        config={
-            "BROKER_DEFAULT_DB_LOCATION": str(broker_dir),
-            "BROKER_DEFAULT_DB_NAME": "configured.db",
-        },
+        config=resolve_config(
+            override={
+                "BROKER_DEFAULT_DB_LOCATION": str(broker_dir),
+                "BROKER_DEFAULT_DB_NAME": "configured.db",
+            }
+        ),
     )
     queue.generate_timestamp()
 
@@ -83,7 +88,7 @@ def test_queue_explicit_db_path_overrides_config_default(
     queue = Queue(
         "probe",
         db_path="explicit.db",
-        config={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"},
+        config=resolve_config(override={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"}),
     )
     queue.generate_timestamp()
 
@@ -102,7 +107,10 @@ def test_queue_passed_config_overrides_environment_default(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("BROKER_DEFAULT_DB_NAME", "env.db")
 
-    queue = Queue("probe", config={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"})
+    queue = Queue(
+        "probe",
+        config=resolve_config(override={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"}),
+    )
     queue.generate_timestamp()
 
     assert (tmp_path / ".weft" / "broker.db").is_file()
@@ -113,7 +121,7 @@ def test_queue_write_uses_configured_message_size_limit(tmp_path: Path) -> None:
     queue = Queue(
         "probe",
         db_path=str(tmp_path / "broker.db"),
-        config={"BROKER_MAX_MESSAGE_SIZE": 3},
+        config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 3}),
     )
 
     with pytest.raises(ValueError, match="maximum allowed size \\(3 bytes\\)"):
@@ -126,7 +134,7 @@ def test_queue_write_uses_configured_message_size_limit(tmp_path: Path) -> None:
 def test_broker_broadcast_uses_configured_message_size_limit(tmp_path: Path) -> None:
     broker = BrokerDB(
         str(tmp_path / "broker.db"),
-        config={"BROKER_MAX_MESSAGE_SIZE": 3},
+        config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 3}),
     )
     try:
         broker.write("probe", "ok")
@@ -149,7 +157,7 @@ def test_watcher_omitted_db_uses_configured_default(
         received.append(message)
         handled.set()
 
-    config = {"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"}
+    config = resolve_config(override={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"})
     watcher = QueueWatcher(
         "probe",
         handler,

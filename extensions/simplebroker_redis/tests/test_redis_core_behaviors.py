@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import gc
+import threading
 import time
 import warnings
+import weakref
 from contextlib import ExitStack
 from typing import NoReturn
 
@@ -11,10 +14,11 @@ import pytest
 import redis
 from redis.typing import EncodableT, KeyT
 from simplebroker_redis import RedisRunner, get_backend_plugin
+from simplebroker_redis import core as redis_core_module
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys
 
-from simplebroker import BrokerTarget, Queue, resolve_isolated_config
+from simplebroker import BrokerTarget, Queue, resolve_config
 from simplebroker._exceptions import (
     IntegrityError,
     MessageError,
@@ -25,13 +29,33 @@ from simplebroker._exceptions import (
 pytestmark = [pytest.mark.redis_only]
 
 
+def test_process_write_lock_registry_uses_weak_plain_locks() -> None:
+    registry = redis_core_module._ProcessWriteLockRegistry()
+
+    lock = registry.get("redis://example/0", "tenant")
+    retained = weakref.ref(lock)
+
+    assert type(lock) is type(threading.Lock())
+    assert registry.get("redis://example/0", "tenant") is lock
+    assert registry.get("redis://example/0", "other") is not lock
+
+    del lock
+    gc.collect()
+
+    assert retained() is None
+    assert len(registry._locks) == 0
+    replacement = registry.get("redis://example/0", "tenant")
+    assert type(replacement) is type(threading.Lock())
+    assert len(registry._locks) == 1
+
+
 def test_queue_move_rejects_mutated_descriptor_namespace(
     redis_url: str, redis_namespace: str
 ) -> None:
     plugin = get_backend_plugin()
     other_namespace = f"{redis_namespace}_other"
     target = BrokerTarget("redis", redis_url, {"namespace": redis_namespace})
-    config = resolve_isolated_config({})
+    config = resolve_config(override={})
     try:
         with ExitStack() as stack:
             source = stack.enter_context(
@@ -164,7 +188,9 @@ def test_keep_write_publish_failure_leaves_whole_unit_committed(
 def test_redis_manual_vacuum_translates_client_errors(
     redis_runner: RedisRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    core = RedisBrokerCore(redis_runner, config={"BROKER_AUTO_VACUUM": 0})
+    core = RedisBrokerCore(
+        redis_runner, config=resolve_config(override={"BROKER_AUTO_VACUUM": 0})
+    )
     try:
         core.write("jobs", "payload")
         assert core.claim_one("jobs", with_timestamps=False) == "payload"
@@ -381,7 +407,7 @@ def test_redis_core_rejects_invalid_inputs(
 ) -> None:
     core = RedisBrokerCore(
         redis_runner,
-        config={"BROKER_MAX_MESSAGE_SIZE": 5},
+        config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 5}),
     )
     try:
         with pytest.raises(MessageError, match="exceeds maximum"):

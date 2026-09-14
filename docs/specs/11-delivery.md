@@ -345,15 +345,19 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- [Keyset peek pagination](../plans/2026-09-11-keyset-peek-pagination-plan.md)
-  owns forward-only live traversal under [SB-DELIVERY-4].
+- retired: 2026-09-11-keyset-peek-pagination-plan — source `5e4bcb7`
+  (local-only pin); see the ledger in `docs/plans/README.md`. It owns
+  forward-only live traversal under [SB-DELIVERY-4].
 
-- [Test proof quality](../plans/2026-09-07-test-proof-quality-plan.md)
+- retired: 2026-09-07-test-proof-quality-plan — source `646718f`; see the
+  ledger in `docs/plans/README.md`.
 
-- [Critical review remediation](../plans/2026-09-07-critical-review-remediation-plan.md)
+- retired: 2026-09-07-critical-review-remediation-plan — source `dbace84`;
+  see the ledger in `docs/plans/README.md`.
 
-- active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
-  — owns [SB-DELIVERY-9] and the [SB-DELIVERY-1] claimed-state clarification
+- retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
+  see the ledger in `docs/plans/README.md`. It owns [SB-DELIVERY-9] and the
+  [SB-DELIVERY-1] claimed-state clarification.
 
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It aligns async,

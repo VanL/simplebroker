@@ -15,7 +15,7 @@ from simplebroker_redis.keys import RedisKeys, encode_id
 from simplebroker_redis.plugin import RedisMultiQueueActivityWaiter
 from simplebroker_redis.validation import key_prefix
 
-from simplebroker import Queue, create_activity_waiter_for_queues
+from simplebroker import Queue, create_activity_waiter_for_queues, resolve_config
 from simplebroker._broker_session import close_process_broker_sessions
 from simplebroker._exceptions import QueueNameError
 from simplebroker._targets import BrokerTarget
@@ -283,10 +283,9 @@ def test_broadcast_exact_create_missing_updates_real_registry_and_storage(
 ) -> None:
     core = RedisBrokerCore(
         redis_runner,
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 100,
-        },
+        config=resolve_config(
+            override={"BROKER_AUTO_VACUUM": 1, "BROKER_AUTO_VACUUM_INTERVAL": 100}
+        ),
     )
     keys = RedisKeys(redis_runner.namespace)
     try:
@@ -394,10 +393,9 @@ def test_broadcast_empty_exact_create_missing_is_a_storage_and_maintenance_noop(
 ) -> None:
     core = RedisBrokerCore(
         redis_runner,
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 100,
-        },
+        config=resolve_config(
+            override={"BROKER_AUTO_VACUUM": 1, "BROKER_AUTO_VACUUM_INTERVAL": 100}
+        ),
     )
     keys = RedisKeys(redis_runner.namespace)
     try:

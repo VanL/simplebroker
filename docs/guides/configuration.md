@@ -3,7 +3,7 @@
 This guide is the home for SimpleBroker configuration: every `BROKER_*`
 environment variable, database scoping and discovery, project
 configuration files, security notes, and performance tuning. The README
-carries only the most-used settings. `load_config()` documents 32 keys;
+carries only the most-used settings. `DEFAULT_CONFIG` declares 32 built-in keys;
 all 32 appear in this guide — most in the catalog below, with
 `BROKER_PROJECT_SCOPE`, `BROKER_DEFAULT_DB_LOCATION`, and
 `BROKER_MAX_MESSAGE_SIZE` documented in the Project scoping and Security
@@ -19,92 +19,63 @@ context.
 Recognized settings are strict at the point they are consumed. A value that
 cannot be parsed or validated raises
 `simplebroker.ext.InvalidConfigError` for Python callers. Package import stays
-safe so applications can install their own error boundary, but the first
-operation that needs the invalid ambient configuration fails before opening a
-broker target. The CLI reports the key, a safe rejected-value display, and the
+safe so applications can install their own error boundary, but resolving
+the invalid configuration fails before opening a broker target. The CLI reports the key, a safe rejected-value display, and the
 expected form on stderr, then exits `1`; passwords and full backend targets are
 redacted. It does not substitute defaults after a fatal config error.
 
-`load_config()` and `resolve_config()` are fresh strict reads of the current
-environment. Public handles and operations take one immutable `ResolvedConfig`
-snapshot at their documented construction or invocation boundary. A later new
-Queue or command can therefore observe an intentional environment change; an
-existing Queue, watcher, broker, runner, or active operation stays fixed.
-`resolve_config(overrides)` still starts from the current environment base, so
-an ordinary override mapping is not a bypass for invalid ambient state.
-
-Call `snapshot_config()` to capture the current ambient configuration once and
-reuse the same receipt across several handles. This is the explicit way to get
-process-wide consistency. Do not use concurrent `os.environ` mutation as a
-dynamic control plane; construct and pass a snapshot instead.
-
-Embedders that own a separate configuration namespace should call
-`resolve_isolated_config(overrides)`. It starts from the 32 canonical defaults
-without reading ambient `BROKER_*`, rejects unknown keys by default, and returns
-a complete `ResolvedConfig`. Set `preserve_unknown=True` only when extension
-keys must pass through opaquely. Every `ResolvedConfig` has all canonical keys;
-known values are normalized and validated, and extra top-level bindings are
-copied and read-only. Values stored under extra keys are extension-owned and
-are not recursively copied or frozen. On permissive paths, a misspelled
-canonical-looking key is preserved but has no canonical effect; use the
-isolated factory's strict default when typo detection matters. Preserve the
-marker when passing config to Queue, discovery, watchers, runners, brokers, or
-load. Converting it to
-`dict` discards the no-ambient-reread guarantee at the next public seam.
-
-## Shared configuration for embedders
-
-`build_config()` selects one external namespace and returns a complete,
-immutable `ConfigSnapshot` with unprefixed internal keys. Supply the environment
-explicitly: omitting `env` reads no process environment. Fields absent from
-all supplied sources remain available through their schema defaults.
+`BROKER_*` environment variables configure the `broker` command, which reads
+them once at startup. The Python library reads no environment: a Queue,
+watcher or command function without a Config uses defaults. A program that
+wants the same settings as the CLI reads them once and passes them down, much
+as a C program calls `setlocale(LC_ALL, "")`:
 
 ```python
 import os
-from simplebroker import CONFIG_DEFAULTS, ConfigField, Queue, build_config
+from simplebroker import Queue, resolve_config
+
+config = resolve_config(env=os.environ)
+queue = Queue("jobs", config=config)
+```
+
+Consumer `config=` parameters take Config objects, not unresolved mappings.
+Handles, watchers and active operations retain the Config they were given.
+
+## Shared configuration for embedders
+
+One resolver returns uppercase unprefixed keys. Copy `DEFAULT_CONFIG` to change
+defaults or add validators; no schema or registration step is required.
+
+```python
+import os
+from dataclasses import replace
+from simplebroker import DEFAULT_CONFIG, ConfigField, Queue, resolve_config
 
 
 def retention_days(value):
-    if type(value) is not int or value < 0:
-        raise ValueError("expected a nonnegative integer")
-    return value
+    days = int(value)
+    if days < 0:
+        raise ValueError("expected zero or more days")
+    return days
 
 
-APP_DEFAULTS = CONFIG_DEFAULTS.derive(
-    defaults={"cache_mb": 20},
-    fields={
-        "retention_days": ConfigField(
-            default=7,
-            description="Days to retain application records",
-            validator=retention_days,
-            parser=int,
-        ),
-    },
-)
-config = build_config("APP", env=os.environ, defaults=APP_DEFAULTS)
-assert config["cache_mb"] == config["APP_CACHE_MB"]
+fields = dict(DEFAULT_CONFIG)
+fields["CACHE_MB"] = replace(fields["CACHE_MB"], default=20)
+fields["RETENTION_DAYS"] = ConfigField(7, "days to retain", retention_days)
+config = resolve_config("APP", defaults=fields, env=os.environ)
+cache_mb = config["CACHE_MB"]
 with Queue("tasks", db_path=".app.db", config=config) as queue:
     queue.write("work")
 ```
 
-`APP_RETENTION_DAYS` is available through the same loader as inherited broker
-fields. `BROKER_*` cannot override an APP build. Unknown external names are
-ignored; malformed recognized values fail. The same snapshot carries app and
-broker fields into handles, without another ambient read or broker-only copy.
-`ConfigSchema({...})` also supports independent schemas with no broker fields;
-only snapshots passed into broker consumers need the complete broker schema.
+`APP_RETENTION_DAYS` uses the same validator path as broker fields. A selected
+custom name such as `APP_SOMETHING_CUSTOM` is retained as `SOMETHING_CUSTOM`
+even without a field record; its value passes through unchanged. Other prefixes
+and bare external keys are ignored. Only uppercase suffixes are selected;
+near-miss capitalization of a declared field warns with the input location.
+No prefixed or lowercase lookup aliases exist on Config.
 
-A `ConfigField` validator returns its canonical value or raises `ValueError` or
-`TypeError`; its optional parser converts external env/TOML input first. Use
-`dependencies=("other_field",)` and `default_factory=lambda values: ...` when a
-missing value depends on another resolved field. Cyclic or missing dependencies
-are schema errors. `with_options()` recomputes affected derived defaults only
-while they still have default provenance; it preserves explicitly supplied values.
-Schema derivation copies declarations, so customizing an embedder does not mutate
-`CONFIG_DEFAULTS`. Adding a field under an inherited name is an error: use
-`defaults={...}` or `parsers={...}` for intentional overrides.
-
-External TOML settings use the same namespaced spellings as environment values:
+TOML settings use the same namespaced names:
 
 ```toml
 version = 1
@@ -114,31 +85,55 @@ APP_CACHE_MB = 24
 APP_RETENTION_DAYS = 14
 ```
 
-Call `build_config("APP", env=os.environ, config_file=".app.toml",
-defaults=APP_DEFAULTS)` to activate these settings. A parsed root-table mapping
-is accepted too. Existing project target fields and tables keep their existing
-parser and precedence. Merely adding namespaced settings to a discovered
-`.broker.toml` does **not** activate them for the existing CLI. File settings
-are read only when this additive API receives `config_file=` explicitly.
+Pass `toml=".app.toml"` (or a parsed root mapping) to activate tuning settings.
+Project-target fields keep their separate parser and precedence. Discovered
+`.broker.toml` files do not automatically activate tuning keys.
 
-The default builder order is typed `options` > file > env > defaults. Options
-are a sparse mapping of canonical names, such as `{"cache_mb": 30}`, not argv
-or parser-generated defaults. Canonical defaults/options are validated without
-reapplying external unit conversion. The broker schema preserves ambient-base
-validation: an invalid selected file/env base value still fails before an
-ordinary option is applied. A higher-priority file value may shadow its env
-value. A schema can derive `source_order=("options", "env", "file")` and
-`validate_base=False` for an embedder whose documented policy selects the
-winning value before validation.
-The loader never changes target selection or a caller's external alias policy.
+Precedence is defaults, TOML, environment, then override.
+Overrides use external names, such as `{"APP_CACHE_MB": 30}`. Unlike environment
+and TOML selection, a bare key, wrong prefix or malformed name in an override
+raises `ValueError`. Valid custom names remain accepted. Every supplied value is
+validated, and each invalid value produces a warning as its source is applied.
+If an invalid value is still in effect after all sources, resolution raises;
+a later valid value replaces it. Combined path constraints are checked on the
+final values.
+Application-only defaults skip absent broker fields.
 
-`snapshot.with_options({...})` applies an ambient-free overlay.
-`snapshot.to_values()` exports detached canonical data for process transport;
-`ConfigSnapshot.from_values(values, schema=APP_DEFAULTS, prefix="APP")` validates a complete
-payload without env or default filling. Keep the snapshot marker across broker
-handoffs. New snapshots iterate canonical names once; namespaced lookup, `get`,
-and membership are aliases. Existing `ResolvedConfig` and legacy resolver
-mapping spellings, iteration, opaque extras, and subclass behavior are preserved.
+Config retains its namespace as `config.prefix`, separate from its values. Pass an
+existing Config explicitly as `config=`: `resolve_config(config=config)` returns it
+unchanged without reading TOML or the environment, and adding an override derives
+a new Config that inherits the namespace and field validators:
+
+```python
+updated = resolve_config(config=config, override={f"{config.prefix}_CACHE_MB": 30})
+```
+
+Passing anything other than a Config as `config=` raises `TypeError`, and a
+different `prefix` or `defaults` alongside it raises `ValueError`.
+
+CLI arguments are parsed and validated by `cli.py`, not the resolver. The resolver
+has no `args` parameter. Existing CLI command and target options are unchanged.
+
+Config is read-only at its top level. For transport, send `config.prefix` and
+`dict(config)` separately; the receiver reconstructs a namespaced override map
+and supplies its field declarations:
+
+```python
+payload = {f"{prefix}_{key}": value for key, value in values.items()}
+restored = resolve_config(prefix, defaults=fields, override=payload)
+```
+
+Pass the Config object itself through Queue/watcher handoffs to retain the same
+snapshot. Mutating nested containers is unsupported.
+
+Declare custom fields once, for example at module level, and reuse the table.
+Handles share a backend session only when their Configs carry the same values,
+namespace and field records, and field records compare by object identity: a
+table rebuilt for every handle gives each Config its own session, even when the
+records are identical. Configs that only add values through `override` share
+normally, because they keep the `DEFAULT_CONFIG` records. Declare a field only
+when it needs a default or a validator; an undeclared value is kept unchanged
+and is absent unless supplied.
 
 ## Environment variables
 
@@ -174,13 +169,13 @@ mapping spellings, iteration, opaque extras, and subclass behavior are preserved
 - `BROKER_VACUUM_THRESHOLD` - Claimed-message ratio that triggers auto-vacuum (default: 10%)
 - `BROKER_VACUUM_BATCH_SIZE` - Number of messages to delete per vacuum batch (default: 1000)
 
-`BROKER_VACUUM_THRESHOLD` keeps its established representation-sensitive
-input rules. String and environment values are percentages: `"0.5"` becomes
-`0.005`, while `"50"` becomes `0.5`. Typed numeric values from 0 through 1
-are ratios: `0.5` remains `0.5`. Typed numeric values over 1 are percentages,
-so numeric `50` also becomes `0.5`. Independently of the configured ratio,
-automatic vacuum is eligible when there are more than 10,000 claimed messages;
-10,000 alone does not fire that absolute backstop.
+`BROKER_VACUUM_THRESHOLD` is a percentage from 0 through 100, independent of
+input type. `"10"` and numeric `10` mean 10%; numeric `0.1` means 0.1%.
+Integers, floats and numeric strings are accepted for this percentage field.
+Booleans and boolean strings such as `"true"` are rejected.
+`config["VACUUM_THRESHOLD"]` stores the percentage; maintenance callers convert
+to a fraction. Independently, more than 10,000 claimed messages also makes
+automatic vacuum eligible; exactly 10,000 does not fire that backstop.
 
 Automatic maintenance is synchronous and best effort, not a background
 process. A due check runs after the triggering message transaction commits;
@@ -262,14 +257,11 @@ export BROKER_PROJECT_SCOPE=true
 export BROKER_DEFAULT_DB_NAME=project-queue.db
 ```
 
-**Why so many `BROKER_*` settings?** `load_config()` documents 32 config keys
+**Why so many `BROKER_*` settings?** `DEFAULT_CONFIG` declares 32 config keys
 because SimpleBroker is also embedded by larger tools. Most users should never
-touch most of them. Embedders such as Weft translate their own namespace into
-those keys. Use `resolve_isolated_config()` for a complete app-owned mapping,
-or `resolve_config()` when omitted values should deliberately inherit ambient
-SimpleBroker configuration. Use `snapshot_config()` when several handles
-should share one ambient-derived receipt. This keeps translation mechanical
-instead of one-off.
+touch most settings. Embedders use `resolve_config("WEFT", defaults=fields,
+env=os.environ)` to read their own namespace from the environment, or omit env
+to use only defaults and overrides. Pass the resulting Config through handles.
 
 **Why is `BROKER_SYNC_MODE=FULL` the default?** The default favors durability
 over benchmark numbers. `NORMAL` may improve write throughput, but it changes
@@ -656,7 +648,10 @@ fi
   Broker data can be sensitive, but it is not inherently a private-key-style
   secret that warrants silently overriding an operator's sharing policy.
 - **Project config secrets**: Prefer `BROKER_BACKEND_PASSWORD` or another
-  environment variable over embedding passwords in `.broker.toml`. SimpleBroker
+  environment variable over embedding passwords in `.broker.toml`. Python
+  programs pass `BROKER_BACKEND_PASSWORD` through
+  `resolve_config(env=os.environ)`, or rely on the backend's own convention
+  such as libpq's `PGPASSWORD`. SimpleBroker
   warns without printing the secret when a target embeds a password. It does
   not infer confidentiality or integrity from the config file's mode,
   ownership, parent-directory permissions, or ACLs. Operators own the effective

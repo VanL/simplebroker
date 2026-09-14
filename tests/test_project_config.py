@@ -19,7 +19,7 @@ from typing import Any, get_type_hints
 import pytest
 
 from simplebroker._backend_plugins import get_backend_plugin
-from simplebroker._constants import load_config
+from simplebroker._constants import resolve_config
 from simplebroker._exceptions import DatabaseError, UnknownBackendPluginError
 from simplebroker._project_config import (
     _same_filesystem,
@@ -530,7 +530,7 @@ def test_sqlite_plugin_never_silently_discards_backend_options(tmp_path: Path) -
     options = {"pool": {"timeout": 5}}
     calls = (
         lambda: plugin.init_backend(
-            load_config(), toml_target=target, toml_options=options
+            resolve_config(env=os.environ), toml_target=target, toml_options=options
         ),
         lambda: plugin.create_runner(target, backend_options=options),
         lambda: plugin.initialize_target(target, backend_options=options),
@@ -699,7 +699,7 @@ def test_project_backend_setup_uses_config_file_phase_lock(
             executor.submit(
                 _initialize_project_backend_target,
                 target,
-                config={},
+                config=resolve_config(override={}),
             )
             for _ in range(2)
         ]
@@ -1098,7 +1098,7 @@ def test_public_resolve_broker_target_discovers_upward_sqlite_project(
 
     resolved = resolve_broker_target(
         nested,
-        config={"BROKER_DEFAULT_DB_NAME": ".broker.db"},
+        config=resolve_config(override={"BROKER_DEFAULT_DB_NAME": ".broker.db"}),
     )
 
     assert resolved is not None
@@ -1108,7 +1108,7 @@ def test_public_resolve_broker_target_discovers_upward_sqlite_project(
     assert (
         broker_root(
             nested,
-            config={"BROKER_DEFAULT_DB_NAME": ".broker.db"},
+            config=resolve_config(override={"BROKER_DEFAULT_DB_NAME": ".broker.db"}),
         )
         == project_root.resolve()
     )
@@ -1139,10 +1139,12 @@ def test_public_resolve_broker_target_prefers_legacy_sqlite_over_env_backend(
 
     resolved = resolve_broker_target(
         nested,
-        config={
-            "BROKER_BACKEND": "postgres",
-            "BROKER_DEFAULT_DB_NAME": ".broker.db",
-        },
+        config=resolve_config(
+            override={
+                "BROKER_BACKEND": "postgres",
+                "BROKER_DEFAULT_DB_NAME": ".broker.db",
+            }
+        ),
     )
 
     assert resolved is not None
@@ -1159,7 +1161,7 @@ def test_public_target_for_directory_builds_default_sqlite_target(
 
     target = target_for_directory(
         tmp_path,
-        config={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"},
+        config=resolve_config(override={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"}),
     )
 
     assert target.backend_name == "sqlite"
@@ -1172,7 +1174,7 @@ def test_public_broker_target_roundtrip_serialization(tmp_path: Path) -> None:
 
     original = target_for_directory(
         tmp_path,
-        config={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"},
+        config=resolve_config(override={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"}),
     )
 
     encoded = serialize_broker_target(original)
@@ -1282,10 +1284,10 @@ def test_resolve_target_defaults_to_sqlite_without_toml(
     """Without toml and without BROKER_BACKEND, sqlite discovery still returns None."""
     monkeypatch.chdir(tmp_path)
 
-    target = resolve_broker_target(tmp_path, config=load_config())
+    target = resolve_broker_target(tmp_path, config=resolve_config(env=os.environ))
 
     assert target is None
-    assert broker_root(tmp_path, config=load_config()) is None
+    assert broker_root(tmp_path, config=resolve_config(env=os.environ)) is None
 
 
 def test_resolve_target_unknown_backend_raises(
@@ -1298,7 +1300,7 @@ def test_resolve_target_unknown_backend_raises(
     with pytest.raises(
         RuntimeError, match="Requested backend 'mysql' is not available"
     ):
-        target_for_directory(tmp_path, config=load_config())
+        target_for_directory(tmp_path, config=resolve_config(env=os.environ))
 
 
 def test_resolve_target_missing_postgres_plugin_has_install_hint(
@@ -1307,7 +1309,7 @@ def test_resolve_target_missing_postgres_plugin_has_install_hint(
     """Missing postgres plugin should recommend the extension package."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("BROKER_BACKEND", "postgres")
-    config = load_config()
+    config = resolve_config(env=os.environ)
 
     def raise_unknown(name: str) -> None:
         del name
@@ -1331,7 +1333,7 @@ def test_resolve_target_does_not_prose_match_other_plugin_runtime_errors(
     """Only the typed unknown-plugin failure should receive install guidance."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("BROKER_BACKEND", "postgres")
-    config = load_config()
+    config = resolve_config(env=os.environ)
     failure = RuntimeError("Unknown backend plugin: postgres")
 
     def raise_other_runtime_error(name: str) -> None:
@@ -1387,7 +1389,9 @@ def test_resolve_project_target_prefers_project_values_over_env_target(
         lambda name="postgres": DummyPlugin(),
     )
 
-    resolved = resolve_project_target(config_path)
+    resolved = resolve_project_target(
+        config_path, config=resolve_config(env=os.environ)
+    )
 
     assert resolved.backend_name == "postgres"
     assert resolved.target == "postgresql://toml@tomlhost/tomldb"
@@ -1397,8 +1401,8 @@ def test_resolve_project_target_prefers_project_values_over_env_target(
     assert isinstance(seen["config"], dict)
     config_dict = seen["config"]
     assert isinstance(config_dict, dict)
-    assert config_dict["BROKER_BACKEND_TARGET"] == ""
-    assert config_dict["BROKER_BACKEND_PASSWORD"] == "secret"
+    assert config_dict["BACKEND_TARGET"] == ""
+    assert config_dict["BACKEND_PASSWORD"] == "secret"
 
 
 def test_toml_overrides_env_backend_in_public_helpers(
@@ -1408,7 +1412,7 @@ def test_toml_overrides_env_backend_in_public_helpers(
     monkeypatch.setenv("BROKER_BACKEND", "postgres")
     _write_project_config(tmp_path / ".broker.toml", backend="sqlite", target="x.db")
 
-    target = target_for_directory(tmp_path, config=load_config())
+    target = target_for_directory(tmp_path, config=resolve_config(env=os.environ))
 
     assert target.backend_name == "sqlite"
 
@@ -1436,11 +1440,13 @@ def test_project_config_discovery_uses_configured_path_and_name(
         target="weft.db",
     )
 
-    config = {
-        "BROKER_PROJECT_SCOPE": True,
-        "BROKER_PROJECT_CONFIG_PATH": ".weft",
-        "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_PROJECT_SCOPE": True,
+            "BROKER_PROJECT_CONFIG_PATH": ".weft",
+            "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+        }
+    )
 
     discovered = find_project_config(nested, config=config)
     target = resolve_broker_target(nested, config=config)
@@ -1463,10 +1469,12 @@ def test_project_config_discovery_honors_an_absolute_config_location(
     _write_project_config(config_path, backend="sqlite", target="queue.db")
     unrelated_start = tmp_path / "workspace" / "nested"
     unrelated_start.mkdir(parents=True)
-    config = {
-        "BROKER_PROJECT_CONFIG_PATH": str(config_dir),
-        "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_PROJECT_CONFIG_PATH": str(config_dir),
+            "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+        }
+    )
 
     assert project_config_path_for_directory(unrelated_start, config=config) == (
         config_path.resolve()
@@ -1480,11 +1488,13 @@ def test_target_for_directory_uses_configured_project_config_location(
 ) -> None:
     """Explicit-root resolution should check the configured TOML location."""
 
-    config = {
-        "BROKER_PROJECT_CONFIG_PATH": ".weft",
-        "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
-        "BROKER_DEFAULT_DB_NAME": ".weft/broker.db",
-    }
+    config = resolve_config(
+        override={
+            "BROKER_PROJECT_CONFIG_PATH": ".weft",
+            "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+            "BROKER_DEFAULT_DB_NAME": ".weft/broker.db",
+        }
+    )
     config_path = project_config_path_for_directory(tmp_path, config=config)
     config_path.parent.mkdir()
     _write_project_config(config_path, backend="sqlite", target="pg-owned.db")

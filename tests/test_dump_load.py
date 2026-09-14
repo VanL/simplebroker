@@ -25,6 +25,7 @@ from simplebroker import (
     dump_lines,
     load_lines,
     open_broker,
+    resolve_config,
 )
 from simplebroker._constants import LOGICAL_COUNTER_MASK, NS_PER_SECOND
 from simplebroker._dump import (
@@ -425,29 +426,21 @@ def test_load_typed_config_override_changes_skew_limit(
         load_lines(
             broker,
             [_load_header(header)],
-            config={"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": 0},
+            config=resolve_config(override={"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": 0}),
         )
 
 
-def test_load_samples_environment_for_each_invocation(
+def test_load_without_config_ignores_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
     now_ns = header - NS_PER_SECOND
     monkeypatch.setattr("simplebroker._dump._time_ns", lambda: now_ns)
+    monkeypatch.setenv("BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS", "0")
 
-    with open_broker(_db(tmp_path)) as broker:
-        monkeypatch.setenv("BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS", "0")
-        with (
-            pytest.warns(DumpClockSkewWarning),
-            pytest.raises(ValueError, match="configured maximum of 0 seconds"),
-        ):
-            load_lines(broker, [_load_header(header)])
-
-        monkeypatch.setenv("BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS", "2")
-        with pytest.warns(DumpClockSkewWarning):
-            result = load_lines(broker, [_load_header(header)])
+    with open_broker(_db(tmp_path)) as broker, pytest.warns(DumpClockSkewWarning):
+        result = load_lines(broker, [_load_header(header)])
 
     assert result == LoadResult(messages=0, aliases=0)
 

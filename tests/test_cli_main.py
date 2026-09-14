@@ -12,8 +12,9 @@ from unittest.mock import patch
 
 import pytest
 
-from simplebroker import _paths, cli
-from simplebroker._exceptions import DatabaseError, DataError, InvalidConfigError
+from simplebroker import _paths, cli, resolve_config
+from simplebroker._constants import InvalidConfigError
+from simplebroker._exceptions import DatabaseError, DataError
 from simplebroker._targets import BrokerTarget
 
 
@@ -569,7 +570,7 @@ def test_compound_default_is_finalized_before_canonical_containment(tmp_path):
     prepared = cli._validate_legacy_sqlite_target(
         args,
         unresolved_target,
-        config={"BROKER_DEFAULT_DB_NAME": "state/queue.db"},
+        config=resolve_config(override={"BROKER_DEFAULT_DB_NAME": "state/queue.db"}),
     )
 
     assert prepared.target == str((target_dir / "queue.db").resolve())

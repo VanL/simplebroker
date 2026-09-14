@@ -18,6 +18,7 @@ from simplebroker_pg._identifiers import stable_lock_key
 from simplebroker_pg.plugin import PostgresBackendPlugin
 from simplebroker_pg.runner import PostgresRunner, _SharedActivityListener
 
+from simplebroker import resolve_config
 from simplebroker.db import BrokerCore
 from tests.helper_scripts import drive_until
 from tests.helpers.state_machine_contracts import (
@@ -692,14 +693,16 @@ class _RealVacuumHarness:
                 PostgresBackendPlugin().vacuum(
                     self.runner,
                     compact=self.scenario.compact,
-                    config={"BROKER_VACUUM_BATCH_SIZE": 100},
+                    config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 100}),
                 )
             else:
                 with pytest.raises(BaseException) as raised:
                     PostgresBackendPlugin().vacuum(
                         self.runner,
                         compact=self.scenario.compact,
-                        config={"BROKER_VACUUM_BATCH_SIZE": 100},
+                        config=resolve_config(
+                            override={"BROKER_VACUUM_BATCH_SIZE": 100}
+                        ),
                     )
                 caught = raised.value
             if self.scenario.prove_discard_releases_lock:

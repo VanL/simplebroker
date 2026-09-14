@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import Queue, resolve_config
 from simplebroker._exceptions import MessageError
 
 pytestmark = [pytest.mark.shared]
@@ -17,7 +17,7 @@ def _queue(broker_target: Any, name: str) -> Queue:
         name,
         db_path=broker_target,
         persistent=True,
-        config={"BROKER_MAX_MESSAGE_SIZE": _LIMIT_BYTES},
+        config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": _LIMIT_BYTES}),
     )
 
 

@@ -201,7 +201,7 @@ def test_cmd_write_validates_keep_before_config_stdin_and_target() -> None:
             "snapshots",
             None,
             keep_newest=cast(Any, "2"),
-            config=_ExplodingConfig(),
+            config=cast(Any, _ExplodingConfig()),
         )
 
 

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from importlib import metadata
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 
+from ._constants import Config
 from ._constants import __version__ as SIMPLEBROKER_VERSION
 from ._delivery import DeliveryGuarantee
-from ._exceptions import DatabaseError, UnknownBackendPluginError
+from ._exceptions import UnknownBackendPluginError
 from ._sql import BackendSQLNamespace, ensure_backend_sql_namespace
-from .config import legacy_config
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -53,7 +52,7 @@ class BackendPlugin(Protocol):
 
     def init_backend(
         self,
-        config: Mapping[str, Any],
+        config: Config,
         *,
         toml_target: str = "",
         toml_options: Mapping[str, Any] | None = None,
@@ -64,7 +63,7 @@ class BackendPlugin(Protocol):
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> SQLRunner: ...
 
     def create_core(
@@ -72,7 +71,7 @@ class BackendPlugin(Protocol):
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
         stop_event: Any = None,
     ) -> BrokerConnection: ...
 
@@ -80,7 +79,7 @@ class BackendPlugin(Protocol):
         self,
         runner: Any,
         *,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
         stop_event: Any = None,
     ) -> BrokerConnection: ...
 
@@ -89,7 +88,7 @@ class BackendPlugin(Protocol):
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None: ...
 
     def validate_target(
@@ -98,7 +97,7 @@ class BackendPlugin(Protocol):
         *,
         backend_options: Mapping[str, Any] | None = None,
         verify_initialized: bool = True,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None: ...
 
     def cleanup_target(
@@ -106,7 +105,7 @@ class BackendPlugin(Protocol):
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> bool: ...
 
     def check_version(self) -> None: ...
@@ -115,20 +114,18 @@ class BackendPlugin(Protocol):
         self,
         conn: Any,
         *,
-        config: Mapping[str, Any],
+        config: Config,
         optimization_complete: bool = False,
     ) -> None: ...
 
-    def apply_optimization_settings(
-        self, conn: Any, *, config: Mapping[str, Any]
-    ) -> None: ...
+    def apply_optimization_settings(self, conn: Any, *, config: Config) -> None: ...
 
     def setup_connection_phase(
         self,
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any],
+        config: Config,
     ) -> None: ...
 
     def initialize_database(
@@ -236,7 +233,7 @@ class BackendPlugin(Protocol):
         runner: SQLRunner,
         *,
         compact: bool,
-        config: Mapping[str, Any],
+        config: Config,
     ) -> None: ...
 
     def create_activity_waiter(
@@ -311,7 +308,7 @@ class BrokerConnection(Protocol):
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> Iterator[tuple[str, int] | str]: ...
 
     def peek_one(
@@ -384,7 +381,7 @@ class BrokerConnection(Protocol):
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> Iterator[tuple[str, int] | str]: ...
 
     def delete(self, queue: str | None = None) -> int: ...
@@ -651,33 +648,6 @@ def get_backend_plugin(name: str = DEFAULT_BACKEND_NAME) -> BackendPlugin:
     return _load_entry_point_plugin(name)
 
 
-def validate_backend_target(
-    plugin: BackendPlugin,
-    target: str,
-    *,
-    backend_options: Mapping[str, Any] | None = None,
-    verify_initialized: bool = True,
-    config: Mapping[str, Any] | None = None,
-) -> None:
-    """Small wrapper to standardize backend validation exceptions."""
-    try:
-        plugin.validate_target(
-            target,
-            backend_options=backend_options,
-            verify_initialized=verify_initialized,
-            config=legacy_config(config) if config is not None else None,
-        )
-    except DatabaseError:
-        raise
-    except FileNotFoundError as exc:
-        raise DatabaseError(str(exc)) from exc
-
-
-def target_parent_directory(target: str) -> Path:
-    """Return the parent directory for filesystem-backed targets."""
-    return Path(target).expanduser().resolve().parent
-
-
 __all__ = [
     "BACKEND_API_VERSION",
     "BACKEND_ENTRY_POINT_GROUP",
@@ -689,6 +659,4 @@ __all__ = [
     "MultiQueueActivityWaiterHook",
     "get_backend_plugin",
     "resolve_runner_backend_plugin",
-    "target_parent_directory",
-    "validate_backend_target",
 ]

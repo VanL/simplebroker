@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Iterable
 from typing import Any
@@ -14,6 +15,7 @@ from simplebroker_pg.runner import RunnerMetaState
 from simplebroker_pg.validation import SchemaInspection, SchemaState
 
 import simplebroker.db as db_module
+from simplebroker import resolve_config
 from simplebroker._exceptions import DatabaseError
 from simplebroker._runner import SetupPhase
 
@@ -177,12 +179,14 @@ def test_initialize_target_closes_runner_when_core_construction_fails(
 def test_initialize_target_passes_one_config_snapshot_to_runner_and_core(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from simplebroker import snapshot_config
+    from simplebroker import resolve_config
 
     class Runner:
         pass
 
-    marker = snapshot_config({"EXTENSION_RECEIPT": "kept"})
+    marker = resolve_config(
+        env=os.environ, override={"BROKER_EXTENSION_RECEIPT": "kept"}
+    )
     runner = Runner()
     runner_config: list[object] = []
     core_config: list[object] = []
@@ -352,7 +356,7 @@ def test_vacuum_compacts_after_deleting_claimed_batches() -> None:  # noqa: C901
     PostgresBackendPlugin().vacuum(
         runner,
         compact=True,
-        config={"BROKER_VACUUM_BATCH_SIZE": 100},
+        config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 100}),
     )
 
     assert runner.events == ["lease", "begin", "commit", "begin", "rollback", "release"]
@@ -366,7 +370,7 @@ def test_vacuum_lock_contention_needs_no_optional_runner_lease() -> None:
     PostgresBackendPlugin().vacuum(
         runner,
         compact=False,
-        config={"BROKER_VACUUM_BATCH_SIZE": 100},
+        config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 100}),
     )
 
     assert len(runner.calls) == 1

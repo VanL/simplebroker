@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from simplebroker import resolve_config
 from simplebroker._constants import DEFAULT_DB_NAME
 from simplebroker._paths import (
     _find_project_database,
@@ -318,11 +319,13 @@ class TestDatabasePathResolution:
         abs_path = tmp_path / "absolute.db"
         args = argparse.Namespace(file=str(abs_path), dir=Path.cwd(), command="write")
         absolute_path = os.sep.join([os.sep + "some", "otherpath"])
-        config = {
-            "BROKER_DEFAULT_DB_LOCATION": absolute_path,
-            "BROKER_DEFAULT_DB_NAME": "other.db",
-            "BROKER_PROJECT_SCOPE": True,
-        }
+        config = resolve_config(
+            override={
+                "BROKER_DEFAULT_DB_LOCATION": absolute_path,
+                "BROKER_DEFAULT_DB_NAME": "other.db",
+                "BROKER_PROJECT_SCOPE": True,
+            }
+        )
 
         try:
             result_path, used_scope = _resolve_database_path(args, config=config)
@@ -354,11 +357,13 @@ class TestDatabasePathResolution:
                 command="write",
             )
             absolute_path = os.sep.join([os.sep + "env", "default", "path"])
-            config = {
-                "BROKER_DEFAULT_DB_LOCATION": absolute_path,
-                "BROKER_DEFAULT_DB_NAME": DEFAULT_DB_NAME,
-                "BROKER_PROJECT_SCOPE": True,
-            }
+            config = resolve_config(
+                override={
+                    "BROKER_DEFAULT_DB_LOCATION": absolute_path,
+                    "BROKER_DEFAULT_DB_NAME": DEFAULT_DB_NAME,
+                    "BROKER_PROJECT_SCOPE": True,
+                }
+            )
 
             # Real project discovery: the fixture tree holds the database,
             # so precedence is proven against actual search, not a canned
@@ -378,11 +383,13 @@ class TestDatabasePathResolution:
 
         args = argparse.Namespace(file=DEFAULT_DB_NAME, dir=Path.cwd(), command="write")
 
-        config = {
-            "BROKER_DEFAULT_DB_LOCATION": str(tmp_path / "env"),
-            "BROKER_DEFAULT_DB_NAME": "env.db",
-            "BROKER_PROJECT_SCOPE": False,
-        }
+        config = resolve_config(
+            override={
+                "BROKER_DEFAULT_DB_LOCATION": str(tmp_path / "env"),
+                "BROKER_DEFAULT_DB_NAME": "env.db",
+                "BROKER_PROJECT_SCOPE": False,
+            }
+        )
 
         try:
             result_path, used_scope = _resolve_database_path(args, config=config)
@@ -402,11 +409,13 @@ class TestDatabasePathResolution:
 
         args = argparse.Namespace(file="missing.db", dir=Path.cwd(), command="write")
 
-        config = {
-            "BROKER_DEFAULT_DB_LOCATION": "",
-            "BROKER_DEFAULT_DB_NAME": "missing.db",
-            "BROKER_PROJECT_SCOPE": True,
-        }
+        config = resolve_config(
+            override={
+                "BROKER_DEFAULT_DB_LOCATION": "",
+                "BROKER_DEFAULT_DB_NAME": "missing.db",
+                "BROKER_PROJECT_SCOPE": True,
+            }
+        )
 
         try:
             with pytest.raises(ValueError) as exc_info:
@@ -440,11 +449,13 @@ class TestDatabasePathResolution:
                 command="init",  # Special case
             )
 
-            config = {
-                "BROKER_DEFAULT_DB_LOCATION": "",
-                "BROKER_DEFAULT_DB_NAME": DEFAULT_DB_NAME,
-                "BROKER_PROJECT_SCOPE": True,
-            }
+            config = resolve_config(
+                override={
+                    "BROKER_DEFAULT_DB_LOCATION": "",
+                    "BROKER_DEFAULT_DB_NAME": DEFAULT_DB_NAME,
+                    "BROKER_PROJECT_SCOPE": True,
+                }
+            )
 
             result_path, used_scope = _resolve_database_path(args, config=config)
             expected = sub_dir / DEFAULT_DB_NAME

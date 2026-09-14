@@ -17,7 +17,7 @@ from psycopg import conninfo as pg_conninfo
 from simplebroker_pg import PostgresRunner, get_backend_plugin
 from simplebroker_pg.validation import connect
 
-from simplebroker import BrokerTarget, Queue
+from simplebroker import BrokerTarget, Config, Queue
 from simplebroker._runner import SetupPhase, SQLRunner
 from simplebroker.db import BrokerCore
 
@@ -320,7 +320,7 @@ def test_postgres_project_persistent_queues_share_plugin_runner(
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> SQLRunner:
         nonlocal create_runner_calls
         create_runner_calls += 1

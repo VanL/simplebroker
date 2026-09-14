@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import Queue, resolve_config
 from simplebroker._exceptions import OperationalError, StopException
 from simplebroker._runner import SQLiteRunner
 from simplebroker.db import BrokerCore, DBConnection
@@ -70,7 +70,8 @@ def test_connection_failure_logs_retry_and_terminal_context(
     caplog,
 ) -> None:
     connection = DBConnection(
-        str(tmp_path / "broker.db"), config={"BROKER_LOGGING_ENABLED": True}
+        str(tmp_path / "broker.db"),
+        config=resolve_config(override={"BROKER_LOGGING_ENABLED": True}),
     )
     failure = OperationalError("database is locked")
 
@@ -186,7 +187,7 @@ def test_queue_gc_finalizer_logs_cleanup_failure(
         "jobs",
         db_path=str(tmp_path / "broker.db"),
         persistent=True,
-        config={"BROKER_LOGGING_ENABLED": True},
+        config=resolve_config(override={"BROKER_LOGGING_ENABLED": True}),
     )
     assert queue.peek_one(with_timestamps=False) is None
     assert queue.conn is not None

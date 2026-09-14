@@ -852,7 +852,8 @@ heading blocks deletion.
 
 ## Related Plans
 
-- [Test proof quality](../plans/2026-09-07-test-proof-quality-plan.md)
+- retired: 2026-09-07-test-proof-quality-plan — source `646718f`; see the
+  ledger in `docs/plans/README.md`.
 
 This spec was authored and evolved in the agent-guidance repository;
 the plans below live there, not in this repository (quoted by name so
@@ -866,7 +867,8 @@ Local adoption record (soft-retired; not a live path claim):
 
 Local plans:
 
-- [Critical review remediation](../plans/2026-09-07-critical-review-remediation-plan.md)
+- retired: 2026-09-07-critical-review-remediation-plan — source `dbace84`;
+  see the ledger in `docs/plans/README.md`.
 
 - retired: 2026-08-06-ruff-suppression-registry-extraction-plan — source
   `3cb6e091`; see the ledger in `docs/plans/README.md`

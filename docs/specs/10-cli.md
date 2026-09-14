@@ -58,12 +58,21 @@ _Implementation mapping_:
 The CLI resolves its broker environment snapshot before parser-dependent
 behavior; invalid selected configuration still produces
 the plain preparse exit-1 error, including help, version, and raw --json.
-Parsed explicit settings overlay that retained snapshot without another
-environment read. This preserved CLI failure ordering is distinct from a
-schema's value-precedence rule and is preserved for direct broker resolution
+Parsed explicit target settings take precedence over the retained defaults
+without another environment read. `cli.py` owns argv parsing and flag validation;
+the config resolver does not accept an arbitrary `args` mapping. The global
+`--dir` and `--file` selectors reuse the path-component validator from config.
+Their flag-specific rules remain separate: `--file` permits absolute paths,
+while `DEFAULT_DB_NAME` requires a relative name. This preserved CLI failure ordering is distinct from a
+resolver's source-precedence rule and is preserved for direct broker resolution
 as well. Command syntax, target-selection precedence, and the post-parse JSON error contract are
-unchanged. Internal field names are canonical; env diagnostics retain the
-external `BROKER_*` spelling.
+unchanged. Internal field names are uppercase and unprefixed; env diagnostics retain the
+external `BROKER_*` spelling. Well-formed custom namespaced keys are retained;
+near-miss capitalization of a registered field warns with its source and
+expected spelling, while the malformed name is ignored. Each invalid value also
+warns as its source is applied. Configuration warnings are printed on stderr as
+one `simplebroker: warning: <message>` line each, without Python warning
+formatting; an invalid final value is then reported by the exit-1 error.
 
 The CLI follows ordinary Unix stream roles:
 
@@ -402,8 +411,9 @@ _Implementation mapping_:
 
 - [Shared configuration loader and unprefixed snapshots](../plans/2026-09-11-shared-configuration-loader-plan.md): shared configuration internals with preserved CLI behavior.
 
-- active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
-  — owns [SB-CLI-7] and the [SB-CLI-3] value-taking write-option extension
+- retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
+  see the ledger in `docs/plans/README.md`. It owns [SB-CLI-7] and the
+  [SB-CLI-3] value-taking write-option extension.
 
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It repairs shell

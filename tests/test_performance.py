@@ -22,7 +22,7 @@ from typing import cast
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import Queue, resolve_config
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueMoveWatcher
 
@@ -640,7 +640,7 @@ def test_move_performance_with_large_batches(workdir: Path) -> None:
 def test_performance_improvement_with_claims(workdir: Path) -> None:
     """Test performance improvement when using claimed vs delete operations."""
     db_path = workdir / "test.db"
-    config = {"BROKER_AUTO_VACUUM": 0}
+    config = resolve_config(override={"BROKER_AUTO_VACUUM": 0})
 
     # This benchmark inspects the physical claimed-row representation. Automatic
     # maintenance is a separate concern and may legitimately remove those rows.
@@ -710,7 +710,7 @@ def test_batch_delete_many_performance(workdir: Path) -> None:
 def test_vacuum_batch_size_limits(workdir: Path) -> None:
     """Test that vacuum respects batch size limits for performance."""
     db_path = workdir / "test.db"
-    config = {"BROKER_AUTO_VACUUM": 0}
+    config = resolve_config(override={"BROKER_AUTO_VACUUM": 0})
 
     # Write and claim a large number of messages
     message_count = 10000

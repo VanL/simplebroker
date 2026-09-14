@@ -13,6 +13,7 @@ from simplebroker_pg._failure_order import (
 )
 from simplebroker_pg.plugin import PostgresBackendPlugin
 
+from simplebroker import resolve_config
 from simplebroker._runner import SetupPhase
 from simplebroker.db import BrokerCore
 
@@ -211,7 +212,7 @@ def test_vacuum_leases_connection_for_advisory_lock_lifetime() -> None:
     PostgresBackendPlugin().vacuum(
         runner,
         compact=False,
-        config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+        config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
     )
 
     assert runner.lease_calls == 1
@@ -229,7 +230,7 @@ def test_vacuum_unlock_false_releases_without_warning() -> None:
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert runner.release_calls == 1
@@ -261,7 +262,7 @@ def test_vacuum_discards_checkout_when_unlock_completion_is_unknown() -> None:
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert runner.discard_calls == 1
@@ -300,7 +301,7 @@ def test_vacuum_body_base_exception_survives_ordinary_cleanup_failures() -> None
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     notes = cast(tuple[str, ...], getattr(caught.value, "__notes__", ()))
@@ -324,7 +325,7 @@ def test_vacuum_unlock_failure_is_primary_over_ordinary_body_failure() -> None:
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert caught.value is unlock_failure
@@ -349,7 +350,7 @@ def test_vacuum_discard_base_exception_is_primary() -> None:
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert caught.value is discard_failure
@@ -374,7 +375,7 @@ def test_vacuum_unlock_base_exception_survives_ordinary_later_cleanup() -> None:
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert caught.value is unlock_failure
@@ -399,7 +400,7 @@ def test_vacuum_release_base_exception_is_primary() -> None:
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert caught.value is release_failure
@@ -420,7 +421,7 @@ def test_vacuum_ordinary_release_failure_preserves_combined_context_chain() -> N
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert caught.value is release_failure
@@ -445,7 +446,7 @@ def test_vacuum_body_base_exception_survives_definite_unlock_result(
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert caught.value is body_failure
@@ -468,7 +469,7 @@ def test_vacuum_body_base_exception_survives_ordinary_rollback_failure() -> None
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert caught.value is body_failure

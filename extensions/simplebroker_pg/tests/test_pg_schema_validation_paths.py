@@ -25,6 +25,7 @@ from simplebroker_pg.validation import (
     validate_target,
 )
 
+from simplebroker import Config, resolve_config
 from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError, IntegrityError, OperationalError
 from simplebroker._runner import SetupPhase
@@ -556,54 +557,63 @@ def test_quote_ident_rejects_invalid_identifiers() -> None:
     "config",
     [
         {
-            "BROKER_BACKEND_TARGET": "",
-            "BROKER_BACKEND_HOST": "",
-            "BROKER_BACKEND_PORT": 5432,
-            "BROKER_BACKEND_USER": "postgres",
-            "BROKER_BACKEND_DATABASE": "simplebroker",
-            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+            "BACKEND_TARGET": "",
+            "BACKEND_HOST": "",
+            "BACKEND_PORT": 5432,
+            "BACKEND_USER": "postgres",
+            "BACKEND_DATABASE": "simplebroker",
+            "BACKEND_SCHEMA": "simplebroker_pg_v1",
         },
         {
-            "BROKER_BACKEND_TARGET": "",
-            "BROKER_BACKEND_HOST": "localhost",
-            "BROKER_BACKEND_PORT": True,
-            "BROKER_BACKEND_USER": "postgres",
-            "BROKER_BACKEND_DATABASE": "simplebroker",
-            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+            "BACKEND_TARGET": "",
+            "BACKEND_HOST": "localhost",
+            "BACKEND_PORT": True,
+            "BACKEND_USER": "postgres",
+            "BACKEND_DATABASE": "simplebroker",
+            "BACKEND_SCHEMA": "simplebroker_pg_v1",
         },
         {
-            "BROKER_BACKEND_TARGET": "",
-            "BROKER_BACKEND_HOST": "localhost",
-            "BROKER_BACKEND_PORT": "not-a-port",
-            "BROKER_BACKEND_USER": "postgres",
-            "BROKER_BACKEND_DATABASE": "simplebroker",
-            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+            "BACKEND_TARGET": "",
+            "BACKEND_HOST": "localhost",
+            "BACKEND_PORT": "not-a-port",
+            "BACKEND_USER": "postgres",
+            "BACKEND_DATABASE": "simplebroker",
+            "BACKEND_SCHEMA": "simplebroker_pg_v1",
         },
     ],
 )
 def test_verify_env_rejects_invalid_connection_parts(
     config: dict[str, object],
 ) -> None:
+    # Direct Config construction is necessary here. This test proves verify_env's
+    # own guard, and resolve_config would intercept two cases before it runs:
+    # BACKEND_PORT=True is coerced to 1 by the int validator, which verify_env
+    # then accepts as a valid port, so no DatabaseError would fire; and
+    # BACKEND_PORT="not-a-port" raises InvalidConfigError inside the resolver.
+    # The empty-host case would survive resolve_config(override=...) unchanged;
+    # it shares this form so the parametrized cases stay uniform.
     with pytest.raises(DatabaseError):
-        verify_env(config)
+        verify_env(Config({**resolve_config(), **config}))
 
 
 def test_verify_env_rejects_non_text_toml_target() -> None:
     with pytest.raises(DatabaseError, match="toml target must be a string"):
-        verify_env({}, toml_target=cast(Any, object()))
+        verify_env(resolve_config(), toml_target=cast(Any, object()))
 
 
 def test_init_backend_brackets_ipv6_hosts() -> None:
     result = PostgresBackendPlugin().init_backend(
-        {
-            "BROKER_BACKEND_HOST": "2001:db8::1",
-            "BROKER_BACKEND_PORT": 5432,
-            "BROKER_BACKEND_USER": "postgres",
-            "BROKER_BACKEND_PASSWORD": "",
-            "BROKER_BACKEND_DATABASE": "simplebroker",
-            "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
-            "BROKER_BACKEND_TARGET": "",
-        }
+        resolve_config(
+            override={
+                "BROKER_BACKEND_HOST": "2001:db8::1",
+                "BROKER_BACKEND_PORT": 5432,
+                "BROKER_BACKEND_USER": "postgres",
+                "BROKER_BACKEND_PASSWORD": "",
+                "BROKER_BACKEND_DATABASE": "simplebroker",
+                "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+                "BROKER_BACKEND_TARGET": "",
+            }
+        )
     )
 
     assert result["target"] == "postgresql://postgres@[2001:db8::1]:5432/simplebroker"
@@ -613,8 +623,8 @@ def test_postgres_plugin_noop_hooks_accept_expected_arguments() -> None:
     plugin = PostgresBackendPlugin()
 
     plugin.check_version()
-    plugin.apply_connection_settings(None, config={})
-    plugin.apply_optimization_settings(None, config={})
+    plugin.apply_connection_settings(None, config=resolve_config(override={}))
+    plugin.apply_optimization_settings(None, config=resolve_config(override={}))
     assert plugin.get_data_version(cast(Any, object())) is None
 
 

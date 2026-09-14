@@ -128,4 +128,13 @@ class BrokerTarget:
         return get_backend_plugin(self.backend_name)
 
 
-__all__ = ["BrokerTarget", "redact_backend_target"]
+def normalize_sqlite_target(target: str) -> str:
+    """Return the stable identity path for a SQLite file target."""
+    path = Path(target).expanduser()
+    try:
+        return str(path.resolve())
+    except (OSError, ValueError):
+        return str(path)
+
+
+__all__ = ["BrokerTarget", "normalize_sqlite_target", "redact_backend_target"]

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from ... import _sql
 from ..._backend_plugins import ActivityWaiter
-from ..._constants import SCHEMA_VERSION
+from ..._constants import SCHEMA_VERSION, Config
 from ..._exceptions import DatabaseError
 from ..._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 from .maintenance import (
@@ -184,7 +184,7 @@ class SQLiteBackendPlugin:
 
     def init_backend(
         self,
-        config: Mapping[str, Any],
+        config: Config,
         *,
         toml_target: str = "",
         toml_options: Mapping[str, Any] | None = None,
@@ -201,7 +201,7 @@ class SQLiteBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> SQLiteRunner:
         _reject_backend_options(backend_options)
         from ..._runner import SQLiteRunner
@@ -213,7 +213,7 @@ class SQLiteBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         _reject_backend_options(backend_options)
         from ...db import BrokerDB
@@ -227,7 +227,7 @@ class SQLiteBackendPlugin:
         *,
         backend_options: Mapping[str, Any] | None = None,
         verify_initialized: bool = True,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         _reject_backend_options(backend_options)
         del config
@@ -238,7 +238,7 @@ class SQLiteBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> bool:
         _reject_backend_options(backend_options)
         del config
@@ -278,7 +278,7 @@ class SQLiteBackendPlugin:
         self,
         conn: Any,
         *,
-        config: Mapping[str, Any],
+        config: Config,
         optimization_complete: bool = False,
     ) -> None:
         apply_connection_settings(
@@ -287,9 +287,7 @@ class SQLiteBackendPlugin:
             optimization_complete=optimization_complete,
         )
 
-    def apply_optimization_settings(
-        self, conn: Any, *, config: Mapping[str, Any]
-    ) -> None:
+    def apply_optimization_settings(self, conn: Any, *, config: Config) -> None:
         apply_optimization_settings(conn, config=config)
 
     def setup_connection_phase(
@@ -297,7 +295,7 @@ class SQLiteBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any],
+        config: Config,
     ) -> None:
         del backend_options
         setup_connection_phase(target, config=config)
@@ -496,7 +494,7 @@ class SQLiteBackendPlugin:
         runner: SQLRunner,
         *,
         compact: bool,
-        config: Mapping[str, Any],
+        config: Config,
     ) -> None:
         vacuum(runner, compact=compact, config=config)
 

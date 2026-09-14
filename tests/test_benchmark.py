@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from bin import benchmark
+from simplebroker import Config
 from simplebroker._targets import BrokerTarget
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -498,7 +499,9 @@ def test_sqlite_tuning_profiles_change_only_disclosed_config() -> None:
     for profile in benchmark.SQLITE_TUNING_PROFILES:
         tuned = benchmark._benchmark_config(dict(profile.config_delta))
         changed = {key for key in baseline if tuned[key] != baseline[key]}
-        assert changed == {key for key, _ in profile.config_delta}
+        assert changed == {
+            key.removeprefix("BROKER_") for key, _ in profile.config_delta
+        }
 
     tuned_keys = {
         key
@@ -576,9 +579,9 @@ def test_tuning_config_reaches_every_trial_phase(
     assert [phase for phase, _ in seen] == ["target", "seed", "timed", "verify"]
     configs = [config for _, config in seen]
     assert all(config is configs[0] for config in configs)
-    assert isinstance(configs[0], dict)
-    assert configs[0]["BROKER_SYNC_MODE"] == "NORMAL"
-    assert configs[0]["BROKER_CACHE_MB"] == 50
+    assert isinstance(configs[0], Config)
+    assert configs[0]["SYNC_MODE"] == "NORMAL"
+    assert configs[0]["CACHE_MB"] == 50
 
 
 def test_json_main_records_raw_trials_and_best(

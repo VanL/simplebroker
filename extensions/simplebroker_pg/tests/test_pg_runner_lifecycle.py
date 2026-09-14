@@ -17,6 +17,7 @@ from simplebroker_pg import PostgresRunner
 from simplebroker_pg._identifiers import stable_lock_key
 from simplebroker_pg.plugin import PostgresBackendPlugin
 
+from simplebroker import resolve_config
 from simplebroker._exceptions import IntegrityError, OperationalError
 from simplebroker._runner import SetupPhase
 from simplebroker.db import BrokerCore
@@ -480,7 +481,7 @@ def test_vacuum_body_base_exception_settles_transaction_before_definite_unlock(
         PostgresBackendPlugin().vacuum(
             runner,
             compact=False,
-            config={"BROKER_VACUUM_BATCH_SIZE": 1000},
+            config=resolve_config(override={"BROKER_VACUUM_BATCH_SIZE": 1000}),
         )
 
     assert pool.conn.rollback_calls == 1

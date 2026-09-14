@@ -14,6 +14,7 @@ from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis import plugin as redis_plugin_module
 from simplebroker_redis.core import RedisBrokerCore
 
+from simplebroker import resolve_config
 from simplebroker._exceptions import DatabaseError, OperationalError
 
 pytestmark = [pytest.mark.redis_only]
@@ -235,10 +236,9 @@ def test_redis_core_maintenance_recovers_before_inherited_core_lock(
     runner = RedisRunner("redis://transport.invalid/0", namespace="fork_maintenance")
     core = RedisBrokerCore(
         runner,
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 10_000,
-        },
+        config=resolve_config(
+            override={"BROKER_AUTO_VACUUM": 1, "BROKER_AUTO_VACUUM_INTERVAL": 10_000}
+        ),
     )
     lock_held = threading.Event()
     release_lock = threading.Event()

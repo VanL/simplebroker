@@ -165,7 +165,7 @@ failure or cleanup order.
 | async `stream_read` (19) | `stream_read` (7) | Split peek, exactly-once, at-least-once, and single-message generators; public close propagates to the selected generator. |
 | `MultiQueueWatcher.__init__` (15) | `__init__` (4) | Fixed handler carry-over; named validation and queue-entry construction. |
 | safe path validation (17) | `_validate_safe_path_components` (6) | Named dangerous-character and component checks without changing error order. |
-| `load_config` (19) | `load_config` (2) | One 32-field schema plus named default-path and project-config validation phases. |
+| `load_config` (19) | `resolve_config` (9) | `load_config` was removed on 2026-09-12; one `DEFAULT_CONFIG` field table with one validator per field and a single source-overlay loop in `resolve_config` replaced it. |
 | advisory `acquire` (12) | `acquire` (10) | Named the shared lock-retry decision while keeping acquisition ownership local. |
 | `packaging_smoke_main` (12) | `packaging_smoke_main` (5) | Named build, artifact inspection, install, and smoke phases. |
 | `TimestampGenerator.validate` (11) | `validate` (9) | Removed float fallback and made each integral grammar's rejection/precedence explicit. |
@@ -184,35 +184,26 @@ failure or cleanup order.
 | managed subprocess context (24) | `managed_subprocess` (7) | `ManagedProcess.close` is the one idempotent escalation and reader-cleanup owner. |
 | two diagnostic race tests (19, 11) | deleted | Stronger production-path transition and concurrency tests made the diagnostic-only assertions redundant. |
 
-Configuration has one shared schema/resolution owner in `simplebroker/config.py`.
-`simplebroker/_constants.py` retains ordinary constants and compatibility exports.
-`load_config()` is the strict fresh environment parser; `resolve_config()` is
-the compatible environment-base resolver for ordinary mappings. Public
-ownership boundaries convert ordinary results through `snapshot_config()`.
-Existing `ResolvedConfig` and the additive `ConfigSnapshot` are naming facades
-over shared receipt machinery. New composed snapshots retain their app schema
-and values directly across broker handoffs; legacy views keep their public keys.
-There is no import-time config
-object or cached exception. Each invalid fresh sample therefore raises a new
-`InvalidConfigError`, while import remains safe and `cli.main()` remains the
-sole process-level translator to the one-line exit-1 diagnostic.
+Configuration lives in `simplebroker/_constants.py`: one `DEFAULT_CONFIG`
+table, one `resolve_config()` function and one read-only `Config`. Sources are
+explicit; absent env means isolation. Each field has one validator. Invalid values warn as each source is applied
+and raise if any remain at the end; one plain function checks combined path
+constraints on the final values. There is no schema/derivation engine or naming view.
 
-`ConfigSnapshot` supplies canonical internal access and selected-prefix aliases.
-`CONFIG_DEFAULTS` owns broker fields; embedders derive defaults or add fields
-without registering them in core. Explicit env and TOML select declared names
-under one prefix; unknown external names are ignored. File activation remains
-explicit, separate from project discovery. Preserve source validation timing,
-not just merge order, when changing this seam.
+Env, explicit TOML and overrides select namespaced uppercase keys and strip
+only the prefix. Undeclared selected values pass through. Overrides reject
+invalid names; env/TOML ignore them with declared near-miss warnings. Internal
+reads use uppercase unprefixed keys. CLI argv parsing stays in `cli.py`. Config stores documented units, so vacuum
+percentages convert at the maintenance caller, not in the resolver. Transport
+carries the prefix plus ordinary values, rebuilt as a namespaced override with
+receiver-owned field declarations. Config retains namespace and declarations
+for derived overrides; both participate in session identity.
 
-`ResolvedConfig` guarantees every canonical key with the existing
-normalization and validation. It also preserves additional keys as opaque
-extension data. Its top-level bindings are copied and read-only; nested opaque
-values remain extension-owned. Exact marker receipts preserve identity.
-`resolve_isolated_config()` uses the same canonical schema without ambient
-input and rejects extras by default for fail-closed embedders; its explicit
-`preserve_unknown=True` mode opts into opaque pass-through. `_overlay_config()`
-is the ambient-free operation-local overlay for a handle that already owns a
-marker.
+No ambient input is parsed at module import. An existing Config is retained
+across ownership boundaries; a fresh handle explicitly supplies environment
+when its public seam owns ambient selection. The CLI remains the process-level
+translator for InvalidConfigError diagnostics. Complete configuration values
+participate in session identity, including custom fields.
 
 Queue, discovery, command, CLI, watcher, load, broker-context, and direct
 runner seams sample once at their published ownership event. They pass the
@@ -220,9 +211,11 @@ same marker through target selection, `DBConnection`, process-session keys and
 factories, `BrokerCore`, first-party backend plugins, runners, and cleanup.
 Lazy resource acquisition is not a second configuration time. A watcher given
 an existing Queue adopts the Queue marker unless explicit watcher config
-overlays or replaces watcher-local policy; the Queue still operates under its
-own marker. Transactional generator overrides are frozen when the
-configuration-consuming generator body first runs. `_paths.py` resolves its
+replaces watcher-local policy; the Queue still operates under its
+own marker. Per-call configs are already resolved snapshots. A transactional
+generator retains the supplied Config when its consuming body first runs.
+Consumers never normalize mappings: callers derive partial overrides with
+`resolve_config(config=base, override=namespaced_changes)` before passing them. `_paths.py` resolves its
 fixed built-in backend at validation time; opaque extras cannot select a core
 backend. Process sessions include the complete marker in identity, so opaque
 extras can separate resource sessions without becoming canonical core options.

@@ -10,6 +10,7 @@ import warnings
 
 import pytest
 
+from simplebroker import resolve_config
 from simplebroker._exceptions import OperationalError
 from simplebroker._targets import BrokerTarget
 
@@ -441,7 +442,7 @@ class TestMixedMode(WatcherTestBase):
         warnings.filterwarnings(
             "ignore", message="Timestamp conflict persisted", category=RuntimeWarning
         )
-        test_config = {"BROKER_BUSY_TIMEOUT": 100}
+        test_config = resolve_config(override={"BROKER_BUSY_TIMEOUT": 100})
 
         read_messages = []
         lock = threading.Lock()

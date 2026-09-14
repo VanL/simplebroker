@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from simplebroker import _retry_policy
+from simplebroker import _retry_policy, resolve_config
 from simplebroker import _runner as runner_module
 from simplebroker import db as db_module
 from simplebroker._backends.sqlite import runtime as sqlite_runtime
@@ -343,7 +343,9 @@ class TestSQLiteRunnerErrorHandling:
             # Keep admission strictly beyond every 10-second coordination
             # wait (20 seconds under CI) so scheduler delay cannot become the
             # test oracle.
-            config={"BROKER_BUSY_TIMEOUT": int(scale_timeout_for_ci(30.0) * 1000)},
+            config=resolve_config(
+                override={"BROKER_BUSY_TIMEOUT": int(scale_timeout_for_ci(30.0) * 1000)}
+            ),
         )
 
         def capture_error(call: Callable[[], None]) -> None:
@@ -440,7 +442,7 @@ class TestSQLiteRunnerErrorHandling:
 
         runner = ObservedSQLiteRunner(
             str(tmp_path / "shared-runner-three-contenders.db"),
-            config={"BROKER_BUSY_TIMEOUT": 1500},
+            config=resolve_config(override={"BROKER_BUSY_TIMEOUT": 1500}),
         )
         runner.begin_immediate()
 
@@ -594,7 +596,7 @@ class TestSQLiteRunnerErrorHandling:
 
         runner = SQLiteRunner(
             str(tmp_path / "foreign-close.db"),
-            config={"BROKER_BUSY_TIMEOUT": 50},
+            config=resolve_config(override={"BROKER_BUSY_TIMEOUT": 50}),
         )
         runner.begin_immediate()
         owner_connection = runner.get_connection()
@@ -661,7 +663,7 @@ class TestSQLiteRunnerErrorHandling:
         with tempfile.TemporaryDirectory() as tmpdir:
             runner = SQLiteRunner(
                 str(Path(tmpdir) / "test.db"),
-                config={"BROKER_LOGGING_ENABLED": True},
+                config=resolve_config(override={"BROKER_LOGGING_ENABLED": True}),
             )
 
             # Create a connection
@@ -735,7 +737,7 @@ class TestSQLiteRunnerErrorHandling:
 
         runner = SQLiteRunner(
             str(tmp_path / "test.db"),
-            config={"BROKER_BUSY_TIMEOUT": 5000},
+            config=resolve_config(override={"BROKER_BUSY_TIMEOUT": 5000}),
         )
         try:
             conn = runner.get_connection()
@@ -770,7 +772,7 @@ class TestSQLiteRunnerErrorHandling:
         monkeypatch.setattr(sqlite3, "connect", connect_spy)
         runner = SQLiteRunner(
             str(tmp_path / "test.db"),
-            config={"BROKER_BUSY_TIMEOUT": 5000},
+            config=resolve_config(override={"BROKER_BUSY_TIMEOUT": 5000}),
         )
         try:
             with runner._setup_operation_context():
@@ -959,7 +961,7 @@ class TestSQLiteRunnerErrorHandling:
         with pytest.raises(OperationalError, match="database is locked"):
             sqlite_runtime.setup_connection_phase(
                 str(tmp_path / "test.db"),
-                config={"BROKER_BUSY_TIMEOUT": 5000},
+                config=resolve_config(override={"BROKER_BUSY_TIMEOUT": 5000}),
                 busy_timeout_ms=250,
             )
 

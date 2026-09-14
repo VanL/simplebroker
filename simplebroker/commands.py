@@ -18,11 +18,11 @@ import os
 import sys
 import time
 import warnings
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextvars import ContextVar
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 from ._aliases import resolve_queue_operand
 from ._constants import (
@@ -31,8 +31,8 @@ from ._constants import (
     EXIT_QUEUE_EMPTY,
     EXIT_SUCCESS,
     PROG_NAME,
-    ResolvedConfig,
-    snapshot_config,
+    Config,
+    resolve_config,
 )
 from ._delivery import validate_keep_newest
 from ._dump import _load_clock_skew_warning_sink, dump_lines, load_lines
@@ -50,7 +50,6 @@ from ._paths import _validate_sqlite_database
 from ._selection import SelectionOrder, validate_bounded_order
 from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
-from .config import canonical_config
 from .db import (
     BrokerDB,
     DBConnection,
@@ -228,15 +227,14 @@ def _resolve_alias_name(
     db_path: DBTarget,
     name: str,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config,
 ) -> tuple[str, str | None]:
     """Resolve a queue name or alias, returning canonical queue and alias used."""
     if not name.startswith(ALIAS_PREFIX):
         # Avoid opening a connection for the common literal-name case.
         return name, None
 
-    resolved_config = snapshot_config(config)
-    with DBConnection(db_path, config=resolved_config) as conn:
+    with DBConnection(db_path, config=config) as conn:
         db = cast(BrokerDB, conn.get_connection())
         return resolve_queue_operand(name, db.resolve_alias)
 
@@ -245,11 +243,11 @@ def cmd_alias_list(
     db_path: DBTarget,
     target: str | None = None,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     wrote_output = False
     try:
-        resolved_config = snapshot_config(config)
+        resolved_config = resolve_config(config=config)
         with DBConnection(db_path, config=resolved_config) as conn:
             db = cast(BrokerDB, conn.get_connection())
             if target:
@@ -276,9 +274,9 @@ def cmd_alias_add(
     target: str,
     *,
     quiet: bool = False,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     with DBConnection(db_path, config=resolved_config) as conn:
         db = cast(BrokerDB, conn.get_connection())
         if quiet:
@@ -293,9 +291,9 @@ def cmd_alias_remove(
     db_path: DBTarget,
     alias: str,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     with DBConnection(db_path, config=resolved_config) as conn:
         db = cast(BrokerDB, conn.get_connection())
 
@@ -392,7 +390,7 @@ def _read_from_stdin(max_bytes: int) -> str:
 def _get_message_content(
     message: str | None,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config,
 ) -> str:
     """Get message content from argument or stdin, with size validation.
 
@@ -405,8 +403,7 @@ def _get_message_content(
     Raises:
         ValueError: If message exceeds size limit or no interactive message was given
     """
-    resolved_config = snapshot_config(config)
-    max_message_size = int(canonical_config(resolved_config)["max_message_size"])
+    max_message_size = int(config["MAX_MESSAGE_SIZE"])
 
     if message == "-":
         return _read_from_stdin(max_message_size)
@@ -658,7 +655,7 @@ def cmd_write(
     json_output: bool = False,
     show_timestamps: bool = False,
     keep_newest: int | None = None,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Write message to queue using Queue API.
 
@@ -674,7 +671,7 @@ def cmd_write(
         Exit code
     """
     validated_keep = validate_keep_newest(keep_newest)
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     content = _get_message_content(message, config=resolved_config)
     canonical_queue, _ = _resolve_alias_name(
         db_path,
@@ -712,7 +709,7 @@ def cmd_read(
     message_id_str: str | None = None,
     before_str: str | None = None,
     order: str = "oldest",
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Read and remove message(s) from queue using Queue API.
 
@@ -743,7 +740,7 @@ def cmd_read(
         message_id_str=message_id_str,
     )
 
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
 
     # Create queue instance
     canonical_queue, _ = _resolve_alias_name(
@@ -753,7 +750,7 @@ def cmd_read(
     )
     with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
         selected_fetch_generator: FetchGeneratorFn = queue.read_generator
-        commit_interval = int(canonical_config(resolved_config)["read_commit_interval"])
+        commit_interval = int(resolved_config["READ_COMMIT_INTERVAL"])
         if all_messages and commit_interval > 1:
 
             def stream_fetch_generator(
@@ -809,7 +806,7 @@ def cmd_peek(
     before_str: str | None = None,
     include_claimed: bool = False,
     order: str = "oldest",
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Peek at message(s) without removing them using Queue API.
 
@@ -842,7 +839,7 @@ def cmd_peek(
         message_id_str=message_id_str,
     )
 
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     canonical_queue, _ = _resolve_alias_name(
         db_path,
         queue_name,
@@ -872,7 +869,7 @@ def cmd_list(
     pattern: str | None = None,
     prefix: str | None = None,
     json_output: bool = False,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """List queue names, optionally with counts.
 
@@ -888,7 +885,7 @@ def cmd_list(
     # Use DBConnection as a context manager
     wrote_output = False
     try:
-        resolved_config = snapshot_config(config)
+        resolved_config = resolve_config(config=config)
         with DBConnection(db_path, config=resolved_config) as conn:
             db = cast(BrokerDB, conn.get_connection())
 
@@ -960,10 +957,10 @@ def cmd_exists(
     queue_name: str,
     *,
     json_output: bool = False,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Check whether a queue exists."""
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     canonical_queue, _ = _resolve_alias_name(
         db_path,
         queue_name,
@@ -991,10 +988,10 @@ def cmd_stats(
     queue_name: str,
     *,
     json_output: bool = False,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Show counts for one queue."""
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     canonical_queue, _ = _resolve_alias_name(
         db_path,
         queue_name,
@@ -1027,7 +1024,7 @@ def cmd_status(
     db_path: DBTarget,
     *,
     json_output: bool = False,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Show high-level database status metrics.
 
@@ -1035,7 +1032,7 @@ def cmd_status(
         db_path: Path to the broker database.
         json_output: When True, emit newline-delimited JSON instead of key/value lines.
     """
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     with DBConnection(db_path, config=resolved_config) as conn:
         db = cast(BrokerDB, conn.get_connection())
         stats = db.status()
@@ -1065,7 +1062,7 @@ def cmd_delete(
     queue_name: str | None = None,
     message_id_str: str | None = None,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Remove messages from queue(s).
 
@@ -1089,7 +1086,7 @@ def cmd_delete(
         if queue_name is None:
             raise _ArgumentValidationError("a queue is required with a message ID")
 
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     canonical_queue = None
     if queue_name is not None:
         canonical_queue, _ = _resolve_alias_name(
@@ -1125,10 +1122,10 @@ def cmd_rename(
     *,
     json_output: bool = False,
     retarget_aliases: bool = True,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Rename a queue using the broker admin API."""
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     canonical_old, _ = _resolve_alias_name(
         db_path,
         old_queue,
@@ -1274,7 +1271,7 @@ def cmd_move(
     after_str: str | None = None,
     before_str: str | None = None,
     order: str = "oldest",
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Move message(s) between queues using Queue API.
 
@@ -1314,7 +1311,7 @@ def cmd_move(
         message_id_str=message_id_str,
     )
 
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     canonical_source, _ = _resolve_alias_name(
         db_path,
         source_queue,
@@ -1377,7 +1374,7 @@ def cmd_broadcast(
     pattern: str | None = None,
     *,
     queue_names: Sequence[str] | None = None,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Send a message to selected queues.
 
@@ -1393,7 +1390,7 @@ def cmd_broadcast(
     Returns:
         Exit code
     """
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     content = _get_message_content(message, config=resolved_config)
 
     # Broadcast is a cross-queue operation, use DBConnection
@@ -1414,7 +1411,7 @@ def cmd_dump(
     include: list[str] | None = None,
     exclude: list[str] | None = None,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Write the broker's contents to stdout as simplebroker-dump v1 ndjson.
 
@@ -1427,7 +1424,7 @@ def cmd_dump(
         Exit code (0 on success; the dump of an empty broker is its header)
     """
     # Cross-queue operation: use DBConnection directly (same idiom as cmd_list)
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     with DBConnection(db_path, config=resolved_config) as conn:
         broker = conn.get_connection()
         lines = dump_lines(broker, include=include, exclude=exclude)
@@ -1447,14 +1444,14 @@ def cmd_load(
     *,
     force: bool = False,
     quiet: bool = False,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Apply a simplebroker-dump from stdin to the broker.
 
     Returns:
         Exit code 0 on success. Invalid input and storage failures raise.
     """
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     if sys.stdin.isatty():
         raise _ArgumentValidationError(
             "reads a dump from stdin into a fresh broker "
@@ -1478,7 +1475,7 @@ def cmd_vacuum(
     compact: bool = False,
     *,
     quiet: bool = False,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Vacuum claimed messages from the database.
 
@@ -1489,7 +1486,7 @@ def cmd_vacuum(
     Returns:
         Exit code
     """
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     with DBConnection(db_path, config=resolved_config) as conn:
         db = cast(BrokerDB, conn.get_connection())
         start_time = time.monotonic()
@@ -1523,8 +1520,8 @@ def _resolve_watch_inputs(
     *,
     move_to: str | None,
     after_str: str | None,
-    config: Mapping[str, Any] | None,
-) -> tuple[str, str | None, int | None, ResolvedConfig]:
+    config: Config,
+) -> tuple[str, str | None, int | None, Config]:
     """Resolve aliases and timestamp input for one watch command."""
     if move_to and after_str:
         raise _ArgumentValidationError(
@@ -1534,20 +1531,19 @@ def _resolve_watch_inputs(
 
     after_timestamp = None if after_str is None else _validate_timestamp(after_str)
 
-    resolved_config = snapshot_config(config)
     canonical_queue, _ = _resolve_alias_name(
         db_path,
         queue_name,
-        config=resolved_config,
+        config=config,
     )
     canonical_move_to = None
     if move_to is not None:
         canonical_move_to, _ = _resolve_alias_name(
             db_path,
             move_to,
-            config=resolved_config,
+            config=config,
         )
-    return canonical_queue, canonical_move_to, after_timestamp, resolved_config
+    return canonical_queue, canonical_move_to, after_timestamp, config
 
 
 def _watch_message_handler(
@@ -1593,7 +1589,7 @@ def cmd_watch(
     after_str: str | None = None,
     quiet: bool = False,
     move_to: str | None = None,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Watch queue for new messages in real-time.
 
@@ -1610,6 +1606,7 @@ def cmd_watch(
     Returns:
         Exit code
     """
+    config = resolve_config(config=config)
     watch_inputs = _resolve_watch_inputs(
         db_path,
         queue_name,
@@ -1700,7 +1697,7 @@ def _init_broker_target(
     db_target: BrokerTarget,
     *,
     quiet: bool,
-    config: Mapping[str, Any] | None,
+    config: Config,
 ) -> int:
     """Initialize one resolved backend target without replacing state."""
     target_path = db_target.target_path
@@ -1732,8 +1729,7 @@ def _init_broker_target(
             )
             return EXIT_SUCCESS
 
-    resolved_config = snapshot_config(config)
-    _initialize_project_backend_target(db_target, config=resolved_config)
+    _initialize_project_backend_target(db_target, config=config)
     target_kind = "database" if db_target.backend_name == "sqlite" else "target"
     _status(
         f"Initialized SimpleBroker {target_kind}: {db_target.display_target}",
@@ -1746,7 +1742,7 @@ def _init_sqlite_path(
     db_path: str,
     *,
     quiet: bool,
-    config: Mapping[str, Any] | None,
+    config: Config,
 ) -> int:
     """Initialize one legacy SQLite path without replacing state."""
     path = Path(db_path)
@@ -1758,9 +1754,8 @@ def _init_sqlite_path(
     if existing_result is not None:
         return existing_result
 
-    resolved_config = snapshot_config(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with DBConnection(db_path, config=resolved_config) as connection:
+    with DBConnection(db_path, config=config) as connection:
         connection.get_connection()
     _status(f"Initialized SimpleBroker database: {db_path}", quiet=quiet)
     return EXIT_SUCCESS
@@ -1770,9 +1765,10 @@ def cmd_init(
     db_path: DBTarget,
     quiet: bool,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> int:
     """Initialize a target non-destructively, preserving any existing state."""
+    config = resolve_config(config=config)
     if isinstance(db_path, BrokerTarget):
         return _init_broker_target(db_path, quiet=quiet, config=config)
     return _init_sqlite_path(db_path, quiet=quiet, config=config)

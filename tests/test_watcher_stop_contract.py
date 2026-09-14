@@ -7,6 +7,7 @@ from typing import Any, NoReturn
 
 import pytest
 
+from simplebroker import resolve_config
 from simplebroker._exceptions import OperationalError, StopException
 from simplebroker.watcher import PollingStrategy, QueueWatcher, StopWatching
 
@@ -163,7 +164,7 @@ def test_batch_iterators_close_once_on_exhaustion_after_handler_continuation(
         handler,
         db=broker_target,
         batch_processing=True,
-        config={"BROKER_LOGGING_ENABLED": False},
+        config=resolve_config(override={"BROKER_LOGGING_ENABLED": False}),
     )
     monkeypatch.setattr(
         watcher._queue_obj,
@@ -607,7 +608,7 @@ def test_context_exit_suppresses_stop_failure_without_replacing_body_exception(
         "context_stop_failure",
         lambda _message, _timestamp: None,
         db=broker_target,
-        config={"BROKER_LOGGING_ENABLED": False},
+        config=resolve_config(override={"BROKER_LOGGING_ENABLED": False}),
     )
     run_thread: threading.Thread | None = None
 

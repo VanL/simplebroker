@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import Queue, resolve_config
 from simplebroker import _timestamp as timestamp_module
 from simplebroker._constants import (
     LOGICAL_COUNTER_MASK,
@@ -333,7 +333,7 @@ def test_queue_insert_messages_uses_configured_message_size_limit(
         "jobs",
         db_path=broker_target,
         persistent=True,
-        config={"BROKER_MAX_MESSAGE_SIZE": 3},
+        config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 3}),
     )
     try:
         with pytest.raises(ValueError, match="maximum allowed size \\(3 bytes\\)"):

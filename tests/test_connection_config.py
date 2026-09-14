@@ -1,8 +1,9 @@
-"""Regression tests for partial config handling in connection setup."""
+"""Regression tests for explicit configuration ownership in connection setup."""
 # mypy: disable-error-code=no-untyped-def
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,12 +13,10 @@ from simplebroker import (
     Queue,
     open_broker,
     resolve_config,
-    resolve_isolated_config,
     target_for_directory,
 )
 from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
-from simplebroker._constants import load_config
-from simplebroker._exceptions import InvalidConfigError, MessageError
+from simplebroker._exceptions import MessageError
 from simplebroker._runner import SQLiteRunner
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore, DBConnection
@@ -30,81 +29,68 @@ def test_resolve_config_normalizes_partial_override_values() -> None:
     """Public config normalization should produce complete typed broker config."""
 
     config = resolve_config(
-        {
+        env=os.environ,
+        override={
             "BROKER_AUTO_VACUUM_INTERVAL": "100",
             "BROKER_BACKEND_PORT": "5433",
             "BROKER_PROJECT_SCOPE": "1",
             "BROKER_LOGGING_ENABLED": "1",
             "BROKER_VACUUM_THRESHOLD": "20",
-        }
+        },
     )
 
-    assert config["BROKER_AUTO_VACUUM_INTERVAL"] == 100
-    assert isinstance(config["BROKER_AUTO_VACUUM_INTERVAL"], int)
-    assert config["BROKER_BACKEND_PORT"] == 5433
-    assert isinstance(config["BROKER_BACKEND_PORT"], int)
-    assert config["BROKER_PROJECT_SCOPE"] is True
-    assert config["BROKER_LOGGING_ENABLED"] is True
-    assert config["BROKER_VACUUM_THRESHOLD"] == 0.2
-    assert isinstance(config["BROKER_VACUUM_THRESHOLD"], float)
-    assert config["BROKER_MAX_MESSAGE_SIZE"] == load_config()["BROKER_MAX_MESSAGE_SIZE"]
+    assert config["AUTO_VACUUM_INTERVAL"] == 100
+    assert isinstance(config["AUTO_VACUUM_INTERVAL"], int)
+    assert config["BACKEND_PORT"] == 5433
+    assert isinstance(config["BACKEND_PORT"], int)
+    assert config["PROJECT_SCOPE"] is True
+    assert config["LOGGING_ENABLED"] is True
+    assert config["VACUUM_THRESHOLD"] == 20
+    assert isinstance(config["VACUUM_THRESHOLD"], float)
+    assert (
+        config["MAX_MESSAGE_SIZE"] == resolve_config(env=os.environ)["MAX_MESSAGE_SIZE"]
+    )
 
 
 def test_resolve_config_preserves_typed_debug_and_percentage_overrides() -> None:
     """Programmatic overrides should not need environment-style strings."""
 
     config = resolve_config(
-        {
-            "BROKER_DEBUG": False,
-            "BROKER_VACUUM_THRESHOLD": 20,
-        }
+        env=os.environ,
+        override={"BROKER_DEBUG": False, "BROKER_VACUUM_THRESHOLD": 20},
     )
 
-    assert config["BROKER_DEBUG"] is False
-    assert config["BROKER_VACUUM_THRESHOLD"] == 0.2
+    assert config["DEBUG"] is False
+    assert config["VACUUM_THRESHOLD"] == 20
 
-    assert resolve_config({"BROKER_DEBUG": "verbose"})["BROKER_DEBUG"] is True
+    assert (
+        resolve_config(env=os.environ, override={"BROKER_DEBUG": "verbose"})["DEBUG"]
+        is True
+    )
 
 
-def test_ephemeral_queue_keeps_constructor_snapshot_after_invalid_env_change(
+def test_library_handles_without_config_ignore_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "5")
-    queue = Queue("jobs", db_path=str(tmp_path / "snapshot.db"))
+    monkeypatch.setenv("BROKER_DEFAULT_DB_NAME", "env.db")
 
-    monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "not-an-integer")
-
-    assert queue.write("12345") > 0
-    with pytest.raises(MessageError, match=r"exceeds maximum allowed size \(5 bytes\)"):
-        queue.write("123456")
-
-
-def test_new_queue_observes_later_environment_while_existing_queue_stays_fixed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "5")
-    first = Queue("jobs", db_path=str(tmp_path / "first-snapshot.db"))
-    monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "7")
-    second = Queue("jobs", db_path=str(tmp_path / "second-snapshot.db"))
-
-    with pytest.raises(MessageError, match=r"maximum allowed size \(5 bytes\)"):
-        first.write("123456")
-    assert second.write("1234567") > 0
+    assert Queue("jobs", db_path=str(tmp_path / "queue.db")).write("123456") > 0
+    with open_broker(str(tmp_path / "broker.db")) as broker:
+        assert broker.write("jobs", "123456") > 0
+    assert Path(target_for_directory(tmp_path).target).name != "env.db"
 
 
 def test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "5")
     queue = Queue(
         "jobs",
         db_path=str(tmp_path / "persistent-lazy-snapshot.db"),
         persistent=True,
+        config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 5}),
     )
-    monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "not-an-integer")
 
     try:
         assert queue.write("12345") > 0
@@ -114,30 +100,13 @@ def test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation(
         queue.close()
 
 
-def test_open_broker_samples_when_context_is_entered(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "5")
-    manager = open_broker(str(tmp_path / "entry-snapshot.db"))
-    monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "7")
-
-    with manager as broker:
-        assert broker.write("jobs", "1234567") > 0
-        with pytest.raises(
-            MessageError,
-            match=r"exceeds maximum allowed size \(7 bytes\)",
-        ):
-            broker.write("jobs", "12345678")
-
-
 def test_dbconnection_keeps_constructor_snapshot_for_lazy_core_creation(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "5")
-    connection = DBConnection(str(tmp_path / "lazy-core-snapshot.db"), config=None)
-    monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "not-an-integer")
+    connection = DBConnection(
+        str(tmp_path / "lazy-core-snapshot.db"),
+        config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 5}),
+    )
 
     try:
         broker = connection.get_connection()
@@ -155,11 +124,8 @@ def test_generator_override_inherits_core_snapshot_without_ambient_reread(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = resolve_isolated_config(
-        {
-            "BROKER_AUTO_VACUUM": 0,
-            "BROKER_GENERATOR_BATCH_SIZE": 1,
-        }
+    config = resolve_config(
+        override={"BROKER_AUTO_VACUUM": 0, "BROKER_GENERATOR_BATCH_SIZE": 1}
     )
     runner = SQLiteRunner(str(tmp_path / "generator-overlay.db"), config=config)
 
@@ -172,7 +138,7 @@ def test_generator_override_inherits_core_snapshot_without_ambient_reread(
             "jobs",
             with_timestamps=False,
             delivery_guarantee="at_least_once",
-            config={"BROKER_GENERATOR_BATCH_SIZE": 2},
+            config=resolve_config(override={"BROKER_GENERATOR_BATCH_SIZE": 2}),
         )
         try:
             assert next(messages) == "one"
@@ -180,32 +146,36 @@ def test_generator_override_inherits_core_snapshot_without_ambient_reread(
             messages.close()
 
 
-def test_generator_reads_ordinary_override_on_first_iteration(
-    tmp_path: Path,
-) -> None:
-    config = resolve_isolated_config({"BROKER_AUTO_VACUUM": 0})
+def test_generator_retains_explicit_config_on_first_iteration(tmp_path: Path) -> None:
+    config = resolve_config(override={"BROKER_AUTO_VACUUM": 0})
     runner = SQLiteRunner(str(tmp_path / "generator-entry-snapshot.db"), config=config)
-
+    supplied = {"GENERATOR_BATCH_SIZE": 1}
+    operation_config = resolve_config(
+        config=config,
+        override={"BROKER_" + key: value for key, value in (supplied).items()},
+    )
     with BrokerCore(runner, config=config) as core:
         core.write("jobs", "one")
-        overrides: dict[str, Any] = {"BROKER_GENERATOR_BATCH_SIZE": 1}
-        messages = core.claim_generator(
+        messages: Any = core.claim_generator(
             "jobs",
             with_timestamps=False,
             delivery_guarantee="at_least_once",
-            config=overrides,
+            config=operation_config,
         )
-        overrides["BROKER_GENERATOR_BATCH_SIZE"] = "not-an-integer"
-
-        with pytest.raises(InvalidConfigError, match="BROKER_GENERATOR_BATCH_SIZE"):
-            next(messages)
+        supplied["GENERATOR_BATCH_SIZE"] = 2
+        try:
+            assert next(messages) == "one"
+        finally:
+            messages.close()
 
 
 def test_broker_core_merges_partial_config_with_defaults(tmp_path: Path) -> None:
-    """A partial size override governs writes while other defaults remain usable."""
+    """A resolved size override governs writes while other defaults remain usable."""
     runner = SQLiteRunner(str(tmp_path / "test.db"))
 
-    with BrokerCore(runner, config={"BROKER_MAX_MESSAGE_SIZE": 5}) as core:
+    with BrokerCore(
+        runner, config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 5})
+    ) as core:
         core.write("jobs", "12345")
         with pytest.raises(
             MessageError, match=r"exceeds maximum allowed size \(5 bytes\)"
@@ -234,7 +204,7 @@ def test_dbconnection_non_sqlite_target_accepts_partial_config(
 
     with DBConnection(
         target,
-        config={"BROKER_MAX_MESSAGE_SIZE": 5},
+        config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 5}),
     ) as conn:
         core = conn.get_connection()
         core.write("jobs", "12345")
@@ -258,8 +228,8 @@ def test_target_for_directory_normalizes_partial_backend_config(
         def init_backend(self, config):
             seen.update(config)
             return {
-                "target": str(config["BROKER_BACKEND_TARGET"]),
-                "backend_options": {"schema": str(config["BROKER_BACKEND_SCHEMA"])},
+                "target": str(config["BACKEND_TARGET"]),
+                "backend_options": {"schema": str(config["BACKEND_SCHEMA"])},
             }
 
     monkeypatch.setattr(
@@ -269,33 +239,22 @@ def test_target_for_directory_normalizes_partial_backend_config(
 
     target = target_for_directory(
         tmp_path,
-        config={
-            "BROKER_BACKEND": "postgres",
-            "BROKER_BACKEND_TARGET": "postgresql://broker@db.example.com/app",
-            "BROKER_BACKEND_SCHEMA": "broker_schema",
-            "BROKER_BACKEND_PORT": "5433",
-            "BROKER_AUTO_VACUUM_INTERVAL": "100",
-        },
+        config=resolve_config(
+            override={
+                "BROKER_BACKEND": "postgres",
+                "BROKER_BACKEND_TARGET": "postgresql://broker@db.example.com/app",
+                "BROKER_BACKEND_SCHEMA": "broker_schema",
+                "BROKER_BACKEND_PORT": "5433",
+                "BROKER_AUTO_VACUUM_INTERVAL": "100",
+            }
+        ),
     )
 
     assert target.backend_name == "postgres"
-    assert seen["BROKER_BACKEND_PORT"] == 5433
-    assert isinstance(seen["BROKER_BACKEND_PORT"], int)
-    assert seen["BROKER_AUTO_VACUUM_INTERVAL"] == 100
-    assert isinstance(seen["BROKER_AUTO_VACUUM_INTERVAL"], int)
-
-
-def test_target_discovery_samples_environment_for_each_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("BROKER_DEFAULT_DB_NAME", "first.db")
-    first = target_for_directory(tmp_path)
-    monkeypatch.setenv("BROKER_DEFAULT_DB_NAME", "second.db")
-    second = target_for_directory(tmp_path)
-
-    assert Path(first.target) == tmp_path / "first.db"
-    assert Path(second.target) == tmp_path / "second.db"
+    assert seen["BACKEND_PORT"] == 5433
+    assert isinstance(seen["BACKEND_PORT"], int)
+    assert seen["AUTO_VACUUM_INTERVAL"] == 100
+    assert isinstance(seen["AUTO_VACUUM_INTERVAL"], int)
 
 
 def test_watcher_instance_config_maps_into_strategy_fields(
@@ -310,42 +269,19 @@ def test_watcher_instance_config_maps_into_strategy_fields(
         "jobs",
         lambda _message, _timestamp: None,
         db=tmp_path / "watcher.db",
-        config={
-            "BROKER_INITIAL_CHECKS": 2,
-            "BROKER_MAX_INTERVAL": 0.01,
-            "BROKER_BURST_SLEEP": 0.0001,
-            "BROKER_JITTER_FACTOR": 0,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_INITIAL_CHECKS": 2,
+                "BROKER_MAX_INTERVAL": 0.01,
+                "BROKER_BURST_SLEEP": 0.0001,
+                "BROKER_JITTER_FACTOR": 0,
+            }
+        ),
     )
     try:
         strategy = watcher._strategy
         assert strategy._initial_checks == 2
         assert strategy._max_interval == 0.01
-        assert strategy._burst_sleep == 0.0001
-        assert strategy._jitter_factor == 0
-    finally:
-        watcher.stop()
-
-
-def test_watcher_environment_config_maps_into_strategy_fields(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Environment variant of part (i)."""
-    monkeypatch.setenv("BROKER_INITIAL_CHECKS", "0")
-    monkeypatch.setenv("BROKER_MAX_INTERVAL", "0.007")
-    monkeypatch.setenv("BROKER_BURST_SLEEP", "0.0001")
-    monkeypatch.setenv("BROKER_JITTER_FACTOR", "0")
-
-    watcher = QueueWatcher(
-        "jobs",
-        lambda _message, _timestamp: None,
-        db=tmp_path / "environment-watcher.db",
-    )
-    try:
-        strategy = watcher._strategy
-        assert strategy._initial_checks == 0
-        assert strategy._max_interval == 0.007
         assert strategy._burst_sleep == 0.0001
         assert strategy._jitter_factor == 0
     finally:
@@ -374,30 +310,31 @@ def test_polling_strategy_fields_determine_delay_schedule() -> None:
     assert all(delay <= 0.01 for delay in delays)
 
 
-def test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient(
+def test_watcher_given_queue_adopts_queue_snapshot_and_overlays(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("BROKER_INITIAL_CHECKS", "3")
-    monkeypatch.setenv("BROKER_CACHE_MB", "17")
     queue = Queue(
         "jobs",
         db_path=str(tmp_path / "watcher-queue-snapshot.db"),
         persistent=True,
+        config=resolve_config(
+            override={"BROKER_INITIAL_CHECKS": 3, "BROKER_CACHE_MB": 17}
+        ),
     )
-    monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "not-an-integer")
 
     inherited = QueueWatcher(queue, lambda _message, _timestamp: None)
     overlaid = QueueWatcher(
         queue,
         lambda _message, _timestamp: None,
-        config={"BROKER_INITIAL_CHECKS": 9},
+        config=resolve_config(
+            config=queue._config, override={"BROKER_INITIAL_CHECKS": 9}
+        ),
     )
     try:
         assert inherited._config is queue._config
         assert inherited._strategy._initial_checks == 3
         assert overlaid._strategy._initial_checks == 9
-        assert overlaid._config["BROKER_CACHE_MB"] == 17
+        assert overlaid._config["CACHE_MB"] == 17
         assert overlaid._queue_obj._config is queue._config
     finally:
         inherited.stop()
@@ -409,10 +346,9 @@ def test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient(
 def test_claim_generator_uses_instance_batch_size(broker_target) -> None:
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_GENERATOR_BATCH_SIZE": 1,
-            "BROKER_AUTO_VACUUM": 0,
-        },
+        config=resolve_config(
+            override={"BROKER_GENERATOR_BATCH_SIZE": 1, "BROKER_AUTO_VACUUM": 0}
+        ),
     )
     generator: Any = None
     try:
@@ -443,10 +379,9 @@ def test_claim_generator_uses_instance_batch_size(broker_target) -> None:
 def test_move_generator_uses_instance_batch_size(broker_target) -> None:
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_GENERATOR_BATCH_SIZE": 1,
-            "BROKER_AUTO_VACUUM": 0,
-        },
+        config=resolve_config(
+            override={"BROKER_GENERATOR_BATCH_SIZE": 1, "BROKER_AUTO_VACUUM": 0}
+        ),
     )
     generator: Any = None
     try:
@@ -484,10 +419,9 @@ def test_generator_explicit_config_overrides_instance_batch_size(
 ) -> None:
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_GENERATOR_BATCH_SIZE": 1,
-            "BROKER_AUTO_VACUUM": 0,
-        },
+        config=resolve_config(
+            override={"BROKER_GENERATOR_BATCH_SIZE": 1, "BROKER_AUTO_VACUUM": 0}
+        ),
     )
     generator: Any = None
     try:
@@ -499,7 +433,7 @@ def test_generator_explicit_config_overrides_instance_batch_size(
                 "source",
                 with_timestamps=False,
                 delivery_guarantee="at_least_once",
-                config={"BROKER_GENERATOR_BATCH_SIZE": 2},
+                config=resolve_config(override={"BROKER_GENERATOR_BATCH_SIZE": 2}),
             )
         else:
             generator = broker.move_generator(
@@ -507,7 +441,7 @@ def test_generator_explicit_config_overrides_instance_batch_size(
                 "destination",
                 with_timestamps=False,
                 delivery_guarantee="at_least_once",
-                config={"BROKER_GENERATOR_BATCH_SIZE": 2},
+                config=resolve_config(override={"BROKER_GENERATOR_BATCH_SIZE": 2}),
             )
 
         assert [next(generator) for _ in range(3)] == [
@@ -531,3 +465,34 @@ def test_generator_explicit_config_overrides_instance_batch_size(
         if generator is not None:
             generator.close()
         broker.shutdown()
+
+
+@pytest.mark.parametrize("consumer", ["connection", "watcher"])
+def test_explicit_config_is_retained_at_constructor(
+    tmp_path: Path, consumer: str
+) -> None:
+    supplied = {"CUSTOM_METADATA": {"labels": ["original"]}}
+    config = resolve_config(
+        override={"BROKER_" + key: value for key, value in (supplied).items()}
+    )
+    path = tmp_path / "capture.db"
+    if consumer == "connection":
+        connection = DBConnection(str(path), config=config)
+        try:
+            supplied["CUSTOM_METADATA"]["labels"].append("changed")
+            assert connection._config is config
+            assert connection._config["CUSTOM_METADATA"] == {
+                "labels": ["original", "changed"]
+            }
+        finally:
+            connection.close()
+    else:
+        watcher = QueueWatcher("jobs", lambda *_: None, db=path, config=config)
+        try:
+            supplied["CUSTOM_METADATA"]["labels"].append("changed")
+            assert watcher._config is config
+            assert watcher._config["CUSTOM_METADATA"] == {
+                "labels": ["original", "changed"]
+            }
+        finally:
+            watcher.stop()

@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 
 from simplebroker._backends.sqlite import runtime as sqlite_runtime
-from simplebroker._constants import load_config
+from simplebroker._constants import resolve_config
 from simplebroker._runner import SetupPhase, SQLiteRunner
 from simplebroker.db import BrokerCore, BrokerDB
 
@@ -102,11 +102,13 @@ def test_sqlite_runner_uses_constructor_config(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
     runner = SQLiteRunner(
         str(db_path),
-        config={
-            "BROKER_BUSY_TIMEOUT": 1234,
-            "BROKER_CACHE_MB": 25,
-            "BROKER_WAL_AUTOCHECKPOINT": 5000,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_BUSY_TIMEOUT": 1234,
+                "BROKER_CACHE_MB": 25,
+                "BROKER_WAL_AUTOCHECKPOINT": 5000,
+            }
+        ),
     )
 
     with BrokerCore(runner):
@@ -120,7 +122,9 @@ def test_sqlite_runner_restores_optimization_settings_after_fork_detection(
 ) -> None:
     """Inherited runners should recover optimization state before opening child conns."""
     db_path = tmp_path / "test.db"
-    runner = SQLiteRunner(str(db_path), config={"BROKER_CACHE_MB": 25})
+    runner = SQLiteRunner(
+        str(db_path), config=resolve_config(override={"BROKER_CACHE_MB": 25})
+    )
 
     with BrokerCore(runner):
         assert _rows(runner.run("PRAGMA cache_size", fetch=True))[0][0] == -25600
@@ -134,7 +138,7 @@ def test_sqlite_runner_restores_optimization_settings_after_fork_detection(
 
 def test_sqlite_runtime_closes_connection_setting_cursors() -> None:
     """Setup PRAGMA cursors should not wait for connection-close finalization."""
-    config = load_config()
+    config = resolve_config(env=os.environ)
     tracker = TrackingConnection()
     conn = cast(sqlite3.Connection, tracker)
 
@@ -152,7 +156,7 @@ def test_sqlite_connection_phase_closes_setup_cursors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Connection-phase setup should finalize every cursor before closing."""
-    config = load_config()
+    config = resolve_config(env=os.environ)
     conn = TrackingConnection()
 
     monkeypatch.setattr(sqlite_runtime, "check_version", lambda: None)
@@ -169,7 +173,9 @@ def test_custom_cache_size(tmp_path: Path) -> None:
     """Test that BROKER_CACHE_MB config works."""
     db_path = tmp_path / "test.db"
 
-    with BrokerDB(str(db_path), config={"BROKER_CACHE_MB": 25}) as db:
+    with BrokerDB(
+        str(db_path), config=resolve_config(override={"BROKER_CACHE_MB": 25})
+    ) as db:
         result = _rows(db._runner.run("PRAGMA cache_size", fetch=True))
         cache_size = result[0][0]
         assert cache_size == -25600  # 25MB = 25600KiB
@@ -179,7 +185,9 @@ def test_custom_sync_mode_normal(tmp_path: Path) -> None:
     """Test that BROKER_SYNC_MODE=NORMAL works."""
     db_path = tmp_path / "test.db"
 
-    with BrokerDB(str(db_path), config={"BROKER_SYNC_MODE": "NORMAL"}) as db:
+    with BrokerDB(
+        str(db_path), config=resolve_config(override={"BROKER_SYNC_MODE": "NORMAL"})
+    ) as db:
         result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
         sync_mode = result[0][0]
         assert sync_mode == 1  # NORMAL = 1
@@ -189,7 +197,9 @@ def test_custom_sync_mode_off(tmp_path: Path) -> None:
     """Test that BROKER_SYNC_MODE=OFF works."""
     db_path = tmp_path / "test.db"
 
-    with BrokerDB(str(db_path), config={"BROKER_SYNC_MODE": "OFF"}) as db:
+    with BrokerDB(
+        str(db_path), config=resolve_config(override={"BROKER_SYNC_MODE": "OFF"})
+    ) as db:
         result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
         sync_mode = result[0][0]
         assert sync_mode == 0  # OFF = 0
@@ -199,20 +209,22 @@ def test_invalid_sync_mode_defaults_to_full(tmp_path: Path) -> None:
     """Test that invalid BROKER_SYNC_MODE defaults to FULL."""
     db_path = tmp_path / "test.db"
 
-    with BrokerDB(str(db_path), config={"BROKER_SYNC_MODE": "INVALID"}) as db:
+    with BrokerDB(
+        str(db_path), config=resolve_config(override={"BROKER_SYNC_MODE": "INVALID"})
+    ) as db:
         result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
         sync_mode = result[0][0]
         assert sync_mode == 2  # FULL = 2
 
 
-def test_optimization_settings_defensively_default_invalid_sync_mode() -> None:
+def test_optimization_settings_use_resolved_sync_mode() -> None:
     conn = sqlite3.connect(":memory:")
     try:
-        with pytest.warns(RuntimeWarning, match="defaulting to FULL"):
-            sqlite_runtime.apply_optimization_settings(
-                conn,
-                config={"BROKER_CACHE_MB": 8, "BROKER_SYNC_MODE": "INVALID"},
-            )
+        config = resolve_config(
+            override={"BROKER_CACHE_MB": 8, "BROKER_SYNC_MODE": "INVALID"}
+        )
+        assert config["SYNC_MODE"] == "FULL"
+        sqlite_runtime.apply_optimization_settings(conn, config=config)
 
         assert conn.execute("PRAGMA synchronous").fetchone() == (2,)
     finally:
@@ -223,7 +235,9 @@ def test_sync_mode_case_insensitive(tmp_path: Path) -> None:
     """Test that BROKER_SYNC_MODE is case-insensitive."""
     db_path = tmp_path / "test.db"
 
-    with BrokerDB(str(db_path), config={"BROKER_SYNC_MODE": "normal"}) as db:
+    with BrokerDB(
+        str(db_path), config=resolve_config(override={"BROKER_SYNC_MODE": "normal"})
+    ) as db:
         result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
         sync_mode = result[0][0]
         assert sync_mode == 1  # NORMAL = 1
@@ -233,7 +247,10 @@ def test_custom_wal_autocheckpoint(tmp_path: Path) -> None:
     """Test that BROKER_WAL_AUTOCHECKPOINT config works."""
     db_path = tmp_path / "test.db"
 
-    with BrokerDB(str(db_path), config={"BROKER_WAL_AUTOCHECKPOINT": 5000}) as db:
+    with BrokerDB(
+        str(db_path),
+        config=resolve_config(override={"BROKER_WAL_AUTOCHECKPOINT": 5000}),
+    ) as db:
         result = _rows(db._runner.run("PRAGMA wal_autocheckpoint", fetch=True))
         autocheckpoint = result[0][0]
         assert autocheckpoint == 5000
@@ -247,7 +264,10 @@ def test_invalid_wal_autocheckpoint_defaults(tmp_path: Path) -> None:
         UserWarning,
         match="Invalid BROKER_WAL_AUTOCHECKPOINT '-100'",
     ):
-        db = BrokerDB(str(db_path), config={"BROKER_WAL_AUTOCHECKPOINT": -100})
+        db = BrokerDB(
+            str(db_path),
+            config=resolve_config(override={"BROKER_WAL_AUTOCHECKPOINT": -100}),
+        )
     with db:
         result = _rows(db._runner.run("PRAGMA wal_autocheckpoint", fetch=True))
         autocheckpoint = result[0][0]
@@ -258,7 +278,9 @@ def test_wal_autocheckpoint_zero_disables(tmp_path: Path) -> None:
     """Test that BROKER_WAL_AUTOCHECKPOINT=0 disables automatic checkpoints."""
     db_path = tmp_path / "test.db"
 
-    with BrokerDB(str(db_path), config={"BROKER_WAL_AUTOCHECKPOINT": 0}) as db:
+    with BrokerDB(
+        str(db_path), config=resolve_config(override={"BROKER_WAL_AUTOCHECKPOINT": 0})
+    ) as db:
         result = _rows(db._runner.run("PRAGMA wal_autocheckpoint", fetch=True))
         autocheckpoint = result[0][0]
         assert autocheckpoint == 0  # Disabled

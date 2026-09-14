@@ -18,7 +18,10 @@ from .conftest import run_cli
 
 
 def _spawn_broker(
-    workdir: Path, *args: str, unbuffered: bool = True
+    workdir: Path,
+    *args: str,
+    unbuffered: bool = True,
+    consumer_closed: bool = False,
 ) -> subprocess.Popen[str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
@@ -28,19 +31,29 @@ def _spawn_broker(
         env["PYTHONUNBUFFERED"] = "1"
     else:
         env.pop("PYTHONUNBUFFERED", None)
-    return subprocess.Popen(
-        [sys.executable, "-m", "simplebroker.cli", *args],
-        cwd=workdir,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    stdout = subprocess.PIPE
+    write_fd = None
+    if consumer_closed:
+        read_fd, write_fd = os.pipe()
+        os.close(read_fd)
+        stdout = write_fd
+    try:
+        return subprocess.Popen(
+            [sys.executable, "-m", "simplebroker.cli", *args],
+            cwd=workdir,
+            env=env,
+            stdout=stdout,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    finally:
+        if write_fd is not None:
+            os.close(write_fd)
 
 
 def _close_consumer_and_wait(process: subprocess.Popen[str]) -> tuple[int | None, str]:
-    assert process.stdout is not None
-    process.stdout.close()
+    if process.stdout is not None:
+        process.stdout.close()
     try:
         returncode = process.wait(timeout=10)
     except subprocess.TimeoutExpired:
@@ -70,7 +83,7 @@ def test_default_buffered_list_pipe_closure_is_controlled_error(
 ) -> None:
     assert run_cli("write", "listed", "payload", cwd=workdir)[0] == 0
 
-    process = _spawn_broker(workdir, "list", unbuffered=False)
+    process = _spawn_broker(workdir, "list", unbuffered=False, consumer_closed=True)
     returncode, stderr = _close_consumer_and_wait(process)
 
     assert returncode == 1
@@ -97,6 +110,7 @@ def test_default_buffered_write_pipe_closure_reports_durable_mutation(
         "payload",
         output_flag,
         unbuffered=False,
+        consumer_closed=True,
     )
     returncode, stderr = _close_consumer_and_wait(process)
 
@@ -144,14 +158,20 @@ def test_help_and_version_pipe_closure_are_controlled_errors(
     workdir: Path,
     args: tuple[str, ...],
 ) -> None:
-    process = _spawn_broker(workdir, *args, unbuffered=False)
+    process = _spawn_broker(workdir, *args, unbuffered=False, consumer_closed=True)
 
     _assert_controlled_finite_output_error(process, json_output=False)
 
 
 def test_alias_list_pipe_closure_is_a_controlled_error(workdir: Path) -> None:
     assert run_cli("alias", "add", "worker", "jobs", cwd=workdir)[0] == 0
-    process = _spawn_broker(workdir, "alias", "list", unbuffered=False)
+    process = _spawn_broker(
+        workdir,
+        "alias",
+        "list",
+        unbuffered=False,
+        consumer_closed=True,
+    )
 
     _assert_controlled_finite_output_error(process, json_output=False)
 
@@ -175,7 +195,7 @@ def test_finite_metadata_pipe_closure_is_a_controlled_error(
     json_output: bool,
 ) -> None:
     assert run_cli("write", "finite", "payload", cwd=workdir)[0] == 0
-    process = _spawn_broker(workdir, *args, unbuffered=False)
+    process = _spawn_broker(workdir, *args, unbuffered=False, consumer_closed=True)
 
     _assert_controlled_finite_output_error(process, json_output=json_output)
 
@@ -189,6 +209,7 @@ def test_rename_pipe_closure_reports_durable_mutation(workdir: Path) -> None:
         "new-name",
         "--json",
         unbuffered=False,
+        consumer_closed=True,
     )
 
     message = _assert_controlled_finite_output_error(process, json_output=True)
@@ -206,6 +227,7 @@ def test_rename_no_match_pipe_closure_overrides_queue_empty(workdir: Path) -> No
         "new-name",
         "--json",
         unbuffered=False,
+        consumer_closed=True,
     )
 
     message = _assert_controlled_finite_output_error(process, json_output=True)
@@ -305,6 +327,7 @@ def test_short_default_buffered_read_all_rolls_back_before_commit(
         "short",
         "--all",
         unbuffered=False,
+        consumer_closed=True,
     )
     returncode, stderr = _close_consumer_and_wait(process)
 
@@ -322,7 +345,14 @@ def test_exact_message_pipe_closure_is_clean(workdir: Path) -> None:
     ) as queue:
         message_id = queue.write("payload")
 
-    process = _spawn_broker(workdir, "read", "exact", "-m", str(message_id))
+    process = _spawn_broker(
+        workdir,
+        "read",
+        "exact",
+        "-m",
+        str(message_id),
+        consumer_closed=True,
+    )
     returncode, stderr = _close_consumer_and_wait(process)
 
     assert returncode == 0, stderr
@@ -342,6 +372,7 @@ def test_exact_message_json_pipe_closure_is_clean(workdir: Path) -> None:
         "-m",
         str(message_id),
         "--json",
+        consumer_closed=True,
     )
     returncode, stderr = _close_consumer_and_wait(process)
 
@@ -359,7 +390,7 @@ def test_exact_move_pipe_closure_is_clean(workdir: Path, json_output: bool) -> N
     args = ["move", "move-source", "move-dest", "-m", str(message_id)]
     if json_output:
         args.append("--json")
-    process = _spawn_broker(workdir, *args)
+    process = _spawn_broker(workdir, *args, consumer_closed=True)
     returncode, stderr = _close_consumer_and_wait(process)
 
     assert returncode == 0, stderr
@@ -383,6 +414,7 @@ def test_move_all_pipe_closure_is_clean_after_atomic_move(workdir: Path) -> None
         "move-all-source",
         "move-all-dest",
         "--all",
+        consumer_closed=True,
     )
     returncode, stderr = _close_consumer_and_wait(process)
 

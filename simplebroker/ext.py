@@ -79,6 +79,7 @@ from ._backend_plugins import (
     MultiQueueActivityWaiterHook,
     get_backend_plugin,
 )
+from ._constants import InvalidConfigError
 from ._delivery import (
     DeliveryGuarantee,
     validate_delivery_guarantee,
@@ -89,7 +90,6 @@ from ._exceptions import (
     DatabaseError,
     DataError,
     IntegrityError,
-    InvalidConfigError,
     MessageError,
     OperationalError,
     QueueNameError,

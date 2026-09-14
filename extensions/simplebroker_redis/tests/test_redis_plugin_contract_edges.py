@@ -14,7 +14,7 @@ from simplebroker_redis.plugin import RedisBackendPlugin
 from simplebroker_redis.runner import RedisRunner
 from simplebroker_redis.validation import NamespaceInspection, NamespaceState
 
-from simplebroker import snapshot_config
+from simplebroker import resolve_config
 from simplebroker._exceptions import DatabaseError, OperationalError
 
 pytestmark = [pytest.mark.redis_only]
@@ -82,7 +82,7 @@ def test_database_and_namespace_defaults_keep_legacy_config_compatible() -> None
     assert redis_plugin_module._database_number("simplebroker") == 0
     assert (
         redis_plugin_module._namespace_from_options(
-            {},
+            resolve_config(),
             {"namespace": "tenant", "schema": "tenant"},
         )
         == "tenant"
@@ -100,7 +100,7 @@ def test_plugin_runner_receipt_keeps_marker_out_of_redundant_config_path(
             captured.update(kwargs)
 
     monkeypatch.setattr(redis_plugin_module, "RedisRunner", RecordingRunner)
-    config = snapshot_config({"BROKER_BUSY_TIMEOUT": 1250})
+    config = resolve_config(env=os.environ, override={"BROKER_BUSY_TIMEOUT": 1250})
 
     RedisBackendPlugin().create_runner(
         "redis://example/0",
@@ -112,14 +112,52 @@ def test_plugin_runner_receipt_keeps_marker_out_of_redundant_config_path(
     assert "config" not in captured
 
 
-def test_direct_runner_snapshots_environment_when_pool_options_are_missing(
+@pytest.mark.parametrize("operation", ["init_backend", "create_runner"])
+def test_plugin_normalization_parses_pool_options_once(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    parse = redis_plugin_module.pool_options_from_config
+
+    def recording_parse(config: Any, backend_options: Any) -> Any:
+        calls.append(dict(backend_options))
+        return parse(config, backend_options)
+
+    monkeypatch.setattr(
+        redis_plugin_module,
+        "pool_options_from_config",
+        recording_parse,
+    )
+    config = resolve_config(env={}, override={})
+    options = {
+        "namespace": "tenant",
+        "max_connections": "3",
+        "pool_timeout": "0.25",
+    }
+
+    result = getattr(RedisBackendPlugin(), operation)(
+        "redis://example/0" if operation == "create_runner" else config,
+        **(
+            {"backend_options": options, "config": config}
+            if operation == "create_runner"
+            else {"toml_options": options}
+        ),
+    )
+
+    assert calls == [options]
+    if operation == "create_runner":
+        assert result.pool_options.max_connections == 3
+        assert result.pool_options.timeout == 0.25
+
+
+def test_direct_runner_without_pool_options_uses_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "1250")
     runner = RedisRunner("redis://example/0", namespace="tenant")
-    monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "9750")
 
-    assert runner.pool_options.timeout == 1.25
+    assert runner.pool_options.timeout == resolve_config()["BUSY_TIMEOUT"] / 1000
 
 
 def test_initialize_target_rejects_owned_older_namespace_before_redis_write(
@@ -160,7 +198,9 @@ def test_initialize_target_rejects_owned_older_namespace_before_redis_write(
 def test_cleanup_reuses_one_snapshot_for_runner_and_core(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    marker = snapshot_config({"EXTENSION_RECEIPT": "kept"})
+    marker = resolve_config(
+        env=os.environ, override={"BROKER_EXTENSION_RECEIPT": "kept"}
+    )
     runner_config: list[object] = []
     core_config: list[object] = []
 

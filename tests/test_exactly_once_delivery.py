@@ -5,13 +5,14 @@ The delivery guarantee depends on the commit_interval parameter:
 - commit_interval>1: At-least-once delivery - each batch is committed only after
   the entire batch has been yielded
 """
-# mypy: disable-error-code=no-untyped-def
 
+# mypy: disable-error-code=no-untyped-def
 import multiprocessing
 from pathlib import Path
 
 import pytest
 
+from simplebroker import resolve_config
 from simplebroker.sbqueue import Queue
 
 from .helper_scripts.broker_factory import make_broker
@@ -69,13 +70,15 @@ def test_automatic_vacuum_runs_only_after_generator_batch_commit(
 ) -> None:
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 4,
-            "BROKER_VACUUM_THRESHOLD": 0.1,
-            "BROKER_VACUUM_BATCH_SIZE": 10,
-            "BROKER_GENERATOR_BATCH_SIZE": 2,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_AUTO_VACUUM": 1,
+                "BROKER_AUTO_VACUUM_INTERVAL": 4,
+                "BROKER_VACUUM_THRESHOLD": 10,
+                "BROKER_VACUUM_BATCH_SIZE": 10,
+                "BROKER_GENERATOR_BATCH_SIZE": 2,
+            }
+        ),
     )
     generator = None
     try:
@@ -277,7 +280,9 @@ def test_invalid_queue_delivery_does_not_create_sqlite_target(
 def test_direct_core_rejects_invalid_delivery_before_mutation(
     broker_target, operation: str
 ) -> None:
-    broker = make_broker(broker_target, config={"BROKER_AUTO_VACUUM": 0})
+    broker = make_broker(
+        broker_target, config=resolve_config(override={"BROKER_AUTO_VACUUM": 0})
+    )
     generator = None
     try:
         broker.write("source", "message-0")

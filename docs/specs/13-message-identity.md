@@ -205,8 +205,9 @@ message identity and delivery state with only the queue binding updated.
 
 ## Related Plans
 
-- active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
-  — extends [SB-ID-2] atomic generated-write visibility with optional claims
+- retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
+  see the ledger in `docs/plans/README.md`. It extends [SB-ID-2] atomic
+  generated-write visibility with optional claims.
 
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It aligns

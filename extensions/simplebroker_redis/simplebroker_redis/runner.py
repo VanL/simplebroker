@@ -5,12 +5,12 @@ from __future__ import annotations
 import contextlib
 import os
 import threading
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from typing import Any
 
 import redis
 
-from simplebroker._constants import snapshot_config
+from simplebroker import Config, resolve_config
 
 from ._constants import DEFAULT_STALE_BATCH_SECONDS
 from .pool import RedisPoolOptions, pool_options_from_config
@@ -30,7 +30,7 @@ class RedisRunner:
         *,
         namespace: str | None = None,
         backend_options: dict[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
         pool_options: RedisPoolOptions | None = None,
         stale_batch_seconds: int = DEFAULT_STALE_BATCH_SECONDS,
     ) -> None:
@@ -40,7 +40,7 @@ class RedisRunner:
         self.target = target
         self.namespace = require_namespace(options)
         if pool_options is None:
-            resolved_config = snapshot_config(config)
+            resolved_config = resolve_config(config=config)
             pool_options = pool_options_from_config(resolved_config, options)
         self.pool_options = pool_options
         self.stale_batch_seconds = stale_batch_seconds

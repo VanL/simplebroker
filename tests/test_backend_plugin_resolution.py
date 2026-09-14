@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Any, Self
@@ -11,7 +12,6 @@ import pytest
 import simplebroker._sql as sqlite_sql
 from simplebroker import Queue
 from simplebroker._backend_plugins import BACKEND_API_VERSION
-from simplebroker._backends import get_backend
 from simplebroker._constants import __version__ as SIMPLEBROKER_VERSION
 from simplebroker._exceptions import UnknownBackendPluginError
 from simplebroker._runner import SetupPhase
@@ -98,9 +98,11 @@ def test_sqlite_initialize_target_passes_config_snapshot_to_broker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import simplebroker.db as db_module
-    from simplebroker import snapshot_config
+    from simplebroker import resolve_config
 
-    marker = snapshot_config({"EXTENSION_RECEIPT": "kept"})
+    marker = resolve_config(
+        env=os.environ, override={"BROKER_EXTENSION_RECEIPT": "kept"}
+    )
     received: list[object] = []
 
     class Broker:
@@ -118,13 +120,6 @@ def test_sqlite_initialize_target_passes_config_snapshot_to_broker(
     get_backend_plugin("sqlite").initialize_target(":memory:", config=marker)
 
     assert received == [marker]
-
-
-def test_unknown_builtin_backend_fails_with_the_requested_name() -> None:
-    """Internal backend selection should not silently fall back to SQLite."""
-
-    with pytest.raises(RuntimeError, match="Unsupported built-in backend: missing"):
-        get_backend("missing")
 
 
 @pytest.mark.sqlite_only
@@ -551,10 +546,10 @@ def test_non_aware_runner_with_resolved_target_uses_target_plugin(  # noqa: C901
 
 def test_sqlite_plugin_has_init_backend() -> None:
     """The built-in sqlite plugin should expose init_backend()."""
-    from simplebroker._constants import load_config
+    from simplebroker._constants import resolve_config
 
     plugin = get_backend_plugin("sqlite")
-    result = plugin.init_backend(load_config())
+    result = plugin.init_backend(resolve_config(env=os.environ))
 
     assert "target" in result
     assert "backend_options" in result

@@ -13,6 +13,7 @@ import psycopg
 import pytest
 from psycopg import sql
 
+from simplebroker import resolve_config
 from simplebroker._backend_plugins import BackendPlugin
 from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError
@@ -79,7 +80,7 @@ def test_two_initializers_admit_the_same_empty_precreated_schema(
 
     def initialize() -> None:
         ready.wait()
-        _initialize_project_backend_target(target, config={})
+        _initialize_project_backend_target(target, config=resolve_config(override={}))
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -200,14 +201,14 @@ def test_project_phase_marker_does_not_hide_older_postgres_schema(
     )
 
     try:
-        _initialize_project_backend_target(target, config={})
+        _initialize_project_backend_target(target, config=resolve_config(override={}))
         with raw_pg_conn.cursor() as cur:
             cur.execute(
                 sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
             )
         create_pg_v5_schema(schema)
 
-        _initialize_project_backend_target(target, config={})
+        _initialize_project_backend_target(target, config=resolve_config(override={}))
 
         with raw_pg_conn.cursor() as cur:
             cur.execute(

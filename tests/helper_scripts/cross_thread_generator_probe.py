@@ -23,10 +23,18 @@ def _build_backend(
     second_runner: Any
     plugin: Any
     if backend == "sqlite":
+        from simplebroker import resolve_config
         from simplebroker._runner import SQLiteRunner
         from simplebroker.db import BrokerCore
 
-        config = {} if sqlite_default_config else {"BROKER_BUSY_TIMEOUT": 0}
+        config = resolve_config(
+            override={
+                "BROKER_" + key: value
+                for key, value in (
+                    {} if sqlite_default_config else {"BUSY_TIMEOUT": 0}
+                ).items()
+            }
+        )
         runner = SQLiteRunner(str(Path(target)), config=config)
         second_runner = SQLiteRunner(str(Path(target)), config=config)
         return (

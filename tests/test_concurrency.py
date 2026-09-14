@@ -12,6 +12,7 @@ from collections import Counter
 
 import pytest
 
+from simplebroker import resolve_config
 from simplebroker.ext import OperationalError
 
 from .conftest import run_cli
@@ -97,7 +98,7 @@ def test_execute_with_retry_survives_real_sqlite_lock(tmp_path):
     queue = Queue(
         "lock-test",
         db_path=str(db_path),
-        config={"BROKER_BUSY_TIMEOUT": 0},
+        config=resolve_config(override={"BROKER_BUSY_TIMEOUT": 0}),
     )
 
     def write_payload():

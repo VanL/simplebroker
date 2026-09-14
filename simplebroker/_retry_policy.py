@@ -8,10 +8,11 @@ that keeps a contended setup from spinning without advancing.
 
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from contextlib import suppress
-from typing import Any, TypeVar
+from typing import TypeVar
 
+from ._constants import Config
 from ._exceptions import OperationalError, StopException
 from ._retry import (
     RetryInterrupted,
@@ -26,7 +27,6 @@ from ._retry import (
     stop_any,
     stop_never,
 )
-from .config import canonical_config
 
 # Module-owned clock/rng seam: tests patch these aliases instead of the
 # shared stdlib attributes, which background threads, destructors, and
@@ -241,10 +241,10 @@ def _execute_connection_retry(
         raise StopException("Connection interrupted") from None
 
 
-def setup_busy_timeout_ms(config: Mapping[str, Any]) -> int:
+def setup_busy_timeout_ms(config: Config) -> int:
     """Return the short busy timeout used by SQLite setup operations."""
 
-    busy_timeout = int(canonical_config(config)["busy_timeout"])
+    busy_timeout = int(config["BUSY_TIMEOUT"])
     return max(0, min(busy_timeout, SETUP_BUSY_TIMEOUT_CAP_MS))
 
 

@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from simplebroker import resolve_config
 from simplebroker._backends.sqlite.maintenance import vacuum_lock_path
 from simplebroker._phaselock import PhaseLockTimeout
 from simplebroker.db import BrokerDB
@@ -174,12 +175,14 @@ def test_lock_open_failure_keeps_automatic_vacuum_due(workdir: Path) -> None:
     db_path = locked_dir / "test.db"
     broker = BrokerDB(
         str(db_path),
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 2,
-            "BROKER_VACUUM_THRESHOLD": 0.1,
-            "BROKER_VACUUM_BATCH_SIZE": 10,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_AUTO_VACUUM": 1,
+                "BROKER_AUTO_VACUUM_INTERVAL": 2,
+                "BROKER_VACUUM_THRESHOLD": 10,
+                "BROKER_VACUUM_BATCH_SIZE": 10,
+            }
+        ),
     )
     original_mode = locked_dir.stat().st_mode
     try:

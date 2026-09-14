@@ -1,11 +1,12 @@
 """Test security fixes."""
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from simplebroker import Queue, snapshot_config, target_for_directory
+from simplebroker import Queue, resolve_config, target_for_directory
 from simplebroker.cli import main
 
 from .conftest import run_cli
@@ -102,7 +103,7 @@ def test_direct_argv_message_size_limit(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.chdir(workdir)
-    config = snapshot_config({"BROKER_MAX_MESSAGE_SIZE": 4})
+    config = resolve_config(env=os.environ, override={"BROKER_MAX_MESSAGE_SIZE": 4})
     with patch(
         "sys.argv",
         ["broker", "-d", str(workdir), "write", "test_queue", "abcde"],

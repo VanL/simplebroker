@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from simplebroker import resolve_config
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
@@ -135,12 +136,14 @@ def test_automatic_vacuum_trigger(broker_target) -> None:
     """Committed claims participate in opportunistic maintenance scheduling."""
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 4,
-            "BROKER_VACUUM_THRESHOLD": 0.5,
-            "BROKER_VACUUM_BATCH_SIZE": 10,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_AUTO_VACUUM": 1,
+                "BROKER_AUTO_VACUUM_INTERVAL": 4,
+                "BROKER_VACUUM_THRESHOLD": 50,
+                "BROKER_VACUUM_BATCH_SIZE": 10,
+            }
+        ),
     )
     try:
         broker.write("test_queue", "message-0")
@@ -159,12 +162,14 @@ def test_automatic_vacuum_trigger(broker_target) -> None:
 def test_disabled_automatic_vacuum_leaves_claimed_messages(broker_target) -> None:
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_AUTO_VACUUM": 0,
-            "BROKER_AUTO_VACUUM_INTERVAL": 4,
-            "BROKER_VACUUM_THRESHOLD": 0.5,
-            "BROKER_VACUUM_BATCH_SIZE": 10,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_AUTO_VACUUM": 0,
+                "BROKER_AUTO_VACUUM_INTERVAL": 4,
+                "BROKER_VACUUM_THRESHOLD": 50,
+                "BROKER_VACUUM_BATCH_SIZE": 10,
+            }
+        ),
     )
     try:
         broker.write("test_queue", "message-0")
@@ -182,12 +187,14 @@ def test_disabled_automatic_vacuum_leaves_claimed_messages(broker_target) -> Non
 def test_automatic_vacuum_waits_for_exact_activity_interval(broker_target) -> None:
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 4,
-            "BROKER_VACUUM_THRESHOLD": 0.1,
-            "BROKER_VACUUM_BATCH_SIZE": 10,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_AUTO_VACUUM": 1,
+                "BROKER_AUTO_VACUUM_INTERVAL": 4,
+                "BROKER_VACUUM_THRESHOLD": 10,
+                "BROKER_VACUUM_BATCH_SIZE": 10,
+            }
+        ),
     )
     try:
         broker.write("test_queue", "message-0")
@@ -211,12 +218,14 @@ def test_bulk_maintenance_activity_preserves_interval_remainder(
 ) -> None:
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 4,
-            "BROKER_VACUUM_THRESHOLD": 0.1,
-            "BROKER_VACUUM_BATCH_SIZE": 10,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_AUTO_VACUUM": 1,
+                "BROKER_AUTO_VACUUM_INTERVAL": 4,
+                "BROKER_VACUUM_THRESHOLD": 10,
+                "BROKER_VACUUM_BATCH_SIZE": 10,
+            }
+        ),
     )
     try:
         broker.insert_messages(
@@ -238,13 +247,15 @@ def test_automatic_vacuum_failure_preserves_committed_operation(
 ) -> None:
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 1,
-            "BROKER_VACUUM_THRESHOLD": 0.1,
-            "BROKER_VACUUM_BATCH_SIZE": 10,
-            "BROKER_LOGGING_ENABLED": 1,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_AUTO_VACUUM": 1,
+                "BROKER_AUTO_VACUUM_INTERVAL": 1,
+                "BROKER_VACUUM_THRESHOLD": 10,
+                "BROKER_VACUUM_BATCH_SIZE": 10,
+                "BROKER_LOGGING_ENABLED": 1,
+            }
+        ),
     )
     original_vacuum = broker._backend_plugin.vacuum
     vacuum_calls = 0
@@ -287,13 +298,15 @@ def test_automatic_vacuum_failure_preserves_committed_keep_write(
 ) -> None:
     broker = make_broker(
         broker_target,
-        config={
-            "BROKER_AUTO_VACUUM": 1,
-            "BROKER_AUTO_VACUUM_INTERVAL": 3,
-            "BROKER_VACUUM_THRESHOLD": 0.1,
-            "BROKER_VACUUM_BATCH_SIZE": 10,
-            "BROKER_LOGGING_ENABLED": 1,
-        },
+        config=resolve_config(
+            override={
+                "BROKER_AUTO_VACUUM": 1,
+                "BROKER_AUTO_VACUUM_INTERVAL": 3,
+                "BROKER_VACUUM_THRESHOLD": 10,
+                "BROKER_VACUUM_BATCH_SIZE": 10,
+                "BROKER_LOGGING_ENABLED": 1,
+            }
+        ),
     )
 
     def fail_vacuum(runner, *, compact, config) -> None:

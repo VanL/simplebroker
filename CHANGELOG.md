@@ -9,14 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Shared `build_config()` API with immutable schemas, configurable external
-  prefixes, explicit namespaced TOML input, and embedder-defined fields and
-  validators. Composed snapshots pass directly into broker handles and support
-  ambient-free overlays and canonical value transport. Existing resolver
-  APIs, namespaced mapping views, CLI precedence, and backend contracts remain
-  compatible.
+- A single `resolve_config()` with explicit namespace, TOML, environment,
+  override sources; read-only `Config`, `DEFAULT_CONFIG` and
+  embedder-defined validators. Selected custom fields are retained without
+  registration.
 
 ### Changed
+
+- Configuration now uses uppercase unprefixed keys, with no aliases. Removed
+  the old snapshot/isolated/builder APIs and separate config module. Resolver
+  env input is explicit; precedence is defaults, TOML, env, override.
+  CLI argv handling remains separate.
+- Only the `broker` command reads `BROKER_*` environment variables, once at
+  startup. Library handles and `cmd_*` functions without a `Config` use
+  defaults; Python programs opt in with `resolve_config(env=os.environ)`.
+- Each invalid configuration value emits a warning as its source is applied;
+  resolution raises only if an invalid value remains after all sources. A
+  relative `DEFAULT_DB_LOCATION` is now an invalid value rather than being
+  ignored with a warning.
+- Consumer `config=` parameters take resolved `Config` objects. Explicit
+  per-call configurations replace the inherited snapshot; callers build partial
+  overlays with `resolve_config(config=base, override=namespaced_changes)`. Field validators
+  are private; the config exports are `Config`, `ConfigField`, `DEFAULT_CONFIG`
+  and `resolve_config`.
+- Vacuum threshold is consistently a percentage in 0–100: stored default is
+  `10`, and numeric `0.1` now means 0.1%, rather than the old 10% heuristic.
+- Overrides use namespaced keys and raise `ValueError` for malformed names,
+  bare keys and wrong namespaces; valid selected custom names remain accepted.
+  Derived Config objects inherit their prefix and field validators. Percentage configuration rejects booleans.
+- Near-miss external configuration capitalization warns with its source;
+  malformed names remain ignored.
+- `resolve_config(config=...)` accepts an already-resolved Config and returns it
+  unchanged without reading TOML or the environment, or derives from it when an
+  `override` is supplied. A non-Config `config` value, or a source that is not a
+  mapping, raises `TypeError` instead of an assertion failure. It replaces the
+  removed `base=` parameter, so a config's namespace can no longer be rebound
+  while deriving. Config consumers and per-call `config` arguments pass a supplied
+  value through it, so a plain mapping now fails with `TypeError` at the boundary
+  instead of a later `KeyError` or `AttributeError`.
 
 - Live peek streams (`Queue.peek_generator()`, `Queue.peek(all_messages=True)`,
   and CLI `peek --all`) now advance by public message ID on SQLite,

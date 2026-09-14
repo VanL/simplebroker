@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import simplebroker.watcher as watcher_module
-from simplebroker import Queue
+from simplebroker import Queue, resolve_config
 from simplebroker._exceptions import OperationalError
 from simplebroker._retry import interruptible_sleep
 from simplebroker.watcher import (
@@ -74,7 +74,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
         writer = Queue(
             "queue",
             db_path=broker_target,
-            config={"BROKER_MAX_MESSAGE_SIZE": 100},
+            config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 100}),
         )
         observer = Queue("queue", db_path=broker_target)
         handled: list[tuple[str, int]] = []
@@ -91,7 +91,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             lambda msg, ts: handled.append((msg, ts)),
             db=broker_target,
             error_handler=error_handler,
-            config={"BROKER_MAX_MESSAGE_SIZE": 3},
+            config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 3}),
         )
         try:
             writer.write("toolong")
@@ -117,17 +117,16 @@ class TestWatcherEdgeCases(WatcherTestBase):
         writer = Queue(
             "queue",
             db_path=broker_target,
-            config={"BROKER_MAX_MESSAGE_SIZE": 100},
+            config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": 100}),
         )
         handled = threading.Event()
         watcher = QueueWatcher(
             "queue",
             lambda _message, _timestamp: handled.set(),
             db=broker_target,
-            config={
-                "BROKER_LOGGING_ENABLED": True,
-                "BROKER_MAX_MESSAGE_SIZE": 1,
-            },
+            config=resolve_config(
+                override={"BROKER_LOGGING_ENABLED": True, "BROKER_MAX_MESSAGE_SIZE": 1}
+            ),
         )
         try:
             writer.write("too large")
@@ -174,7 +173,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             "queue",
             lambda message, timestamp: None,
             db=broker_target,
-            config={"BROKER_LOGGING_ENABLED": True},
+            config=resolve_config(override={"BROKER_LOGGING_ENABLED": True}),
         )
         attempts = 0
 
@@ -275,7 +274,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             handler,
             db=broker_target,
             error_handler=error_handler,
-            config={"BROKER_LOGGING_ENABLED": 1},
+            config=resolve_config(override={"BROKER_LOGGING_ENABLED": 1}),
         )
 
         with caplog.at_level("ERROR", logger="simplebroker.watcher"):
@@ -313,7 +312,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 "queue",
                 handler,
                 db=broker_target,
-                config={"BROKER_LOGGING_ENABLED": logging_enabled},
+                config=resolve_config(
+                    override={"BROKER_LOGGING_ENABLED": logging_enabled}
+                ),
             )
         else:
             watcher = QueueMoveWatcher(
@@ -321,7 +322,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 "destination",
                 handler,
                 db=broker_target,
-                config={"BROKER_LOGGING_ENABLED": logging_enabled},
+                config=resolve_config(
+                    override={"BROKER_LOGGING_ENABLED": logging_enabled}
+                ),
             )
 
         try:
@@ -550,7 +553,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             "queue",
             lambda m, t: None,
             db=broker_target,
-            config={"BROKER_LOGGING_ENABLED": logging_enabled},
+            config=resolve_config(override={"BROKER_LOGGING_ENABLED": logging_enabled}),
         )
         try:
             with (

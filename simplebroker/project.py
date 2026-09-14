@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ._backend_plugins import BackendPlugin, get_backend_plugin
-from ._constants import ResolvedConfig, snapshot_config
+from ._constants import Config, resolve_config
 from ._exceptions import UnknownBackendPluginError
 from ._paths import _find_project_database
 from ._project_config import (
@@ -17,11 +17,6 @@ from ._project_config import (
     resolve_project_target,
 )
 from ._targets import BrokerTarget
-from .config import canonical_config, legacy_config
-
-
-def _config_snapshot(config: Mapping[str, Any] | None) -> ResolvedConfig:
-    return snapshot_config(config)
 
 
 def _root_from_relative_target(target_path: Path, relative_target: Path) -> Path:
@@ -46,15 +41,15 @@ def _requested_backend_plugin(name: str) -> BackendPlugin:
 def _configured_backend_target(
     root: Path,
     *,
-    config: Mapping[str, Any],
+    config: Config,
     used_project_scope: bool,
 ) -> BrokerTarget | None:
-    backend_name = str(canonical_config(config).get("backend", "sqlite"))
+    backend_name = str(config["BACKEND"])
     if backend_name == "sqlite":
         return None
 
     plugin = _requested_backend_plugin(backend_name)
-    resolved = plugin.init_backend(legacy_config(config))
+    resolved = plugin.init_backend(config)
     return BrokerTarget(
         backend_name=backend_name,
         target=str(resolved["target"]),
@@ -85,11 +80,11 @@ def _sqlite_target(
 
 
 def _discover_legacy_sqlite_target(
-    start_dir: Path, *, config: Mapping[str, Any]
+    start_dir: Path, *, config: Config
 ) -> BrokerTarget | None:
     """Discover an existing legacy SQLite project target rooted above start_dir."""
 
-    default_target = Path(str(canonical_config(config)["default_db_name"]))
+    default_target = Path(str(config["DEFAULT_DB_NAME"]))
     discovered = _find_project_database(str(default_target), start_dir)
     if discovered is None:
         return None
@@ -101,7 +96,7 @@ def _discover_legacy_sqlite_target(
 def resolve_broker_target(
     starting_dir: str | Path | None = None,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> BrokerTarget | None:
     """Discover or synthesize a SimpleBroker target from a directory.
 
@@ -117,7 +112,7 @@ def resolve_broker_target(
     is selected.
     """
 
-    config_dict = _config_snapshot(config)
+    config_dict = resolve_config(config=config)
     start_dir = (
         Path.cwd().resolve()
         if starting_dir is None
@@ -145,7 +140,7 @@ def resolve_broker_target(
 def target_for_directory(
     directory: str | Path,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> BrokerTarget:
     """Return the broker target rooted at an explicit directory.
 
@@ -154,7 +149,7 @@ def target_for_directory(
     configured default sqlite target path is resolved relative to `directory`.
     """
 
-    config_dict = _config_snapshot(config)
+    config_dict = resolve_config(config=config)
     root = Path(directory).expanduser().resolve()
 
     config_path = project_config_path_for_directory(root, config=config_dict)
@@ -169,7 +164,7 @@ def target_for_directory(
     if configured_target is not None:
         return configured_target
 
-    default_target = Path(str(canonical_config(config_dict)["default_db_name"]))
+    default_target = Path(str(config_dict["DEFAULT_DB_NAME"]))
     target_path = (
         default_target.resolve(strict=False)
         if default_target.is_absolute()
@@ -185,7 +180,7 @@ def target_for_directory(
 def broker_root(
     starting_dir: str | Path | None = None,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> Path | None:
     """Return the discovered broker project root, if one exists."""
 

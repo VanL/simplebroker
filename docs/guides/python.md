@@ -962,9 +962,9 @@ from typing import Any
 from simplebroker import (
     BrokerTarget,
     Queue,
-    ResolvedConfig,
+    Config,
     open_broker,
-    resolve_isolated_config,
+    resolve_config,
     target_for_directory,
 )
 
@@ -972,14 +972,14 @@ from simplebroker import (
 @dataclass(frozen=True)
 class AppBrokerClient:
     target: BrokerTarget
-    config: ResolvedConfig
+    config: Config
 
     @classmethod
     def from_root(cls, root: str | Path, **overrides: Any) -> "AppBrokerClient":
         root_path = Path(root)
         (root_path / ".myapp").mkdir(parents=True, exist_ok=True)
-        config = resolve_isolated_config(
-            {
+        config = resolve_config(
+            override={
                 "BROKER_PROJECT_CONFIG_PATH": ".myapp",
                 "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
                 "BROKER_DEFAULT_DB_NAME": ".myapp/broker.db",
@@ -1010,33 +1010,25 @@ with client.broker() as broker:
 The stable embedding surface is the public package API exported from
 `simplebroker` plus the extension contracts in `simplebroker.ext`. Treat
 underscore-prefixed modules and raw storage details as implementation. If your
-application already translates a separate environment namespace into complete
-selected `BROKER_*` values, it can continue passing them through
-`resolve_isolated_config()`. For new integrations, the
-[shared configuration builder](configuration.md#shared-configuration-for-embedders)
-lets an application derive broker defaults, declare its own fields and validators,
-and select its external prefix. Pass its `ConfigSnapshot` directly to these same
-handles; app fields remain available in the retained snapshot.
-Preserve the returned snapshot marker
-through every lower-layer call; converting it to an ordinary dict restores the
-normal ambient-base behavior. Use `resolve_config()` when inheriting ambient
-SimpleBroker configuration is intentional. Use `snapshot_config()` when
-several handles should share one explicit ambient-derived receipt. The isolated
-factory rejects unknown keys by default; `preserve_unknown=True` opts into
-opaque extension keys while keeping every canonical key normalized and
-validated. Avoid importing
-`simplebroker._constants` or guessing database paths.
+application has its own environment namespace, use the
+[shared configuration resolver](configuration.md#shared-configuration-for-embedders)
+with that prefix and explicit `env`. Copy `DEFAULT_CONFIG` to change defaults
+or add user validators. Pass the returned Config directly through all handles;
+custom fields remain available and no downstream boundary rereads environment.
+Omit env for isolation. Avoid importing `simplebroker._constants` or guessing
+database paths.
 
-Configuration passed to a Queue, watcher, or broker is normalized and retained
-as that instance's snapshot. Operational methods use the snapshot unless an
-existing explicit per-call generator config is supplied. An ordinary
-transactional-generator override is frozen when the `at_least_once` generator
-is first iterated. A watcher given an existing Queue inherits that Queue's
-snapshot unless explicit watcher config overlays or replaces it. New handles
-may observe later environment changes; existing handles do not. Explicit
-watcher config changes watcher-local policy, not the supplied Queue's retained
-operation config. Do not mutate
-`os.environ` concurrently as a reconfiguration mechanism. Target and Queue
+Configuration passed to a Queue, watcher, or broker must be a `Config`, or
+`TypeError` is raised; the instance retains that object. Convert mappings with `resolve_config(override=namespaced_values)`
+before passing them. Operational methods use the retained snapshot unless an
+explicit per-call Config is supplied. Such a Config replaces the snapshot for
+that operation. To derive a partial override, resolve it explicitly with
+`resolve_config(config=base_config, override=namespaced_changes)`. A watcher given an existing
+Queue inherits that Queue's snapshot unless an explicit Config replaces it.
+Explicit watcher config changes watcher-local policy, not the supplied Queue's
+retained operation config. Handles without a Config use defaults and do not
+read `BROKER_*` environment variables; to honor them, pass
+`resolve_config(env=os.environ)` once at startup. Target and Queue
 representations, plus cross-target errors, redact connection passwords and all
 backend-option values. `serialize_broker_target()` is different: it is a
 lossless process-transport payload, may contain credentials, and must not be

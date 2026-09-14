@@ -30,6 +30,7 @@ from typing import Any, Self, TypeVar, cast
 
 from simplebroker import (
     BrokerTarget,
+    Config,
     Queue,
     QueueWatcher,
     open_broker,
@@ -67,15 +68,19 @@ def run_in_executor(func: Callable[..., T]) -> Callable[..., asyncio.Future[T]]:
 
 @dataclass(frozen=True)
 class BrokerClient:
-    """Small public-API client that owns target resolution."""
+    """Small public-API client that owns target resolution.
+
+    Override keyword names use the external namespace, such as BROKER_CACHE_MB.
+    from_target uses the supplied Config prefix when one is provided.
+    """
 
     target: BrokerTarget
-    config: dict[str, Any]
+    config: Config
 
     @classmethod
     def from_root(cls, root: Path | str, **overrides: Any) -> "BrokerClient":
         """Create a client using normal SimpleBroker target resolution."""
-        config = resolve_config(overrides)
+        config = resolve_config(override=overrides)
         return cls(target_for_directory(root, config=config), config)
 
     @classmethod
@@ -90,11 +95,13 @@ class BrokerClient:
         cls,
         target: BrokerTarget,
         *,
-        config: dict[str, Any] | None = None,
+        config: Config | None = None,
         **overrides: Any,
     ) -> "BrokerClient":
         """Create a client from an already-resolved backend target."""
-        resolved_config = resolve_config({**(config or {}), **overrides})
+        resolved_config = resolve_config(config=config)
+        if overrides:
+            resolved_config = resolve_config(config=resolved_config, override=overrides)
         return cls(target, resolved_config)
 
     @classmethod
@@ -102,7 +109,7 @@ class BrokerClient:
         cls, root: Path | str | None = None, **overrides: Any
     ) -> "BrokerClient":
         """Discover a project/env target, or create the default target for root."""
-        config = resolve_config(overrides)
+        config = resolve_config(override=overrides)
         search_root = Path.cwd() if root is None else Path(root)
         target = resolve_broker_target(search_root, config=config)
         if target is None:

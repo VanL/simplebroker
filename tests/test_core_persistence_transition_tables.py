@@ -16,7 +16,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from simplebroker import DumpClockSkewWarning, open_broker
+from simplebroker import DumpClockSkewWarning, open_broker, resolve_config
 from simplebroker._backends.sqlite.schema import (
     initialize_database,
     messages_has_claimed_column,
@@ -1277,7 +1277,7 @@ def test_sqlite_runner_fires_transition_table(
 ) -> None:
     _skip_unavailable_fork_transition(transition_case.payload)
     config = (
-        {"BROKER_BUSY_TIMEOUT": 25}
+        resolve_config(override={"BROKER_BUSY_TIMEOUT": 25})
         if transition_case.payload == "FOREIGN_ADMISSION_TIMEOUT"
         else None
     )

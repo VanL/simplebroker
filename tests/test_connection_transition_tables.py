@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 
+from simplebroker import resolve_config
 from simplebroker._broker_session import (
     _ProcessBrokerSession,
     close_process_broker_sessions,
@@ -173,7 +174,9 @@ def _assert_cleanup_failure(
     path: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    manager = DBConnection(path, config={"BROKER_LOGGING_ENABLED": True})
+    manager = DBConnection(
+        path, config=resolve_config(override={"BROKER_LOGGING_ENABLED": True})
+    )
     if payload == "REGISTERED_CLOSE_FAILURE":
         resource: Any = _FailingShutdown()
         manager._connection_registry.add(resource)

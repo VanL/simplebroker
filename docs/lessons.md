@@ -216,43 +216,7 @@ Dated moment-tier entries (foldable after age floor and distillation).
   ignored local database makes the stale test pass only in a dirty developer
   checkout. Reproduce missing-state tests from a clean directory before
   changing product behavior. (First-run cleanup CI after `a38e6a9`.)
-- 2026-08-06: A doctrine that has not been self-applied drifts first on the
-  corpus's own surfaces. The 2026-08-05 audit and its remediation showed the
-  enumeration-gate rule (§12) existed as written doctrine while spec-*writing*
-  had no such gate — a fourteen-review remediation still shipped one fresh
-  ungated enumeration (`dump` omitted from the [SB-CLI-1] clean-stop list).
-  New normative enumerations land their gate in the same change, and each new
-  doctrine names its floor (gate, or declared claim plus review). (Folded
-  into `runbooks/writing-specs.md`, `engineering-principles.md` §12, and
-  `runbooks/testing-patterns.md` Pattern 8 in the same change.)
-- 2026-08-06: Tests that configure away the hostile default they claim to
-  cover pass for years while the shipped default fails: the broken-pipe
-  suite forced `PYTHONUNBUFFERED=1` and 8 KB payloads, so the default
-  block-buffered `read --all` claimed messages into a dead pipe undetected.
-  Prove the shipped default path; altered-environment variants are companion
-  tests, never replacements. (Now `runbooks/testing-patterns.md` Pattern 8.)
-
-- 2026-07-30: A canonical-doc extraction must audit every removed README
-  paragraph for operational hazards, not only normative rules. A pointer can
-  stay correct while a safety warning disappears. Bind each enumerable branch
-  in the promoted clause separately; grouped labels such as “duplicate
-  handling” can hide normalization-order, empty-input, and high-water cases.
-  (Phase 2A message-identity cutover completed-work review.)
-- 2026-08-04: Hand-maintained counts and completeness claims ("32 config
-  keys", "full catalog") drift from code and multiply across routing
-  surfaces (README, llms.txt, CHANGELOG). Verify any counted or
-  completeness claim mechanically against its source (`load_config()`,
-  `__all__`, an index) before writing it, and prefer making a "full"
-  claim true over weakening it on every surface that repeats it. Two
-  independent reviewers caught the same defect class in one migration.
-  (Docs IA plan, completion review CR2 + post-completion PC1.)
-- 2026-08-04: Native/backend activity notifications are wake hints, not
-  authoritative state. A hint can be stale, replayed, or lose a race to
-  another consumer, so re-check live pending state before treating the
-  notification as work; narrow same-watcher local hints may support an
-  explicitly bounded direct attempt. (Harvested from
-  2026-05-05-pg-watcher-followup-review-remediation-plan; source `197629e2`.)
-- 2026-08-04 (revised 2026-08-11; was: all failed best-effort cleanup should
+- 2026-08-04: (revised 2026-08-11; was: all failed best-effort cleanup should
   remain tracked for retry): Cleanup failure policy follows the resource's
   declared lifecycle. A retry-capable, bookkept resource stays tracked after
   release failure so a later retry can find it. A one-shot terminal resource
@@ -264,40 +228,12 @@ Dated moment-tier entries (foldable after age floor and distillation).
   terminal exception: `[SB-API-6]` and retired
   2026-08-11-activity-waiter-terminal-close-contract-plan — source `27f9ae4`;
   see the ledger in `docs/plans/README.md`.)
-- 2026-08-04: Pre-parser argument rewriting is a safety boundary. Help must be
-  side-effect free, the subcommand inventory must be complete, and destructive
-  global flags need explicit command-combination guards; otherwise a missed
-  subcommand can hoist a cleanup flag into an unintended action. (Harvested
-  from 2026-07-02-evaluation-fixes-plan; source `197629e2`.)
-- 2026-08-04: An ordering token and the row it orders must become visible in
-  one commit. Publishing a high-water mark before its row lets checkpoint
-  readers advance past work that is still uncommitted. (Harvested from
-  2026-07-02-evaluation-fixes-plan; source `197629e2`.)
-- 2026-08-04: “Unused” searches must include examples and every other ungated
-  consumer. Executable examples need at least one behavioral gate; syntax or
-  SQL that no normal test imports can otherwise remain broken indefinitely.
-  (Harvested from 2026-07-02-evaluation-fixes-plan; source `197629e2`.)
 - 2026-08-04: Test subprocess environments must sanitize session-start
   developer-ambient configuration while preserving explicit harness channels
   and per-test overrides. Otherwise the same subprocess suite silently
   exercises different behavior on different machines; already-imported
   in-process config snapshots are a separate boundary. (Harvested from
   2026-07-02-evaluation-fixes-plan; source `197629e2`.)
-- 2026-08-04: A deadlock correction fixes lock order; stronger retry is not a
-  substitute. Prove both the statement/acquisition order and behavior under the
-  real lock manager, because mocks and retries can hide the same cycle.
-  (Harvested from 2026-07-02-watch-after-and-pg-rename-lock-plan; source
-  `197629e2`.)
-- 2026-08-04: Compatibility-handshake peers must declare their protocol
-  literals independently. Importing one side's constant into the other makes
-  mismatch detection tautological; protocol-version state must also remain
-  distinct from storage-schema state. (Harvested from
-  2026-07-03-backend-api-version-handshake-plan; source `197629e2`.)
-- 2026-08-04: Post-fork recovery must replace inherited locks before every
-  possible acquisition, not only inside the eventual resource getter. A lock
-  taken by a vanished thread can deadlock any earlier entry point in the child.
-  (Harvested from 2026-07-03-checkpoint-move-caveat-and-lock-hardening-plan;
-  source `197629e2`.)
 - 2026-08-04: Check `os.WIFEXITED(status)` before interpreting
   `os.WEXITSTATUS(status)`. A signaled child has no normal exit code and can be
   misreported as success if the predicates are reversed. (Harvested from
@@ -308,11 +244,6 @@ Dated moment-tier entries (foldable after age floor and distillation).
   substring replacement is a fallback, not the primary security model.
   (Harvested from 2026-07-05-independent-review-fixes-plan and
   2026-07-12-code-scanning-alert-triage-plan; source `197629e2`.)
-- 2026-08-04: Irreversible release tags come after exact-SHA green validation.
-  A tag created before validation turns a correctable build or workflow defect
-  into repository-history repair. (Harvested from
-  2026-07-12-release-reproducibility-and-publication-hardening-plan; source
-  `197629e2`.)
 - 2026-08-04: Cleanup authority comes from resource ownership and live state,
   never a path-name heuristic. Names describe location, not whether the current
   process created or may delete the resource. (Harvested from
@@ -323,77 +254,6 @@ Dated moment-tier entries (foldable after age floor and distillation).
   they actually use. (Harvested from
   2026-05-05-review-findings-remediation-plan and
   2026-07-09-core-reliability-issues-1-5-plan; source `197629e2`.)
-- 2026-08-04: When a mutation promises a global or current-set invariant,
-  check authoritative live state inside its atomic boundary, not a process
-  cache or client snapshot. Caches may optimize reads, but they cannot
-  authorize alias mutation, delete, or patternless broadcast semantics against
-  concurrently changing storage; weaker snapshot contracts must be named.
-  (Harvested from 2026-05-05-review-findings-remediation-plan and
-  2026-07-16-code-review-findings-remediation-plan; source `197629e2`.)
-- 2026-08-06: A well-formed plan is not a verified plan. Agent-authored
-  plans reproduce hardening form (invariants, stop gates, anti-mocking
-  clauses) with high fluency while still naming nonexistent surfaces
-  (`--since`, `evalsha`) and proposing lock-order deadlocks. Review must
-  existence-check every named flag, test path, seam, and driver order
-  against executable code before grading anything else; form quality
-  carries no information. (From rounds 1–2 of
-  2026-08-06-pre-release-review-remediation-plan.)
-- 2026-08-06: Fix proposals touching a registered concurrency state
-  machine, lock order, or object lifecycle are architectural regardless
-  of diff size. Three of five "small debts" in one pre-release plan were
-  a PostgreSQL lock-order cycle, a reentrant-lock self-deadlock, and a
-  structurally unreachable finalizer — each looked like a one-liner.
-  Classify by the surface touched, not the lines changed. (From F6–F8 of
-  the same plan's round-1 review.)
-- 2026-08-06: Negative knowledge stored in a closed plan does not
-  transfer; refusals must live at the tier the next actor loads before
-  judgment. The cross-thread ownership refusal recorded in the
-  2026-07-13 plan's Unit D was read, cited, and still re-proposed as
-  "healing" until it was promoted to [REV-THEORY-005]. Record *why* a
-  rejected fix was dangerous wherever the next proposer will look, not
-  only where the rejection happened. (From the 2026-07-27 generator
-  poisoning review arc.)
-- 2026-08-06: SQL `BEGIN EXCLUSIVE` is not SQLite's WAL lifecycle lock,
-  and no in-process SQL protocol can quiesce a database for deletion.
-  Round-3 probes disproved the plausible protocol on every leg:
-  `PRAGMA wal_checkpoint(TRUNCATE)` inside `BEGIN EXCLUSIVE` fails
-  with `database table is locked` even with zero other connections; in
-  WAL mode `BEGIN EXCLUSIVE` equals `BEGIN IMMEDIATE` and excludes
-  only writers — idle holders and active readers coexist with it; and
-  unlinking an open database is upstream-undefined
-  (howtocorrupt.html §2.5: old and replacement generations can share
-  pathname-derived WAL/SHM names). WAL last-close cleanup is driven by
-  SQLite's internal main-file `SQLITE_LOCK_EXCLUSIVE`, which SQL
-  cannot take. Consequences: an enforceable protective cleanup would
-  need out-of-band lifetime coordination across every connection (its
-  own class-5 design); the shipped alternative is revision 5's
-  explicitly destructive contract — delete the bounded owned namespace
-  under explicit authority, with concurrent-storage outcomes
-  documented as undefined per upstream, and deterministic CLI
-  attempt/diagnostic/exit semantics. An earlier version of this entry
-  taught the disproved exclusive-transaction protocol as durable
-  guidance hours after it was drafted — the lessons ledger is itself a
-  reviewable surface, not a place confident text lands unreviewed.
-  (From rounds 3–5 of 2026-08-06-pre-release-review-remediation-plan;
-  supersedes the rejected R2-era entry in place, pre-landing.)
-- 2026-08-07: A closed plan's unexecuted task with no deviation row is
-  invisible debt. The cross-thread generator finalization probes existed in
-  all three backend suites, but their opt-in gates were never enabled in the
-  owning CI workflows. Closure review must diff every planned task against
-  executable evidence, not merely accept a checked list or a passing default
-  suite. (From Unit I of
-  2026-08-06-pre-release-review-remediation-plan.)
-- 2026-08-13: Lint-inventory tests must match the real owner of each fact:
-  Ruff owns `__all__` sort order (membership is the public-surface test); a
-  suppression scanner must tokenize comments and use the tracked-file
-  inventory (string constants and untracked files false-pass); repository
-  path keys must be POSIX, not host-native `Path` display. (Harvested from
-  2026-07-29-ruff-lint-expansion-plan at `6481ca08`.)
-- 2026-08-13: A generated suppression location index should key by enclosing
-  symbol, not source line. Line keys churn on every edit and hide a `# noqa`
-  copied onto a different function. The generator must never create an
-  approval. (Harvested from 2026-07-30-ruff-suppression-index-generator-plan
-  at `6481ca08`.)
 - 2026-08-13: mypy applies a later `--config-file` after earlier CLI flags, so
   pass `--config-file` before partition overrides. Type-check an
   ambient-excluded `tests/` tree with an explicit file list, not discovery;
@@ -405,53 +265,11 @@ Dated moment-tier entries (foldable after age floor and distillation).
   launcher. Direct `python bin/release.py` can pick Apple system 3.9 and fail
   before tag creation on a repo that requires `>=3.11`. (Harvested from
   2026-07-31-ci-release-remediation-plan at `197629e2`.)
-- 2026-08-13: When deleting a public helper module, sweep every import form,
-  including `from simplebroker import Queue, helpers`. An `as helpers` alias
-  that still names the deleted module is the same defect. Do not replace a
-  deleted facade with a same-named package that re-exports split internals —
-  call sites never migrate and the discoverability problem survives.
-  (Harvested from 2026-07-31-python-library-api-contract-plan at `6481ca08`.)
-- 2026-08-13: Measured large-legacy SQLite migrations can exceed the fixed
-  phase-lock waiter (F21: median 29.622s at 10M rows, 273.111s at 50M versus a
-  20s budget). That proves the timeout can expire during a healthy migration;
-  it does not by itself justify a new progress protocol. Reconsider only with
-  new evidence of material concurrent-opener harm, and start a new reviewed
-  plan. Designs A (bounded override), B (progress-aware wait), and C
-  (operator serialization) remain historical input in
-  2026-07-17-schema-migration-aware-waiting-proposal at `88466aff`.
 - 2026-08-13: Packaged project URLs that will be followed from PyPI must be
   absolute `https://` links. Relative repo paths resolve against the package
   page and 404. (Harvested from 2026-08-04-docs-information-architecture-plan
   at `c403c5eb`.)
-- 2026-08-13: A CLI `watch` that claims and prints a body flushes stdout
-  before a shell handler can reject the payload. Peek-ack (or move-ack) is
-  required when the handler may refuse; a claim-then-process shell worker
-  will acknowledge work the handler never accepted. Bash cannot store NUL, so
-  reject NUL before handler/delete rather than passing the body as a quoted
-  argument. (Harvested from 2026-08-04-worker-example-error-handling-plan at
-  `695dc16a`.)
-- 2026-08-13: In a `pipefail` shell worker, SIGPIPE from an early-close
-  consumer can mask a successful handler. Distinguish a successful early
-  close from a failed process. A worker checkpoint records last-processed
-  identity; it is not proof that older pending work is gone and must not be
-  fed to `--after` as a completeness cursor. (Harvested from
-  2026-08-05-worker-portability-and-example-corrections-plan at `6481ca08`.)
-- 2026-08-13: The 6.0.2 pre-release deferred-units register is negative
-  knowledge, not dropped work. (C) A `main()` catch cannot see eager
-  import-time config load. (D) Unconditional stderr provenance contradicts
-  `[SB-CLI-2]`; `status` is not a provenance channel. (F) PostgreSQL alias
-  add/remove (advisory→meta) versus rename (meta→advisory) is a lock-order
-  cycle; SQLite's no-op hook is not "no hook." (H) A non-reentrant Redis
-  `_write_lock` around `insert_messages` self-deadlocks patterned broadcast;
-  the seam is `.eval`. (G) remains `[REV-THEORY-005]`. Reopen each only from
-  the named condition in 2026-08-06-pre-release-review-remediation-plan at
-  `84159198`.
-- 2026-08-13: A harvest-gate block for missing lessons is repaired by
-  extracting dated, source-pinned ledger entries in the same sweep. That is
-  not Golden Rule, runbook, or theory promotion and does not need a separate
-  plan. Leave the plan completed only when the reusable correction cannot be
-  stated faithfully from the closed record.
-- 2026-08-13 (revised 2026-08-23; was: eager config load let invalid env
+- 2026-08-13: (revised 2026-08-23; was: eager config load let invalid env
   escape before `main()`): Keep package imports ambient-free. Sample strict
   current config once at each handle or invocation ownership seam; Python
   raises a fresh `InvalidConfigError` before side effects, and the outer CLI
@@ -467,11 +285,6 @@ Dated moment-tier entries (foldable after age floor and distillation).
   mask the active error. Translate the category immediately at the command
   boundary. (Harvested from 2026-08-12-bounded-live-dump-plan N3a/N3b/IR-2 at
   `d0d2de9`.)
-- 2026-08-13: When converting an exclusive `before` filter to an inclusive
-  identity bound, do not compute unchecked `H + 1` at the signed-ID ceiling.
-  At that ceiling every valid ID is already `<= H` and no extra filter is
-  required. (Harvested from 2026-08-12-bounded-live-dump-plan at `d0d2de9`;
-  rationale also in `docs/implementation/08-message-identity-and-write-visibility.md`.)
 - 2026-08-23: Format rejected configuration values through a separate safe
   display boundary: redact sensitive fields before value-controlled
   formatting, tolerate hostile `repr`, escape controls, then apply the size
@@ -603,3 +416,8 @@ Dated moment-tier entries (foldable after age floor and distillation).
   Preserve editable descriptors for future handles; detach both the handle's
   input and its reporting value. (Critical-review remediation, real Valkey
   namespace regression.)
+- 2026-09-12: When deleting helpers that a test package `__init__` re-exports,
+  rewrite the `__init__` in the same step as (or before) the deletion.
+  `tests/conftest.py` imports `tests.helper_scripts.broker_factory`, which
+  loads that `__init__`, so even a 40-second partial state broke collection
+  for every concurrent session sharing the worktree. (Dead-code cleanup plan.)

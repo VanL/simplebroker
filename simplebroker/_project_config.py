@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sys
 import tomllib
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -13,13 +12,11 @@ from ._backend_plugins import get_backend_plugin
 from ._constants import (
     DEFAULT_PROJECT_CONFIG_NAME,
     MAX_PROJECT_TRAVERSAL_DEPTH,
-    ResolvedConfig,
-    _overlay_config,
+    Config,
     _validate_safe_path_components,
-    snapshot_config,
+    resolve_config,
 )
 from ._targets import BrokerTarget, _backend_target_has_password
-from .config import canonical_config, legacy_config
 
 PROJECT_CONFIG_FILENAME = DEFAULT_PROJECT_CONFIG_NAME
 SUPPORTED_PROJECT_CONFIG_VERSION = 1
@@ -88,10 +85,6 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
     }
 
 
-def _config_snapshot(config: Mapping[str, Any] | None) -> ResolvedConfig:
-    return snapshot_config(config)
-
-
 def _require_lossless_backend_options(
     backend_name: str,
     backend_options: dict[str, Any],
@@ -138,19 +131,13 @@ def _require_lossless_backend_options(
 def project_config_path_for_directory(
     directory: Path,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> Path:
     """Return the configured project config path rooted at a directory."""
 
-    config_dict = _config_snapshot(config)
-    config_path_prefix = str(
-        canonical_config(config_dict).get("project_config_path", "")
-    )
-    config_name = str(
-        canonical_config(config_dict).get(
-            "project_config_name", PROJECT_CONFIG_FILENAME
-        )
-    )
+    config_dict = resolve_config(config=config)
+    config_path_prefix = str(config_dict["PROJECT_CONFIG_PATH"])
+    config_name = str(config_dict["PROJECT_CONFIG_NAME"])
     root = directory.resolve()
 
     if config_path_prefix:
@@ -165,14 +152,12 @@ def project_config_path_for_directory(
 def find_project_config(
     starting_dir: Path,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
     max_depth: int = MAX_PROJECT_TRAVERSAL_DEPTH,
 ) -> Path | None:
     """Search upward for the configured project TOML file."""
-    config_dict = _config_snapshot(config)
-    config_path_prefix = str(
-        canonical_config(config_dict).get("project_config_path", "")
-    )
+    config_dict = resolve_config(config=config)
+    config_path_prefix = str(config_dict["PROJECT_CONFIG_PATH"])
 
     if config_path_prefix and Path(config_path_prefix).expanduser().is_absolute():
         candidate = project_config_path_for_directory(starting_dir, config=config_dict)
@@ -199,7 +184,7 @@ def find_project_config(
 def resolve_project_target(
     config_path: Path,
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> BrokerTarget:
     """Resolve a project config into an internal target object.
 
@@ -213,14 +198,14 @@ def resolve_project_target(
     target = config_data["target"]
     backend_options = dict(config_data["backend_options"])
 
-    config_dict = _overlay_config(
-        snapshot_config(config),
-        legacy_config(canonical_config({"backend_target": ""})),
+    base_config = resolve_config(config=config)
+    config_dict = resolve_config(
+        config=base_config, override={f"{base_config.prefix}_BACKEND_TARGET": ""}
     )
     # The selected plugin owns option validation and normalization, including
     # for SQLite. Project values are not replaced by ambient target state.
     resolved = plugin.init_backend(
-        legacy_config(config_dict),
+        config_dict,
         toml_target=target,
         toml_options=backend_options,
     )

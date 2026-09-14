@@ -26,6 +26,7 @@ import pytest
 from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
+from simplebroker import resolve_config
 from simplebroker._exceptions import MessageError, OperationalError
 
 from .helper_scripts.broker_factory import active_backend, make_queue
@@ -78,7 +79,7 @@ def test_size_limit_counts_utf8_bytes(broker_target, body: str) -> None:
     q = make_queue(
         f"size_{next(_uniq)}",
         broker_target,
-        config={"BROKER_MAX_MESSAGE_SIZE": SIZE_LIMIT_BYTES},
+        config=resolve_config(override={"BROKER_MAX_MESSAGE_SIZE": SIZE_LIMIT_BYTES}),
     )
     try:
         if len(body.encode("utf-8")) <= SIZE_LIMIT_BYTES:

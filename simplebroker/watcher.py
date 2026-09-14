@@ -69,7 +69,7 @@ import threading
 import time
 import weakref
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from enum import Enum, auto
 from functools import partial
 from pathlib import Path
@@ -78,16 +78,14 @@ from typing import TYPE_CHECKING, Any, Self, cast
 
 from ._constants import (
     MAX_TOTAL_RETRY_TIME,
-    _overlay_config,
-    resolve_isolated_config,
-    snapshot_config,
+    Config,
+    resolve_config,
 )
 from ._exceptions import OperationalError, StopException
 from ._message_id import format_message_id
 from ._retry import interruptible_sleep
 from ._retry_policy import _execute_watcher_operational_retry
 from ._targets import BrokerTarget
-from .config import canonical_config
 from .db import BrokerDB
 from .sbqueue import Queue, _close_iterator
 
@@ -211,7 +209,7 @@ def config_aware_default_error_handler(
     message: str,
     timestamp: int,
     *,
-    config: Mapping[str, Any],
+    config: Config,
 ) -> bool:
     """Internal default error handler that respects BROKER_LOGGING_ENABLED.
 
@@ -231,7 +229,7 @@ def config_aware_default_error_handler(
     Returns:
         True to continue processing (don't stop the watcher)
     """
-    if canonical_config(config)["logging_enabled"]:
+    if config["LOGGING_ENABLED"]:
         return default_error_handler(exc, message, timestamp)
     return True
 
@@ -242,7 +240,7 @@ _DEFAULT_ERROR_HANDLER = cast(ErrorHandler, config_aware_default_error_handler)
 
 def _bind_error_handler(
     error_handler: ErrorHandler,
-    config: Mapping[str, Any],
+    config: Config,
 ) -> ErrorHandler:
     """Bind instance config only for SimpleBroker's internal default handler."""
     if error_handler is _DEFAULT_ERROR_HANDLER:
@@ -329,7 +327,7 @@ class BaseWatcher(ABC):
         db: BrokerDB | str | Path | BrokerTarget | None = None,
         stop_event: threading.Event | None = None,
         polling_strategy: PollingStrategy | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         """Initialize base watcher.
 
@@ -338,15 +336,18 @@ class BaseWatcher(ABC):
             db: SQLite BrokerDB, BrokerTarget, or path (uses default if None)
             stop_event: Optional event to signal watcher shutdown
             polling_strategy: Custom polling strategy (uses default if None)
-            config: Configuration dictionary (uses default if None)
+            config: Resolved snapshot (inherits the Queue snapshot, or uses
+                defaults for a queue name, when omitted)
 
         """
         # Handle queue parameter - either Queue object or string name
         if isinstance(queue, Queue):
             self._queue_obj = queue
-            resolved_config = _overlay_config(queue._config, config)
+            resolved_config = (
+                queue._config if config is None else resolve_config(config=config)
+            )
         else:
-            resolved_config = snapshot_config(config)
+            resolved_config = resolve_config(config=config)
             # Create Queue object with persistent=True by default for watchers.
             # ``None`` means Queue should resolve the target from config.
             db_path: str | BrokerTarget | None
@@ -423,9 +424,7 @@ class BaseWatcher(ABC):
         """
         return self._queue_obj
 
-    def _create_strategy(
-        self, *, config: Mapping[str, Any] | None = None
-    ) -> PollingStrategy:
+    def _create_strategy(self, *, config: Config | None = None) -> PollingStrategy:
         """Create the default polling strategy for this watcher.
 
         This method provides the default PollingStrategy configuration
@@ -454,15 +453,17 @@ class BaseWatcher(ABC):
 
         See Also:
             PollingStrategy: For parameter details
-            snapshot_config(): For configuration snapshot ownership
+            Config: Retained configuration snapshot
         """
-        effective_config = _overlay_config(self._config, config)
+        effective_config = (
+            self._config if config is None else resolve_config(config=config)
+        )
         return PollingStrategy(
             stop_event=self._stop_event,
-            initial_checks=canonical_config(effective_config)["initial_checks"],
-            max_interval=canonical_config(effective_config)["max_interval"],
-            burst_sleep=canonical_config(effective_config)["burst_sleep"],
-            jitter_factor=canonical_config(effective_config)["jitter_factor"],
+            initial_checks=effective_config["INITIAL_CHECKS"],
+            max_interval=effective_config["MAX_INTERVAL"],
+            burst_sleep=effective_config["BURST_SLEEP"],
+            jitter_factor=effective_config["JITTER_FACTOR"],
         )
 
     def _create_activity_waiter(self, queue: Queue) -> ActivityWaiter | None:
@@ -518,7 +519,7 @@ class BaseWatcher(ABC):
         process_func: Callable[[], Any],
         operation_name: str,
         *,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> Any:
         """Execute a processing function with operational error retry.
 
@@ -534,7 +535,9 @@ class BaseWatcher(ABC):
             StopWatching: If stop requested during retry
 
         """
-        effective_config = _overlay_config(self._config, config)
+        effective_config = (
+            self._config if config is None else resolve_config(config=config)
+        )
         max_retries = 5
 
         def _attempt() -> Any:
@@ -542,7 +545,7 @@ class BaseWatcher(ABC):
             return process_func()
 
         def _log_retry(state: Any, exc: Exception, wait: float) -> None:
-            if canonical_config(effective_config)["logging_enabled"]:
+            if effective_config["LOGGING_ENABLED"]:
                 logger.debug(
                     f"OperationalError during {operation_name} "
                     f"(retry {state.tries}/{max_retries}): {exc}. "
@@ -560,7 +563,7 @@ class BaseWatcher(ABC):
         except StopException:
             raise StopWatching from None
         except OperationalError as e:
-            if canonical_config(effective_config)["logging_enabled"]:
+            if effective_config["LOGGING_ENABLED"]:
                 logger.log(
                     logging.ERROR,
                     f"Failed after {max_retries} operational errors: {e}",
@@ -575,7 +578,7 @@ class BaseWatcher(ABC):
         timestamp: int,
         error_handler: Callable[[Exception, str, int], bool | None],
         *,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         """Handle errors from message handler.
 
@@ -593,7 +596,9 @@ class BaseWatcher(ABC):
         if isinstance(e, (StopWatching, StopException)):
             raise StopWatching from e
 
-        effective_config = _overlay_config(self._config, config)
+        effective_config = (
+            self._config if config is None else resolve_config(config=config)
+        )
         stop_requested = False
         try:
             result = error_handler(e, message, timestamp)
@@ -607,7 +612,7 @@ class BaseWatcher(ABC):
             raise StopWatching from stop_error
         except Exception as eh_error:
             # Error handler itself failed
-            if canonical_config(effective_config)["logging_enabled"]:
+            if effective_config["LOGGING_ENABLED"]:
                 logger.log(
                     logging.ERROR,
                     f"Error handler failed: {eh_error}\nOriginal error: {e}",
@@ -939,7 +944,7 @@ class BaseWatcher(ABC):
         timestamp: int,
         error_handler: Callable[[Exception, str, int], bool | None],
         *,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> bool:
         """Safely call the handler with error handling.
 
@@ -951,7 +956,9 @@ class BaseWatcher(ABC):
         Returns:
             True only when the message handler returns normally.
         """
-        effective_config = _overlay_config(self._config, config)
+        effective_config = (
+            self._config if config is None else resolve_config(config=config)
+        )
         if not hasattr(self, "_handler") or self._handler is None:
             return False
         try:
@@ -992,7 +999,7 @@ class BaseWatcher(ABC):
         message: str,
         timestamp: int,
         *,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> bool | None:
         """Dispatch a message to the handler with error handling and size validation.
 
@@ -1010,8 +1017,10 @@ class BaseWatcher(ABC):
             If the message exceeds the size limit, it will be truncated for error reporting
             but the original oversized message will be discarded.
         """
-        resolved_config = _overlay_config(self._config, config)
-        max_message_size = int(canonical_config(resolved_config)["max_message_size"])
+        resolved_config = (
+            self._config if config is None else resolve_config(config=config)
+        )
+        max_message_size = int(resolved_config["MAX_MESSAGE_SIZE"])
 
         # Validate message size.
         message_size = len(message.encode("utf-8"))
@@ -1020,7 +1029,7 @@ class BaseWatcher(ABC):
                 f"Message size ({message_size} bytes) exceeds "
                 f"{max_message_size} byte limit"
             )
-            if canonical_config(resolved_config)["logging_enabled"]:
+            if resolved_config["LOGGING_ENABLED"]:
                 logger.error(error_msg)
             # Use error handler if available
             if self._error_handler:
@@ -1215,7 +1224,7 @@ class BaseWatcher(ABC):
         try:
             self.stop()
         except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
-            if canonical_config(self._config)["logging_enabled"]:
+            if self._config["LOGGING_ENABLED"]:
                 logger.warning(f"Error during stop in __exit__: {e}")
 
     def _setup_finalizer(self) -> None:
@@ -1311,19 +1320,11 @@ class SignalHandlerContext:
 
 # These public signature defaults must move together with the canonical
 # ambient-free configuration contract in [SB-API-6].
-_POLLING_CANONICAL_DEFAULTS = resolve_isolated_config({})
-_POLLING_INITIAL_CHECKS_DEFAULT: int = canonical_config(_POLLING_CANONICAL_DEFAULTS)[
-    "initial_checks"
-]
-_POLLING_MAX_INTERVAL_DEFAULT: float = canonical_config(_POLLING_CANONICAL_DEFAULTS)[
-    "max_interval"
-]
-_POLLING_BURST_SLEEP_DEFAULT: float = canonical_config(_POLLING_CANONICAL_DEFAULTS)[
-    "burst_sleep"
-]
-_POLLING_JITTER_FACTOR_DEFAULT: float = canonical_config(_POLLING_CANONICAL_DEFAULTS)[
-    "jitter_factor"
-]
+_POLLING_CANONICAL_DEFAULTS = resolve_config(env={})
+_POLLING_INITIAL_CHECKS_DEFAULT: int = _POLLING_CANONICAL_DEFAULTS["INITIAL_CHECKS"]
+_POLLING_MAX_INTERVAL_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS["MAX_INTERVAL"]
+_POLLING_BURST_SLEEP_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS["BURST_SLEEP"]
+_POLLING_JITTER_FACTOR_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS["JITTER_FACTOR"]
 
 
 class PollingStrategy:
@@ -1675,7 +1676,7 @@ class QueueWatcher(BaseWatcher):
         batch_processing: bool = False,
         polling_strategy: PollingStrategy | None = None,
         error_handler: ErrorHandler = _DEFAULT_ERROR_HANDLER,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         """Initialize the QueueWatcher.
 
@@ -1741,7 +1742,7 @@ class QueueWatcher(BaseWatcher):
         self._pending_found_by_db_check = False
 
         # Two-phase detection configuration
-        self._skip_idle_check = canonical_config(self._config)["skip_idle_check"]
+        self._skip_idle_check = self._config["SKIP_IDLE_CHECK"]
 
     def _has_pending_messages(self) -> bool:
         """Fast check if queue has unclaimed messages.
@@ -2013,7 +2014,7 @@ class QueueMoveWatcher(BaseWatcher):
         max_messages: int | None = None,
         polling_strategy: PollingStrategy | None = None,
         error_handler: ErrorHandler = _DEFAULT_ERROR_HANDLER,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         """Initialize a QueueMoveWatcher.
 
@@ -2131,7 +2132,7 @@ class QueueMoveWatcher(BaseWatcher):
 
             # Check max messages limit
             if self._max_messages and self._move_count >= self._max_messages:
-                if canonical_config(self._config)["logging_enabled"]:
+                if self._config["LOGGING_ENABLED"]:
                     logger.info(f"Reached max_messages limit ({self._max_messages})")
                 self._stop_event.set()
                 raise StopWatching

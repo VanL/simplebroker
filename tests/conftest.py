@@ -33,6 +33,7 @@ from simplebroker._project_config import (
 from simplebroker._targets import BrokerTarget
 
 from .helper_scripts.broker_factory import (
+    active_backend,
     make_broker,
     make_queue,
     make_target,
@@ -40,13 +41,6 @@ from .helper_scripts.broker_factory import (
 
 # Import cleanup fixtures
 from .helper_scripts.cleanup import cleanup_at_exit, cleanup_watchers
-
-# Import subprocess utilities
-from .helper_scripts.managed_subprocess import (
-    ManagedProcess,
-    managed_subprocess,
-    run_subprocess,
-)
 from .helper_scripts.timing import scale_timeout_for_ci
 
 # Import watcher patching
@@ -183,13 +177,6 @@ _SQLITE_ONLY_RUN_CLI_MODULE_REASONS = {
 }
 
 
-def _test_backend_name(env: dict[str, str] | None = None) -> str:
-    """Return the active backend name for CLI black-box tests."""
-    if env and env.get("BROKER_TEST_BACKEND"):
-        return env["BROKER_TEST_BACKEND"]
-    return os.environ.get("BROKER_TEST_BACKEND", "sqlite")
-
-
 def _postgres_schema_name(root: Path) -> str:
     """Derive a stable per-test schema name from the temp project root."""
     digest = hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
@@ -277,7 +264,7 @@ def _initialize_postgres_project(config_path: Path, *, dsn: str) -> None:
 
 def _cleanup_postgres_projects(root: Path) -> None:
     """Drop any temporary PG schemas created under a test workdir."""
-    if _test_backend_name() != POSTGRES_TEST_BACKEND:
+    if active_backend() != POSTGRES_TEST_BACKEND:
         return
 
     dsn = os.environ.get("SIMPLEBROKER_PG_TEST_DSN")
@@ -356,7 +343,7 @@ def _ensure_redis_project_config(config_root: Path, *, url: str) -> Path:
 
 
 def _cleanup_redis_projects(root: Path) -> None:
-    if _test_backend_name() != REDIS_TEST_BACKEND:
+    if active_backend() != REDIS_TEST_BACKEND:
         return
     url = _redis_test_url()
     if not url:
@@ -398,7 +385,7 @@ def _cleanup_redis_projects(root: Path) -> None:
 @pytest.fixture(scope="session")
 def pg_worker_dsn() -> str | None:
     """Return the PG test DSN, or None when not running against Postgres."""
-    if _test_backend_name() != POSTGRES_TEST_BACKEND:
+    if active_backend() != POSTGRES_TEST_BACKEND:
         return None
     dsn = os.environ.get("SIMPLEBROKER_PG_TEST_DSN")
     if not dsn:
@@ -431,7 +418,7 @@ def pg_worker_tmpdir(
     config_path = root / PROJECT_CONFIG_FILENAME
     target, password = _postgres_target_without_password(pg_worker_dsn)
     if password:
-        os.environ.setdefault("BROKER_BACKEND_PASSWORD", password)
+        os.environ.setdefault("PGPASSWORD", password)
     config_path.write_text(
         "\n".join(
             [
@@ -490,10 +477,7 @@ def pg_worker_runner(
                 pg_worker_dsn,
                 backend_options={"schema": pg_worker_schema},
             )
-        if hasattr(runner, "shutdown"):
-            runner.shutdown()
-        else:
-            runner.close()
+        runner.shutdown()
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -552,7 +536,7 @@ def _reset_pg_tables(runner: Any, plugin: Any) -> None:
 @pytest.fixture(scope="session")
 def redis_worker_url() -> str | None:
     """Return the Valkey test URL, or None when not running against Redis."""
-    if _test_backend_name() != REDIS_TEST_BACKEND:
+    if active_backend() != REDIS_TEST_BACKEND:
         return None
     url = _redis_test_url()
     if not url:
@@ -668,7 +652,7 @@ def broker_target(
     redis_worker_plugin: BackendPlugin | None,
 ) -> BrokerTarget:
     """Backend-agnostic resolved target for the active backend."""
-    if _test_backend_name() == POSTGRES_TEST_BACKEND:
+    if active_backend() == POSTGRES_TEST_BACKEND:
         assert pg_worker_dsn is not None
         assert pg_worker_schema is not None
         assert pg_worker_runner is not None
@@ -679,7 +663,7 @@ def broker_target(
             pg_dsn=pg_worker_dsn,
             pg_schema=pg_worker_schema,
         )
-    if _test_backend_name() == REDIS_TEST_BACKEND:
+    if active_backend() == REDIS_TEST_BACKEND:
         assert redis_worker_url is not None
         assert redis_worker_namespace is not None
         assert redis_worker_runner is not None
@@ -749,14 +733,14 @@ def workdir(
     Postgres: all tests in a worker share a single tmpdir + schema.
         Tables are TRUNCATEd between tests for isolation.
     """
-    if _test_backend_name() == POSTGRES_TEST_BACKEND:
+    if active_backend() == POSTGRES_TEST_BACKEND:
         assert pg_worker_tmpdir is not None
         assert pg_worker_runner is not None
         _reset_pg_tables(pg_worker_runner, pg_worker_plugin)
         monkeypatch.chdir(pg_worker_tmpdir)
         monkeypatch.setenv("BROKER_PROJECT_SCOPE", "1")
         yield pg_worker_tmpdir
-    elif _test_backend_name() == REDIS_TEST_BACKEND:
+    elif active_backend() == REDIS_TEST_BACKEND:
         assert redis_worker_tmpdir is not None
         assert redis_worker_url is not None
         assert redis_worker_namespace is not None
@@ -916,7 +900,7 @@ def run_cli(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-028] exception
         full_env[_CLI_COVERAGE_STAGING_ENV] = str(staging_coverage)
         full_env["COVERAGE_FILE"] = str(staging_coverage)
 
-    if _test_backend_name(full_env) == POSTGRES_TEST_BACKEND:
+    if active_backend(full_env) == POSTGRES_TEST_BACKEND:
         dsn = full_env.get("SIMPLEBROKER_PG_TEST_DSN")
         if not dsn:
             raise RuntimeError(
@@ -932,7 +916,7 @@ def run_cli(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-028] exception
         # initialize_database() via BrokerCore.__init__.
         full_env.setdefault("BROKER_PROJECT_SCOPE", "1")
 
-    if _test_backend_name(full_env) == REDIS_TEST_BACKEND:
+    if active_backend(full_env) == REDIS_TEST_BACKEND:
         url = full_env.get("SIMPLEBROKER_VALKEY_TEST_URL") or full_env.get(
             "SIMPLEBROKER_REDIS_TEST_URL"
         )
@@ -1082,13 +1066,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 # Export subprocess utilities for use in tests
 # --------------------------------------------------------------------------- #
 __all__ = [
-    "ManagedProcess",
     "build_cli_env",
     "cleanup_at_exit",
     "cleanup_watchers",
-    "managed_subprocess",
     "patch_watchers",
     "run_cli",
-    "run_subprocess",
     "workdir",
 ]

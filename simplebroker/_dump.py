@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import time
 import warnings
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -29,7 +29,8 @@ from ._constants import (
     MAX_LOGICAL_COUNTER,
     NS_PER_SECOND,
     SQLITE_MAX_INT64,
-    snapshot_config,
+    Config,
+    resolve_config,
 )
 from ._message_id import (
     INVALID_MESSAGE_ID_MESSAGE,
@@ -37,7 +38,6 @@ from ._message_id import (
     normalize_message_id,
 )
 from ._message_insert import RESERVED_MESSAGE_ID_MESSAGE
-from .config import canonical_config
 
 # Module-owned clock/rng seam: tests patch these aliases instead of the
 # shared stdlib attributes, which background threads, destructors, and
@@ -260,7 +260,7 @@ def load_lines(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
     lines: Iterable[str],
     *,
     force: bool = False,
-    config: Mapping[str, Any] | None = None,
+    config: Config | None = None,
 ) -> LoadResult:
     """Apply simplebroker-dump v1 lines to a broker.
 
@@ -278,8 +278,7 @@ def load_lines(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
         broker: Current backend-v7 broker connection.
         lines: Iterable of v1 NDJSON records.
         force: Bypass only excessive future-skew refusal; warnings still fire.
-        config: Optional typed configuration overrides resolved through the
-            standard SimpleBroker config path.
+        config: Resolved configuration snapshot; omitted config uses defaults.
 
     Raises:
         TypeError: If the broker lacks the required timestamp-advance method.
@@ -297,10 +296,9 @@ def load_lines(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
         raise TypeError(
             "broker must provide callable advance_last_timestamp() for dump load"
         )
-    resolved_config = snapshot_config(config)
+    resolved_config = resolve_config(config=config)
     max_future_skew_ns = (
-        int(canonical_config(resolved_config)["load_max_future_skew_seconds"])
-        * NS_PER_SECOND
+        int(resolved_config["LOAD_MAX_FUTURE_SKEW_SECONDS"]) * NS_PER_SECOND
     )
 
     messages = 0

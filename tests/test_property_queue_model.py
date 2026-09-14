@@ -28,6 +28,7 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
+from simplebroker import resolve_config
 from simplebroker._targets import BrokerTarget
 
 from .helper_scripts.broker_factory import make_queue
@@ -44,7 +45,7 @@ BODIES = st.text(
 
 # Claimed rows must be deterministic for exact include_claimed/stats
 # predictions; see the Stage 3 design notes in the plan.
-MACHINE_CONFIG = {"BROKER_AUTO_VACUUM": 0}
+MACHINE_CONFIG = resolve_config(override={"BROKER_AUTO_VACUUM": 0})
 
 _EXECUTIONS = itertools.count()
 

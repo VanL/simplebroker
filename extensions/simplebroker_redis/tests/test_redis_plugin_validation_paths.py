@@ -18,6 +18,7 @@ from simplebroker_redis.validation import (
     validate_target,
 )
 
+from simplebroker import resolve_config
 from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError
 
@@ -201,14 +202,16 @@ def test_owned_older_redis_namespace_reports_unsupported_without_mutation(
 
 def test_redis_init_backend_builds_target_from_parts() -> None:
     result = RedisBackendPlugin().init_backend(
-        {
-            "BROKER_BACKEND_HOST": "redis.example.test",
-            "BROKER_BACKEND_PORT": "6380",
-            "BROKER_BACKEND_PASSWORD": "p@ss word",
-            "BROKER_BACKEND_DATABASE": "2",
-            "BROKER_BACKEND_SCHEMA": "tenant_1",
-            "BROKER_BACKEND_TARGET": "",
-        },
+        resolve_config(
+            override={
+                "BROKER_BACKEND_HOST": "redis.example.test",
+                "BROKER_BACKEND_PORT": "6380",
+                "BROKER_BACKEND_PASSWORD": "p@ss word",
+                "BROKER_BACKEND_DATABASE": "2",
+                "BROKER_BACKEND_SCHEMA": "tenant_1",
+                "BROKER_BACKEND_TARGET": "",
+            }
+        ),
         toml_options={"max_connections": "3", "pool_timeout": "0.5"},
     )
 
@@ -232,20 +235,22 @@ def test_redis_init_backend_rejects_invalid_database_numbers(
 ) -> None:
     with pytest.raises(DatabaseError, match=match):
         RedisBackendPlugin().init_backend(
-            {
-                "BROKER_BACKEND_HOST": "127.0.0.1",
-                "BROKER_BACKEND_PORT": "6379",
-                "BROKER_BACKEND_DATABASE": database,
-                "BROKER_BACKEND_SCHEMA": "tenant_1",
-                "BROKER_BACKEND_TARGET": "",
-            }
+            resolve_config(
+                override={
+                    "BROKER_BACKEND_HOST": "127.0.0.1",
+                    "BROKER_BACKEND_PORT": "6379",
+                    "BROKER_BACKEND_DATABASE": database,
+                    "BROKER_BACKEND_SCHEMA": "tenant_1",
+                    "BROKER_BACKEND_TARGET": "",
+                }
+            )
         )
 
 
 def test_redis_backend_options_schema_and_namespace_must_match() -> None:
     with pytest.raises(DatabaseError, match="namespace and schema options must match"):
         RedisBackendPlugin().init_backend(
-            {},
+            resolve_config(override={}),
             toml_options={"namespace": "tenant_a", "schema": "tenant_b"},
         )
 

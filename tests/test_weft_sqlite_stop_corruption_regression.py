@@ -59,7 +59,7 @@ _sibling_weft_skip_reason = _add_sibling_weft_to_sys_path()
 psutil = pytest.importorskip("psutil")
 try:
     importlib.import_module("weft")
-except ModuleNotFoundError as exc:
+except ImportError as exc:
     if _sibling_weft_skip_reason is not None:
         pytest.skip(_sibling_weft_skip_reason, allow_module_level=True)
     pytest.skip(f"could not import 'weft': {exc}", allow_module_level=True)

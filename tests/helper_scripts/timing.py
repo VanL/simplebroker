@@ -6,9 +6,6 @@ import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TypeVar
-
-T = TypeVar("T")
 
 
 class _DriveUntilTimeout(AssertionError):
@@ -160,105 +157,6 @@ def wait_for_condition(
     except _DriveUntilTimeout:
         return False
     return True
-
-
-def wait_for_value(
-    value_fn: Callable[[], T],
-    expected: T,
-    timeout: float = 5.0,
-    interval: float = 0.1,
-    message: str | None = None,
-) -> bool:
-    """Wait for a function to return an expected value.
-
-    Args:
-        value_fn: Function that returns a value
-        expected: Expected value to wait for
-        timeout: Maximum time to wait in seconds
-        interval: Time between checks in seconds
-        message: Optional message for debugging
-
-    Returns:
-        True if expected value was returned, False if timeout occurred
-
-    """
-    return wait_for_condition(
-        lambda: value_fn() == expected,
-        timeout=timeout,
-        interval=interval,
-        message=message,
-    )
-
-
-def wait_for_count(
-    count_fn: Callable[[], int],
-    expected_count: int,
-    timeout: float = 5.0,
-    interval: float = 0.1,
-    at_least: bool = False,
-) -> bool:
-    """Wait for a count to reach expected value.
-
-    Args:
-        count_fn: Function that returns current count
-        expected_count: Expected count to wait for
-        timeout: Maximum time to wait in seconds
-        interval: Time between checks in seconds
-        at_least: If True, wait for count >= expected_count
-
-    Returns:
-        True if expected count was reached, False if timeout occurred
-
-    """
-    if at_least:
-
-        def condition() -> bool:
-            return count_fn() >= expected_count
-    else:
-
-        def condition() -> bool:
-            return count_fn() == expected_count
-
-    return wait_for_condition(condition, timeout=timeout, interval=interval)
-
-
-def retry_on_exception(
-    func: Callable[[], T],
-    exception_types: type[BaseException] | tuple[type[BaseException], ...] = Exception,
-    max_attempts: int = 3,
-    delay: float = 0.5,
-    backoff_factor: float = 2.0,
-) -> T:
-    """Retry a function on exception.
-
-    Args:
-        func: Function to retry
-        exception_types: Exception types to catch and retry
-        max_attempts: Maximum number of attempts
-        delay: Initial delay between attempts
-        backoff_factor: Multiplier for delay after each attempt
-
-    Returns:
-        Result of successful function call
-
-    Raises:
-        The last exception if all attempts fail
-
-    """
-    current_delay = delay
-    last_exception: BaseException | None = None
-
-    for attempt in range(max_attempts):
-        try:
-            return func()
-        except exception_types as e:
-            last_exception = e
-            if attempt < max_attempts - 1:
-                time.sleep(current_delay)
-                current_delay *= backoff_factor
-
-    assert last_exception is not None
-    raise last_exception
 
 
 # Performance threshold configuration

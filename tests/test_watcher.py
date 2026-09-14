@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import os
 import signal
 import subprocess
 import sys
@@ -12,7 +13,7 @@ from typing import Any
 import pytest
 
 from simplebroker import Queue
-from simplebroker._constants import load_config
+from simplebroker._constants import resolve_config
 
 from .helper_scripts.broker_factory import active_backend, make_broker
 from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
@@ -1219,15 +1220,15 @@ class TestPollingStrategy:
 import inspect
 import threading
 
-from simplebroker import resolve_isolated_config
+from simplebroker import resolve_config
 from simplebroker.ext import PollingStrategy
 
-config = resolve_isolated_config({})
+config = resolve_config()
 parameter_keys = {
-    "initial_checks": "BROKER_INITIAL_CHECKS",
-    "max_interval": "BROKER_MAX_INTERVAL",
-    "burst_sleep": "BROKER_BURST_SLEEP",
-    "jitter_factor": "BROKER_JITTER_FACTOR",
+    "initial_checks": "INITIAL_CHECKS",
+    "max_interval": "MAX_INTERVAL",
+    "burst_sleep": "BURST_SLEEP",
+    "jitter_factor": "JITTER_FACTOR",
 }
 parameters = inspect.signature(PollingStrategy).parameters
 for parameter, key in parameter_keys.items():
@@ -1236,10 +1237,10 @@ for parameter, key in parameter_keys.items():
     assert type(default) is type(config[key])
 
 strategy = PollingStrategy(threading.Event())
-assert strategy._initial_checks == config["BROKER_INITIAL_CHECKS"]
-assert strategy._max_interval == config["BROKER_MAX_INTERVAL"]
-assert strategy._burst_sleep == config["BROKER_BURST_SLEEP"]
-assert strategy._jitter_factor == config["BROKER_JITTER_FACTOR"]
+assert strategy._initial_checks == config["INITIAL_CHECKS"]
+assert strategy._max_interval == config["MAX_INTERVAL"]
+assert strategy._burst_sleep == config["BURST_SLEEP"]
+assert strategy._jitter_factor == config["JITTER_FACTOR"]
 
 explicit = PollingStrategy(
     threading.Event(),
@@ -1274,40 +1275,41 @@ import threading
 import simplebroker._constants as constants
 import simplebroker.watcher as watcher
 
-real_resolve_isolated_config = constants.resolve_isolated_config
+real_resolve_config = constants.resolve_config
 calls = []
 injected = {
-    "BROKER_INITIAL_CHECKS": 7,
-    "BROKER_MAX_INTERVAL": 0.625,
-    "BROKER_BURST_SLEEP": 0.0125,
-    "BROKER_JITTER_FACTOR": 0.375,
+    "INITIAL_CHECKS": 7,
+    "MAX_INTERVAL": 0.625,
+    "BURST_SLEEP": 0.0125,
+    "JITTER_FACTOR": 0.375,
 }
 
-def resolve_injected(overrides):
-    calls.append(dict(overrides))
-    return real_resolve_isolated_config(injected | dict(overrides))
+def resolve_injected(**kwargs):
+    calls.append(kwargs)
+    return real_resolve_config(override={"BROKER_" + key: value for key, value in injected.items()})
 
-constants.resolve_isolated_config = resolve_injected
+constants.resolve_config = resolve_injected
 watcher = importlib.reload(watcher)
 
 parameters = inspect.signature(watcher.PollingStrategy).parameters
 parameter_keys = {
-    "initial_checks": "BROKER_INITIAL_CHECKS",
-    "max_interval": "BROKER_MAX_INTERVAL",
-    "burst_sleep": "BROKER_BURST_SLEEP",
-    "jitter_factor": "BROKER_JITTER_FACTOR",
+    "initial_checks": "INITIAL_CHECKS",
+    "max_interval": "MAX_INTERVAL",
+    "burst_sleep": "BURST_SLEEP",
+    "jitter_factor": "JITTER_FACTOR",
 }
-assert calls == [{}]
+# One module-scope resolution, explicitly ambient-free.
+assert calls == [{"env": {}}]
 for parameter, key in parameter_keys.items():
     default = parameters[parameter].default
     assert default == injected[key]
     assert type(default) is type(injected[key])
 
 strategy = watcher.PollingStrategy(threading.Event())
-assert strategy._initial_checks == injected["BROKER_INITIAL_CHECKS"]
-assert strategy._max_interval == injected["BROKER_MAX_INTERVAL"]
-assert strategy._burst_sleep == injected["BROKER_BURST_SLEEP"]
-assert strategy._jitter_factor == injected["BROKER_JITTER_FACTOR"]
+assert strategy._initial_checks == injected["INITIAL_CHECKS"]
+assert strategy._max_interval == injected["MAX_INTERVAL"]
+assert strategy._burst_sleep == injected["BURST_SLEEP"]
+assert strategy._jitter_factor == injected["JITTER_FACTOR"]
 """,
             ],
             text=True,
@@ -1757,8 +1759,9 @@ class TestErrorScenarios(WatcherTestBase):
     ):
         """Test default behavior when handler fails and no error_handler."""
         # Enable logging for this test after it's testing logging behavior
-        test_config = load_config()
-        test_config["BROKER_LOGGING_ENABLED"] = True
+        test_config = resolve_config(
+            env=os.environ, override={"BROKER_LOGGING_ENABLED": True}
+        )
 
         broker.write("test_queue", "bad_message")
 
@@ -1797,8 +1800,9 @@ class TestErrorScenarios(WatcherTestBase):
     ):
         """Test when error_handler itself raises exception."""
         # Enable logging for this test after it's testing logging behavior
-        test_config = load_config()
-        test_config["BROKER_LOGGING_ENABLED"] = True
+        test_config = resolve_config(
+            env=os.environ, override={"BROKER_LOGGING_ENABLED": True}
+        )
 
         broker.write("test_queue", "message")
         handler_failure = ValueError("Handler error")

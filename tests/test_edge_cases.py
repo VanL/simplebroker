@@ -7,6 +7,7 @@ in production environments.
 from __future__ import annotations
 
 import multiprocessing
+import os
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -69,10 +70,10 @@ def test_vacuum_lock_timeout_key_is_removed(workdir: Path) -> None:
     import os as _os
     from unittest.mock import patch as _patch
 
-    from simplebroker._constants import load_config
+    from simplebroker._constants import resolve_config
 
     with _patch.dict(_os.environ, {"BROKER_VACUUM_LOCK_TIMEOUT": "0"}):
-        config = load_config()
+        config = resolve_config(env=os.environ)
     assert "BROKER_VACUUM_LOCK_TIMEOUT" not in config
 
     db_path = workdir / "test.db"

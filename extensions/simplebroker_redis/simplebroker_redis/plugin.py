@@ -12,19 +12,19 @@ from urllib.parse import quote
 
 import redis
 
+from simplebroker import Config, resolve_config
 from simplebroker._backend_plugins import (
     ActivityWaiter,
     _ensure_backend_api_version,
 )
-from simplebroker._constants import SIMPLEBROKER_MAGIC, ResolvedConfig, snapshot_config
+from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError, OperationalError
-from simplebroker.config import canonical_config
 
 from . import scripts
 from ._constants import DEFAULT_NAMESPACE, REDIS_SCHEMA_VERSION
 from .core import RedisBrokerCore
 from .keys import RedisKeys, encode_id
-from .pool import POOL_OPTION_KEYS, pool_options_from_config
+from .pool import POOL_OPTION_KEYS, RedisPoolOptions, pool_options_from_config
 from .responses import response_int
 from .runner import RedisRunner
 from .validation import (
@@ -87,17 +87,17 @@ def _database_number(value: object) -> int:
     return number
 
 
-def _target_from_parts(config: Mapping[str, Any]) -> str:
-    host = _text(canonical_config(config).get("backend_host"), "127.0.0.1")
-    port = _text(canonical_config(config).get("backend_port"), "6379")
-    password = canonical_config(config).get("backend_password")
-    db = _database_number(canonical_config(config).get("backend_database"))
+def _target_from_parts(config: Config) -> str:
+    host = _text(config.get("BACKEND_HOST"), "127.0.0.1")
+    port = _text(config.get("BACKEND_PORT"), "6379")
+    password = config.get("BACKEND_PASSWORD")
+    db = _database_number(config.get("BACKEND_DATABASE"))
     auth = f":{quote(str(password), safe='')}@" if password else ""
     return f"redis://{auth}{host}:{port}/{db}"
 
 
 def _namespace_from_options(
-    config: Mapping[str, Any],
+    config: Config,
     toml_options: Mapping[str, Any] | None,
 ) -> str:
     options = dict(toml_options or {})
@@ -108,14 +108,14 @@ def _namespace_from_options(
             raise DatabaseError("Redis namespace and schema options must match")
     if "namespace" in options or "schema" in options:
         return require_namespace(options)
-    schema = _text(canonical_config(config).get("backend_schema"), DEFAULT_NAMESPACE)
+    schema = _text(config.get("BACKEND_SCHEMA"), DEFAULT_NAMESPACE)
     return require_namespace({"namespace": schema})
 
 
 def _normalize_backend_options(
-    config: ResolvedConfig,
+    config: Config,
     backend_options: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], RedisPoolOptions]:
     options = dict(backend_options or {})
     namespace = _namespace_from_options(config, options)
     allowed = {"namespace", "schema", *POOL_OPTION_KEYS}
@@ -126,8 +126,7 @@ def _normalize_backend_options(
     normalized = dict(options)
     normalized["namespace"] = namespace
     normalized.pop("schema", None)
-    pool_options_from_config(config, normalized)
-    return normalized
+    return normalized, pool_options_from_config(config, normalized)
 
 
 @dataclass(slots=True)
@@ -386,18 +385,15 @@ class RedisBackendPlugin:
 
     def init_backend(
         self,
-        config: Mapping[str, Any],
+        config: Config,
         *,
         toml_target: str = "",
         toml_options: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        resolved_config = snapshot_config(config)
-        target = _text(toml_target) or _text(
-            canonical_config(resolved_config).get("backend_target")
-        )
+        target = _text(toml_target) or _text(config.get("BACKEND_TARGET"))
         if not target:
-            target = _target_from_parts(resolved_config)
-        backend_options = _normalize_backend_options(resolved_config, toml_options)
+            target = _target_from_parts(config)
+        backend_options, _ = _normalize_backend_options(config, toml_options)
         return {
             "target": target,
             "backend_options": backend_options,
@@ -408,11 +404,12 @@ class RedisBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> RedisRunner:
-        resolved_config = snapshot_config(config)
-        normalized = _normalize_backend_options(resolved_config, backend_options)
-        pool_options = pool_options_from_config(resolved_config, normalized)
+        resolved_config = resolve_config(config=config)
+        normalized, pool_options = _normalize_backend_options(
+            resolved_config, backend_options
+        )
         return RedisRunner(
             target,
             backend_options=normalized,
@@ -424,7 +421,7 @@ class RedisBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
         stop_event: threading.Event | None = None,
     ) -> RedisBrokerCore:
         # Handshake BEFORE construction: RedisBrokerCore.__init__ opens the
@@ -433,7 +430,7 @@ class RedisBackendPlugin:
         # generator setup. A hand-instantiated or subclassed plugin must fail
         # the backend API check before any connection is attempted.
         _ensure_backend_api_version(self)
-        resolved_config = snapshot_config(config)
+        resolved_config = resolve_config(config=config)
         runner = self.create_runner(
             target,
             backend_options=backend_options,
@@ -449,14 +446,14 @@ class RedisBackendPlugin:
         self,
         runner: RedisRunner,
         *,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
         stop_event: threading.Event | None = None,
     ) -> RedisBrokerCore:
         # See create_core: validate before the core opens its connection.
         _ensure_backend_api_version(self)
         return RedisBrokerCore(
             runner,
-            config=snapshot_config(config),
+            config=(resolve_config(config=config)),
             stop_event=stop_event,
         )
 
@@ -465,7 +462,7 @@ class RedisBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         del config
         namespace = require_namespace(backend_options)
@@ -475,9 +472,8 @@ class RedisBackendPlugin:
             return
         client = redis.Redis.from_url(target, decode_responses=True)
         try:
-            prefix = key_prefix(namespace)
             client.hset(
-                f"{prefix}:meta",
+                RedisKeys(namespace).meta,
                 mapping={
                     "magic": SIMPLEBROKER_MAGIC,
                     "schema_version": str(REDIS_SCHEMA_VERSION),
@@ -496,7 +492,7 @@ class RedisBackendPlugin:
         *,
         backend_options: Mapping[str, Any] | None = None,
         verify_initialized: bool = True,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> None:
         del config
         validate_target(
@@ -510,9 +506,9 @@ class RedisBackendPlugin:
         target: str,
         *,
         backend_options: Mapping[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> bool:
-        resolved_config = snapshot_config(config)
+        resolved_config = resolve_config(config=config)
         namespace = require_namespace(backend_options)
         inspection = inspect_namespace(target, backend_options={"namespace": namespace})
         if inspection.state is NamespaceState.ABSENT:
@@ -566,7 +562,7 @@ class RedisBackendPlugin:
 
     def read_last_ts(self, runner: RedisRunner) -> int:
         try:
-            raw = runner.client.hget(f"{key_prefix(runner.namespace)}:meta", "last_ts")
+            raw = runner.client.hget(RedisKeys(runner.namespace).meta, "last_ts")
             return response_int(raw or 0)
         except redis.RedisError as exc:
             raise OperationalError(str(exc)) from exc
@@ -576,7 +572,7 @@ class RedisBackendPlugin:
             result = runner.client.eval(
                 scripts.ADVANCE_LAST_TS,
                 1,
-                f"{key_prefix(runner.namespace)}:meta",
+                RedisKeys(runner.namespace).meta,
                 str(new_ts),
                 encode_id(new_ts),
             )
@@ -586,17 +582,13 @@ class RedisBackendPlugin:
 
     def write_last_ts(self, runner: RedisRunner, ts: int) -> None:
         try:
-            runner.client.hset(
-                f"{key_prefix(runner.namespace)}:meta", "last_ts", str(ts)
-            )
+            runner.client.hset(RedisKeys(runner.namespace).meta, "last_ts", str(ts))
         except redis.RedisError as exc:
             raise OperationalError(str(exc)) from exc
 
     def read_alias_version(self, runner: RedisRunner) -> int:
         try:
-            raw = runner.client.hget(
-                f"{key_prefix(runner.namespace)}:meta", "alias_version"
-            )
+            raw = runner.client.hget(RedisKeys(runner.namespace).meta, "alias_version")
             return response_int(raw or 0)
         except redis.RedisError as exc:
             raise OperationalError(str(exc)) from exc

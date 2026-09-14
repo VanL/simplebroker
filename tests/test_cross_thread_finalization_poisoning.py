@@ -20,7 +20,7 @@ from typing import Any, cast
 
 import pytest
 
-from simplebroker import Queue, _broker_session
+from simplebroker import Queue, _broker_session, resolve_config
 from simplebroker._exceptions import OperationalError
 from simplebroker._retry_policy import _execute_with_retry
 from simplebroker._runner import SQLiteRunner
@@ -504,7 +504,7 @@ def test_preblocked_waiter_observes_poison_without_hanging(tmp_path: Path) -> No
 def test_shared_runner_sibling_times_out_after_foreign_generator_poison(
     tmp_path: Path,
 ) -> None:
-    config = {"BROKER_BUSY_TIMEOUT": 50}
+    config = resolve_config(override={"BROKER_BUSY_TIMEOUT": 50})
     runner = SQLiteRunner(str(tmp_path / "shared-runner-poison.db"), config=config)
     core = BrokerCore(runner, config=config)
     _TEST_CORES.append(core)

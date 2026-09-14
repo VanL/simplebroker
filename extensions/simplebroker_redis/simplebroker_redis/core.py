@@ -9,11 +9,11 @@ import time
 import uuid
 import warnings
 import weakref
+from _thread import LockType
 from collections import deque
-from collections.abc import Generator, Iterable, Mapping, Sequence
+from collections.abc import Generator, Iterable, Sequence
 from contextlib import AbstractContextManager
 from fnmatch import fnmatchcase
-from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
 import redis
@@ -21,12 +21,11 @@ import redis
 if TYPE_CHECKING:
     from typing import overload
 
+from simplebroker import Config, resolve_config
 from simplebroker._aliases import resolve_queue_operand
 from simplebroker._constants import (
     ALIAS_PREFIX,
     PEEK_BATCH_SIZE,
-    _overlay_config,
-    snapshot_config,
 )
 from simplebroker._exceptions import (
     IntegrityError,
@@ -50,7 +49,6 @@ from simplebroker._message_search import (
 from simplebroker._selection import SelectionOrder, validate_selection_order
 from simplebroker._sidecar import SidecarSession
 from simplebroker._timestamp import TimestampGenerator, validate_timestamp_bound
-from simplebroker.config import canonical_config
 from simplebroker.db import (
     _literal_prefix_from_fnmatch,
     _validate_queue_name_cached,
@@ -74,50 +72,23 @@ from .validation import is_namespace_key
 logger = logging.getLogger(__name__)
 
 
-class _SharedWriteLock:
-    """Weak-referenceable process-local lock for one Redis namespace."""
-
-    __slots__ = ("__weakref__", "_lock")
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-
-    def __enter__(self) -> None:
-        self._lock.acquire()
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> Literal[False]:
-        self._lock.release()
-        return False
-
-    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-        return self._lock.acquire(blocking, timeout)
-
-    def release(self) -> None:
-        self._lock.release()
-
-
 class _ProcessWriteLockRegistry:
     """Share write ordering within a process without retaining dead targets."""
 
     def __init__(self) -> None:
         self._pid = os.getpid()
         self._guard = threading.Lock()
-        self._locks: weakref.WeakValueDictionary[tuple[str, str], _SharedWriteLock] = (
+        self._locks: weakref.WeakValueDictionary[tuple[str, str], LockType] = (
             weakref.WeakValueDictionary()
         )
 
-    def get(self, target: str, namespace: str) -> _SharedWriteLock:
+    def get(self, target: str, namespace: str) -> LockType:
         self._reset_after_fork_if_needed()
         key = (target, namespace)
         with self._guard:
             lock = self._locks.get(key)
             if lock is None:
-                lock = _SharedWriteLock()
+                lock = threading.Lock()
                 self._locks[key] = lock
             return lock
 
@@ -155,20 +126,20 @@ class RedisBrokerCore:
         self,
         runner: RedisRunner,
         *,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
         stop_event: threading.Event | None = None,
     ) -> None:
         self._runner = runner
-        self._config = snapshot_config(config)
+        self._config = resolve_config(config=config)
         self._stop_event = stop_event or threading.Event()
         self._lock = threading.RLock()
         self._write_lock = _write_lock_registry.get(runner.target, runner.namespace)
         self._pid = os.getpid()
         self._keys = RedisKeys(runner.namespace)
         self._prefix = self._keys.prefix
-        self._max_message_size = int(canonical_config(self._config)["max_message_size"])
+        self._max_message_size = int(self._config["MAX_MESSAGE_SIZE"])
         self._maintenance_schedule = MaintenanceSchedule(
-            int(canonical_config(self._config)["auto_vacuum_interval"])
+            int(self._config["AUTO_VACUUM_INTERVAL"])
         )
         self._active_generator_batch: Literal["claim", "move"] | None = None
         self._active_generator_batch_owner: int | None = None
@@ -797,7 +768,7 @@ class RedisBrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> Generator[tuple[str, int] | str, None, None]:
         validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         self._validate_queue_name(queue)
@@ -815,11 +786,13 @@ class RedisBrokerCore:
                 row = rows[0]
                 yield row if with_timestamps else row[0]
             return
-        effective_config = _overlay_config(self._config, config)
+        effective_config = (
+            self._config if config is None else resolve_config(config=config)
+        )
         effective_batch_size = (
             batch_size
             if batch_size is not None
-            else canonical_config(effective_config)["generator_batch_size"]
+            else effective_config["GENERATOR_BATCH_SIZE"]
         )
         yield from self._claim_batch_generator(
             queue,
@@ -1185,7 +1158,7 @@ class RedisBrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: Mapping[str, Any] | None = None,
+        config: Config | None = None,
     ) -> Generator[tuple[str, int] | str, None, None]:
         validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
@@ -1207,11 +1180,13 @@ class RedisBrokerCore:
                 row = rows[0]
                 yield row if with_timestamps else row[0]
             return
-        effective_config = _overlay_config(self._config, config)
+        effective_config = (
+            self._config if config is None else resolve_config(config=config)
+        )
         effective_batch_size = (
             batch_size
             if batch_size is not None
-            else canonical_config(effective_config)["generator_batch_size"]
+            else effective_config["GENERATOR_BATCH_SIZE"]
         )
         while True:
             token, rows = self._begin_batch(
@@ -1316,7 +1291,7 @@ class RedisBrokerCore:
     def _record_maintenance_activity(self, completed: int) -> None:
         """Run one best-effort maintenance check after committed activity."""
         self._check_fork_safety()
-        if canonical_config(self._config)["auto_vacuum"] != 1 or completed <= 0:
+        if self._config["AUTO_VACUUM"] != 1 or completed <= 0:
             return
 
         with self._lock:
@@ -1327,11 +1302,11 @@ class RedisBrokerCore:
                 if vacuum_is_eligible(
                     claimed_count=claimed_count,
                     total_count=total_count,
-                    threshold=float(canonical_config(self._config)["vacuum_threshold"]),
+                    threshold=float(self._config["VACUUM_THRESHOLD"]) / 100,
                 ):
                     self.vacuum()
             except Exception:
-                if canonical_config(self._config)["logging_enabled"]:
+                if self._config["LOGGING_ENABLED"]:
                     logger.exception("Automatic vacuum failed; will retry later")
             else:
                 self._maintenance_schedule.mark_check_succeeded()
@@ -1891,7 +1866,7 @@ class RedisBrokerCore:
         self._assert_no_reentrant_mutation_during_batch("vacuum")
         try:
             with self._lock:
-                batch_size = int(canonical_config(self._config)["vacuum_batch_size"])
+                batch_size = int(self._config["VACUUM_BATCH_SIZE"])
                 for queue in [str(item) for item in self._queue_names()]:
                     self._client.eval(
                         scripts.VACUUM_CLAIMED,

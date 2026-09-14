@@ -7,6 +7,7 @@ from typing import Any, NoReturn
 
 import pytest
 
+from simplebroker import resolve_config
 from simplebroker.watcher import QueueMoveWatcher, QueueWatcher, StopWatching
 
 from .helper_scripts.timing import scale_timeout_for_ci
@@ -61,7 +62,7 @@ def test_batch_iterator_close_failure_is_secondary_to_error_handler_failure(
         db=broker_target,
         batch_processing=True,
         error_handler=error_handler,
-        config={"BROKER_LOGGING_ENABLED": False},
+        config=resolve_config(override={"BROKER_LOGGING_ENABLED": False}),
     )
     monkeypatch.setattr(
         watcher._queue_obj,
@@ -110,7 +111,7 @@ def test_consume_error_handler_failure_is_terminal_and_visible_without_logging(
         handler,
         db=broker_target,
         error_handler=error_handler,
-        config={"BROKER_LOGGING_ENABLED": False},
+        config=resolve_config(override={"BROKER_LOGGING_ENABLED": False}),
     )
 
     with pytest.raises(RuntimeError, match="error handler failed") as raised:
@@ -152,7 +153,7 @@ def test_peek_error_handler_failure_stops_before_later_dispatch(
         db=broker_target,
         error_handler=error_handler,
         peek=True,
-        config={"BROKER_LOGGING_ENABLED": False},
+        config=resolve_config(override={"BROKER_LOGGING_ENABLED": False}),
     )
 
     with pytest.raises(RuntimeError, match="peek error handler failed") as raised:
@@ -192,7 +193,7 @@ def test_move_error_handler_failure_preserves_first_move_and_stops_before_second
         handler,
         db=broker_target,
         error_handler=error_handler,
-        config={"BROKER_LOGGING_ENABLED": False},
+        config=resolve_config(override={"BROKER_LOGGING_ENABLED": False}),
     )
 
     with pytest.raises(RuntimeError, match="move error handler failed") as raised:

@@ -286,7 +286,8 @@ not pass/fail thresholds.
 
 ## Related plan
 
-- [Keyset peek pagination](../plans/2026-09-11-keyset-peek-pagination-plan.md)
+- retired: 2026-09-11-keyset-peek-pagination-plan — source `5e4bcb7`
+  (local-only pin); see the ledger in `docs/plans/README.md`.
 
 - retired: 2026-08-25-verified-review-findings-remediation-plan — source
   `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns bounded

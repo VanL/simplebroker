@@ -1,30 +1,66 @@
-"""Constants and configuration for SimpleBroker.
+"""Shared constants, field definitions and explicit configuration resolution.
 
-This module centralizes all constants and environment variable configuration
-for SimpleBroker. Constants are immutable values that control various aspects
-of the system's behavior, from message size limits to timing parameters.
-
-Environment Variables:
-    See the load_config() function for a complete list of supported environment
-    variables and their default values.
-
-Usage:
-    from simplebroker._constants import MAX_MESSAGE_SIZE, snapshot_config
-
-    # Use constants directly
-    if len(message) > MAX_MESSAGE_SIZE:
-        raise ValueError("Message too large")
-
-    # Resolve one immutable receipt at an ownership boundary.
-    config = snapshot_config()
-    timeout = config["BROKER_BUSY_TIMEOUT"]
+External env/TOML keys carry a namespace. Resolved keys are uppercase and
+unprefixed; values retain the units declared in DEFAULT_CONFIG.
 """
 
+from __future__ import annotations
+
+import os
 import platform
 import re
+import tomllib
 import unicodedata
+import warnings
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from copy import copy
+from dataclasses import dataclass
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Any, Final
+from types import MappingProxyType
+from typing import Any, Final
+
+
+class BrokerError(Exception):
+    """Base exception for all SimpleBroker errors."""
+
+
+class InvalidConfigError(BrokerError, ValueError):
+    """A recognized configuration value could not be parsed or validated."""
+
+    __slots__ = ("_expected", "_key", "_source", "_value_display")
+
+    def __init__(
+        self,
+        *,
+        key: str,
+        source: str,
+        expected: str,
+        value_display: str,
+    ) -> None:
+        self._key = key
+        self._source = source
+        self._expected = expected
+        self._value_display = value_display
+        super().__init__(
+            f"invalid configuration {key}={value_display}: expected {expected}"
+        )
+
+    @property
+    def key(self) -> str:
+        return self._key
+
+    @property
+    def source(self) -> str:
+        return self._source
+
+    @property
+    def expected(self) -> str:
+        return self._expected
+
+    @property
+    def value_display(self) -> str:
+        return self._value_display
+
 
 # ==============================================================================
 # VERSION INFORMATION
@@ -88,6 +124,7 @@ Messages larger than this will be rejected with a ValueError.
 
 # Longest accepted queue name, in characters.
 MAX_QUEUE_NAME_LENGTH: Final[int] = 512
+"""Maximum allowed length for queue names in characters."""
 
 # Vacuum eligibility's absolute claimed-row limit ([SB-OPS-6]: "more
 # than 10,000 claimed messages" fires regardless of ratio).
@@ -106,7 +143,6 @@ _WINDOWS_MAX_PATH_LENGTH: Final[int] = 260
 # DEL (0x7f) are hex-escaped before a rejected value is shown.
 _ASCII_PRINTABLE_MIN: Final[int] = 32
 _ASCII_DEL: Final[int] = 127
-"""Maximum allowed length for queue names in characters."""
 
 # ==============================================================================
 # TIMESTAMP AND ID GENERATION
@@ -116,13 +152,6 @@ _ASCII_DEL: Final[int] = 127
 
 TIMESTAMP_EXACT_NUM_DIGITS: Final[int] = 19
 """Exact number of digits required for message ID timestamps in string form."""
-
-PHYSICAL_TIME_BITS: Final[int] = 52
-"""Nominal physical-width constant retained for compatibility.
-
-Generated IDs retain ``time.time_ns()`` magnitude and clear the low 12 bits;
-they do not encode a 52-bit microsecond counter.
-"""
 
 LOGICAL_COUNTER_BITS: Final[int] = 12
 """Low bits reserved for ordering within one 4,096-nanosecond time grain."""
@@ -145,12 +174,6 @@ SQLITE_MAX_INT64: Final[int] = 2**63
 
 MS_PER_SECOND: Final[int] = 1000
 """Milliseconds per second."""
-
-US_PER_SECOND: Final[int] = 1_000_000
-"""Microseconds per second."""
-
-MS_PER_US: Final[int] = 1000
-"""Microseconds per millisecond."""
 
 NS_PER_US: Final[int] = 1000
 """Nanoseconds per microsecond."""
@@ -185,24 +208,6 @@ which is used for transactional claim/move operations.
 
 MAX_TOTAL_RETRY_TIME: Final[int] = 300  # 5 minutes max
 """Maximum time in seconds to retry watcher initialization before giving up."""
-
-# ==============================================================================
-# DATABASE RUNNER PHASES
-# ==============================================================================
-
-
-class ConnectionPhase:
-    """Database setup phases for SQLRunner implementations."""
-
-    CONNECTION = "connection"
-    """Basic connectivity and critical settings (e.g., enabling WAL mode)."""
-
-    SCHEMA = "schema"
-    """Schema bootstrap and migrations."""
-
-    OPTIMIZATION = "optimization"
-    """Performance settings (cache size, synchronous mode, etc.)."""
-
 
 # ==============================================================================
 # PROJECT SCOPING CONSTANTS
@@ -417,50 +422,585 @@ def _validate_safe_path_components(path: str, context: str = "path") -> None:
         )
 
 
-# Historical private-module imports remain available without an import cycle.
-if TYPE_CHECKING:
-    from . import config as _configuration
+# ==============================================================================
+# CONFIGURATION DEFAULTS AND VALIDATORS
+# ==============================================================================
 
-    _CONFIG_FIELDS = _configuration._CONFIG_FIELDS
-    _CONFIG_NORMALIZERS = _configuration._CONFIG_NORMALIZERS
-    ResolvedConfig = _configuration.ResolvedConfig
-    _normalize_config_value = _configuration._normalize_config_value
-    _overlay_config = _configuration._overlay_config
-    _parse_bool = _configuration._parse_bool
-    _parse_debug_flag = _configuration._parse_debug_flag
-    _parse_load_max_future_skew = _configuration._parse_load_max_future_skew
-    _parse_project_scope = _configuration._parse_project_scope
-    _parse_strict_one_bool = _configuration._parse_strict_one_bool
-    _parse_vacuum_threshold = _configuration._parse_vacuum_threshold
-    _safe_config_value_display = _configuration._safe_config_value_display
-    _validate_config = _configuration._validate_config
-    load_config = _configuration.load_config
-    resolve_config = _configuration.resolve_config
-    resolve_isolated_config = _configuration.resolve_isolated_config
-    snapshot_config = _configuration.snapshot_config
+# Typed defaults in the units declared below; embedders copy the field table
+# to replace these defaults without changing the package's shared values.
+DEFAULT_BUSY_TIMEOUT_MS: Final[int] = 5000
+DEFAULT_CACHE_MB: Final[int] = 10
+DEFAULT_SYNC_MODE: Final[str] = "FULL"
+DEFAULT_WAL_AUTOCHECKPOINT: Final[int] = 1000
+DEFAULT_READ_COMMIT_INTERVAL: Final[int] = 1
+DEFAULT_GENERATOR_BATCH_SIZE: Final[int] = 100
+DEFAULT_AUTO_VACUUM: Final[int] = 1
+DEFAULT_AUTO_VACUUM_INTERVAL: Final[int] = 100
+PERCENT_SCALE: Final[int] = 100
+DEFAULT_VACUUM_THRESHOLD_PCT: Final[float] = 10.0
+DEFAULT_VACUUM_BATCH_SIZE: Final[int] = 1000
+DEFAULT_SKIP_IDLE_CHECK: Final[bool] = False
+DEFAULT_JITTER_FACTOR: Final[float] = 0.15
+DEFAULT_INITIAL_CHECKS: Final[int] = 100
+DEFAULT_MAX_INTERVAL: Final[float] = 0.1
+DEFAULT_BURST_SLEEP: Final[float] = 0.00001
+DEFAULT_DEBUG: Final[bool] = False
+DEFAULT_LOGGING_ENABLED: Final[bool] = False
+DEFAULT_DB_LOCATION: Final[str] = ""
+DEFAULT_PROJECT_CONFIG_PATH: Final[str] = ""
+DEFAULT_PROJECT_SCOPE: Final[bool] = False
+DEFAULT_BACKEND: Final[str] = "sqlite"
+DEFAULT_BACKEND_HOST: Final[str] = "localhost"
+DEFAULT_BACKEND_PORT: Final[int] = 5432
+DEFAULT_BACKEND_USER: Final[str] = "postgres"
+DEFAULT_BACKEND_PASSWORD: Final[str] = ""
+DEFAULT_BACKEND_DATABASE: Final[str] = "simplebroker"
+DEFAULT_BACKEND_SCHEMA: Final[str] = "simplebroker_pg_v1"
+DEFAULT_BACKEND_TARGET: Final[str] = ""
 
 
-def __getattr__(name: str) -> Any:
-    if name in {
-        "_CONFIG_NORMALIZERS",
-        "_parse_bool",
-        "_normalize_config_value",
-        "_overlay_config",
-        "_parse_vacuum_threshold",
-        "load_config",
-        "resolve_isolated_config",
-        "_parse_debug_flag",
-        "snapshot_config",
-        "_parse_project_scope",
-        "_CONFIG_FIELDS",
-        "_validate_config",
-        "ResolvedConfig",
-        "resolve_config",
-        "_safe_config_value_display",
-        "_parse_load_max_future_skew",
-        "_parse_strict_one_bool",
-    }:
-        from . import config
+def _percent(value: Any) -> float:
+    """Accept a percentage between zero and 100, stored as a percentage."""
+    if isinstance(value, bool):
+        raise TypeError("percentage must be a number, not a boolean")
+    result = float(value)
+    if not 0 <= result <= PERCENT_SCALE:
+        raise ValueError("percentage must be between 0 and 100")
+    return result
 
-        return getattr(config, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+def _strict_one_bool(value: Any) -> bool:
+    """Accept the existing strict-one flag grammar and typed booleans."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return str(value) == "1"
+
+
+def _debug_flag(value: Any) -> bool:
+    """A nonempty debug value enables debugging, including the string '0'."""
+    return bool(value)
+
+
+def _project_scope(value: Any) -> bool:
+    """Accept typed booleans or the standard 1/true/yes/on grammar."""
+    if isinstance(value, bool):
+        return value
+    return str(value).lower().strip() in ("1", "true", "yes", "on")
+
+
+def _load_max_future_skew(value: Any) -> int:
+    """Require non-negative integer seconds, without rounding or booleans."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise TypeError("must be a non-negative integer")
+    result = int(value)
+    if result < 0:
+        raise ValueError("must be a non-negative integer")
+    return result
+
+
+def _sync_mode(value: Any) -> str:
+    """Normalize SQLite sync mode, retaining the FULL fallback."""
+    result = str(value).upper()
+    return result if result in ("FULL", "NORMAL", "OFF") else DEFAULT_SYNC_MODE
+
+
+def _db_location_path(value: Any) -> str:
+    """Accept an empty string or a safe absolute directory path."""
+    result = str(value)
+    if result:
+        if not os.path.isabs(result):
+            raise ValueError("DEFAULT_DB_LOCATION must be an absolute path")
+        _validate_safe_path_components(result, "DEFAULT_DB_LOCATION")
+    return result
+
+
+def _db_name_path(value: Any) -> str:
+    """Accept a database filename with at most one relative directory."""
+    result = str(value)
+    if result:
+        _validate_safe_path_components(result, "DEFAULT_DB_NAME")
+        if os.path.isabs(result):
+            raise ValueError("database name must be relative")
+        if len(PurePath(result).parts) > COMPOUND_DB_NAME_PARTS:
+            raise ValueError("database name must not contain nested directories")
+    return result
+
+
+def _project_config_path(value: Any) -> str:
+    """Accept an absolute directory or one relative directory."""
+    result = str(value)
+    if result:
+        _validate_safe_path_components(result, "PROJECT_CONFIG_PATH")
+        if (
+            not os.path.isabs(result)
+            and len(PurePath(result.replace("\\", "/")).parts) > 1
+        ):
+            raise ValueError("must be an absolute path or a single relative directory")
+    return result
+
+
+def _project_config_name(value: Any) -> str:
+    """Accept a config filename with at most one relative directory."""
+    result = str(value)
+    if result:
+        _validate_safe_path_components(result, "PROJECT_CONFIG_NAME")
+        if os.path.isabs(result):
+            raise ValueError("project config name must be relative")
+        if len(PurePath(result.replace("\\", "/")).parts) > COMPOUND_DB_NAME_PARTS:
+            raise ValueError("project config name must not contain nested directories")
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigField:
+    """One default, its declared unit or description, and optional validator."""
+
+    default: Any
+    description: str
+    validator: Callable[[Any], Any] | None = None
+    sensitive: bool = False
+
+
+# The external namespace used when no base or explicit prefix is supplied.
+DEFAULT_PREFIX: Final[str] = "BROKER"
+
+# The single field table pairs defaults with their meaning and one coercer.
+DEFAULT_CONFIG: Final[Mapping[str, ConfigField]] = MappingProxyType(
+    {
+        "BUSY_TIMEOUT": ConfigField(
+            DEFAULT_BUSY_TIMEOUT_MS, "an integer number of milliseconds", int
+        ),
+        "CACHE_MB": ConfigField(
+            DEFAULT_CACHE_MB, "an integer number of megabytes", int
+        ),
+        "SYNC_MODE": ConfigField(DEFAULT_SYNC_MODE, "FULL, NORMAL, or OFF", _sync_mode),
+        "WAL_AUTOCHECKPOINT": ConfigField(
+            DEFAULT_WAL_AUTOCHECKPOINT, "an integer page count", int
+        ),
+        "MAX_MESSAGE_SIZE": ConfigField(MAX_MESSAGE_SIZE, "an integer byte count", int),
+        "READ_COMMIT_INTERVAL": ConfigField(
+            DEFAULT_READ_COMMIT_INTERVAL, "an integer message count", int
+        ),
+        "GENERATOR_BATCH_SIZE": ConfigField(
+            DEFAULT_GENERATOR_BATCH_SIZE, "an integer message count", int
+        ),
+        "LOAD_MAX_FUTURE_SKEW_SECONDS": ConfigField(
+            DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS,
+            "a non-negative integer number of seconds",
+            _load_max_future_skew,
+        ),
+        "AUTO_VACUUM": ConfigField(DEFAULT_AUTO_VACUUM, "an integer flag", int),
+        "AUTO_VACUUM_INTERVAL": ConfigField(
+            DEFAULT_AUTO_VACUUM_INTERVAL, "an integer mutation count", int
+        ),
+        "VACUUM_THRESHOLD": ConfigField(
+            DEFAULT_VACUUM_THRESHOLD_PCT,
+            "a number between 0 and 100, excluding booleans",
+            _percent,
+        ),
+        "VACUUM_BATCH_SIZE": ConfigField(
+            DEFAULT_VACUUM_BATCH_SIZE, "an integer message count", int
+        ),
+        "SKIP_IDLE_CHECK": ConfigField(
+            DEFAULT_SKIP_IDLE_CHECK, "a boolean flag", _strict_one_bool
+        ),
+        "JITTER_FACTOR": ConfigField(DEFAULT_JITTER_FACTOR, "a numeric ratio", float),
+        "INITIAL_CHECKS": ConfigField(
+            DEFAULT_INITIAL_CHECKS, "an integer check count", int
+        ),
+        "MAX_INTERVAL": ConfigField(
+            DEFAULT_MAX_INTERVAL, "a numeric number of seconds", float
+        ),
+        "BURST_SLEEP": ConfigField(
+            DEFAULT_BURST_SLEEP, "a numeric number of seconds", float
+        ),
+        "DEBUG": ConfigField(DEFAULT_DEBUG, "a boolean flag", _debug_flag),
+        "LOGGING_ENABLED": ConfigField(
+            DEFAULT_LOGGING_ENABLED, "a boolean flag", _strict_one_bool
+        ),
+        "DEFAULT_DB_LOCATION": ConfigField(
+            DEFAULT_DB_LOCATION,
+            "an absolute directory path or empty string",
+            _db_location_path,
+        ),
+        "DEFAULT_DB_NAME": ConfigField(
+            DEFAULT_DB_NAME,
+            "a relative database path with at most one directory",
+            _db_name_path,
+        ),
+        "PROJECT_CONFIG_PATH": ConfigField(
+            DEFAULT_PROJECT_CONFIG_PATH,
+            "an absolute directory or one relative directory",
+            _project_config_path,
+        ),
+        "PROJECT_CONFIG_NAME": ConfigField(
+            DEFAULT_PROJECT_CONFIG_NAME,
+            "a relative config path with at most one directory",
+            _project_config_name,
+        ),
+        "PROJECT_SCOPE": ConfigField(
+            DEFAULT_PROJECT_SCOPE, "a boolean flag", _project_scope
+        ),
+        "BACKEND": ConfigField(DEFAULT_BACKEND, "a backend name", str),
+        "BACKEND_HOST": ConfigField(DEFAULT_BACKEND_HOST, "a host name", str),
+        "BACKEND_PORT": ConfigField(DEFAULT_BACKEND_PORT, "an integer port", int),
+        "BACKEND_USER": ConfigField(DEFAULT_BACKEND_USER, "a user name", str),
+        "BACKEND_PASSWORD": ConfigField(
+            DEFAULT_BACKEND_PASSWORD, "a password string", str, sensitive=True
+        ),
+        "BACKEND_DATABASE": ConfigField(
+            DEFAULT_BACKEND_DATABASE, "a database name", str
+        ),
+        "BACKEND_SCHEMA": ConfigField(DEFAULT_BACKEND_SCHEMA, "a schema name", str),
+        "BACKEND_TARGET": ConfigField(
+            DEFAULT_BACKEND_TARGET, "a backend target string", str, sensitive=True
+        ),
+    }
+)
+
+
+class Config(Mapping[str, Any]):
+    """A shallow, read-only copy of resolved values in their declared units."""
+
+    def __init__(
+        self,
+        values: Mapping[str, Any],
+        *,
+        prefix: str = DEFAULT_PREFIX,
+        defaults: Mapping[str, ConfigField] = DEFAULT_CONFIG,
+    ) -> None:
+        self._values = MappingProxyType(dict(values))
+        self._prefix = prefix
+        # Derivation needs the field validators as well as resolved values.
+        # Keep a shallow declaration snapshot, not another configuration object.
+        self._defaults = MappingProxyType(dict(defaults))
+
+    @property
+    def prefix(self) -> str:
+        """External namespace inherited by an explicitly derived configuration."""
+        return self._prefix
+
+    def __getitem__(self, key: str) -> Any:
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+
+# External suffixes and declarations use ASCII uppercase identifier spelling.
+_CONFIG_NAME = re.compile(r"[A-Z][A-Z0-9_]*\Z")
+_CONFIG_VALUE_DISPLAY_LIMIT: Final[int] = 160
+
+
+def _safe_config_value_display(value: Any, *, sensitive: bool = False) -> str:
+    if sensitive:
+        return "<redacted>"
+    if type(value) in (str, bytes, int, float, bool, type(None)):
+        display = repr(value)
+    else:
+        display = f"<{type(value).__name__}>"
+    display = "".join(
+        f"\\x{ord(char):02x}"
+        if ord(char) < _ASCII_PRINTABLE_MIN or ord(char) == _ASCII_DEL
+        else char
+        for char in display
+    )
+    if len(display) > _CONFIG_VALUE_DISPLAY_LIMIT:
+        display = display[: _CONFIG_VALUE_DISPLAY_LIMIT - 3] + "..."
+    return display
+
+
+def _check_whole_config(
+    values: dict[str, Any],
+    *,
+    prefix: str,
+    source: str,
+    defaults: Mapping[str, ConfigField],
+) -> None:
+    """Apply the combined project-config path rule to the final values."""
+    path = values.get("PROJECT_CONFIG_PATH")
+    name = values.get("PROJECT_CONFIG_NAME")
+    if (
+        isinstance(path, str)
+        and path
+        and not os.path.isabs(path)
+        and isinstance(name, str)
+        and name
+        and len(PurePath(path.replace("\\", "/")).parts)
+        + len(PurePath(name.replace("\\", "/")).parts)
+        > COMPOUND_DB_NAME_PARTS
+    ):
+        field = defaults.get("PROJECT_CONFIG_NAME")
+        raise InvalidConfigError(
+            key=f"{prefix}_PROJECT_CONFIG_NAME",
+            source=source,
+            expected="PROJECT_CONFIG_PATH and PROJECT_CONFIG_NAME not to combine into nested directories",
+            value_display=_safe_config_value_display(
+                name, sensitive=bool(field and field.sensitive)
+            ),
+        )
+
+
+def _validated_value(field: ConfigField, value: Any, *, key: str, source: str) -> Any:
+    """Return a field's normalized value or raise with safe diagnostics."""
+    assert field.validator is not None
+    try:
+        # Built-in coercers can invoke a str subclass's hostile repr while
+        # formatting a parse error. Keep diagnostics owned here.
+        normalized = str.__str__(value) if isinstance(value, str) else value
+        return field.validator(normalized)
+    except (TypeError, ValueError) as exc:
+        raise InvalidConfigError(
+            key=key,
+            source=source,
+            expected=field.description,
+            value_display=_safe_config_value_display(value, sensitive=field.sensitive),
+        ) from exc
+
+
+def _source_phrase(source: str) -> str:
+    """Name a configuration source for a one-line diagnostic."""
+    return {
+        "default": "defaults",
+        "environment": "the environment",
+        "file": "the TOML file",
+        "override": "overrides",
+        "TOML mapping": "the TOML mapping",
+    }.get(source, source)
+
+
+def _warn_invalid(failure: InvalidConfigError) -> None:
+    """Report an invalid value as its source is applied."""
+    warnings.warn(
+        f"ignoring invalid {failure.key}={failure.value_display} from "
+        f"{_source_phrase(failure.source)} (expected {failure.expected})",
+        UserWarning,
+        stacklevel=1,
+    )
+
+
+def _external_config_key(
+    supplied_key: Any,
+    value: Any,
+    *,
+    marker: str,
+    location: str,
+    defaults: Mapping[str, ConfigField],
+    strict: bool = False,
+) -> str | None:
+    """Select one external namespace suffix, warning only for declared near misses."""
+    selected = isinstance(supplied_key, str) and supplied_key.startswith(marker)
+    key = supplied_key[len(marker) :] if selected else ""
+    if selected and _CONFIG_NAME.fullmatch(key):
+        return key
+    if strict:
+        raise ValueError(
+            f"{location} configuration key {_safe_config_value_display(supplied_key)} "
+            f"must match {marker}[A-Z][A-Z0-9_]*"
+        )
+    if not selected:
+        return None
+    candidate = key.upper()
+    if candidate in defaults:
+        field = defaults[candidate]
+        warnings.warn(
+            f"ignoring {supplied_key} from {_source_phrase(location)}: did you mean "
+            f"{marker}{candidate}? "
+            f"(value {_safe_config_value_display(value, sensitive=field.sensitive)})",
+            UserWarning,
+            stacklevel=1,
+        )
+    return None
+
+
+def _read_config_toml(
+    path: os.PathLike[str] | str, *, prefix: str
+) -> Mapping[str, Any]:
+    """Read an explicitly supplied document with config error metadata."""
+    try:
+        with open(path, "rb") as stream:
+            return tomllib.load(stream)
+    except (OSError, ValueError) as exc:
+        raise InvalidConfigError(
+            key=f"{prefix}_CONFIG_FILE",
+            source="file",
+            expected="a readable TOML document",
+            value_display=_safe_config_value_display(os.fspath(path)),
+        ) from exc
+
+
+def _validate_config_names(names: Iterable[Any], source: str) -> None:
+    """Reject malformed caller-controlled names without restricting custom fields."""
+    for key in names:
+        if not isinstance(key, str) or not _CONFIG_NAME.fullmatch(key):
+            raise ValueError(
+                f"{source} configuration key {_safe_config_value_display(key)} "
+                "must match [A-Z][A-Z0-9_]* (uppercase unprefixed name)"
+            )
+
+
+def _require_mapping(supplied: object, source: str) -> Mapping[str, Any]:
+    """Name the caller's argument when a configuration source is not a mapping."""
+    if not isinstance(supplied, Mapping):
+        parameter = {"environment": "env", "file": "toml"}.get(source, source)
+        raise TypeError(
+            f"{parameter} configuration must be a mapping, "
+            f"not {type(supplied).__name__}"
+        )
+    return supplied
+
+
+def _from_supplied_config(
+    config: object,
+    *,
+    prefix: str | None,
+    defaults: Mapping[str, ConfigField] | None,
+    override: Mapping[str, Any] | None,
+) -> Config:
+    """Return an explicitly supplied Config, or derive from it with an override."""
+    if not isinstance(config, Config):
+        raise TypeError(
+            f"config must be a Config, not {type(config).__name__}; "
+            "build one with resolve_config()"
+        )
+    if prefix is not None and prefix != config.prefix:
+        raise ValueError(
+            f"prefix {prefix!r} differs from the supplied config's prefix "
+            f"{config.prefix!r}"
+        )
+    if defaults is not None and dict(defaults) != dict(config._defaults):
+        raise ValueError(
+            "defaults differ from the supplied config's field declarations"
+        )
+    if override is not None:
+        _require_mapping(override, "override")
+    if not override:
+        return config
+    # An already-resolved config absorbed its TOML and environment when it was
+    # built, so deriving reads neither again and does not revalidate its values.
+    return _resolve_sources(
+        config.prefix,
+        defaults=config._defaults,
+        derive_from=config,
+        toml=None,
+        env=None,
+        override=override,
+    )
+
+
+def resolve_config(
+    prefix: str | None = None,
+    *,
+    defaults: Mapping[str, ConfigField] | None = None,
+    toml: os.PathLike[str] | str | Mapping[str, Any] | None = None,
+    env: Mapping[str, str] | None = None,
+    override: Mapping[str, Any] | None = None,
+    config: Config | None = None,
+) -> Config:
+    """Resolve defaults < TOML < environment < overrides.
+
+    Environment input is explicit. TOML and env select only names under the
+    supplied prefix. Override uses that same namespace and rejects invalid names.
+    Every supplied value is validated; an invalid value warns as its source is
+    applied. If any invalid value remains after all sources, the first raises.
+    An explicitly supplied ``config`` is returned unchanged without reading TOML
+    or the environment, or derived from when an override is also supplied; its
+    namespace and field declarations are inherited and cannot be rebound.
+    """
+    if config is not None:
+        return _from_supplied_config(
+            config, prefix=prefix, defaults=defaults, override=override
+        )
+    if defaults is not None and defaults is not DEFAULT_CONFIG:
+        _validate_config_names(defaults, "defaults")
+    return _resolve_sources(
+        DEFAULT_PREFIX if prefix is None else prefix,
+        defaults=DEFAULT_CONFIG if defaults is None else defaults,
+        derive_from=None,
+        toml=toml,
+        env=env,
+        override=override,
+    )
+
+
+def _resolve_sources(
+    prefix: str,
+    *,
+    defaults: Mapping[str, ConfigField],
+    derive_from: Config | None,
+    toml: os.PathLike[str] | str | Mapping[str, Any] | None,
+    env: Mapping[str, str] | None,
+    override: Mapping[str, Any] | None,
+) -> Config:
+    """Apply defaults or a resolved config, then TOML, environment and override."""
+    values: dict[str, Any] = {}
+    origins: dict[str, str] = {}
+    failures: dict[str, InvalidConfigError] = {}
+    marker = prefix + "_"
+    sources = (
+        (
+            "default",
+            {
+                key: copy(field.default)
+                if isinstance(field.default, (dict, list, set, bytearray))
+                else field.default
+                for key, field in defaults.items()
+            }
+            if derive_from is None
+            else {},
+        ),
+        ("config", derive_from),
+        ("file", toml),
+        ("environment", env),
+        ("override", override),
+    )
+    for source, supplied in sources:
+        if supplied is None:
+            continue
+        location = "TOML mapping" if source == "file" else source
+        if source == "file" and not isinstance(supplied, Mapping):
+            location = os.fspath(supplied)
+            supplied = _read_config_toml(supplied, prefix=prefix)
+        supplied = _require_mapping(supplied, source)
+        for supplied_key, value in supplied.items():
+            key = supplied_key
+            if source in ("file", "environment", "override"):
+                selected_key = _external_config_key(
+                    supplied_key,
+                    value,
+                    marker=marker,
+                    location=location,
+                    defaults=defaults,
+                    strict=source == "override",
+                )
+                if selected_key is None:
+                    continue
+                key = selected_key
+            failures.pop(key, None)
+            # Values carried by an already-resolved config are not revalidated.
+            field = defaults.get(key) if source != "config" else None
+            if field is not None and field.validator is not None:
+                try:
+                    value = _validated_value(
+                        field, value, key=marker + key, source=source
+                    )
+                except InvalidConfigError as failure:
+                    _warn_invalid(failure)
+                    failures[key] = failure
+                    continue
+            values[key] = value
+            origins[key] = source
+    if failures:
+        raise next(iter(failures.values()))
+    _check_whole_config(
+        values,
+        prefix=prefix,
+        source=origins.get("PROJECT_CONFIG_NAME", "default"),
+        defaults=defaults,
+    )
+    return Config(values, prefix=prefix, defaults=defaults)

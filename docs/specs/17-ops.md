@@ -286,8 +286,9 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- active: [2026-09-02-write-keep-pending-window-plan](../plans/2026-09-02-write-keep-pending-window-plan.md)
-  — clarifies [SB-OPS-2], [SB-OPS-3], and [SB-OPS-6] for write-time claims
+- retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
+  see the ledger in `docs/plans/README.md`. It clarifies [SB-OPS-2],
+  [SB-OPS-3], and [SB-OPS-6] for write-time claims.
 
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It repairs

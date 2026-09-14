@@ -6,13 +6,14 @@ Tests filtering messages by timestamp for read and peek commands.
 
 import datetime
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from simplebroker import Queue, commands, target_for_directory
-from simplebroker._constants import LOGICAL_COUNTER_MASK, load_config
+from simplebroker import Queue, commands, resolve_config, target_for_directory
+from simplebroker._constants import LOGICAL_COUNTER_MASK
 
 from .conftest import _reset_pg_tables, run_cli
 from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
@@ -131,8 +132,7 @@ def test_read_all_commit_interval_keeps_uncommitted_batch_on_output_failure(
             raise RuntimeError("output stopped")
         return warned_newlines
 
-    config = load_config()
-    config["BROKER_READ_COMMIT_INTERVAL"] = 5
+    config = resolve_config(env=os.environ, override={"BROKER_READ_COMMIT_INTERVAL": 5})
     monkeypatch.setattr(commands, "_output_message", fail_during_second_batch)
 
     with pytest.raises(RuntimeError, match="output stopped"):

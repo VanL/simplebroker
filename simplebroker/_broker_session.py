@@ -10,14 +10,12 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
 from typing import Any, Protocol, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
-from ._constants import ResolvedConfig
+from ._constants import Config
 from ._key_material import FrozenValue, freeze_key_material, snapshot_key_material
-from ._targets import BrokerTarget
-from .config import ConfigSnapshot, legacy_config
+from ._targets import BrokerTarget, normalize_sqlite_target
 
 _CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
 
@@ -41,7 +39,7 @@ class _SessionSpec:
     backend_name: str
     target: str
     backend_options: Mapping[str, Any]
-    config: ResolvedConfig | ConfigSnapshot
+    config: Config
     backend_plugin: BackendPlugin
 
 
@@ -122,21 +120,13 @@ def _capture_process_session_cleanup(
     return primary
 
 
-def _normalize_sqlite_target(target: str) -> str:
-    path = Path(target).expanduser()
-    try:
-        return str(path.resolve())
-    except (OSError, ValueError):
-        return str(path)
-
-
 def _target_parts(
     db_path: str | BrokerTarget,
 ) -> tuple[str, str, dict[str, Any], BackendPlugin]:
     if isinstance(db_path, BrokerTarget):
         target = db_path.target
         if db_path.backend_name == "sqlite":
-            target = _normalize_sqlite_target(target)
+            target = normalize_sqlite_target(target)
         return (
             db_path.backend_name,
             target,
@@ -145,46 +135,37 @@ def _target_parts(
         )
     return (
         "sqlite",
-        _normalize_sqlite_target(str(db_path)),
+        normalize_sqlite_target(str(db_path)),
         {},
         get_backend_plugin("sqlite"),
     )
 
 
-def _session_key(
-    db_path: str | BrokerTarget, config: ResolvedConfig | ConfigSnapshot
-) -> _SessionKey:
+def _session_key(db_path: str | BrokerTarget, config: Config) -> _SessionKey:
     return _session_spec(db_path, config).key
 
 
 def _session_spec(
     db_path: str | BrokerTarget,
-    config: ResolvedConfig | ConfigSnapshot,
+    config: Config,
 ) -> _SessionSpec:
     backend_name, target, backend_options, backend_plugin = _target_parts(db_path)
     backend_options_snapshot = cast(
         dict[str, Any], snapshot_key_material(backend_options)
-    )
-    # New declared fields are already frozen. Legacy opaque containers retain
-    # the existing acquisition-time ownership copy. All fields remain keyed.
-    config_snapshot = (
-        config
-        if isinstance(config, ConfigSnapshot)
-        else ResolvedConfig(cast(Mapping[str, Any], snapshot_key_material(config)))
     )
     key = _SessionKey(
         pid=_getpid(),
         backend_name=backend_name,
         target=target,
         backend_options=freeze_key_material(backend_options_snapshot),
-        config=freeze_key_material(legacy_config(config_snapshot)),
+        config=freeze_key_material((config.prefix, config._defaults, config)),
     )
     return _SessionSpec(
         key=key,
         backend_name=backend_name,
         target=target,
         backend_options=backend_options_snapshot,
-        config=config_snapshot,
+        config=config,
         backend_plugin=backend_plugin,
     )
 
@@ -390,7 +371,7 @@ class _ProcessBrokerSessionRegistry:
         self,
         db_path: str | BrokerTarget,
         *,
-        config: ResolvedConfig | ConfigSnapshot,
+        config: Config,
         factory_builder: _SessionCoreFactoryBuilder,
     ) -> tuple[_SessionKey, _ProcessBrokerSession]:
         self._recover_after_fork_if_needed()
@@ -444,7 +425,7 @@ _registry = _ProcessBrokerSessionRegistry()
 def acquire_process_broker_session(
     db_path: str | BrokerTarget,
     *,
-    config: ResolvedConfig | ConfigSnapshot,
+    config: Config,
     factory_builder: _SessionCoreFactoryBuilder,
 ) -> tuple[_SessionKey, _ProcessBrokerSession]:
     return _registry.acquire(

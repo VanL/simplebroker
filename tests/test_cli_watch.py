@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from .conftest import managed_subprocess
+from .helper_scripts.managed_subprocess import managed_subprocess
 from .helper_scripts.timestamp_validation import validate_timestamp
 from .helper_scripts.timing import scale_timeout_for_ci
 
