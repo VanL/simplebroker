@@ -524,12 +524,10 @@ def _sync_mode(value: Any) -> str:
 
 
 def _db_location_path(value: Any) -> str:
-    """Accept an empty string or a safe absolute directory path."""
+    """Accept an empty string or an absolute host directory, preserving spelling."""
     result = str(value)
-    if result:
-        if not os.path.isabs(result):
-            raise ValueError("DEFAULT_DB_LOCATION must be an absolute path")
-        _validate_safe_path_components(result, "DEFAULT_DB_LOCATION")
+    if result and not os.path.isabs(result):
+        raise ValueError("DEFAULT_DB_LOCATION must be an absolute path")
     return result
 
 
@@ -567,12 +565,9 @@ def _db_name_path(value: Any) -> str:
 def _project_config_path(value: Any) -> str:
     """Accept an absolute directory or one relative directory."""
     result = str(value)
-    if result:
+    if result and not os.path.isabs(result):
         _validate_safe_path_components(result, "PROJECT_CONFIG_PATH")
-        if (
-            not os.path.isabs(result)
-            and len(PurePath(result.replace("\\", "/")).parts) > 1
-        ):
+        if len(PurePath(result.replace("\\", "/")).parts) > 1:
             raise ValueError("must be an absolute path or a single relative directory")
     return result
 

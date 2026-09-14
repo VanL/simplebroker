@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-09-14-host-path-name-boundary-plan.md | completed — class 5; host-path boundary implemented; 691 targeted tests passed, native/Claude/interface/Sol reviews have no remaining blocker; closure authorized for 8.2.2 |
 | 2026-09-14-config-json-transport-plan.md | retired-pending — soft-retired 2026-09-14; physical deletion requires a separate verification pass |
 | 2026-09-14-cross-platform-release-gate-recovery-plan.md | retired-pending — soft-retired 2026-09-14; physical deletion requires a separate verification pass |
 | 2026-09-13-verified-review-remediation-plan.md | retired-pending — soft-retired 2026-09-14; local-only source pin; physical deletion requires publication and a separate verification pass |

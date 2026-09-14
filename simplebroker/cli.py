@@ -20,7 +20,6 @@ from ._constants import (
     Config,
     InvalidConfigError,
     _db_name_path,
-    _validate_safe_path_components,
     _validate_sqlite_filename,
     resolve_config,
 )
@@ -1483,25 +1482,11 @@ def _require_legacy_sqlite_path(resolved_target: BrokerTarget) -> Path:
     return db_path
 
 
-def _validate_cli_path_components(value: str, label: str) -> None:
-    """Reuse config path validation, translating only CLI-owned failures.
-
-    --dir/--file select a target, rather than changing config defaults. In
-    particular --file permits absolute paths, unlike DEFAULT_DB_NAME, so share
-    the component validator without applying the field's relative-path rule.
-    """
-    try:
-        _validate_safe_path_components(value, label)
-    except ValueError as error:
-        raise _ArgumentValidationError(str(error)) from error
-
-
 def _validate_cli_database_filename(value: str) -> None:
     """Keep relative CLI names compound and absolute parent paths unrestricted."""
     try:
         if Path(value).is_absolute():
             _validate_sqlite_filename(value)
-            _validate_safe_path_components(value, "Database filename")
         else:
             _db_name_path(value)
     except ValueError as error:
@@ -1521,9 +1506,6 @@ def _run_cleanup(
     try:
         if resolved_target.legacy_sqlite_path_mode:
             db_path = _require_legacy_sqlite_path(resolved_target)
-            _validate_cli_path_components(
-                str(args.dir), "Directory argument (-d/--dir)"
-            )
             if not resolved_target.used_project_scope:
                 _validate_cli_database_filename(args.file)
             _validate_sqlite_filename(str(db_path))
@@ -1647,7 +1629,6 @@ def _validate_legacy_sqlite_target(
     used_project_scope = resolved_target.used_project_scope
     containment_required = not (Path(args.file).is_absolute() or used_project_scope)
 
-    _validate_cli_path_components(str(working_dir), "Directory argument (-d/--dir)")
     _validate_working_directory(working_dir)
 
     if containment_required:

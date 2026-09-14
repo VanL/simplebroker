@@ -15,17 +15,23 @@ from .helper_scripts import create_dangerous_path
 
 
 class TestCliArgumentValidation:
-    """Test validation of CLI arguments for dangerous characters."""
+    """Test CLI directory errors and database-name validation."""
 
-    def test_directory_argument_validation(self) -> None:
-        """Test that -d/--dir argument is validated for dangerous characters."""
-        # Create a temporary directory path with dangerous characters
+    def test_missing_directory_argument_is_clean_error(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A missing --dir is an invocation error before target creation."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            dangerous_dir = create_dangerous_path(temp_dir, "|")
+            missing_dir = Path(temp_dir) / "missing"
 
-            with patch("sys.argv", ["simplebroker", "-d", dangerous_dir, "list"]):
+            with patch("sys.argv", ["simplebroker", "-d", str(missing_dir), "list"]):
                 exit_code = main()
-                assert exit_code != 0  # Should fail with error
+            captured = capsys.readouterr()
+            assert exit_code == 1
+            assert captured.out == ""
+            assert "Directory not found" in captured.err
+            assert "Traceback" not in captured.err
+            assert not missing_dir.exists()
 
     def test_file_argument_validation(self) -> None:
         """Test that -f/--file argument is validated for dangerous characters."""
@@ -66,42 +72,41 @@ class TestCliArgumentValidation:
     @pytest.mark.skipif(
         platform.system() == "Windows", reason="Unix-specific shell chars"
     )
-    def test_unix_shell_characters_in_paths(self) -> None:
-        """Test that Unix shell characters are caught in path arguments."""
-        dangerous_chars = ["|", "&", ";", "$", "`", '"', "'", "<", ">"]
+    def test_missing_posix_directory_paths_are_clean_errors(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shell punctuation does not change the missing-directory error."""
+        characters = ["|", "&", ";", "$", "`", '"', "'", "<", ">"]
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            for char in dangerous_chars:
-                dangerous_path = create_dangerous_path(temp_dir, char)
-                with patch("sys.argv", ["simplebroker", "-d", dangerous_path, "list"]):
+            for char in characters:
+                missing_path = create_dangerous_path(temp_dir, char)
+                with patch("sys.argv", ["simplebroker", "-d", missing_path, "list"]):
                     exit_code = main()
-                    assert exit_code != 0, (
-                        f"Should have caught dangerous character: {char}"
-                    )
+                captured = capsys.readouterr()
+                assert exit_code == 1
+                assert captured.out == ""
+                assert "Directory not found" in captured.err
+                assert "Traceback" not in captured.err
+                assert not Path(missing_path).exists()
 
     @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
-    def test_windows_dangerous_characters_in_paths(self) -> None:
-        """Test that Windows dangerous characters are caught in path arguments."""
-        # Note: colon is handled specially for drive letters, so we test it separately
-        dangerous_chars = ["*", "?", '"', "<", ">", "|"]
+    def test_invalid_windows_directory_paths_are_clean_errors(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """OS-invalid directory spellings produce clean missing-directory errors."""
+        characters = ["*", "?", '"', "<", ">", "|", ":"]
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Use the temporary directory as a base for Windows paths
-            for char in dangerous_chars:
-                dangerous_path = create_dangerous_path(temp_dir, char)
-                with patch("sys.argv", ["simplebroker", "-d", dangerous_path, "list"]):
+            for char in characters:
+                invalid_path = create_dangerous_path(temp_dir, char)
+                with patch("sys.argv", ["simplebroker", "-d", invalid_path, "list"]):
                     exit_code = main()
-                    assert exit_code != 0, (
-                        f"Should have caught dangerous character: {char}"
-                    )
-
-            # Test invalid colon usage (not part of drive letter)
-            invalid_colon_path = create_dangerous_path(temp_dir, ":")
-            with patch("sys.argv", ["simplebroker", "-d", invalid_colon_path, "list"]):
-                exit_code = main()
-                assert exit_code != 0, (
-                    "Should have caught colon not part of drive letter"
-                )
+                captured = capsys.readouterr()
+                assert exit_code == 1
+                assert captured.out == ""
+                assert "Directory not found" in captured.err
+                assert "Traceback" not in captured.err
 
     @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
     def test_windows_drive_letters_allowed_in_paths(self) -> None:

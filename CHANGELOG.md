@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- CLI paths, absolute directory settings, and SQLite project discovery accept
+  host directories with spaces and punctuation as supplied. Database-name
+  validation applies to the filename and optional compound-name project
+  subdirectory, not arbitrary ancestor directories.
+
 ## [8.2.1] - 2026-09-14
 
 ### Added

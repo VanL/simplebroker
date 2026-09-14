@@ -124,8 +124,10 @@ with existing traversal, containment, platform-specific reserved-name and
 length checks. `DEFAULT_DB_NAME` and relative `--file` names retain their
 existing single optional directory component, with this grammar applied to
 each component. Path separators delimit components and are not admitted by
-the component grammar. For absolute `--file` paths, the grammar applies to
-the terminal filename; parent-directory paths retain their existing rules.
+the component grammar. For absolute `--file` paths, the grammar applies only
+to the terminal filename. The optional directory in a compound name is a project subdirectory
+(for example `.weft` in `.weft/broker.db`), not a restriction on the selected
+working directory or its ancestors.
 Invalid names are rejected before target creation or mutation, with the
 allowed character set in the diagnostic. A bad environment default retains
 the preparse exit-1 rule; a bad explicit filename uses the established plain
@@ -148,21 +150,17 @@ selected path and its directories are protected by the operating-system
 permissions and ACLs chosen by the operator; they do not claim protection
 against concurrent replacement in a directory another principal may modify.
 
-Except for the SQLite filename grammar above, path admission is based on
-hazards in an actual SimpleBroker or operating-system consumer, not on
-characters a shell would interpret if a path were later copied into an
-unquoted command. On POSIX, parent-directory shell-only punctuation such
-as `#`, `$`, backtick, single/double quotes, parentheses, braces, semicolon,
-ampersand, exclamation, caret, pipe, and angle brackets is accepted when the
-filesystem accepts it.
-
-NUL and control characters, applicable traversal or containment violations,
-platform-reserved names and syntax, and punctuation still interpreted by an
-internal path-pattern consumer remain rejected. In particular, `*`, `?`, `[`,
-and `]` remain rejected until every owned-file enumeration treats them
-literally, and `~` remains rejected while target consumers expand it. POSIX
-target length is governed by the effective filesystem and system calls;
-SimpleBroker does not impose a smaller product-wide total-path ceiling.
+Host directory paths are accepted as supplied and are not subject to the
+database-name component grammar or its 255-character limit. This includes
+the working directory, `--dir`, `DEFAULT_DB_LOCATION`, absolute
+`PROJECT_CONFIG_PATH`, and ancestors of explicit CLI/API or project-config
+targets. Spaces (including leading or trailing spaces), Unicode, and
+punctuation in those directories are preserved. Existing path resolution,
+home expansion, existence/access checks, and operating-system limitations
+still apply; this does not relax relative-target physical containment.
+Name validation remains on the selected database filename and optional
+compound-name subdirectory. Relative project-config names and prefixes
+retain their separate validation rules.
 
 `init` and `[SB-OPS-7]` cleanup retain their separately specified preparation
 and path behavior.
@@ -428,6 +426,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- [Host paths and database names](../plans/2026-09-14-host-path-name-boundary-plan.md): preserve host ancestors while validating selected names.
+
 - retired: 2026-09-13-verified-review-remediation-plan — source `1c6898b`;
   see the ledger in `docs/plans/README.md`. It owns database-name grammar and
   safe malformed-target diagnostics.
@@ -435,7 +435,6 @@ _Implementation mapping_:
 - retired: 2026-09-11-shared-configuration-loader-plan — source `4efe7b3`;
   see the ledger in `docs/plans/README.md`. It owns the shared configuration
   internals with preserved CLI behavior.
-
 
 - retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
   see the ledger in `docs/plans/README.md`. It owns [SB-CLI-7] and the
@@ -569,7 +568,11 @@ _Implementation mapping_:
   `tests/test_cli_main.py::test_compound_default_is_finalized_before_canonical_containment`,
   `tests/test_project_config.py::test_project_config_trust_anchor_allows_parent_target`, and
   `tests/test_project_config.py::test_project_config_trust_anchor_follows_target_symlink`
-- `[SB-CLI-2]` semantic POSIX path admission and retained consumer hazards:
+- `[SB-CLI-2]` host-path admission and retained filename restrictions:
+  `tests/test_path_security.py::test_host_ancestors_cli_dir_absolute_default_and_cleanup`,
+  `tests/test_path_security.py::test_host_ancestors_public_queue_and_project_discovery`,
+  `tests/test_path_security.py::test_host_ancestors_cli_init_preserves_compound_name`,
+  `tests/test_constants.py::test_absolute_host_directory_config_preserves_ancestor_spelling`,
   `tests/test_path_security.py::test_posix_punctuation_works_across_explicit_status_and_cleanup_paths`,
   `tests/test_path_security.py::test_posix_punctuation_works_for_init_and_project_discovery`,
   `tests/test_path_security.py::test_filesystem_supported_posix_path_over_1024_reaches_sqlite`, and

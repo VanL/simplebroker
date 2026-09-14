@@ -219,8 +219,13 @@ Compound defaults and relative CLI filenames select every name component;
 explicit filesystem paths select only the terminal filename. Queue binding,
 project resolution, open_broker, BrokerDB before mkdir, and SQLiteRunner apply
 the shared validator before their first side effect. Supplied and resolved
-names both qualify; generic directory validation and target identity normalization
-remain separate. open_broker admission precedes DBConnection's retry wrapper so
+names both qualify. Host directories are passed to the existing path consumers
+without applying lexical name validation to ancestors. This keeps project
+TOML discovery, directory configuration and CLI target selection consistent
+with explicit Queue paths. Cleanup enumerates a literal parent directory;
+phase-status globbing uses only the validated database basename as its pattern
+prefix. Directory existence, access, target normalization and relative-target
+physical containment remain separate checks. open_broker admission precedes DBConnection's retry wrapper so
 invalid names retain the public ValueError boundary instead of a retry error.
 
 Queue, discovery, command, CLI, watcher, load, broker-context, and direct

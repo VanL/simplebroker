@@ -36,8 +36,6 @@ from simplebroker._constants import (
     resolve_config,
 )
 
-from .helper_scripts import create_dangerous_path
-
 pytestmark = [
     pytest.mark.shared,
     pytest.mark.filterwarnings("ignore:.*ignoring invalid"),
@@ -781,22 +779,18 @@ class TestConfigValidation:
             config = resolve_config(env=os.environ)
             assert config["DEFAULT_DB_NAME"] == "simple.db"
 
-    def test_broker_default_db_location_dangerous_characters_raises_error(self) -> None:
-        """Test that dangerous characters in BROKER_DEFAULT_DB_LOCATION raise an error."""
-        import tempfile
-
-        # Create a platform-appropriate absolute path with dangerous characters
-        with tempfile.TemporaryDirectory() as temp_dir:
-            test_path = create_dangerous_path(temp_dir, "*")
-
-            with (
-                patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}),
-                pytest.raises(
-                    ValueError,
-                    match="expected an absolute directory path or empty string",
-                ),
-            ):
-                resolve_config(env=os.environ)
+    @pytest.mark.skipif(
+        os.name != "posix", reason="Literal star is a POSIX host-path spelling"
+    )
+    def test_broker_default_db_location_accepts_literal_star(
+        self, tmp_path: Path
+    ) -> None:
+        directory = tmp_path / "literal*parent"
+        directory.mkdir()
+        config = resolve_config(
+            env={}, override={"BROKER_DEFAULT_DB_LOCATION": str(directory)}
+        )
+        assert config["DEFAULT_DB_LOCATION"] == str(directory)
 
     def test_broker_default_db_location_valid_absolute_path(self) -> None:
         """Test that valid absolute paths in BROKER_DEFAULT_DB_LOCATION are accepted."""
@@ -989,3 +983,34 @@ def test_database_name_grammar_preserves_windows_reserved_names(monkeypatch, nam
     monkeypatch.setattr("simplebroker._constants.platform.system", lambda: "Windows")
     with pytest.raises(ValueError, match="ASCII"):
         resolve_config(env={}, override={"BROKER_DEFAULT_DB_NAME": name})
+
+
+@pytest.mark.parametrize("key", ["DEFAULT_DB_LOCATION", "PROJECT_CONFIG_PATH"])
+@pytest.mark.parametrize(
+    "ancestor",
+    [
+        "interior spaces",
+        "Unicode café",
+        pytest.param(
+            " leading ",
+            marks=pytest.mark.skipif(
+                os.name != "posix", reason="Edge-space host paths require POSIX"
+            ),
+        ),
+        pytest.param(
+            "glob[xy]?*~",
+            marks=pytest.mark.skipif(
+                os.name != "posix", reason="Literal glob punctuation requires POSIX"
+            ),
+        ),
+    ],
+)
+def test_absolute_host_directory_config_preserves_ancestor_spelling(
+    tmp_path: Path, key: str, ancestor: str
+) -> None:
+    directory = tmp_path / ancestor / "project"
+    directory.mkdir(parents=True)
+    supplied = str(directory)
+    config = resolve_config(env={}, override={f"BROKER_{key}": supplied})
+    assert config[key] == supplied
+    assert ancestor in config[key]

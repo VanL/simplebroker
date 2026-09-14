@@ -13,7 +13,6 @@ from ._constants import (
     DEFAULT_PROJECT_CONFIG_NAME,
     MAX_PROJECT_TRAVERSAL_DEPTH,
     Config,
-    _validate_safe_path_components,
     _validate_sqlite_filename,
     resolve_config,
 )
@@ -218,9 +217,6 @@ def resolve_project_target(
         _validate_sqlite_filename(target, f"{config_path} sqlite target")
         resolved_target = (config_path.parent / target).expanduser().resolve()
         _validate_sqlite_filename(str(resolved_target), f"{config_path} sqlite target")
-        _validate_safe_path_components(
-            str(resolved_target), f"{config_path} sqlite target"
-        )
         target = str(resolved_target)
 
     return BrokerTarget(

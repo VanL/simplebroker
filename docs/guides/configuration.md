@@ -285,7 +285,13 @@ and containment checks. Both components of a compound default or relative CLI
 `--file` must qualify. An absolute CLI path or explicit Python filesystem path
 constrains only the database filename, so a Python path such as
 `my dir/broker.db` is allowed while that same spelling as `DEFAULT_DB_NAME`
-is rejected. Supplied and symlink-resolved filenames are checked before
+is rejected. The optional directory in a compound name is the application's
+project subdirectory, such as `.weft`, not the project root or its ancestors.
+Host directory paths, including `--dir`, `DEFAULT_DB_LOCATION`, and absolute
+`PROJECT_CONFIG_PATH`, retain spaces and punctuation as supplied; the name
+component grammar and 255-character limit do not apply to these host paths.
+Normal path resolution and filesystem limits still apply.
+Supplied and symlink-resolved filenames are checked before
 creation or mutation. These restrictions do not apply to PostgreSQL database
 names, Redis namespaces, or project-config filenames. Existing databases with
 disallowed names are not renamed automatically; plan any operator migration

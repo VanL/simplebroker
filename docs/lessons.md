@@ -422,6 +422,14 @@ Dated moment-tier entries (foldable after age floor and distillation).
   loads that `__init__`, so even a 40-second partial state broke collection
   for every concurrent session sharing the worktree. (Dead-code cleanup plan.)
 
+- 2026-09-14: A logical-name validator must not be applied to the assembled host
+  path. Compound database names own the optional project subdirectory and final
+  filename; project roots and arbitrary ancestors belong to the caller's
+  filesystem context. Verify CLI, config and project-discovery routes alongside
+  direct API paths: discovery can revalidate an ancestor that direct access
+  already accepts. Evidence: host-path/name-boundary plan and real Weft resolver
+  probes under edge-space ancestors, with literal-parent cleanup controls.
+
 - 2026-09-14: A performance proof must separate fixture setup from the behavior
   it measures. A raw SQLite `executemany()` on an autocommit runner can turn
   every seed row into a durable transaction, so a timeout sampled inside setup

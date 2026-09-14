@@ -682,3 +682,190 @@ def test_oversized_project_database_name_has_bounded_cli_error(
     if json_output:
         assert isinstance(json.loads(err), dict)
     assert set(tmp_path.iterdir()) == {config_path}
+
+
+_HOST_ANCESTORS = [
+    "interior spaces",
+    "Unicode café",
+    pytest.param(
+        " leading",
+        marks=pytest.mark.skipif(
+            os.name != "posix", reason="Leading-space host ancestor probe is POSIX"
+        ),
+    ),
+    pytest.param(
+        "trailing ",
+        marks=pytest.mark.skipif(
+            os.name != "posix", reason="Trailing-space host ancestor probe is POSIX"
+        ),
+    ),
+    pytest.param(
+        "glob[xy]?*~",
+        marks=pytest.mark.skipif(
+            os.name != "posix", reason="Literal glob punctuation requires POSIX"
+        ),
+    ),
+]
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize("ancestor", _HOST_ANCESTORS)
+def test_host_ancestors_cli_dir_absolute_default_and_cleanup(
+    tmp_path: Path, ancestor: str
+) -> None:
+    directory = tmp_path / ancestor / "project"
+    directory.mkdir(parents=True)
+    target = directory / "broker.db"
+    env = {
+        "BROKER_TEST_BACKEND": "sqlite",
+        "BROKER_PROJECT_SCOPE": "0",
+        "PHASELOCK_ENABLE_XATTRS": "0",
+    }
+    code, out, err = run_cli(
+        "--dir",
+        directory,
+        "-f",
+        "broker.db",
+        "write",
+        "jobs",
+        "payload",
+        cwd=tmp_path,
+        env=env,
+    )
+    assert code == 0, err
+    assert out == ""
+    assert target.exists()
+    assert ancestor in str(target)
+    code, out, err = run_cli(
+        "--file", target, "--status", "--json", cwd=tmp_path, env=env
+    )
+    assert code == 0, err
+    assert json.loads(out)["total_messages"] == 1
+    code, out, err = run_cli(
+        "read",
+        "jobs",
+        cwd=tmp_path,
+        env={
+            **env,
+            "BROKER_DEFAULT_DB_LOCATION": str(directory),
+            "BROKER_DEFAULT_DB_NAME": "broker.db",
+        },
+    )
+    assert code == 0, err
+    assert out == "payload"
+
+    # A wildcard interpretation of ancestors would include this sibling.
+    sibling = (
+        tmp_path
+        / ("globxy-any~" if ancestor == "glob[xy]?*~" else "sibling")
+        / "project"
+    )
+    sibling.mkdir(parents=True)
+    sentinel = sibling / "broker.db.status.tmp.1.2"
+    sentinel.write_text("keep sibling")
+    unrelated = directory / "broker.db.status.tmp.not-owned"
+    unrelated.write_text("keep unrelated")
+    owned_temp = directory / "broker.db.status.tmp.1.2"
+    owned_temp.write_text("old owned temp")
+    code, out, err = run_cli("--file", target, "--cleanup", cwd=tmp_path, env=env)
+    assert code == 0, err
+    assert out == ""
+    assert not target.exists()
+    assert not owned_temp.exists()
+    assert not Path(f"{target}.status").exists()
+    assert sentinel.read_text() == "keep sibling"
+    assert unrelated.read_text() == "keep unrelated"
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize("ancestor", _HOST_ANCESTORS)
+def test_host_ancestors_public_queue_and_project_discovery(
+    tmp_path: Path, ancestor: str
+) -> None:
+    from simplebroker import (
+        Queue,
+        resolve_broker_target,
+        resolve_config,
+        target_for_directory,
+    )
+
+    root = tmp_path / ancestor / "project"
+    config_dir = root / ".weft"
+    child = root / "child"
+    config_dir.mkdir(parents=True)
+    child.mkdir()
+    target_path = config_dir / "broker.db"
+    config = resolve_config(
+        env={},
+        override={
+            "BROKER_DEFAULT_DB_NAME": ".weft/broker.db",
+            "BROKER_PROJECT_CONFIG_PATH": ".weft",
+            "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+            "BROKER_PROJECT_SCOPE": True,
+        },
+    )
+    before = target_for_directory(root, config=config)
+    assert before.target_path == target_path.resolve()
+    with Queue("jobs", db_path=before, config=config) as queue:
+        queue.write("payload")
+        assert queue.read() == "payload"
+    (config_dir / "broker.toml").write_text(
+        'version = 1\nbackend = "sqlite"\ntarget = "broker.db"\n'
+    )
+    explicit = target_for_directory(root, config=config)
+    discovered = resolve_broker_target(child, config=config)
+    assert discovered is not None
+    assert explicit.target_path == discovered.target_path == target_path.resolve()
+    assert ancestor in explicit.target
+    with Queue("jobs", db_path=discovered, config=config) as queue:
+        queue.write("after config")
+        assert queue.read() == "after config"
+    code, out, err = run_cli(
+        "write",
+        "jobs",
+        "cli project",
+        cwd=child,
+        env={
+            "BROKER_TEST_BACKEND": "sqlite",
+            "BROKER_PROJECT_SCOPE": "1",
+            "BROKER_PROJECT_CONFIG_PATH": ".weft",
+            "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+        },
+    )
+    assert code == 0, err
+    assert out == ""
+    with Queue("jobs", db_path=explicit, config=config) as queue:
+        assert queue.read() == "cli project"
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize(
+    "ancestor",
+    [
+        "interior spaces",
+        pytest.param(
+            " edge ~[*?] ",
+            marks=pytest.mark.skipif(
+                os.name != "posix",
+                reason="Literal punctuation and edge spaces require POSIX",
+            ),
+        ),
+    ],
+)
+def test_host_ancestors_cli_init_preserves_compound_name(
+    tmp_path: Path, ancestor: str
+) -> None:
+    root = tmp_path / ancestor / "project"
+    root.mkdir(parents=True)
+    code, out, err = run_cli(
+        "init",
+        cwd=root,
+        env={
+            "BROKER_TEST_BACKEND": "sqlite",
+            "BROKER_PROJECT_SCOPE": "0",
+            "BROKER_DEFAULT_DB_NAME": ".weft/broker.db",
+        },
+    )
+    assert code == 0, err
+    assert out == ""
+    assert (root / ".weft" / "broker.db").exists()
