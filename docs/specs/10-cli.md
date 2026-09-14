@@ -428,9 +428,14 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- [Verified review remediation](../plans/2026-09-13-verified-review-remediation-plan.md): database-name grammar and safe malformed-target diagnostics.
+- retired: 2026-09-13-verified-review-remediation-plan — source `1c6898b`;
+  see the ledger in `docs/plans/README.md`. It owns database-name grammar and
+  safe malformed-target diagnostics.
 
-- [Shared configuration loader and unprefixed snapshots](../plans/2026-09-11-shared-configuration-loader-plan.md): shared configuration internals with preserved CLI behavior.
+- retired: 2026-09-11-shared-configuration-loader-plan — source `4efe7b3`;
+  see the ledger in `docs/plans/README.md`. It owns the shared configuration
+  internals with preserved CLI behavior.
+
 
 - retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
   see the ledger in `docs/plans/README.md`. It owns [SB-CLI-7] and the

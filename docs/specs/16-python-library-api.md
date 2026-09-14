@@ -1029,9 +1029,14 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- [Verified review remediation](../plans/2026-09-13-verified-review-remediation-plan.md): target binding, fork ownership, SQLite name clauses, and config-overflow handling.
+- retired: 2026-09-13-verified-review-remediation-plan — source `1c6898b`;
+  see the ledger in `docs/plans/README.md`. It owns target binding, fork
+  ownership, SQLite name clauses, and config-overflow handling.
 
-- [Shared configuration loader and unprefixed snapshots](../plans/2026-09-11-shared-configuration-loader-plan.md): additive shared API with preserved legacy views and lifecycle.
+- retired: 2026-09-11-shared-configuration-loader-plan — source `4efe7b3`;
+  see the ledger in `docs/plans/README.md`. It owns the additive shared API
+  with preserved legacy views and lifecycle.
+
 
 - retired: 2026-09-07-critical-review-remediation-plan — source `dbace84`;
   see the ledger in `docs/plans/README.md`.

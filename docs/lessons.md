@@ -421,3 +421,11 @@ Dated moment-tier entries (foldable after age floor and distillation).
   `tests/conftest.py` imports `tests.helper_scripts.broker_factory`, which
   loads that `__init__`, so even a 40-second partial state broke collection
   for every concurrent session sharing the worktree. (Dead-code cleanup plan.)
+
+- 2026-09-14: A performance proof must separate fixture setup from the behavior
+  it measures. A raw SQLite `executemany()` on an autocommit runner can turn
+  every seed row into a durable transaction, so a timeout sampled inside setup
+  says nothing about the later scan. Bulk-seed inside one explicit transaction,
+  keep rollback on setup failure, and start the measured clock only after the
+  readiness state is established. Evidence: cross-platform release-gate
+  recovery plan and exact-SHA Windows 3.14 timeout diagnostics.

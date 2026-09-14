@@ -345,7 +345,9 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- [Verified review remediation](../plans/2026-09-13-verified-review-remediation-plan.md): atomic stale-batch recovery and rejection of different effective targets.
+- retired: 2026-09-13-verified-review-remediation-plan — source `1c6898b`;
+  see the ledger in `docs/plans/README.md`. It owns atomic stale-batch recovery
+  and rejection of different effective targets.
 
 - retired: 2026-09-11-keyset-peek-pagination-plan — source `3868d7a`;
   see the ledger in `docs/plans/README.md`. It owns

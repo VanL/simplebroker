@@ -205,7 +205,9 @@ message identity and delivery state with only the queue binding updated.
 
 ## Related Plans
 
-- [Verified review remediation](../plans/2026-09-13-verified-review-remediation-plan.md): preserve unique message ownership during stale Redis recovery.
+- retired: 2026-09-13-verified-review-remediation-plan — source `1c6898b`;
+  see the ledger in `docs/plans/README.md`. It preserves unique message
+  ownership during stale Redis recovery.
 
 - retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
   see the ledger in `docs/plans/README.md`. It extends [SB-ID-2] atomic
