@@ -593,3 +593,92 @@ def test_live_path_hazard_uses_json_diagnostic_without_side_effects(
     assert payload["error"] == "INVALID_ARGUMENT"
     assert "dangerous character '*'" in payload["message"]
     assert not list(tmp_path.glob("queue*.db"))
+
+
+@pytest.mark.parametrize("boundary", ["queue", "config-name", "config-directory"])
+@pytest.mark.parametrize(
+    "kind", ["length", "reserved", "space", "punctuation", "control"]
+)
+def test_oversized_database_name_diagnostics_are_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, kind: str
+) -> None:
+    import warnings
+
+    from simplebroker import Queue, resolve_config
+
+    prefixes = {
+        "length": "a" * 254 + "Z",
+        "reserved": "CON." + "a" * 251,
+        "space": " " + "a" * 254,
+        "punctuation": "?" + "a" * 254,
+        "control": "\n" + "a" * 254,
+    }
+    prefix = prefixes[kind]
+    suffix = "OMITTED_NAME_SUFFIX"
+    name = prefix + suffix + "a" * (1_000_000 - len(prefix) - len(suffix))
+    if kind == "reserved":
+        # Exercise Windows error ordering without pretending to run on Windows.
+        monkeypatch.setattr(_constants.platform, "system", lambda: "Windows")
+
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError) as caught:
+            if boundary == "queue":
+                Queue("jobs", db_path=str(tmp_path / name))
+            else:
+                target = name + "/broker.db" if boundary == "config-directory" else name
+                resolve_config(env={}, override={"BROKER_DEFAULT_DB_NAME": target})
+
+    diagnostics = [str(item.message) for item in emitted]
+    error: BaseException | None = caught.value
+    while error is not None:
+        diagnostics.append(str(error))
+        error = error.__cause__
+    for diagnostic in diagnostics:
+        actual_length = len(diagnostic)
+        assert actual_length < 1024
+        assert suffix not in diagnostic
+    assert any(prefix + "..." in diagnostic for diagnostic in diagnostics)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_database_name_length_limit_is_unchanged() -> None:
+    from simplebroker import resolve_config
+
+    name = "a" * 255
+    for target in (name, name + "/a"):
+        assert (
+            resolve_config(env={}, override={"BROKER_DEFAULT_DB_NAME": target})[
+                "DEFAULT_DB_NAME"
+            ]
+            == target
+        )
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_oversized_project_database_name_has_bounded_cli_error(
+    tmp_path: Path, json_output: bool
+) -> None:
+    prefix = "a" * 254 + "Z"
+    name = prefix + "OMITTED_NAME_SUFFIX" + "a" * 1_000_000
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        f'version = 1\nbackend = "sqlite"\ntarget = {json.dumps(name)}\n',
+        encoding="utf-8",
+    )
+    args = ("list", "--json") if json_output else ("list",)
+    code, out, err = run_cli(
+        *args,
+        cwd=tmp_path,
+        env={"BROKER_TEST_BACKEND": "sqlite", "BROKER_PROJECT_SCOPE": "1"},
+    )
+    assert code == 1
+    assert out == ""
+    actual_length = len(err)
+    assert actual_length < 1200
+    assert prefix + "..." in err
+    assert "OMITTED_NAME_SUFFIX" not in err
+    assert "Traceback" not in err
+    if json_output:
+        assert isinstance(json.loads(err), dict)
+    assert set(tmp_path.iterdir()) == {config_path}

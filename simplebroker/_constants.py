@@ -283,6 +283,13 @@ _WINDOWS_RESERVED_NAMES = {
 }
 
 
+def _path_diagnostic_preview(value: str) -> str:
+    """Keep rejected path/name previews bounded without changing admission."""
+    if len(value) > _MAX_PATH_COMPONENT_LENGTH:
+        return value[:_MAX_PATH_COMPONENT_LENGTH] + "..."
+    return value
+
+
 def _reject_dangerous_path_characters(
     path: str,
     context: str,
@@ -297,7 +304,8 @@ def _reject_dangerous_path_characters(
     )
     if unicode_control is not None:
         raise ValueError(
-            f"{context} contains dangerous character '{unicode_control}': {path}. "
+            f"{context} contains dangerous character '{unicode_control}': "
+            f"{_path_diagnostic_preview(path)}. "
             "Path components must not contain reserved, internally interpreted, "
             "or control characters."
         )
@@ -313,7 +321,8 @@ def _reject_dangerous_path_characters(
 
     dangerous_char = match.group()
     raise ValueError(
-        f"{context} contains dangerous character '{dangerous_char}': {path}. "
+        f"{context} contains dangerous character '{dangerous_char}': "
+        f"{_path_diagnostic_preview(path)}. "
         "Path components must not contain reserved, internally interpreted, "
         "or control characters."
     )
@@ -329,26 +338,31 @@ def _validate_path_component(
     """Validate one already-separated path component."""
     if part == "..":
         raise ValueError(
-            f"{context} must not contain parent directory references: {path}"
+            f"{context} must not contain parent directory references: "
+            f"{_path_diagnostic_preview(path)}"
         )
     if part == ".":
         raise ValueError(
-            f"{context} must not contain current directory references: {path}"
+            f"{context} must not contain current directory references: "
+            f"{_path_diagnostic_preview(path)}"
         )
 
     if is_windows and part.split(".")[0].upper() in _WINDOWS_RESERVED_NAMES:
         raise ValueError(
-            f"{context} contains Windows reserved name '{part}': {path}. "
+            f"{context} contains Windows reserved name "
+            f"'{_path_diagnostic_preview(part)}': {_path_diagnostic_preview(path)}. "
             "Avoid names like CON, PRN, AUX, NUL, COM1-9, LPT1-9."
         )
 
     if part.startswith(" ") or part.endswith(" "):
         raise ValueError(
-            f"{context} component cannot start or end with spaces: '{part}' in {path}"
+            f"{context} component cannot start or end with spaces: "
+            f"'{_path_diagnostic_preview(part)}' in {_path_diagnostic_preview(path)}"
         )
     if len(part) > _MAX_PATH_COMPONENT_LENGTH:
         raise ValueError(
-            f"{context} component too long (max 255 chars): '{part[:50]}...' in {path}"
+            f"{context} component too long (max 255 chars): "
+            f"'{_path_diagnostic_preview(part)}'"
         )
 
 
@@ -410,7 +424,8 @@ def _validate_safe_path_components(path: str, context: str = "path") -> None:
         or normalized_path == "."
     ):
         raise ValueError(
-            f"{context} must not contain current directory references: {path}"
+            f"{context} must not contain current directory references: "
+            f"{_path_diagnostic_preview(path)}"
         )
 
     # POSIX limits depend on the filesystem and system call. Windows retains
@@ -418,7 +433,7 @@ def _validate_safe_path_components(path: str, context: str = "path") -> None:
     if is_windows and len(path) > _WINDOWS_MAX_PATH_LENGTH:
         raise ValueError(
             f"{context} too long (max {_WINDOWS_MAX_PATH_LENGTH} chars): "
-            f"{len(path)} chars in {path[:50]}..."
+            f"{len(path)} chars in {_path_diagnostic_preview(path)}"
         )
 
 

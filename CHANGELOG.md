@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Path-validation errors show rejected names and paths only through their first
+  255 characters, followed by `...` when truncated, instead of echoing oversized
+  inputs. Accepted names and validation order are unchanged.
+
 ## [8.2.0] - 2026-09-14
 
 ### Added
