@@ -173,12 +173,15 @@ blocks until the named owner is reread):
   transient Queues from one handle, which no consumer demonstrates today.
 - `session.close()` recycles the calling thread's cache, closes the minted
   queues through their public `Queue.close()`, then drops its own lease, in
-  that order. The context manager's exit is `close()`, so `with` alone is
-  complete cleanup for the thread that runs it. A minted Queue in use on
+  that order. The calling thread must first close its iterators and exit its
+  Queue or session connection contexts; close rejects an active same-thread
+  operation before changing scope state. The context manager's exit is
+  `close()`, so `with` is complete cleanup for the thread that runs it once
+  those operations have exited. A minted Queue in use on
   another thread behaves exactly as today's cross-thread `Queue.close()`. The
   finalizer path never recycles.
 - Fork: a handle is process-local and is never recovered in a child. Every
-  method checks the stored key pid before any lock; `queue()`,
+  active lifecycle method checks the stored key pid before any lock; `queue()`,
   `recycle_thread()`, `connection()`, and `__enter__` raise on an inherited
   handle for every backend; `close()` on an inherited handle marks itself
   released and finalizes nothing; `connect()` in the child is always a new
@@ -322,7 +325,7 @@ debt exists between commits.
 > `backend_name`, and `config` attributes; ordinary `Queue(...)` use requires
 > no session setup.
 >
-> `BrokerSession.connect(db_path | BrokerTarget, *, config=None)` returns a
+> `BrokerSession.connect(db_path | BrokerTarget | None = None, *, config=None)` returns a
 > handle holding one lease on the process session for that resolved target
 > and configuration. Two handles whose target, backend options, and
 > configuration snapshot resolve to the same session key share one process
@@ -338,7 +341,7 @@ debt exists between commits.
 > today. Closing a minted Queue early is harmless and its later close at
 > scope exit is a no-op; a minted Queue reused after an early close is
 > closed again at scope exit. `queue.session` returns the owning handle for
-> a minted Queue, closed or not, and `None` for an ephemeral,
+> a minted Queue while its session handle remains alive, and `None` for an ephemeral,
 > injected-runner, or directly constructed persistent Queue. A handle held
 > open while minting an unbounded number of transient Queues retains them
 > all; that workload wants one handle per scope, not one handle per process.
@@ -365,13 +368,15 @@ debt exists between commits.
 > `session.close()` performs three steps in order: it releases the calling
 > thread's cached core exactly as `recycle_thread()` does, closes every Queue
 > the handle minted through the public `Queue.close()`, then drops the
-> handle's lease. Closing is idempotent, and the handle admits no new Queues
+> handle's lease. The calling thread first closes its iterators and exits its
+> Queue or session connection contexts; close rejects an active same-thread
+> operation before changing scope state. Closing is idempotent, and the handle admits no new Queues
 > or connections once closing has begun. Every step is attempted after an
 > ordinary failure, and the first failure is raised with later ones attached
 > as notes. A non-ordinary `BaseException` propagates immediately: completed
 > steps stay completed, the lease is released at most once, and no step is
-> rolled back or re-admitted; a later `close()` re-attempts only what was
-> not completed. The thread-cache step means a handle
+> rolled back or re-admitted; a later `close()` re-runs the idempotent sequence
+> and completes what was skipped. The thread-cache step means a handle
 > held for a thread's lifetime and closed on that thread leaves nothing
 > behind without any further call; a handle closed on a thread with no cache
 > releases nothing there. When that lease was the last on the session in this
@@ -520,9 +525,11 @@ boundary"; guide watcher section; CHANGELOG.
 ```python
 class BrokerSession:
     @classmethod
-    def connect(cls, db_path, *, config=None) -> "BrokerSession":
+    def connect(cls, db_path=None, *, config=None) -> "BrokerSession":
         resolved = resolve_config(config=config)
-        target = _canonicalize_queue_target(db_path, config=resolved, runner=None)
+        unresolved = (_default_target_from_config(resolved)
+                      if db_path is None or db_path == "" else db_path)
+        target = _canonicalize_queue_target(unresolved, config=resolved, runner=None)
         key, process_session = acquire_process_broker_session(
             target, config=resolved, factory_builder=_build_process_session_core_factory)
         return cls(key, process_session, target, resolved)
@@ -601,8 +608,9 @@ class BrokerSession:
   fork guard; if any property ever dereferences `_process_session`, it must
   gain the guard.
 
-`sbqueue.py`: `self._session = None` in `__init__`; `session` property. No
-change to `close()`.
+`sbqueue.py`: `self._session = None` in `__init__`; `session` property. The
+stored value is a weak reference so the public back-reference does not delay
+session lease release. No change to `close()`.
 
 `__init__.py`: import and export `BrokerSession`.
 
@@ -828,6 +836,15 @@ rounds of a change to `_broker_session.py`.
 
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
+| [SB-API-3], slice 2 | Add the terminal-timeout no-retry firing test in slice 2 and record its red result. | The test did not land in slice 2, so the original red claim overstated the evidence. A post-completion audit added the missing concrete `factory.close_core` test. It proves that the late failure reaches the disposer once, the closed session does not re-adopt the core, and neither `close_all()` nor a later call retries disposal. | The behavior was implemented, but the promised firing evidence was omitted. Retrospective execution cannot reconstruct a valid red run. | None. |
+| Slice 3 through slice 6 evidence | Preserve a failing pre-change probe and promotion baseline for every slice. | Promotion baselines were recoverable from the commit chain, but failing pre-change output was not preserved for these slices. The execution log now states that limitation instead of implying red-first evidence. | Green results and later review do not establish that each new test failed before implementation. | None. |
+| Slice 4 test seams and homes | Inject lifecycle faults only at `factory.close_core`, `BrokerDB.shutdown`, or `runner.release_thread_connection`; put fork coverage in `test_fork_safety.py`. | Several BrokerSession tests used façade, registry-release, Queue-constructor, and Queue-close monkeypatches, and fork coverage landed in `test_broker_session.py`. The post-completion audit added missing behavioral coverage at real resources or the allowed `factory.close_core` seam where feasible; the original seam and location differences remain visible for follow-up rather than being described as plan-conformant. | The implementation review favored direct handle-state probes, but that diverged from the written anti-mocking and test-home constraints. | Move remaining synthetic façade/registry tests to concrete seams when their failure points can be expressed without weakening the scenario; test-home organization alone does not change the contract. |
+| Slice 2 deleted tests | Delete only the enumerated last-user/retry tests. | `test_queue_close_surrenders_lease_once_when_local_cleanup_fails` and `test_queue_close_retains_local_and_final_cleanup_failures` were also removed. | The deletions were semantically required because both exercised the deleted `drop_thread_user` last-user cleanup path, but they were omitted from the planned deletion list. Explicit and deferred cleanup failure ordering remains covered at the process-session seams. | None. |
+| `SM-WATCHER-LIFECYCLE` evidence | Cite transition-table tests that fire the new watcher ownership rule. | The implementation row cited `test_watcher_transition_tables.py`, but the ownership cases landed elsewhere and the cited file was unchanged. | The evidence map was broader than the actual firing tests. | Point the implementation row at the exact ownership tests. |
+| Implicit target parity | Require an explicit `db_path` for `BrokerSession.connect()`. | `None` and `""` now resolve through the same configured-default path as `Queue`, and the parameter is optional. | Mirroring `Queue(..., persistent=True)` must not silently create a SQLite file named `None`; parity is safer than a new rejection rule. | [SB-API-3] now specifies both implicit forms. |
+| Minted Queue back-reference | Store the owning session directly on each Queue. | Queue stores a weak reference and reports `None` after the session is collected; the session still strongly owns its minted Queue inventory until close or collection. | A strong two-way edge delayed handle finalization and lease release until cyclic GC without adding ownership value. | [SB-API-3] now defines the live-owner boundary. |
+| Close with a same-thread operation open | Rely on the existing iterators-first invariant. | `BrokerSession.close()` rejects before closing the scope when the calling thread has an active Queue or session connection operation. | Dropping the final lease otherwise waits through the terminal timeout on the caller's own operation and can close underneath it. | [SB-API-3] and the guide state the actionable precondition. |
+| Operation acquire/release implementation | Duplicate Queue's three exit branches in `session.connection()`. | `DBConnection._operation_connection()` owns the shared acquire/release branches used by both Queue and BrokerSession. | One lifecycle owner prevents the two public contexts from drifting on `GeneratorExit` or failure handling. | None. |
 
 ## Review Log and Dispositions
 
@@ -921,6 +938,15 @@ still `draft` while its index row and Task 6 said completed; this was corrected
 and the final verdict recorded here. The reviewer's focused high-risk
 selection passed 163 tests.
 
+2026-09-15, post-completion correctness review: **PASS after two documentation
+dispositions.** Runtime fixes for implicit targets, same-thread close,
+finalization, operation acquire/release, watcher ownership, and terminal-timeout
+disposal were accepted. The review required the plan and implementation
+rationale to state the active-operation close precondition, and required the
+two deleted Queue-close tests to be described as obsolete last-user tests
+rather than an unresolved coverage gap. Both corrections landed; the final
+review found no remaining actionable issue.
+
 ## Execution Log
 
 - 2026-09-15: Plan authored against `004a7e9`. Design selected by the owner
@@ -932,7 +958,9 @@ selection passed 163 tests.
   here per commit.
 - 2026-09-15, slice 2: comprehension gates answered as written above. Red
   evidence: the restored worker-retention cases failed against `004a7e9`
-  because Queue close released the last registered thread user. Promotion
+  because Queue close released the last registered thread user. No red result
+  was preserved for the promised terminal-timeout no-retry replacement; that
+  firing test was added only in the post-completion audit. Promotion
   baseline `849d4df`. Subtracted user counts, cause sentinels, registration,
   hold counters, and late-claim retry; retained nested-acquisition unwind,
   `GeneratorExit`, the claim carrier, and one explicit-cleanup drain hold.
@@ -953,7 +981,8 @@ selection passed 163 tests.
   passed, 11 skipped plus extension suite 324 passed, 6 skipped; Redis wrapper
   1715 passed, 19 skipped plus extension suite 360 passed, 1 skipped. Ruff,
   format, mypy, suppression, DOM-15, plan-context, doc-path, and diff gates
-  passed.
+  passed. Promotion baseline `e1d73bc`; a failing pre-change probe was not
+  preserved, so red-first evidence for this slice cannot be claimed.
 - 2026-09-15, slice 4: added the package-root `BrokerSession` lifetime handle,
   scope-owned minted Queues, shared connection access, explicit caller-thread
   recycling, reject-all inherited-handle behavior, and the read-only
@@ -968,17 +997,37 @@ selection passed 163 tests.
   DOM-15, plan-context, doc-path, and diff gates passed. The Weft gate used
   `PYTHONPATH=/Users/van/Developer/simplebroker`, imported
   `/Users/van/Developer/simplebroker/simplebroker/__init__.py`, and passed its
-  42 task-runtime connection and lifecycle-state-machine tests.
+  42 task-runtime connection and lifecycle-state-machine tests. Promotion
+  baseline `0858c25`; failing pre-change output was not preserved.
 - 2026-09-15, slice 5: deprecated `Queue.conn` in its attribute docstring,
   [SB-API-3], the embedding guide, and CHANGELOG. The attribute remains
   readable and emits no warning in 8.3.x. Guidance distinguishes the minting
   scope (`queue.session`), a shared session connection
   (`session.connection()`), and an independent connection (`open_broker()`).
   Static, document, suppression, and targeted lifecycle gates passed.
+  Promotion baseline `64c31ee`; failing pre-change output was not preserved.
 - 2026-09-15, slice 6: added source-to-spec backlinks, indexed the public
   session module and its implementation rationale, added the embedding kernel
   recipe and durable lifecycle lesson, reconciled the status index, and
   recorded the final integrated review. Final full SQLite suite: 3866 passed,
   18 skipped. Static, format, mypy, suppression, DOM-15, plan-context,
   doc-path, diff, and targeted lifecycle gates passed. No agent-inventory
-  update was needed because tool availability did not change.
+  update was needed because tool availability did not change. Promotion
+  baseline `44967ac`; failing pre-change output was not preserved.
+- 2026-09-15, post-completion evidence audit: added the omitted
+  terminal-timeout no-retry firing test at the concrete `factory.close_core`
+  seam. Added BrokerSession probes for a closed handle's recycle no-op while a
+  sibling stays live, a temporary connection lease during concurrent close,
+  the injected-runner `Queue.session is None` case, and public descriptors.
+  The Deviation Log now records unpreserved red evidence, unplanned test
+  deletions, fault-seam and test-home differences, and the watcher evidence-map
+  mismatch instead of presenting the original execution as exact adherence.
+  A subsequent correctness pass aligned implicit targets with Queue, replaced
+  the Queue-to-session strong edge with a weak back-reference, rejected
+  same-thread close while an operation is open, centralized operation
+  acquire/release in `DBConnection`, corrected stale guide text, and pinned an
+  internally owned watcher's run-exit lease release. The remediation review
+  passed after two documentation corrections. Full verification: SQLite 3876
+  passed, 18 skipped; PostgreSQL 1753 passed, 11 skipped plus 325 passed, 6
+  skipped; Redis 1745 passed, 19 skipped plus 361 passed, 1 skipped. The Weft
+  task-runtime selection imported this checkout and passed 42 tests.

@@ -1316,6 +1316,66 @@ def test_terminal_timeout_does_not_close_core_during_active_disposal(
     assert factory.close_core_calls == 1
 
 
+def test_disposal_failure_after_terminal_timeout_surfaces_once_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disposal_started = threading.Event()
+    allow_disposal = threading.Event()
+    disposal_failure = RuntimeError("late disposal failed")
+
+    class Core:
+        def set_stop_event(self, stop_event: threading.Event | None) -> None:
+            del stop_event
+
+    class Factory:
+        def __init__(self) -> None:
+            self.close_core_calls = 0
+            self.close_calls = 0
+
+        def create(self, stop_event: threading.Event | None) -> Core:
+            del stop_event
+            return Core()
+
+        def close_core(self, core: Core) -> None:
+            del core
+            self.close_core_calls += 1
+            disposal_started.set()
+            assert allow_disposal.wait(timeout=_LIVENESS)
+            raise disposal_failure
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    factory = Factory()
+    session = _ProcessBrokerSession(cast(Any, factory))
+    monkeypatch.setattr(broker_session_module, "_CLOSE_ACTIVE_OPERATION_TIMEOUT", 0.0)
+
+    def dispose_on_worker() -> None:
+        session.get_connection(None, lease_operation=False)
+        session.cleanup_current_thread()
+
+    executor = cf.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(dispose_on_worker)
+    try:
+        assert disposal_started.wait(timeout=_LIVENESS)
+        session.close_all()
+        assert session._closed
+        assert session._cores == set()
+        assert factory.close_calls == 1
+    finally:
+        allow_disposal.set()
+
+    with pytest.raises(RuntimeError, match="late disposal failed") as caught:
+        future.result(timeout=_LIVENESS)
+    executor.shutdown()
+
+    assert caught.value is disposal_failure
+    assert session._cores == set()
+    assert factory.close_core_calls == 1
+    session.close_all()
+    assert factory.close_core_calls == 1
+
+
 class _InjectedLifecycleAbort(BaseException):
     pass
 

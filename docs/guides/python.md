@@ -99,9 +99,10 @@ Exhaustion means advancing until `StopIteration`; merely receiving the last
 row leaves the iterator suspended. Close it before closing its Queue or
 higher-level client. Cleanup ends the iterator-owned Queue operation. It does
 not by itself destroy a persistent Queue's cached resources or take ownership
-of a caller-injected runner. If Queue close or `cleanup_connections()` was
-requested while the iterator was suspended, this outermost operation exit also
-completes the deferred caller-thread release. Message settlement still follows
+of a caller-injected runner. If `cleanup_connections()` was requested while the
+iterator was suspended, this outermost operation exit also completes the
+deferred caller-thread release. Closing the Queue releases its lease; it does
+not request thread-cache cleanup. Message settlement still follows
 the selected delivery mode. For peek, cleanup does not acknowledge messages or
 turn live offset paging into a snapshot.
 
@@ -883,10 +884,11 @@ Rules of the road:
   unsupported reserved-object changes, not sidecars.
 - Connection lifetime follows the `Queue`: ephemeral queues get in and get out
   per session; `persistent=True` queues reuse their connection until explicit
-  `cleanup_connections()` releases the caller thread's cached resources. On a
-  worker thread, closing its last used Queue also releases that thread's cache;
-  an open sibling retains it. The main thread retains its cache until explicit
-  cleanup or final shared-session shutdown.
+  `cleanup_connections()` releases the caller thread's cached resources.
+  Closing a persistent Queue releases only its lease. Release a worker's cache
+  on that worker with `cleanup_connections()` or by closing a `BrokerSession`
+  used as the worker's context manager. A thread otherwise retains its cache
+  until explicit cleanup or final shared-session shutdown.
 - Use `?` (qmark) placeholders. They work natively on SQLite and are translated
   by the Postgres backend (where sidecar tables live in the broker's configured
   schema). Other SQL dialect differences are yours to manage.
@@ -989,6 +991,14 @@ its cache on the calling thread too: there is one cache per process-session key
 and thread, not one per handle. Use `session.connection()` for broadcast,
 statistics, and alias operations that should share the same runner or pool.
 Create a fresh session in a forked child; inherited session handles reject use.
+Close Queue iterators and exit Queue or session connection contexts before the
+session exits; closing a session inside one of its same-thread operations is
+rejected.
+
+A retained minted Queue can be used after the session closes, like any closed
+persistent Queue that is reused. If no other lease remains, that operation
+starts a new process session; `queue.session` identifies the closed handle only
+while the handle is still alive.
 
 `Queue.conn` is deprecated compatibility access. Use `queue.session` when you
 need the `BrokerSession` that minted a Queue, `session.connection()` for

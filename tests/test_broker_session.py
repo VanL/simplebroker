@@ -20,6 +20,23 @@ from simplebroker.db import BrokerDB, SQLiteRunner
 pytestmark = [pytest.mark.shared]
 
 
+@pytest.mark.parametrize("implicit_target", [None, ""])
+def test_connect_implicit_target_matches_queue_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    implicit_target: str | None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    queue = Queue("direct", db_path=implicit_target, persistent=True)
+    session = BrokerSession.connect(implicit_target)
+
+    assert session.target == queue.db_target
+    assert session.backend_name == queue.backend_name == "sqlite"
+
+    session.close()
+    queue.close()
+
+
 def test_connect_and_minted_queues_share_one_process_session(tmp_path: Path) -> None:
     target = str(tmp_path / "shared.db")
     first = BrokerSession.connect(target)
@@ -55,6 +72,29 @@ def test_recycle_through_one_handle_releases_another_handles_thread_core(
     assert queue.conn.get_core() is not old_core
     first.close()
     second.close()
+
+
+def test_closed_handle_recycle_is_noop_while_sibling_handle_is_live(
+    tmp_path: Path,
+) -> None:
+    target = str(tmp_path / "closed-sibling-recycle.db")
+    closed = BrokerSession.connect(target)
+    live = BrokerSession.connect(target)
+    queue = live.queue("jobs")
+    queue.write("payload")
+    assert queue.conn is not None
+
+    closed.close()
+    core = queue.conn.get_core()
+    raw = cast(SQLiteRunner, cast(BrokerDB, core)._runner).get_connection()
+    closed.recycle_thread()
+    raw.execute("SELECT 1")
+    assert queue.conn.get_core() is core
+
+    live.recycle_thread()
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        raw.execute("SELECT 1")
+    live.close()
 
 
 def test_session_scope_closes_early_reused_queue_lease(tmp_path: Path) -> None:
@@ -195,6 +235,22 @@ def test_recycle_thread_is_deferred_until_open_operation_exits(tmp_path: Path) -
     session.close()
 
 
+def test_close_rejects_an_open_same_thread_operation_without_closing_scope(
+    tmp_path: Path,
+) -> None:
+    session = BrokerSession.connect(str(tmp_path / "open-operation.db"))
+    queue = session.queue("jobs")
+
+    with (
+        queue.get_connection(),
+        pytest.raises(RuntimeError, match="Close its iterators"),
+    ):
+        session.close()
+
+    session.queue("still-open").write("payload")
+    session.close()
+
+
 def test_foreign_thread_close_does_not_recycle_worker_cache(tmp_path: Path) -> None:
     target = str(tmp_path / "foreign-close.db")
     anchor = Queue("anchor", db_path=target, persistent=True)
@@ -242,6 +298,33 @@ def test_connection_uses_the_shared_session(tmp_path: Path) -> None:
     session.close()
 
 
+def test_connection_lease_keeps_process_session_live_during_concurrent_close(
+    tmp_path: Path,
+) -> None:
+    session = BrokerSession.connect(str(tmp_path / "connection-close.db"))
+    process_session = session._process_session
+    connection_open = threading.Event()
+    allow_connection_close = threading.Event()
+
+    def hold_connection() -> None:
+        with session.connection():
+            connection_open.set()
+            assert allow_connection_close.wait(5.0)
+
+    thread = threading.Thread(target=hold_connection)
+    thread.start()
+    assert connection_open.wait(5.0)
+
+    session.close()
+    assert session._released
+    assert not process_session._closed
+
+    allow_connection_close.set()
+    thread.join(timeout=5.0)
+    assert not thread.is_alive()
+    assert process_session._closed
+
+
 def test_only_session_minted_queues_name_a_session(tmp_path: Path) -> None:
     direct = Queue("direct", db_path=str(tmp_path / "direct.db"), persistent=True)
     ephemeral = Queue("ephemeral", db_path=str(tmp_path / "ephemeral.db"))
@@ -254,6 +337,27 @@ def test_only_session_minted_queues_name_a_session(tmp_path: Path) -> None:
 
     direct.close()
     ephemeral.close()
+    session.close()
+
+
+def test_injected_runner_queue_has_no_session(tmp_path: Path) -> None:
+    runner = SQLiteRunner(str(tmp_path / "injected.db"))
+    queue = Queue("injected", runner=runner)
+
+    assert queue.session is None
+
+    queue.close()
+    runner.close()
+
+
+def test_session_descriptors_report_detached_identity(tmp_path: Path) -> None:
+    target = str(tmp_path / "descriptors.db")
+    session = BrokerSession.connect(target)
+
+    assert session.target == str(Path(target).resolve())
+    assert session.backend_name == "sqlite"
+    assert session.config == session._config
+
     session.close()
 
 
@@ -284,13 +388,21 @@ def test_dropped_handle_releases_only_its_lease(tmp_path: Path) -> None:
     assert process_session is not None
     core = anchor.conn.get_core()
     session = BrokerSession.connect(anchor.db_target)
+    minted = session.queue("minted")
     reference = weakref.ref(session)
 
-    del session
-    gc.collect()
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        del session
+        assert reference() is None
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
-    assert reference() is None
+    assert minted.session is None
     assert core in process_session._cores
+    minted.close()
     anchor.close()
 
 

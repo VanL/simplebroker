@@ -437,23 +437,26 @@ reusable backend resources span calls and need a named owner. Setup stays
 inspectable through `connect(target, config)` and the `target`, `backend_name`,
 and `config` attributes; ordinary `Queue(...)` use requires no session setup.
 
-`BrokerSession.connect(db_path | BrokerTarget, *, config=None)` returns a
-handle holding one lease on the process session for that resolved target and
-configuration. Two handles whose target, backend options, and configuration
-snapshot resolve to the same session key share one process session, one runner
-or pool, and one cached core per thread; they are not two pools and not two
-caches.
+`BrokerSession.connect(db_path | BrokerTarget | None = None, *, config=None)`
+returns a handle holding one lease on the process session for that resolved
+target and configuration. Two handles whose target, backend options, and
+configuration snapshot resolve to the same session key share one process
+session, one runner or pool, and one cached core per thread; they are not two
+pools and not two caches. As with `Queue`, `None` and the empty string select
+the target resolved from configuration.
 
 `session.queue(name)` returns a persistent `Queue` bound to the same target and
 configuration. Minted Queues are scope-owned resources: the handle retains
 every Queue it minted until the handle closes, and closes each one then through
 the public `Queue.close()`. Each minted Queue also holds its own lease, so it
 stays usable if the caller keeps a reference after `session.close()`, exactly
-as a persistent Queue closed and reused does today. Closing a minted Queue
-early is harmless and its later close at scope exit is a no-op; a minted Queue
-reused after an early close is closed again at scope exit. `queue.session`
-returns the owning handle for a minted Queue, closed or not, and `None` for an
-ephemeral, injected-runner, or directly constructed persistent Queue. A handle
+as a persistent Queue closed and reused does today. Its next operation starts
+a new process session if no other lease kept the old one alive. Closing a
+minted Queue early is harmless and its later close at scope exit is a no-op; a
+minted Queue reused after an early close is closed again at scope exit. `queue.session`
+returns the owning handle for a minted Queue while that handle remains alive,
+and `None` after it is collected or for an ephemeral, injected-runner, or
+directly constructed persistent Queue. A handle
 held open while minting an unbounded number of transient Queues retains them
 all; that workload wants one handle per scope, not one handle per process.
 
@@ -479,9 +482,12 @@ block ends the session only after that lease drops.
 `session.close()` performs three steps in order: it releases the calling
 thread's cached core exactly as `recycle_thread()` does, closes every Queue the
 handle minted through the public `Queue.close()`, then drops the handle's
-lease. Closing is idempotent, and the handle admits no new Queues or
-connections once closing has begun. Every step is attempted after an ordinary
-failure, and the first failure is raised with later ones attached as notes. A
+lease. The calling thread must first close its Queue iterators and exit its
+Queue or session connection contexts; `close()` rejects an open same-thread
+operation before closing the scope. Closing is idempotent, and the handle
+admits no new Queues or connections once closing has begun. Every step is
+attempted after an ordinary failure, and the first failure is raised with
+later ones attached as notes. A
 non-ordinary `BaseException` propagates immediately: completed steps stay
 completed, the lease is released at most once, and no step is rolled back or
 re-admitted; a later `close()` re-runs the idempotent sequence and completes
@@ -666,11 +672,11 @@ owns its cached core; a handle owns its lease. The run thread releases its own
 cached core when it leaves `run_forever()` or `run()`, regardless of who owns
 the Queue: a caller-supplied Queue that was used on the run thread loses its
 cache on that thread at run exit and reacquires on its next use there, exactly
-as after `cleanup_connections()`. The watcher never closes a caller-supplied
-Queue's lease; its owner or its `BrokerSession` does that. A `stop()` call from
-another thread while the watcher is idle closes the strategy and, for a Queue
-the watcher constructed, that Queue's lease; it never releases the calling
-thread's cached core.
+as after `cleanup_connections()`. At run exit the watcher also closes the lease
+of a Queue it constructed, while leaving a caller-supplied Queue's lease open;
+the caller or its `BrokerSession` owns that lease. A `stop()` call from another
+thread while the watcher is idle likewise closes the strategy and any Queue the
+watcher constructed; it never releases the calling thread's cached core.
 
 `ActivityWaiter.close()` is terminal and idempotent. The first invocation
 marks the waiter closed before backend cleanup begins. During that invocation

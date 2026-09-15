@@ -1,6 +1,6 @@
 # Session lifecycle integrity remediation
 
-Status: completed
+Status: superseded
 Class: 5 — public Queue lifecycle correctness, deferred cleanup, finalization,
 and shared-backend compatibility.
 Plan type: implementation and contract clarification.

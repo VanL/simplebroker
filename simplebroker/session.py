@@ -15,7 +15,7 @@ from ._constants import Config, resolve_config
 from ._key_material import snapshot_key_material
 from ._targets import BrokerTarget
 from .db import DBConnection, _build_process_session_core_factory
-from .sbqueue import Queue, _canonicalize_queue_target
+from .sbqueue import Queue, _canonicalize_queue_target, _default_target_from_config
 
 
 class BrokerSession:
@@ -52,14 +52,19 @@ class BrokerSession:
     @classmethod
     def connect(
         cls,
-        db_path: str | BrokerTarget,
+        db_path: str | BrokerTarget | None = None,
         *,
         config: Config | None = None,
     ) -> BrokerSession:
         """Acquire a process-session lease for one resolved target."""
         resolved = resolve_config(config=config)
+        unresolved_target = (
+            _default_target_from_config(resolved)
+            if db_path is None or db_path == ""
+            else db_path
+        )
         target = _canonicalize_queue_target(
-            db_path,
+            unresolved_target,
             config=resolved,
             runner=None,
         )
@@ -72,8 +77,11 @@ class BrokerSession:
         session._initialize(key, process_session, target, resolved)
         return session
 
+    def _is_process_owner(self) -> bool:
+        return self._key.pid == _broker_session._getpid()
+
     def _ensure_process_owner(self) -> None:
-        if self._key.pid != _broker_session._getpid():
+        if not self._is_process_owner():
             raise RuntimeError(
                 "BrokerSession used in a forked process. "
                 "Create a new session in the child process."
@@ -97,7 +105,7 @@ class BrokerSession:
                 persistent=True,
                 config=self._config,
             )
-            queue._session = self
+            queue._session = weakref.ref(self)
             self._queues.append(queue)
             return queue
 
@@ -122,23 +130,14 @@ class BrokerSession:
                 share_in_process=True,
             )
         try:
-            connection = conn.get_connection()
-            try:
+            with conn._operation_connection() as connection:
                 yield connection
-            except GeneratorExit:
-                conn.release_connection_after_use()
-                raise
-            except BaseException as failure:
-                conn.release_connection_after_use(active_failure=failure)
-                raise
-            else:
-                conn.release_connection_after_use()
         finally:
             conn.close()
 
     def close(self) -> None:
         """Recycle this thread, close minted Queues, and release this lease."""
-        if self._key.pid != _broker_session._getpid():
+        if not self._is_process_owner():
             self._released = True
             self._finalizer.detach()
             return
@@ -147,6 +146,12 @@ class BrokerSession:
             with self._lock:
                 if self._released:
                     return
+                if self._process_session.current_thread_operation_depth() > 0:
+                    raise RuntimeError(
+                        "BrokerSession cannot close while this thread has an open "
+                        "Queue or connection operation. Close its iterators and "
+                        "exit its connection contexts first."
+                    )
                 self._closing = True
                 queues = list(self._queues)
 
@@ -200,11 +205,7 @@ class BrokerSession:
 
     @property
     def backend_name(self) -> str:
-        return (
-            self._target.backend_name
-            if isinstance(self._target, BrokerTarget)
-            else "sqlite"
-        )
+        return self._key.backend_name
 
     @property
     def config(self) -> Config:

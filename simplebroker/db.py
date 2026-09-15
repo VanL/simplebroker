@@ -1191,6 +1191,22 @@ class DBConnection:
                     active_failure=active_failure,
                 )
 
+    @contextmanager
+    def _operation_connection(self) -> Iterator[BrokerConnection]:
+        """Yield one operation connection and balance its session lease."""
+
+        connection = self.get_connection()
+        try:
+            yield connection
+        except GeneratorExit:
+            self.release_connection_after_use()
+            raise
+        except BaseException as failure:
+            self.release_connection_after_use(active_failure=failure)
+            raise
+        else:
+            self.release_connection_after_use()
+
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Set the stop event used for interruptible retries."""
 

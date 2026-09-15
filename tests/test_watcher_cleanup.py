@@ -149,6 +149,33 @@ class TestWatcherCleanup:
 
         supplied.close()
 
+    def test_run_thread_closes_internally_owned_queue_lease(self, tmp_path) -> None:
+        target = str(tmp_path / "owned-run-thread.db")
+        anchor = Queue("anchor", db_path=target, persistent=True)
+        anchor.write("anchor")
+        assert anchor.conn is not None
+        session = anchor.conn._shared_session
+        assert session is not None
+        observed: dict[str, Any] = {}
+
+        class OneUseWatcher(QueueWatcher):
+            def _run_with_retries(self, max_retries: int = 3) -> None:
+                del max_retries
+                self._queue_obj.has_pending()
+                assert self._queue_obj.conn is not None
+                observed["core"] = self._queue_obj.conn.get_core()
+
+        watcher = OneUseWatcher("owned", lambda *_: None, db=target)
+        thread = watcher.run_in_thread()
+        thread.join(timeout=scale_timeout_for_ci(5.0))
+
+        assert not thread.is_alive()
+        assert watcher._queue_obj.conn is not None
+        assert watcher._queue_obj.conn._shared_released
+        assert observed["core"] not in session._cores
+
+        anchor.close()
+
     def test_live_watcher_finalizer_uses_normal_stop_lifecycle(
         self,
         tmp_path,

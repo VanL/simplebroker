@@ -283,7 +283,7 @@ class Queue:
             resolved_db_path, config=self._config, runner=runner
         )
         self._stop_event: threading.Event | None = None
-        self._session: BrokerSessionType | None = None
+        self._session: weakref.ReferenceType[BrokerSessionType] | None = None
 
         # Create DBConnection for persistent queues and injected-runner queues.
         # The built-in no-runner path keeps its current "get in, get out"
@@ -327,7 +327,7 @@ class Queue:
     @property
     def session(self) -> BrokerSessionType | None:
         """Return the BrokerSession that minted this Queue, when present."""
-        return self._session
+        return self._session() if self._session is not None else None
 
     def _move_destination_name(self, destination: Union[str, "Queue"]) -> str:
         if not isinstance(destination, Queue):
@@ -357,19 +357,8 @@ class Queue:
         if self.conn is not None:
             assert self.conn is not None  # Type guard for mypy
             self.conn.set_stop_event(self._stop_event)
-            connection = self.conn.get_connection()
-            try:
+            with self.conn._operation_connection() as connection:
                 yield connection
-            except GeneratorExit:
-                # Cleanup failure must surface from iterator.close(). Keep the
-                # established zero-argument hook for integration wrappers.
-                self.conn.release_connection_after_use()
-                raise
-            except BaseException as failure:
-                self.conn.release_connection_after_use(active_failure=failure)
-                raise
-            else:
-                self.conn.release_connection_after_use()
         else:
             with DBConnection(self._db_path, self._runner, config=self._config) as conn:
                 conn.set_stop_event(self._stop_event)

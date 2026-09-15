@@ -13,7 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration. It mints persistent Queues that share the process session,
   offers shared connection-level access and explicit caller-thread cache
   recycling, and closes its scoped Queues and lease on exit. Inherited handles
-  reject use in forked children; create a new session there.
+  reject use in forked children; create a new session there. Omitted, `None`,
+  and empty targets follow Queue's configured-default resolution. Close rejects
+  a same-thread operation that is still open, and `queue.session` weakly names
+  its live minting handle without delaying lease release.
 
 ### Deprecated
 
@@ -41,9 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their established cleanup scopes.
 - Watcher cleanup now separates thread-cache ownership from Queue-lease
   ownership. A watcher run releases its own thread's cached core on exit, even
-  for a caller-supplied Queue, while leaving that Queue's lease open. Stopping
-  an idle watcher closes its strategy and any Queue it constructed without
-  releasing the stop caller's thread cache.
+  for a caller-supplied Queue. Run exit also closes the lease of a Queue the
+  watcher constructed while leaving a caller-supplied Queue's lease open.
+  Stopping an idle watcher closes its strategy and any Queue it constructed
+  without releasing the stop caller's thread cache.
 
 ## [8.2.2] - 2026-09-14
 
