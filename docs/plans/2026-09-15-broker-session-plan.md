@@ -173,11 +173,11 @@ blocks until the named owner is reread):
   transient Queues from one handle, which no consumer demonstrates today.
 - `session.close()` recycles the calling thread's cache, closes the minted
   queues through their public `Queue.close()`, then drops its own lease, in
-  that order. The calling thread must first close its iterators and exit its
-  Queue or session connection contexts; close rejects an active same-thread
-  operation before changing scope state. The context manager's exit is
-  `close()`, so `with` is complete cleanup for the thread that runs it once
-  those operations have exited. A minted Queue in use on
+  that order. The calling thread must first close every iterator and exit every
+  Queue or session connection context using the same process-session key;
+  close rejects such an active operation on that thread before changing scope
+  state. The context manager's exit is `close()`, so `with` is complete cleanup
+  for the thread that runs it once those operations have exited. A minted Queue in use on
   another thread behaves exactly as today's cross-thread `Queue.close()`. The
   finalizer path never recycles.
 - Fork: a handle is process-local and is never recovered in a child. Every
@@ -368,9 +368,11 @@ debt exists between commits.
 > `session.close()` performs three steps in order: it releases the calling
 > thread's cached core exactly as `recycle_thread()` does, closes every Queue
 > the handle minted through the public `Queue.close()`, then drops the
-> handle's lease. The calling thread first closes its iterators and exits its
-> Queue or session connection contexts; close rejects an active same-thread
-> operation before changing scope state. Closing is idempotent, and the handle admits no new Queues
+> handle's lease. The calling thread first closes every iterator and exits
+> every Queue or session connection context using the same process-session
+> key; this includes operations opened through sibling handles or directly
+> constructed persistent Queues. Close rejects such an active operation on
+> that thread before changing scope state. Closing is idempotent, and the handle admits no new Queues
 > or connections once closing has begun. Every step is attempted after an
 > ordinary failure, and the first failure is raised with later ones attached
 > as notes. A non-ordinary `BaseException` propagates immediately: completed
@@ -384,7 +386,9 @@ debt exists between commits.
 > another thread observes exactly what a cross-thread `Queue.close()` observes
 > today. The handle is a context manager whose exit calls `close()`, so
 > `with BrokerSession.connect(...) as session:` is complete cleanup for the
-> thread that runs it. A handle that is garbage-collected without `close()`
+> thread that runs it once all same-key operations there have exited. If a
+> body exception is already propagating and close refuses, the body exception
+> stays primary and the refusal is attached as a note. A handle that is garbage-collected without `close()`
 > releases only its lease and never touches the collecting thread's cache.
 >
 > Read-only attributes: `target` (the normalized target, as `Queue.db_target`
@@ -947,6 +951,32 @@ two deleted Queue-close tests to be described as obsolete last-user tests
 rather than an unresolved coverage gap. Both corrections landed; the final
 review found no remaining actionable issue.
 
+Post-completion evidence-audit and correctness-review dispositions:
+
+| ID | Finding | Disposition |
+|----|---------|-------------|
+| P1 | The terminal-timeout no-retry promise lacked its planned firing test. | Accepted. Added the concrete `factory.close_core` proof; the Deviation Log records that no slice-2 red result survived. |
+| P2 | Closed-handle recycle behavior was not proved while a sibling handle kept the key live. | Accepted. Added the sibling-live no-op case. |
+| P3 | A temporary `session.connection()` lease racing close was not proved. | Accepted. Added the event-controlled lease and close case. |
+| P4 | `Queue.session is None` lacked the injected-runner branch. | Accepted. Added that constructor-shape case. |
+| P5 | Public descriptor coverage was incomplete. | Accepted. Added target, backend, and Config descriptor probes; the later follow-up also pins nested BrokerTarget option detachment. |
+| P6 | `connect(None)` and `connect("")` diverged from Queue default-target resolution. | Accepted in `8ec60a0`. Both forms now use Queue's configured-default path. |
+| P7 | The strong Queue-to-session back-reference delayed finalization. | Accepted in `8ec60a0`. The back-reference is weak; implementation doc 06 records why the inventory remains the sole owning edge. |
+| P8 | Closing inside a same-thread operation could wait on itself until terminal timeout. | Accepted in `8ec60a0`. Close now refuses before changing scope state, with the active-operation precondition documented. |
+| P9 | Queue and session connection contexts duplicated operation unwind logic. | Accepted in `8ec60a0`. `DBConnection._operation_connection()` is their single lifecycle owner. |
+| P10 | Internally constructed watcher Queue leases were not proved to close at run exit. | Accepted in `8ec60a0`. Added the firing test and aligned the spec, changelog, implementation map, and Python guide. |
+
+2026-09-15, follow-up review round 2: **all findings accepted**. The first two
+are contract corrections; the third is maintenance cleanup; the fourth closes
+test and traceability gaps without changing the ownership model.
+
+| ID | Finding | Disposition |
+|----|---------|-------------|
+| F1 | Context exit replaced an in-flight body exception when close refused an active same-thread operation. | Preserve the body exception, including `BaseException`, as primary and attach the close refusal as a note. Raise the refusal directly only when no body exception is active. Pin Queue-iterator and session-connection forms and state the context-manager precondition. |
+| F2 | Close refusal is key-wide on the calling thread, while docs and the diagnostic described handle-owned operations. | State that any operation on the same process-session key and calling thread can block close, including a sibling handle or directly constructed persistent Queue; use the same key-wide wording in the diagnostic. |
+| F3 | Small implementation leftovers obscured existing rules. | Share target detachment, remove the misleading recycle lock read, make inherited close enter the same closed state, and replace the inert `conn` string with documentation attached to the public surface. No new mechanism is introduced. |
+| F4 | Four contract sentences and the follow-up evidence trail remained incomplete. | Add concrete reuse, fork-distinct-session, BrokerTarget-detachment, and cleanup-failure probes where feasible; disclose any retained synthetic seam. Record watcher run-exit lease ownership, weak-reference rationale, follow-up baselines, red-evidence limits, hashes, and per-finding dispositions. |
+
 ## Execution Log
 
 - 2026-09-15: Plan authored against `004a7e9`. Design selected by the owner
@@ -1031,3 +1061,32 @@ review found no remaining actionable issue.
   passed, 18 skipped; PostgreSQL 1753 passed, 11 skipped plus 325 passed, 6
   skipped; Redis 1745 passed, 19 skipped plus 361 passed, 1 skipped. The Weft
   task-runtime selection imported this checkout and passed 42 tests.
+- 2026-09-15, cross-handle recycle proof, commit `b8fa87e`: against promotion
+  baseline `5f40902`, added the two-handle case proving that recycle through
+  one live handle closes the caller-thread core used through its sibling and
+  that the sibling reacquires on its next operation. BrokerSession and public
+  API tests, Ruff, and mypy passed. The test passed against the baseline
+  implementation when first run; no failing pre-change result exists, so this
+  commit has no red-first claim.
+- 2026-09-15, lifecycle correction, commit `8ec60a0`: against promotion
+  baseline `b8fa87e`, corrected implicit targets, the Queue back-reference,
+  same-thread close refusal, shared operation unwind, watcher run-exit lease
+  ownership, and the evidence record. The review supplied concrete failing
+  reproductions, but no test-run red output was preserved before the fixes, so
+  red-first evidence is not claimed. Verification: SQLite 3876 passed, 18
+  skipped; PostgreSQL 1753 passed, 11 skipped plus 325 passed, 6 skipped; Redis
+  1745 passed, 19 skipped plus 361 passed, 1 skipped; the Weft lifecycle
+  selection imported this checkout and passed 42 tests; static and document
+  gates passed.
+- 2026-09-15, context-failure and contract follow-up, commit `8bb9cdf`:
+  against promotion baseline `8ec60a0`, preserved an in-flight body exception
+  when context exit refuses key-wide close, shared BrokerTarget detachment,
+  removed the misleading recycle lock read, aligned inherited close state,
+  made the `Queue.conn` deprecation inspectable, corrected watcher guidance,
+  and added retained-Queue rebuild, fork-distinct-session, descriptor, and
+  concrete `BrokerDB.shutdown` failure probes. The review supplied confirmed
+  failing reproductions, but no test-run red output was preserved before the
+  fixes; no red-first claim is made. Verification: SQLite 3883 passed, 18
+  skipped; PostgreSQL 1760 passed, 11 skipped plus 325 passed, 6 skipped;
+  Redis 1752 passed, 19 skipped plus 361 passed, 1 skipped; Weft imported this
+  checkout and passed 42 lifecycle tests; static and document gates passed.

@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an open operation on the same process-session key and calling thread, and
   `queue.session` weakly names its live minting handle without delaying lease
   release.
-  Follow-up lifecycle proof and corrections landed in `b8fa87e` and `8ec60a0`.
+  Follow-up lifecycle proof and corrections landed in `b8fa87e`, `8ec60a0`,
+  and `8bb9cdf`.
 
 ### Deprecated
 
