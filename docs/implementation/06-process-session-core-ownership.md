@@ -113,9 +113,11 @@ changing scope state; otherwise it admits no new
 queues or connections, releases the calling thread's cache, closes every
 minted Queue, and drops the handle lease. Queue and process session calls occur
 outside the handle lock. Ordinary failures do not prevent later independent
-cleanup steps; interruptions preserve completed idempotent steps and leave
-admission closed. The finalizer releases only the handle lease because the
-collector thread does not own another thread's cache.
+cleanup steps. On context exit, an ordinary cleanup failure is attached to an
+already propagating body exception instead of replacing it; a cleanup
+`BaseException` retains priority. Interruptions preserve completed idempotent
+steps and leave admission closed. The finalizer releases only the handle lease
+because the collector thread does not own another thread's cache.
 
 The handle is strictly process-local. Every active method rejects an inherited
 handle before acquiring its lock, for every backend. Inherited `close()` is a

@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and empty targets follow Queue's configured-default resolution. Close rejects
   an open operation on the same process-session key and calling thread, and
   `queue.session` weakly names its live minting handle without delaying lease
-  release.
+  release. On context exit, ordinary cleanup failure is attached to an
+  in-flight body exception instead of replacing it.
   Follow-up lifecycle proof and corrections landed in `b8fa87e`, `8ec60a0`,
   and `8bb9cdf`.
 

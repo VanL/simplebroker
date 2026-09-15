@@ -501,10 +501,11 @@ the session in this process, the session ends as described above. A minted
 Queue still in use on another thread observes exactly what a cross-thread
 `Queue.close()` observes today. The handle is a context manager whose exit
 calls `close()`, subject to the same precondition that this thread has no open
-operation on the process-session key. If exit refuses while a body exception
-is already propagating, that exception remains primary and the refusal is
-attached as a note; without a body exception, exit raises the refusal. Thus
-`with BrokerSession.connect(...) as session:` is complete cleanup for the
+operation on the process-session key. If ordinary close cleanup fails while a
+body exception is already propagating, that exception remains primary and the
+cleanup failure is attached as a note; without a body exception, exit raises
+the cleanup failure. A cleanup `BaseException` retains its existing priority.
+Thus `with BrokerSession.connect(...) as session:` is complete cleanup for the
 thread that runs it when the precondition holds. A handle that is
 garbage-collected without `close()` releases only its lease and never touches
 the collecting thread's cache.

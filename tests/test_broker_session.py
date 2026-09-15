@@ -327,6 +327,65 @@ def test_context_exit_preserves_body_failure_when_same_key_operation_blocks_clos
         operation_owner.close()
 
 
+@pytest.mark.parametrize("body_failure_type", [ValueError, KeyboardInterrupt])
+def test_context_exit_keeps_body_failure_primary_over_ordinary_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    body_failure_type: type[BaseException],
+) -> None:
+    session = BrokerSession.connect(str(tmp_path / "exit-cleanup-failure.db"))
+    session.queue("jobs").write("payload")
+    real_shutdown = BrokerDB.shutdown
+    shutdown_calls = 0
+
+    def fail_first_shutdown(core: BrokerDB) -> None:
+        nonlocal shutdown_calls
+        shutdown_calls += 1
+        if shutdown_calls == 1:
+            raise OSError("cleanup failed")
+        real_shutdown(core)
+
+    monkeypatch.setattr(BrokerDB, "shutdown", fail_first_shutdown)
+    body_failure = body_failure_type("body")
+    with pytest.raises(body_failure_type) as raised, session:
+        raise body_failure
+
+    assert raised.value is body_failure
+    assert any(
+        "OSError: cleanup failed" in note
+        for note in getattr(raised.value, "__notes__", ())
+    )
+    assert shutdown_calls == 2
+    assert session._released
+
+
+def test_context_exit_keeps_cleanup_base_exception_priority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = BrokerSession.connect(str(tmp_path / "exit-cleanup-interrupt.db"))
+    session.queue("jobs").write("payload")
+    real_shutdown = BrokerDB.shutdown
+
+    class CleanupInterrupted(BaseException):
+        pass
+
+    def interrupt_shutdown(core: BrokerDB) -> None:
+        del core
+        raise CleanupInterrupted("cleanup interrupted")
+
+    monkeypatch.setattr(BrokerDB, "shutdown", interrupt_shutdown)
+    body_failure = ValueError("body")
+    with pytest.raises(CleanupInterrupted) as raised, session:
+        raise body_failure
+
+    assert raised.value.__context__ is body_failure
+    assert not session._released
+
+    monkeypatch.setattr(BrokerDB, "shutdown", real_shutdown)
+    session.close()
+
+
 def test_foreign_thread_close_does_not_recycle_worker_cache(tmp_path: Path) -> None:
     target = str(tmp_path / "foreign-close.db")
     anchor = Queue("anchor", db_path=target, persistent=True)

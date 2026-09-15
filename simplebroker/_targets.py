@@ -114,7 +114,7 @@ class BrokerTarget:
             return self.target
         return redact_backend_target(self.target)
 
-    def detached(self) -> BrokerTarget:
+    def _detached(self) -> BrokerTarget:
         """Return a descriptor whose nested options cannot mutate this target."""
 
         return replace(

@@ -198,7 +198,7 @@ class BrokerSession:
     ) -> None:
         try:
             self.close()
-        except _ActiveOperationCloseError as close_failure:
+        except Exception as close_failure:
             if exc is None:
                 raise
             _broker_session._attach_process_session_cleanup_failure(
@@ -210,7 +210,7 @@ class BrokerSession:
     def target(self) -> str | BrokerTarget:
         """Return the bound target without exposing mutable backend options."""
         if isinstance(self._target, BrokerTarget):
-            return self._target.detached()
+            return self._target._detached()
         return self._target
 
     @property

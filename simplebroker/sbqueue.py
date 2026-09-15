@@ -319,7 +319,7 @@ class Queue:
         """Report the bound target without exposing its mutable options."""
 
         if isinstance(self._db_path, BrokerTarget):
-            return self._db_path.detached()
+            return self._db_path._detached()
         return self._db_path
 
     @property

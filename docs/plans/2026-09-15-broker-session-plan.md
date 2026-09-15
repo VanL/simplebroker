@@ -387,9 +387,11 @@ debt exists between commits.
 > today. The handle is a context manager whose exit calls `close()`, so
 > `with BrokerSession.connect(...) as session:` is complete cleanup for the
 > thread that runs it once all same-key operations there have exited. If a
-> body exception is already propagating and close refuses, the body exception
-> stays primary and the refusal is attached as a note. A handle that is garbage-collected without `close()`
-> releases only its lease and never touches the collecting thread's cache.
+> body exception is already propagating and ordinary close cleanup fails, the
+> body exception stays primary and the cleanup failure is attached as a note;
+> a cleanup `BaseException` retains priority. A handle that is garbage-collected
+> without `close()` releases only its lease and never touches the collecting
+> thread's cache.
 >
 > Read-only attributes: `target` (the normalized target, as `Queue.db_target`
 > reports it), `backend_name`, and `config` (the retained snapshot).
@@ -972,7 +974,7 @@ test and traceability gaps without changing the ownership model.
 
 | ID | Finding | Disposition |
 |----|---------|-------------|
-| F1 | Context exit replaced an in-flight body exception when close refused an active same-thread operation. | Preserve the body exception, including `BaseException`, as primary and attach the close refusal as a note. Raise the refusal directly only when no body exception is active. Pin Queue-iterator and session-connection forms and state the context-manager precondition. |
+| F1 | Context exit replaced an in-flight body exception when close refused an active same-thread operation. | Preserve the body exception, including `BaseException`, as primary when ordinary close cleanup fails and attach that later failure as a note. Raise the cleanup failure directly only when no body exception is active; a cleanup `BaseException` retains priority. Pin refusal and ordinary-cleanup forms and state the context-manager precondition. |
 | F2 | Close refusal is key-wide on the calling thread, while docs and the diagnostic described handle-owned operations. | State that any operation on the same process-session key and calling thread can block close, including a sibling handle or directly constructed persistent Queue; use the same key-wide wording in the diagnostic. |
 | F3 | Small implementation leftovers obscured existing rules. | Share target detachment, remove the misleading recycle lock read, make inherited close enter the same closed state, and replace the inert `conn` string with documentation attached to the public surface. No new mechanism is introduced. |
 | F4 | Four contract sentences and the follow-up evidence trail remained incomplete. | Add concrete reuse, fork-distinct-session, BrokerTarget-detachment, and cleanup-failure probes where feasible; disclose any retained synthetic seam. Record watcher run-exit lease ownership, weak-reference rationale, follow-up baselines, red-evidence limits, hashes, and per-finding dispositions. |
