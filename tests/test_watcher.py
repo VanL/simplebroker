@@ -499,10 +499,10 @@ class TestQueueWatcher(WatcherTestBase):
         )
         thread = watcher.run_in_thread()
         try:
-            assert handled.wait(timeout=5.0)
+            assert handled.wait(timeout=scale_timeout_for_ci(5.0))
         finally:
             watcher.stop()
-            thread.join(timeout=5.0)
+            thread.join(timeout=scale_timeout_for_ci(5.0))
 
         assert not thread.is_alive()
         assert len(observed_cores) == 20

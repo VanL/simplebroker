@@ -3,6 +3,7 @@
 import gc
 import threading
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -104,6 +105,44 @@ class TestWatcherCleanup:
         assert stop_calls == [True]
         watcher._finalizer.detach()
         watcher._queue_obj.close()
+
+    def test_collected_watcher_on_worker_does_not_take_collector_cleanup(
+        self,
+        tmp_path,
+    ) -> None:
+        target = str(tmp_path / "watcher-worker-finalizer.db")
+        anchor = Queue("anchor", db_path=target, persistent=True)
+        anchor.write("anchor")
+        assert anchor.conn is not None
+        session = anchor.conn._shared_session
+        assert session is not None
+
+        def collect_watcher() -> None:
+            supplied_queue = Queue("supplied", db_path=target, persistent=True)
+            supplied_queue.write("before-collection")
+            assert supplied_queue.conn is not None
+            collector_core = supplied_queue.conn.get_core()
+            watcher = QueueWatcher(supplied_queue, lambda *_: None)
+            watcher_ref = weakref.ref(watcher)
+            finalizer = watcher._finalizer
+
+            del watcher
+            gc.collect()
+
+            assert watcher_ref() is None
+            assert not finalizer.alive
+            assert collector_core in session._cores
+            supplied_queue.write("after-collection")
+            assert supplied_queue.conn.get_core() is collector_core
+            supplied_queue.close()
+
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(collect_watcher).result(
+                    timeout=scale_timeout_for_ci(5.0)
+                )
+        finally:
+            anchor.close()
 
     def test_tracker_skips_watchers_whose_finalizer_already_released_resources(
         self,

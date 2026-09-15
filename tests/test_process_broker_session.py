@@ -935,6 +935,7 @@ def test_queue_finalizer_does_not_release_collector_thread_core(
     session = anchor.conn._shared_session
     assert session is not None
     queue_refs: list[weakref.ReferenceType[Queue]] = []
+    worker_cores: list[BrokerDB] = []
     worker_connections: list[sqlite3.Connection] = []
     gc_was_enabled = gc.isenabled()
     gc.disable()
@@ -945,6 +946,7 @@ def test_queue_finalizer_does_not_release_collector_thread_core(
         assert queue.conn is not None
         core = cast(BrokerDB, queue.conn.get_core())
         runner = cast(SQLiteRunner, core._runner)
+        worker_cores.append(core)
         worker_connections.extend(runner._all_connections)
         queue._test_cycle = queue  # type: ignore[attr-defined]
         queue_refs.append(weakref.ref(queue))
@@ -965,6 +967,9 @@ def test_queue_finalizer_does_not_release_collector_thread_core(
         assert main_core in session._cores
         assert session._thread_local.core is main_core
         main_connection.execute("SELECT 1")
+        assert worker_cores[0] in session._cores
+        for connection in worker_connections:
+            connection.execute("SELECT 1")
     finally:
         if gc_was_enabled:
             gc.enable()
@@ -987,6 +992,7 @@ def test_queue_finalizer_on_worker_does_not_release_collector_core(
     session = anchor.conn._shared_session
     assert session is not None
     abandoned_refs: list[weakref.ReferenceType[Queue]] = []
+    abandoned_cores: list[BrokerDB] = []
     abandoned_connections: list[sqlite3.Connection] = []
     observations: dict[str, object] = {}
     errors: list[BaseException] = []
@@ -998,6 +1004,7 @@ def test_queue_finalizer_on_worker_does_not_release_collector_core(
         queue.write("message")
         assert queue.conn is not None
         core = cast(BrokerDB, queue.conn.get_core())
+        abandoned_cores.append(core)
         abandoned_connections.extend(cast(SQLiteRunner, core._runner)._all_connections)
         queue._test_cycle = queue  # type: ignore[attr-defined]
         abandoned_refs.append(weakref.ref(queue))
@@ -1011,10 +1018,13 @@ def test_queue_finalizer_on_worker_does_not_release_collector_core(
             gc.collect()
             observations["abandoned_collected"] = abandoned_refs[0]() is None
             observations["collector_owned"] = collector_core in session._cores
+            observations["abandoned_owned"] = abandoned_cores[0] in session._cores
             observations["same_core"] = (
                 collector_queue.conn.get_core() is collector_core
             )
             collector_raw.execute("SELECT 1")
+            for connection in abandoned_connections:
+                connection.execute("SELECT 1")
             collector_queue.close()
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
@@ -1031,6 +1041,7 @@ def test_queue_finalizer_on_worker_does_not_release_collector_core(
         assert errors == []
         assert observations == {
             "abandoned_collected": True,
+            "abandoned_owned": True,
             "collector_owned": True,
             "same_core": True,
         }

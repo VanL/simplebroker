@@ -97,6 +97,31 @@ pass; bootstrap source `2f93ee5`)
 
 ## Ledger
 
+- 2026-09-15: A finalizer runs on the thread that performs collection, not
+  necessarily the thread that used or owns a resource. Thread-local cleanup
+  must require positive owner registration before decrementing users or
+  releasing cached state; arbitrary-thread collection can otherwise dispose
+  an unrelated live resource while failing to reclaim the departed owner's
+  resource. (Close-thread resource-release plan, source `f4cc5d6`.)
+
+- 2026-09-15: `GeneratorExit` from explicit iterator close is lifecycle
+  control, not an application failure to preserve. If deferred cleanup fails
+  and no real application failure is active, propagate that cleanup failure;
+  otherwise Python can consume `GeneratorExit` and hide the only actionable
+  failure. (Close-thread resource-release plan, source `f4cc5d6`.)
+
+- 2026-09-15: A thread-local registration marker must identify the resource
+  generation it registered, not merely remember that registration once
+  happened. Terminal replacement can preserve a logical key while changing the
+  resource owner. Store and compare the exact session object before skipping
+  registration or releasing a user.
+
+- 2026-09-15: Multi-step resource acquisition needs an observable publication
+  boundary. Snapshot both the lower-level lease depth and the higher-level
+  ownership stack, then unwind only state created by that attempt. A generic
+  failure handler that cannot tell whether publication happened can consume an
+  outer operation or leak the newly acquired one.
+
 - 2026-09-12: Canonical config storage is not a public key migration. Preserve lookup, iteration, opaque extras and receipt recognition separately; canonical-looking legacy extras must never drive broker settings. A naming view must carry the receipt through resolver gates without rereading env. Evidence: shared-configuration-loader plan and its collision/handoff regressions.
 
 Dated moment-tier entries (foldable after age floor and distillation).
@@ -437,28 +462,3 @@ Dated moment-tier entries (foldable after age floor and distillation).
   keep rollback on setup failure, and start the measured clock only after the
   readiness state is established. Evidence: cross-platform release-gate
   recovery plan and exact-SHA Windows 3.14 timeout diagnostics.
-
-- 2026-09-15: A finalizer runs on the thread that performs collection, not
-  necessarily the thread that used or owns a resource. Thread-local cleanup
-  must require positive owner registration before decrementing users or
-  releasing cached state; arbitrary-thread collection can otherwise dispose
-  an unrelated live resource while failing to reclaim the departed owner's
-  resource. (Close-thread resource-release plan, source `f4cc5d6`.)
-
-- 2026-09-15: `GeneratorExit` from explicit iterator close is lifecycle
-  control, not an application failure to preserve. If deferred cleanup fails
-  and no real application failure is active, propagate that cleanup failure;
-  otherwise Python can consume `GeneratorExit` and hide the only actionable
-  failure. (Close-thread resource-release plan, source `f4cc5d6`.)
-
-- 2026-09-15: A thread-local registration marker must identify the resource
-  generation it registered, not merely remember that registration once
-  happened. Terminal replacement can preserve a logical key while changing the
-  resource owner. Store and compare the exact session object before skipping
-  registration or releasing a user.
-
-- 2026-09-15: Multi-step resource acquisition needs an observable publication
-  boundary. Snapshot both the lower-level lease depth and the higher-level
-  ownership stack, then unwind only state created by that attempt. A generic
-  failure handler that cannot tell whether publication happened can consume an
-  outer operation or leak the newly acquired one.
