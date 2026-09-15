@@ -7,51 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.3.0] - 2026-09-15
+
 ### Added
 
-- `BrokerSession` is a package-root lifetime handle for one resolved target and
-  configuration. It mints persistent Queues that share the process session,
-  offers shared connection-level access and explicit caller-thread cache
-  recycling, and closes its scoped Queues and lease on exit. Inherited handles
-  reject use in forked children; create a new session there. Omitted, `None`,
-  and empty targets follow Queue's configured-default resolution. Close rejects
-  an open operation on the same process-session key and calling thread, and
-  `queue.session` weakly names its live minting handle without delaying lease
-  release. On context exit, ordinary cleanup failure is attached to an
-  in-flight body exception instead of replacing it.
-  Follow-up lifecycle proof and corrections landed in `b8fa87e`, `8ec60a0`,
-  `8bb9cdf`, and `c61be0f`.
+- Applications that use several queues for one broker target can now open a
+  `BrokerSession`, create persistent queues from it, and release those queues,
+  the shared session lease, and the caller thread's cached backend resources at
+  one explicit scope boundary. `session.connection()` supports cross-queue
+  operations without opening an unrelated session, `session.recycle_thread()`
+  releases the current thread's cache, and `queue.session` identifies the live
+  session that created a queue. Sessions use the same configured-default target
+  resolution as Queue and reject inherited use after a fork, where callers must
+  create a new process-local session.
 
 ### Deprecated
 
-- `Queue.conn` remains readable without a runtime warning through 8.3.x, but
-  callers should use `queue.session`, `session.connection()`, or
-  `open_broker()` according to the ownership they need.
+- `Queue.conn` remains readable without a runtime warning through 8.3.x for a
+  gradual migration. Use `queue.session` to reach the session that created a
+  queue, `session.connection()` for connection-level work within that session,
+  or `open_broker()` for an independent connection scope.
+
+### Changed
+
+- SimpleBroker 8.3.0, `simplebroker-pg` 4.3.0, and `simplebroker-redis` 4.3.0
+  are the coordinated release set. Both extensions require SimpleBroker 8.3.0
+  or newer, and the core `pg` and `redis` extras require the matching 4.3.0
+  extension or newer, so new installations select the complete lifecycle API.
 
 ### Fixed
 
-- Persistent Queue close once again releases only that Queue's process-session
-  lease. A worker thread that must release its cached broker core while another
-  lease keeps the session alive now does so explicitly with
-  `cleanup_connections()`; deferred explicit cleanup still waits for the
-  outermost operation, preserves application-failure priority, and never
-  affects another thread's cache. Failed nested acquisitions and interruptions
-  at the claim/disposal handoff preserve their outer operation, live-session
-  ownership, and drain accounting. A late disposal failure after terminal
-  timeout surfaces to its caller without retry. Iterator-close failures remain
-  visible, hookless shared runners stay factory-owned, and built-in SQLite
-  watchers still distinguish persistent cached-core replacement from each
-  ephemeral operation's fresh core identity.
-- Ordinary watcher garbage collection no longer claims stop or thread-local
-  cleanup authority. Interpreter-exit finalization still routes a live watcher
-  through its normal stop lifecycle, while active runs and Queue owners retain
-  their established cleanup scopes.
-- Watcher cleanup now separates thread-cache ownership from Queue-lease
-  ownership. A watcher run releases its own thread's cached core on exit, even
-  for a caller-supplied Queue. Run exit also closes the lease of a Queue the
-  watcher constructed while leaving a caller-supplied Queue's lease open.
-  Stopping an idle watcher closes its strategy and any Queue it constructed
-  without releasing the stop caller's thread cache.
+- Closing one persistent Queue no longer tears down cached backend resources
+  still shared by another live Queue or session. Worker threads can explicitly
+  release their own cached resources with `cleanup_connections()` after their
+  current operation finishes; cleanup never reaches into another thread's
+  cache. Nested failures and interrupted cleanup preserve the active operation
+  and session ownership, and iterator or late cleanup failures remain visible
+  instead of being retried or silently discarded.
+- Watchers now release only the resources they own. A completed run releases
+  its own thread's cached backend resources and closes a Queue it constructed,
+  while leaving a caller-supplied Queue open. Stopping an idle watcher does not
+  clear the stop caller's unrelated thread cache, and ordinary garbage
+  collection no longer stops a live watcher or claims another owner's cleanup;
+  interpreter shutdown still follows the normal stop path.
+- `BrokerSession` context cleanup no longer replaces an exception raised by the
+  application body. The original exception remains primary, with any cleanup
+  failure attached for diagnosis.
 
 ## [8.2.2] - 2026-09-14
 
