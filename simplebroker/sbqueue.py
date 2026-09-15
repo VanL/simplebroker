@@ -236,6 +236,12 @@ class Queue:
 
     # Type annotations for instance attributes
     conn: DBConnection | None
+    """Deprecated compatibility access to the Queue's connection manager.
+
+    Use ``queue.session`` for the minting scope, ``session.connection()`` for
+    shared connection-level work, or ``open_broker()`` for an independent
+    connection. This attribute remains readable through the 8.3 release line.
+    """
 
     def __init__(
         self,

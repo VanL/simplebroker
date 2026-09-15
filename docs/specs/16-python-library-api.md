@@ -382,6 +382,12 @@ _Implementation mapping_:
   the supplied `Config` directly as that instance's snapshot, including for
   ephemeral operations and later lazy backend/core creation. Any documented
   per-call config replaces the retained snapshot for that call.
+- `Queue.conn` remains readable through 8.3.x for compatibility with code that
+  reached the connection manager directly, but it is deprecated and is not
+  part of the supported surface. A later plan may relocate or remove it. Use
+  `queue.session` to reach the minting scope when present,
+  `session.connection()` for connection-level operations sharing that scope,
+  or `open_broker()` for an independent connection.
 
 For a persistent Queue using a process-shared session, each thread that uses
 the Queue caches one core and backend checkout for that session. `close()`

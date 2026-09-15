@@ -990,6 +990,11 @@ and thread, not one per handle. Use `session.connection()` for broadcast,
 statistics, and alias operations that should share the same runner or pool.
 Create a fresh session in a forked child; inherited session handles reject use.
 
+`Queue.conn` is deprecated compatibility access. Use `queue.session` when you
+need the `BrokerSession` that minted a Queue, `session.connection()` for
+connection-level work sharing that session, or `open_broker()` when the work
+should own an independent connection. No runtime warning is emitted in 8.3.x.
+
 Weft is the reference implementation of this pattern. Its public
 `WeftClient` owns a resolved `WeftContext`; `WeftContext.queue(name)` constructs
 `Queue(name, db_path=context.broker_target, config=context.broker_config)`, and

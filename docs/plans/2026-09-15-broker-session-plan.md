@@ -730,7 +730,7 @@ and Review Log completed.
    Done signal: all gates plus real PG and Redis session tests green;
    interface review re-run on the promoted text only.
    Commit subject: `Add BrokerSession as the public process-session handle`.
-5. [ ] **Commit 5 — Queue.conn deprecation.** Slice 5.
+5. [x] **Commit 5 — Queue.conn deprecation.** Slice 5.
    Commit subject: `Deprecate Queue.conn in favor of session and open_broker`.
 6. [ ] **Commit 6 — traceability.** Slice 6; flip the Status Index row.
    Commit subject: `Reconcile BrokerSession traceability and close the plan`.
@@ -960,3 +960,9 @@ departure. No new runbook candidate.
   `PYTHONPATH=/Users/van/Developer/simplebroker`, imported
   `/Users/van/Developer/simplebroker/simplebroker/__init__.py`, and passed its
   42 task-runtime connection and lifecycle-state-machine tests.
+- 2026-09-15, slice 5: deprecated `Queue.conn` in its attribute docstring,
+  [SB-API-3], the embedding guide, and CHANGELOG. The attribute remains
+  readable and emits no warning in 8.3.x. Guidance distinguishes the minting
+  scope (`queue.session`), a shared session connection
+  (`session.connection()`), and an independent connection (`open_broker()`).
+  Static, document, suppression, and targeted lifecycle gates passed.

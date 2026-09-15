@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recycling, and closes its scoped Queues and lease on exit. Inherited handles
   reject use in forked children; create a new session there.
 
+### Deprecated
+
+- `Queue.conn` remains readable without a runtime warning through 8.3.x, but
+  callers should use `queue.session`, `session.connection()`, or
+  `open_broker()` according to the ownership they need.
+
 ### Fixed
 
 - Persistent Queue close once again releases only that Queue's process-session
