@@ -1092,3 +1092,13 @@ test and traceability gaps without changing the ownership model.
   skipped; PostgreSQL 1760 passed, 11 skipped plus 325 passed, 6 skipped;
   Redis 1752 passed, 19 skipped plus 361 passed, 1 skipped; Weft imported this
   checkout and passed 42 lifecycle tests; static and document gates passed.
+- 2026-09-15, general context-cleanup priority correction, commit `c61be0f`:
+  against promotion baseline `87ec26f`, extended body-exception priority from
+  close refusal to every ordinary cleanup `Exception`, while retaining cleanup
+  `BaseException` priority. Renamed BrokerTarget detachment as a private helper
+  so the correction adds no undocumented public API. The review supplied the
+  ordinary-failure reproduction; no test-run red output was preserved, so no
+  red-first claim is made. Verification: full SQLite suite 3885 passed, 18
+  skipped before the final cleanup-interruption probe; all 9 context-exit tests
+  passed after that probe was added. Ruff, mypy, suppression, DOM-15,
+  plan-context, doc-path, and diff gates passed. Independent final review passed.
