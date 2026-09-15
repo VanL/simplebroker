@@ -1,6 +1,6 @@
 # BrokerSession: name the process session, subtract last-user inference
 
-Status: draft
+Status: completed
 Class: 5 — public library contract change: new package-root type, reverted
 (unreleased) `persistent=True` close semantics, watcher ownership rule, and a
 downstream (Weft) adoption boundary. Hardening applies: deferred cleanup, fork,
@@ -732,7 +732,7 @@ and Review Log completed.
    Commit subject: `Add BrokerSession as the public process-session handle`.
 5. [x] **Commit 5 — Queue.conn deprecation.** Slice 5.
    Commit subject: `Deprecate Queue.conn in favor of session and open_broker`.
-6. [ ] **Commit 6 — traceability.** Slice 6; flip the Status Index row.
+6. [x] **Commit 6 — traceability.** Slice 6; flip the Status Index row.
    Commit subject: `Reconcile BrokerSession traceability and close the plan`.
 
 Stop and revise the plan if correctness requires thread-liveness tracking,
@@ -912,6 +912,15 @@ leaving read-only descriptors explicitly outside that claim. All eleven
 principles pass; the visible session setup remains the recorded deliberate
 departure. No new runbook candidate.
 
+2026-09-15, final integrated review: **PASS after closure-metadata
+disposition.** The reviewer found no code, public-contract, conceptual-unity,
+or unnecessary-complexity defect. It confirmed one registry, a lifetime-only
+public handle, explicit thread-local recycle, coherent lease ownership, and a
+`_close_lock` justified by concurrent close and retry. The plan header was
+still `draft` while its index row and Task 6 said completed; this was corrected
+and the final verdict recorded here. The reviewer's focused high-risk
+selection passed 163 tests.
+
 ## Execution Log
 
 - 2026-09-15: Plan authored against `004a7e9`. Design selected by the owner
@@ -966,3 +975,10 @@ departure. No new runbook candidate.
   scope (`queue.session`), a shared session connection
   (`session.connection()`), and an independent connection (`open_broker()`).
   Static, document, suppression, and targeted lifecycle gates passed.
+- 2026-09-15, slice 6: added source-to-spec backlinks, indexed the public
+  session module and its implementation rationale, added the embedding kernel
+  recipe and durable lifecycle lesson, reconciled the status index, and
+  recorded the final integrated review. Final full SQLite suite: 3866 passed,
+  18 skipped. Static, format, mypy, suppression, DOM-15, plan-context,
+  doc-path, diff, and targeted lifecycle gates passed. No agent-inventory
+  update was needed because tool availability did not change.

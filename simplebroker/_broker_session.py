@@ -1,4 +1,4 @@
-"""Process-local broker session sharing for persistent Queue handles."""
+"""Process-local broker session sharing ([SB-API-3], [SB-API-11])."""
 
 from __future__ import annotations
 

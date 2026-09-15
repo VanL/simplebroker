@@ -24,6 +24,7 @@ Quick pointers to the key guidance documents in this repository.
 | `simplebroker/` | The package: CLI (`__main__.py`), broker session, delivery, backends (`_backends/`), constants, maintenance |
 | `simplebroker/_constants.py` | Shared constants, DEFAULT_CONFIG field definitions, one resolve_config function and the read-only Config object |
 | `simplebroker/_broker_session.py` | Process-session identity, registry/refcount, admission and drain, per-thread core cache |
+| `simplebroker/session.py` | Public `BrokerSession` lifetime handle over the existing process-session registry |
 | `simplebroker/_message_id.py` | Exact message-ID normalization and canonical JSON-string formatting |
 | `simplebroker/sbqueue.py` | Public named-queue handle, backend identity, Queue operation leases, and activity-waiter binding |
 | `simplebroker/db.py` | Concrete process-session core factory, runner publication and checkout rollback, database operations, and the private first-party SQL probe |

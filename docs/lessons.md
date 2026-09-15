@@ -462,3 +462,9 @@ Dated moment-tier entries (foldable after age floor and distillation).
   keep rollback on setup failure, and start the measured clock only after the
   readiness state is established. Evidence: cross-platform release-gate
   recovery plan and exact-SHA Windows 3.14 timeout diagnostics.
+- 2026-09-15: Per-handle close cannot reliably infer that a thread is done with
+  a process-shared cache. Several handles can share one cache, and the last
+  close may run on a different thread. Keep handle close lease-only; name the
+  larger lifetime with an explicit session, and recycle a thread's cache from
+  that thread. Evidence: BrokerSession plan, worker probes, and Weft teardown
+  analysis.

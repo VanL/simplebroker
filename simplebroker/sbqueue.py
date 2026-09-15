@@ -1,4 +1,4 @@
-"""User-friendly Queue API for SimpleBroker.
+"""User-friendly Queue API for SimpleBroker [SB-API-3].
 
 This module provides a simplified interface for working with individual message
 queues without managing the underlying database connection.

@@ -1,4 +1,4 @@
-"""Broker core, connection lifecycle, and the SQLite specialization.
+"""Broker core, connection lifecycle, and the SQLite specialization [SB-API-3].
 
 ``BrokerCore`` implements broker operations against any database: each broker
 target, including Redis, is a database ([SB-ID-1]). PostgreSQL runs through

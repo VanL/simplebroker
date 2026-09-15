@@ -1,4 +1,4 @@
-"""Public lifetime handle for process-shared broker resources [SB-API-3]."""
+"""Public process-session lifetime handle ([SB-API-3], [SB-API-11])."""
 
 from __future__ import annotations
 

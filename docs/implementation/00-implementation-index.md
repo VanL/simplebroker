@@ -24,6 +24,8 @@ read order stay aligned instead of competing.
 4. `04-cross-thread-finalization-poisoning.md`
 5. `05-product-invariant-inventory.md`
 6. `06-process-session-core-ownership.md`
+   Start here for `BrokerSession`, persistent Queue leases, per-thread caches,
+   and the boundary between handle close and caller-thread recycle.
 7. `07-complexity-and-state-machine-map.md`
 8. `08-message-identity-and-write-visibility.md`
 9. `09-storage-schema-and-claim-lifecycle.md`

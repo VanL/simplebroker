@@ -1,4 +1,4 @@
-"""Light-weight queue watcher for SimpleBroker.
+"""Light-weight queue watcher for SimpleBroker [SB-API-6].
 
 This module provides an efficient polling mechanism to consume or monitor
 queues with minimal overhead and fast response times.

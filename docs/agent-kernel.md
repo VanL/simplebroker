@@ -386,6 +386,11 @@ Normative public surfaces and packaging:
   object; expose `queue(name) -> Queue(name, db_path=target, config=config)`.
   House references: Weft `WeftContext.queue()`, Taut
   `broker_target` + `broker_config` handoff (sibling repos).
+- When one task thread uses several queues, hold one `BrokerSession` for that
+  task and create its queues through `session.queue(name)`. Exit the session on
+  the same thread so it recycles that thread's cached core and closes the
+  queues it minted. Use `session.connection()` for cross-queue work that must
+  share the session. Create a new session in a forked child.
 
 ## Reuse handles; recreate across processes
 
