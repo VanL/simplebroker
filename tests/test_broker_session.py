@@ -35,6 +35,28 @@ def test_connect_and_minted_queues_share_one_process_session(tmp_path: Path) -> 
     second.close()
 
 
+def test_recycle_through_one_handle_releases_another_handles_thread_core(
+    tmp_path: Path,
+) -> None:
+    target = str(tmp_path / "shared-recycle.db")
+    first = BrokerSession.connect(target)
+    second = BrokerSession.connect(target)
+    queue = second.queue("jobs")
+    queue.write("payload")
+    assert queue.conn is not None
+    old_core = queue.conn.get_core()
+    assert isinstance(old_core, BrokerDB)
+    old_raw = cast(SQLiteRunner, old_core._runner).get_connection()
+
+    first.recycle_thread()
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        old_raw.execute("SELECT 1")
+    assert queue.conn.get_core() is not old_core
+    first.close()
+    second.close()
+
+
 def test_session_scope_closes_early_reused_queue_lease(tmp_path: Path) -> None:
     session = BrokerSession.connect(str(tmp_path / "scope.db"))
     queue = session.queue("jobs")
