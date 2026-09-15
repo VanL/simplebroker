@@ -426,7 +426,9 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- [Host paths and database names](../plans/2026-09-14-host-path-name-boundary-plan.md): preserve host ancestors while validating selected names.
+- retired: 2026-09-14-host-path-name-boundary-plan — source `c844476`;
+  see the ledger in `docs/plans/README.md`. It preserves host ancestors while
+  validating selected names.
 
 - retired: 2026-09-13-verified-review-remediation-plan — source `1c6898b`;
   see the ledger in `docs/plans/README.md`. It owns database-name grammar and

@@ -437,3 +437,16 @@ Dated moment-tier entries (foldable after age floor and distillation).
   keep rollback on setup failure, and start the measured clock only after the
   readiness state is established. Evidence: cross-platform release-gate
   recovery plan and exact-SHA Windows 3.14 timeout diagnostics.
+
+- 2026-09-15: A finalizer runs on the thread that performs collection, not
+  necessarily the thread that used or owns a resource. Thread-local cleanup
+  must require positive owner registration before decrementing users or
+  releasing cached state; arbitrary-thread collection can otherwise dispose
+  an unrelated live resource while failing to reclaim the departed owner's
+  resource. (Close-thread resource-release plan, source `f4cc5d6`.)
+
+- 2026-09-15: `GeneratorExit` from explicit iterator close is lifecycle
+  control, not an application failure to preserve. If deferred cleanup fails
+  and no real application failure is active, propagate that cleanup failure;
+  otherwise Python can consume `GeneratorExit` and hide the only actionable
+  failure. (Close-thread resource-release plan, source `f4cc5d6`.)

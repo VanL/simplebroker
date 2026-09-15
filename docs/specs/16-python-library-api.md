@@ -1081,9 +1081,13 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- [Caller-thread resource release on close](../plans/2026-09-15-close-thread-resource-release-plan.md): implementation and verification record for this lifecycle contract.
+- retired: 2026-09-15-close-thread-resource-release-plan — source `f4cc5d6`;
+  see the ledger in `docs/plans/README.md`. It is the implementation and
+  verification record for this lifecycle contract.
 
-- [Host paths and database names](../plans/2026-09-14-host-path-name-boundary-plan.md): preserve host ancestors while validating selected names.
+- retired: 2026-09-14-host-path-name-boundary-plan — source `c844476`;
+  see the ledger in `docs/plans/README.md`. It preserves host ancestors while
+  validating selected names.
 
 - retired: 2026-09-13-verified-review-remediation-plan — source `1c6898b`;
   see the ledger in `docs/plans/README.md`. It owns target binding, fork
