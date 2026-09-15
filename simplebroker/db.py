@@ -964,14 +964,19 @@ class DBConnection:
         def open_connection() -> BrokerConnection:
             self._ensure_project_target_initialized()
             session = self._ensure_shared_session()
-            connection = session.get_connection(self._stop_event)
-            self._register_thread_use(session)
+            operation_depth = session.current_thread_operation_depth()
+            stack_depth = self._shared_operation_stack_depth()
             try:
+                connection = session.get_connection(self._stop_event)
+                self._register_thread_use(session)
                 self._push_shared_operation_session(session)
-            except Exception as failure:
-                session.release_current_thread_connection(active_failure=failure)
+                return connection
+            except BaseException as failure:
+                if self._shared_operation_stack_depth() > stack_depth:
+                    self.release_connection_after_use(active_failure=failure)
+                elif session.current_thread_operation_depth() > operation_depth:
+                    session.release_current_thread_connection(active_failure=failure)
                 raise
-            return connection
 
         return self._open_connection_with_retry(
             open_connection,
@@ -983,10 +988,19 @@ class DBConnection:
 
         if threading.current_thread() is threading.main_thread():
             return
-        if bool(getattr(self._thread_local, "shared_user_registered", False)):
+        if getattr(self._thread_local, "shared_user_session", None) is session:
             return
         session.add_thread_user()
-        self._thread_local.shared_user_registered = True
+        self._thread_local.shared_user_session = session
+
+    def _shared_operation_stack_depth(self) -> int:
+        """Return this manager's operation-session stack depth."""
+
+        stack = cast(
+            "list[_ProcessBrokerSession] | None",
+            getattr(self._thread_local, "shared_operation_sessions", None),
+        )
+        return 0 if stack is None else len(stack)
 
     def _push_shared_operation_session(self, session: "_ProcessBrokerSession") -> None:
         stack = cast(
@@ -1189,11 +1203,6 @@ class DBConnection:
                     active_failure=active_failure,
                 )
 
-    def _release_connection_after_failure(self, failure: BaseException) -> None:
-        """Release one operation while preserving its unwinding failure."""
-
-        self.release_connection_after_use(active_failure=failure)
-
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Set the stop event used for interruptible retries."""
 
@@ -1217,21 +1226,21 @@ class DBConnection:
         if self._share_in_process:
             if self._shared_key is not None and not self._shared_released:
                 cleanup_failure: Exception | None = None
-                if (
+                shared_session = self._shared_session
+                registered_session = getattr(
+                    self._thread_local,
+                    "shared_user_session",
+                    None,
+                )
+                if shared_session is not None and (
                     not self._has_inherited_shared_session()
-                    and self._shared_session is not None
-                    and bool(
-                        getattr(
-                            self._thread_local,
-                            "shared_user_registered",
-                            False,
-                        )
-                    )
+                    and registered_session is shared_session
                 ):
-                    delattr(self._thread_local, "shared_user_registered")
+                    delattr(self._thread_local, "shared_user_session")
+                    session_to_drop = cast("_ProcessBrokerSession", shared_session)
                     cleanup_failure = _broker_session._capture_process_session_cleanup(
                         cleanup_failure,
-                        self._shared_session.drop_thread_user,
+                        session_to_drop.drop_thread_user,
                     )
 
                 try:

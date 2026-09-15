@@ -100,6 +100,19 @@ _uniform = random.uniform
 # strategy stops trusting the fast-path change hint.
 _MAX_PRAGMA_FAILURES = 10
 
+
+def _finalize_watcher_lifecycle(
+    watcher_ref: weakref.ReferenceType[BaseWatcher],
+) -> None:
+    """Stop a still-live watcher during interpreter-exit finalization."""
+
+    watcher = watcher_ref()
+    if watcher is None:
+        return
+    with contextlib.suppress(Exception):
+        watcher.stop()
+
+
 if TYPE_CHECKING:
     from ._backend_plugins import ActivityWaiter
 
@@ -1245,53 +1258,19 @@ class BaseWatcher(ABC):
                 logger.warning(f"Error during stop in __exit__: {e}")
 
     def _setup_finalizer(self) -> None:
-        """Set up automatic cleanup finalizer.
+        """Install the finalizer used by cleanup ownership tracking.
 
-        This provides a safety net for resource cleanup if the watcher
-        is garbage collected without proper shutdown. This is especially
-        important on Windows where open file handles prevent TemporaryDirectory
-        from removing .db files.
-
-        WARNING: This is a safety net, NOT a replacement for proper cleanup!
-        --------------------------------------------------------------------
-        The finalizer runs during garbage collection, which is:
-        - Non-deterministic (might not run immediately)
-        - Not guaranteed (might not run at all in some cases)
-        - Too late (resources held longer than necessary)
-
-        Always use context managers or call stop() explicitly!
+        During ordinary collection the weak reference is already dead, so the
+        callback takes no action. At interpreter exit a still-live watcher is
+        stopped through its normal lifecycle owner. The callback never invokes
+        thread-local Queue cleanup directly.
         """
 
-        def _auto_cleanup(wref: weakref.ReferenceType[BaseWatcher]) -> None:
-            """Automatic cleanup function called by finalizer.
-
-            If user code forgets to call stop() / join the thread, the watcher
-            object will eventually be garbage-collected. This finalizer ensures
-            the background thread is stopped and joined and that the thread-local
-            BrokerDB is closed, so every SQLite connection is released before
-            the temp directory is removed.
-            """
-            obj = wref()
-            if obj is None:  # already GC'ed
-                return
-
-            # Try to stop the watcher
-            with contextlib.suppress(Exception):
-                obj.stop()
-
-            # Try to join the thread if it exists
-            thr = getattr(obj, "_thread", None)
-            if thr is not None:
-                thread = thr() if isinstance(thr, weakref.ref) else thr
-                if isinstance(thread, threading.Thread) and thread.is_alive():
-                    with contextlib.suppress(Exception):
-                        thread.join(timeout=1.0)  # don't hang indefinitely
-
-            # Ensure the per-thread BrokerDB is closed
-            with contextlib.suppress(Exception):
-                obj._cleanup_thread_local()
-
-        self._finalizer = weakref.finalize(self, _auto_cleanup, weakref.ref(self))
+        self._finalizer = weakref.finalize(
+            self,
+            _finalize_watcher_lifecycle,
+            weakref.ref(self),
+        )
 
     def __del__(self) -> None:
         """Destructor warns if watcher wasn't properly stopped."""

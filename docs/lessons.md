@@ -450,3 +450,15 @@ Dated moment-tier entries (foldable after age floor and distillation).
   and no real application failure is active, propagate that cleanup failure;
   otherwise Python can consume `GeneratorExit` and hide the only actionable
   failure. (Close-thread resource-release plan, source `f4cc5d6`.)
+
+- 2026-09-15: A thread-local registration marker must identify the resource
+  generation it registered, not merely remember that registration once
+  happened. Terminal replacement can preserve a logical key while changing the
+  resource owner. Store and compare the exact session object before skipping
+  registration or releasing a user.
+
+- 2026-09-15: Multi-step resource acquisition needs an observable publication
+  boundary. Snapshot both the lower-level lease depth and the higher-level
+  ownership stack, then unwind only state created by that attempt. A generic
+  failure handler that cannot tell whether publication happened can consume an
+  outer operation or leak the newly acquired one.

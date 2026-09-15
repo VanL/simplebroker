@@ -1,11 +1,14 @@
 """Test that watchers are properly cleaned up."""
 
+import gc
 import threading
+import weakref
 from typing import Any
 
 import pytest
 
-from simplebroker.watcher import QueueWatcher
+from simplebroker import Queue
+from simplebroker.watcher import QueueWatcher, _finalize_watcher_lifecycle
 
 # Import cleanup helper
 from .helper_scripts.cleanup import WatcherTracker, register_watcher
@@ -42,6 +45,65 @@ class TestWatcherCleanup:
         finally:
             for watcher in watchers:
                 watcher.stop()
+
+    def test_collected_watcher_does_not_take_caller_thread_cleanup(
+        self,
+        tmp_path,
+    ) -> None:
+        target = str(tmp_path / "watcher-finalizer.db")
+        anchor = Queue("anchor", db_path=target, persistent=True)
+        anchor.write("anchor")
+        assert anchor.conn is not None
+        session = anchor.conn._shared_session
+        assert session is not None
+        anchor_core = anchor.conn.get_core()
+
+        owned_watcher = QueueWatcher("owned", lambda *_: None, db=target)
+        owned_watcher._queue_obj.has_pending()
+        owned_queue_ref = weakref.ref(owned_watcher._queue_obj)
+        owned_finalizer = owned_watcher._finalizer
+        owned_watcher_ref = weakref.ref(owned_watcher)
+        del owned_watcher
+        gc.collect()
+
+        assert owned_watcher_ref() is None
+        assert owned_queue_ref() is None
+        assert not owned_finalizer.alive
+        assert anchor_core in session._cores
+        assert anchor.conn.get_core() is anchor_core
+
+        supplied_queue = Queue("supplied", db_path=target, persistent=True)
+        supplied_watcher = QueueWatcher(supplied_queue, lambda *_: None)
+        supplied_stop_event = supplied_watcher._stop_event
+        supplied_finalizer = supplied_watcher._finalizer
+        supplied_watcher_ref = weakref.ref(supplied_watcher)
+        del supplied_watcher
+        gc.collect()
+
+        assert supplied_watcher_ref() is None
+        assert not supplied_finalizer.alive
+        assert not supplied_stop_event.is_set()
+        supplied_queue.write("still-usable")
+        assert supplied_queue.conn is not None
+        assert supplied_queue.conn.get_core() is anchor_core
+
+        supplied_queue.close()
+        anchor.close()
+
+    def test_live_watcher_finalizer_uses_normal_stop_lifecycle(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        watcher = QueueWatcher("live-finalizer", lambda *_: None, db=str(tmp_path))
+        stop_calls: list[bool] = []
+
+        monkeypatch.setattr(watcher, "stop", lambda: stop_calls.append(True))
+        _finalize_watcher_lifecycle(weakref.ref(watcher))
+
+        assert stop_calls == [True]
+        watcher._finalizer.detach()
+        watcher._queue_obj.close()
 
     def test_tracker_skips_watchers_whose_finalizer_already_released_resources(
         self,

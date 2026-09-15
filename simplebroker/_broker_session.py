@@ -9,7 +9,6 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Protocol, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
@@ -18,6 +17,8 @@ from ._key_material import FrozenValue, freeze_key_material, snapshot_key_materi
 from ._targets import BrokerTarget, normalize_sqlite_target
 
 _CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
+_PENDING_CLEANUP_EXPLICIT = object()
+_PENDING_CLEANUP_LAST_USER = object()
 
 # Module-owned pid seam: tests patch this alias instead of the shared
 # ``os.getpid``, which other threads and finalizers may observe.
@@ -65,6 +66,13 @@ class _RegistryEntry:
     refcount: int = 0
 
 
+@dataclass
+class _CoreDisposalClaim:
+    """Carry detached-core ownership across an interruptible handoff."""
+
+    core: BrokerConnection | None = None
+
+
 # Retain inherited resource graphs without invoking their parent-owned cleanup.
 _ABANDONED_FORK_SESSION_ENTRIES: list[dict[_SessionKey, _RegistryEntry]] = []
 
@@ -84,11 +92,12 @@ def _retain_cleanup_failure(
 
     if primary is None:
         return failure
+    failure_notes = tuple(getattr(failure, "__notes__", ()))
     primary.add_note(
         "Additional process-session cleanup failure: "
         f"{type(failure).__qualname__}: {_stable_exception_message(failure)}"
     )
-    for note in getattr(failure, "__notes__", ()):
+    for note in failure_notes:
         primary.add_note(f"Additional process-session cleanup diagnostic: {note}")
     return primary
 
@@ -99,12 +108,21 @@ def _attach_process_session_cleanup_failure(
 ) -> None:
     """Attach deferred cleanup evidence without replacing the active failure."""
 
+    failure_notes = tuple(getattr(failure, "__notes__", ()))
     primary.add_note(
         "Additional process-session cleanup failure: "
         f"{type(failure).__qualname__}: {_stable_exception_message(failure)}"
     )
-    for note in getattr(failure, "__notes__", ()):
+    for note in failure_notes:
         primary.add_note(f"Additional process-session cleanup diagnostic: {note}")
+
+
+def _first_present_failure(
+    *failures: BaseException | None,
+) -> BaseException | None:
+    """Return the first failure by identity, without invoking truthiness."""
+
+    return next((failure for failure in failures if failure is not None), None)
 
 
 def _capture_process_session_cleanup(
@@ -257,31 +275,35 @@ class _ProcessBrokerSession:
     def _end_operation(self, *, active_failure: BaseException | None = None) -> None:
         """Release one active queue operation lease."""
 
-        core_to_close: BrokerConnection | None = None
-        with self._operation_condition:
-            depth = int(getattr(self._thread_local, "operation_depth", 0))
-            if depth <= 0:
-                return
-
-            if depth > 1:
-                self._thread_local.operation_depth = depth - 1
-            else:
-                delattr(self._thread_local, "operation_depth")
-
-            if self._active_operations <= 0:
-                return
-            if depth == 1:
-                core_to_close = self._claim_pending_cleanup_locked()
-
+        claim = _CoreDisposalClaim()
+        release_operation = False
         cleanup_failure: Exception | None = None
+        unwind_failure: BaseException | None = None
         try:
-            if core_to_close is not None:
-                cleanup_failure = self._dispose_claimed_core(core_to_close)
-        finally:
             with self._operation_condition:
-                self._active_operations -= 1
-                if self._active_operations == 0:
-                    self._operation_condition.notify_all()
+                depth = self._pop_operation_depth_locked()
+                if depth is None or self._active_operations <= 0:
+                    return
+                release_operation = True
+                if depth == 1:
+                    self._claim_pending_cleanup_locked(claim)
+
+            if claim.core is not None:
+                cleanup_failure = self._dispose_claimed_core(claim)
+        except BaseException as failure:
+            unwind_failure = failure
+            raise
+        finally:
+            self._restore_claimed_core(claim)
+            if release_operation:
+                self._release_operation_hold()
+            retry_failure = self._retry_closed_claims_after_operation(
+                unwind_failure,
+                cleanup_failure,
+                active_failure,
+            )
+            if retry_failure is not None:
+                cleanup_failure = retry_failure
 
         if cleanup_failure is not None:
             if active_failure is not None:
@@ -292,85 +314,194 @@ class _ProcessBrokerSession:
             else:
                 raise cleanup_failure
 
-    def _claim_current_thread_core_locked(self) -> BrokerConnection | None:
-        """Detach this thread's core while the operation condition is held."""
+    def _pop_operation_depth_locked(self) -> int | None:
+        """Release and return this thread's current operation depth."""
+
+        depth = self.current_thread_operation_depth()
+        if depth <= 0:
+            return None
+        if depth > 1:
+            self._thread_local.operation_depth = depth - 1
+        else:
+            delattr(self._thread_local, "operation_depth")
+        return depth
+
+    def _claim_current_thread_core_locked(
+        self,
+        claim: _CoreDisposalClaim,
+    ) -> None:
+        """Detach reusable TLS while retaining session ownership."""
 
         core = cast(
             BrokerConnection | None,
             getattr(self._thread_local, "core", None),
         )
         if core is None:
-            return None
+            return
+        claim.core = core
         delattr(self._thread_local, "core")
         self._cores.discard(core)
-        return core
 
-    def _claim_pending_cleanup_locked(self) -> BrokerConnection | None:
+    def _claim_pending_cleanup_locked(self, claim: _CoreDisposalClaim) -> None:
         """Consume a pending outermost cleanup after operation guards pass."""
 
-        if not bool(getattr(self._thread_local, "cleanup_pending", False)):
-            return None
-        delattr(self._thread_local, "cleanup_pending")
+        if getattr(self._thread_local, "cleanup_pending", None) is None:
+            return
         if self._closed:
+            delattr(self._thread_local, "cleanup_pending")
             if hasattr(self._thread_local, "core"):
                 delattr(self._thread_local, "core")
-            return None
-        return self._claim_current_thread_core_locked()
+            return
+        self._claim_current_thread_core_locked(claim)
+        delattr(self._thread_local, "cleanup_pending")
 
-    def _restore_failed_core(self, core: BrokerConnection) -> None:
-        """Retain a failed detached core for terminal session cleanup."""
+    def _restore_claimed_core(self, claim: _CoreDisposalClaim) -> None:
+        """Return an unfinished detached claim to terminal session ownership."""
 
+        core = claim.core
+        if core is None:
+            return
         with self._operation_condition:
-            if not self._closed:
-                self._cores.add(core)
+            self._cores.add(core)
+            claim.core = None
 
-    def _dispose_claimed_core(self, core: BrokerConnection) -> Exception | None:
-        """Dispose one detached core, restoring ownership after any failure."""
+    def _dispose_claimed_core(self, claim: _CoreDisposalClaim) -> Exception | None:
+        """Dispose one detached core; session ownership survives failure."""
 
+        core = claim.core
+        assert core is not None
         try:
             self._factory.close_core(core)
         except Exception as failure:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-035] exception
-            self._restore_failed_core(core)
+            self._restore_claimed_core(claim)
             return failure
         except BaseException:
-            self._restore_failed_core(core)
+            self._restore_claimed_core(claim)
             raise
+        claim.core = None
         return None
 
-    def _request_current_thread_cleanup_locked(self) -> BrokerConnection | None:
+    def _request_current_thread_cleanup_locked(
+        self,
+        claim: _CoreDisposalClaim,
+        *,
+        cause: object = _PENDING_CLEANUP_EXPLICIT,
+    ) -> None:
         """Request cleanup while the operation condition is held."""
 
         if self._closed or self._closing:
-            return None
+            return
         core = cast(
             BrokerConnection | None,
             getattr(self._thread_local, "core", None),
         )
         if core is None:
-            return None
-        depth = int(getattr(self._thread_local, "operation_depth", 0))
+            return
+        depth = self.current_thread_operation_depth()
         if depth > 0:
-            self._thread_local.cleanup_pending = True
-            return None
-        core = self._claim_current_thread_core_locked()
-        assert core is not None
+            pending = getattr(self._thread_local, "cleanup_pending", None)
+            if cause is _PENDING_CLEANUP_EXPLICIT or pending is None:
+                self._thread_local.cleanup_pending = cause
+            return
         # A raw drain hold keeps terminal factory close behind disposal without
         # changing this thread's operation depth.
         self._active_operations += 1
-        return core
+        hold_count = int(getattr(self._thread_local, "cleanup_disposal_hold_count", 0))
+        self._thread_local.cleanup_disposal_hold_count = hold_count + 1
+        self._claim_current_thread_core_locked(claim)
 
-    def _dispose_idle_claimed_core(self, core: BrokerConnection) -> None:
-        """Dispose an idle claimed core and release its terminal-drain hold."""
+    def _release_operation_hold(self) -> None:
+        """Release one active-operation or disposal drain hold."""
 
+        with self._operation_condition:
+            if self._active_operations <= 0:
+                return
+            self._active_operations -= 1
+            if self._active_operations == 0:
+                self._operation_condition.notify_all()
+
+    def _release_cleanup_disposal_holds_since(self, initial_count: int) -> None:
+        """Release idle-cleanup holds acquired after an invocation snapshot."""
+
+        with self._operation_condition:
+            current_count = int(
+                getattr(self._thread_local, "cleanup_disposal_hold_count", 0)
+            )
+            release_count = current_count - initial_count
+            if release_count <= 0:
+                return
+            if initial_count > 0:
+                self._thread_local.cleanup_disposal_hold_count = initial_count
+            else:
+                delattr(self._thread_local, "cleanup_disposal_hold_count")
+            self._active_operations = max(
+                0,
+                self._active_operations - release_count,
+            )
+            if self._active_operations == 0:
+                self._operation_condition.notify_all()
+
+    def _cleanup_current_thread(self, *, cause: object) -> None:
+        """Request and complete one caller-thread cleanup when idle."""
+
+        claim = _CoreDisposalClaim()
+        active_failure: BaseException | None = None
+        initial_hold_count = int(
+            getattr(self._thread_local, "cleanup_disposal_hold_count", 0)
+        )
         try:
-            cleanup_failure = self._dispose_claimed_core(core)
-            if cleanup_failure is not None:
-                raise cleanup_failure
-        finally:
             with self._operation_condition:
-                self._active_operations -= 1
-                if self._active_operations == 0:
-                    self._operation_condition.notify_all()
+                self._request_current_thread_cleanup_locked(claim, cause=cause)
+            if claim.core is not None:
+                cleanup_failure = self._dispose_claimed_core(claim)
+                if cleanup_failure is not None:
+                    raise cleanup_failure
+        except BaseException as failure:
+            active_failure = failure
+            raise
+        finally:
+            self._restore_claimed_core(claim)
+            self._release_cleanup_disposal_holds_since(initial_hold_count)
+            retry_failure = self._retry_closed_claims(active_failure)
+            if retry_failure is not None:
+                raise retry_failure
+
+    def _retry_closed_claims(
+        self,
+        active_failure: BaseException | None,
+    ) -> Exception | None:
+        """Retry late claims after terminal timeout without replacing failure."""
+
+        if not self._closed or not self._cores:
+            return None
+        retry_failure = _capture_process_session_cleanup(None, self.close_all)
+        if retry_failure is None:
+            return None
+        if active_failure is None:
+            return retry_failure
+        _attach_process_session_cleanup_failure(active_failure, retry_failure)
+        return None
+
+    def _retry_closed_claims_after_operation(
+        self,
+        unwind_failure: BaseException | None,
+        cleanup_failure: Exception | None,
+        active_failure: BaseException | None,
+    ) -> Exception | None:
+        """Retry late claims using the established operation-failure order."""
+
+        return self._retry_closed_claims(
+            _first_present_failure(
+                unwind_failure,
+                cleanup_failure,
+                active_failure,
+            )
+        )
+
+    def current_thread_operation_depth(self) -> int:
+        """Return this thread's active operation depth."""
+
+        return int(getattr(self._thread_local, "operation_depth", 0))
 
     def _end_core_creation(self) -> None:
         close_factory = False
@@ -388,21 +519,27 @@ class _ProcessBrokerSession:
     def cleanup_current_thread(self) -> None:
         """Recycle the current thread's cached core without releasing the session."""
 
-        with self._operation_condition:
-            core = self._request_current_thread_cleanup_locked()
-        if core is not None:
-            self._dispose_idle_claimed_core(core)
+        self._cleanup_current_thread(cause=_PENDING_CLEANUP_EXPLICIT)
 
     def add_thread_user(self) -> None:
         """Register one connection manager using this thread's cached core."""
 
+        if threading.current_thread() is threading.main_thread():
+            return
         with self._operation_condition:
+            if (
+                getattr(self._thread_local, "cleanup_pending", None)
+                is _PENDING_CLEANUP_LAST_USER
+            ):
+                delattr(self._thread_local, "cleanup_pending")
             count = int(getattr(self._thread_local, "user_count", 0))
             self._thread_local.user_count = count + 1
 
     def drop_thread_user(self) -> None:
         """Release this thread's core when its last registered manager closes."""
 
+        if threading.current_thread() is threading.main_thread():
+            return
         with self._operation_condition:
             count = int(getattr(self._thread_local, "user_count", 0))
             if count <= 0:
@@ -411,9 +548,7 @@ class _ProcessBrokerSession:
                 self._thread_local.user_count = count - 1
                 return
             delattr(self._thread_local, "user_count")
-            core = self._request_current_thread_cleanup_locked()
-        if core is not None:
-            self._dispose_idle_claimed_core(core)
+        self._cleanup_current_thread(cause=_PENDING_CLEANUP_LAST_USER)
 
     def release_current_thread_connection(
         self,
@@ -431,34 +566,63 @@ class _ProcessBrokerSession:
 
         self._end_operation(active_failure=active_failure)
 
+    def _close_terminal_cores(
+        self,
+        cores: list[BrokerConnection],
+        *,
+        retain_failures: bool,
+    ) -> Exception | None:
+        """Close a terminal snapshot, retaining only retry-owned late claims."""
+
+        cleanup_failure: Exception | None = None
+        for index, core in enumerate(cores):
+            try:
+                self._factory.close_core(core)
+            except Exception as failure:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-035] exception
+                if retain_failures:
+                    with self._operation_condition:
+                        self._cores.add(core)
+                cleanup_failure = _retain_cleanup_failure(cleanup_failure, failure)
+            except BaseException:
+                if retain_failures:
+                    with self._operation_condition:
+                        self._cores.update(cores[index:])
+                raise
+        return cleanup_failure
+
     def close_all(self) -> None:
         """Close all owned resources for this session."""
 
         with self._operation_condition:
             if self._closed:
-                return
-            self._closing = True
-            deadline = time.monotonic() + _CLOSE_ACTIVE_OPERATION_TIMEOUT
-            while self._active_operations > 0 or self._active_core_creations > 0:
-                # Daemon threads may not release leases during interpreter shutdown.
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                self._operation_condition.wait(timeout=remaining)
-            self._closed = True
-            cores = list(self._cores)
-            self._cores.clear()
-            defer_factory_close = self._active_core_creations > 0
-            self._factory_close_deferred = defer_factory_close
-            if hasattr(self._thread_local, "core"):
-                delattr(self._thread_local, "core")
+                if not self._cores:
+                    return
+                cores = list(self._cores)
+                self._cores.clear()
+                defer_factory_close = True
+                retrying_late_claims = True
+            else:
+                self._closing = True
+                deadline = time.monotonic() + _CLOSE_ACTIVE_OPERATION_TIMEOUT
+                while self._active_operations > 0 or self._active_core_creations > 0:
+                    # Daemon threads may not release leases during interpreter shutdown.
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._operation_condition.wait(timeout=remaining)
+                self._closed = True
+                cores = list(self._cores)
+                self._cores.clear()
+                defer_factory_close = self._active_core_creations > 0
+                retrying_late_claims = False
+                self._factory_close_deferred = defer_factory_close
+                if hasattr(self._thread_local, "core"):
+                    delattr(self._thread_local, "core")
 
-        cleanup_failure: Exception | None = None
-        for core in cores:
-            cleanup_failure = _capture_process_session_cleanup(
-                cleanup_failure,
-                partial(self._factory.close_core, core),
-            )
+        cleanup_failure = self._close_terminal_cores(
+            cores,
+            retain_failures=retrying_late_claims,
+        )
         if not defer_factory_close:
             cleanup_failure = _capture_process_session_cleanup(
                 cleanup_failure,

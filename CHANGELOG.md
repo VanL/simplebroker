@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visible, and hookless shared runners stay factory-owned. Built-in SQLite
   watchers treat persistent cached-core replacement as a cache sync point while
   ignoring the fresh core identity of each ephemeral operation.
+- Session replacement now renews each worker manager's registration against the
+  exact replacement session. A new same-thread user cancels only a deferred
+  last-user release, while explicit cleanup remains pending. Failed nested
+  acquisitions and interruptions at acquisition or disposal handoffs preserve
+  their outer operation, core ownership, and drain accounting. Terminal timeout
+  neither double-closes an active disposal nor loses a late failed claim; the
+  closed session can retry that claim without rerunning factory shutdown.
+- Ordinary watcher garbage collection no longer claims stop or thread-local
+  cleanup authority. Interpreter-exit finalization still routes a live watcher
+  through its normal stop lifecycle, while active runs and Queue owners retain
+  their established cleanup scopes.
 
 ## [8.2.2] - 2026-09-14
 

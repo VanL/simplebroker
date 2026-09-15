@@ -105,6 +105,11 @@ completes the deferred caller-thread release. Message settlement still follows
 the selected delivery mode. For peek, cleanup does not acknowledge messages or
 turn live offset paging into a snapshot.
 
+If another Queue starts using the same worker-thread cache before that exit, it
+cancels a release requested only because the prior Queue was the last user.
+An explicit `cleanup_connections()` request remains pending. A failed nested
+Queue acquisition never closes or releases the still-running outer operation.
+
 Peeks can also inspect claimed (consumed but not yet vacuumed) messages:
 
 ```python
@@ -514,6 +519,11 @@ or cleanup exception is suppressed and never replaces an exception raised by
 the `with` body; failed cleanup remains retryable with a later `stop()`.
 Background watcher failures still report through `threading.excepthook` and
 are not replayed into the thread exiting the context.
+
+Garbage collection is not a watcher stop mechanism. Keep explicit ownership of
+the watcher and call `stop()` or use the context manager. Collecting an idle
+watcher does not signal a caller-supplied Queue or move thread-local database
+cleanup onto the collector thread.
 
 ## Async integration
 

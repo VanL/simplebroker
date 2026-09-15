@@ -330,13 +330,16 @@ class Queue:
         if self.conn is not None:
             assert self.conn is not None  # Type guard for mypy
             self.conn.set_stop_event(self._stop_event)
+            connection = self.conn.get_connection()
             try:
-                yield self.conn.get_connection()
+                yield connection
             except GeneratorExit:
+                # Cleanup failure must surface from iterator.close(). Keep the
+                # established zero-argument hook for integration wrappers.
                 self.conn.release_connection_after_use()
                 raise
             except BaseException as failure:
-                self.conn._release_connection_after_failure(failure)
+                self.conn.release_connection_after_use(active_failure=failure)
                 raise
             else:
                 self.conn.release_connection_after_use()
@@ -2065,6 +2068,8 @@ class Queue:
         if self._activity_waiter is not None:
             self._activity_waiter.close()
             self._activity_waiter = None
+        # Compatibility seam for downstream watcher subclasses that installed
+        # a separate connection manager before Queue-owned waiters existed.
         if hasattr(self, "_watcher_conn"):
             self._watcher_conn.cleanup()
             delattr(self, "_watcher_conn")

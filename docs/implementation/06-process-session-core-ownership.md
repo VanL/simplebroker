@@ -81,7 +81,9 @@ its Queue lease. An earlier sibling close retains the core. The main thread
 keeps its cached core until final session shutdown or explicit
 `cleanup_connections()`, preserving controller-loop reuse.
 
-The manager's registration flag is thread-local. A Queue or `DBConnection`
+The manager's registration record is thread-local and stores the exact session
+object. Session replacement can reuse a target key, so a boolean or key-only
+record is insufficient. A Queue or `DBConnection`
 finalizer running on a thread where that manager never used the shared session
 therefore surrenders only the abandoned handle's registry lease; it cannot
 decrement that thread's users or dispose an unrelated core. Same-thread
@@ -89,21 +91,41 @@ finalization can deregister its own recorded use. If the abandoned handle held
 the final lease, the registry still performs normal terminal session shutdown.
 
 If the thread is inside a Queue operation, the session records one thread-local
-pending cleanup request. The outermost operation exit claims the core and
+pending cleanup request and its cause. A newly registered user cancels a
+last-user request because that user now owns the cache; it cannot cancel an
+explicit `cleanup_connections()` request. The outermost operation exit claims
+the core and
 disposes it before decrementing the final active-operation count. Idle cleanup
 uses the same count as a raw drain hold while disposal runs outside the session
 condition. This keeps final factory shutdown behind local disposal without
 turning cleanup into a nested Queue operation or waiting for the caller thread
 to resume itself.
 
-Claiming removes the core from TLS and the session-owned set under the session
-condition. Any disposal failure restores only session ownership, not TLS reuse,
-so terminal cleanup can retry without handing a failed core to a new operation.
+Claiming first publishes the core into an invocation-owned claim, then removes
+it from reusable TLS and the session-owned set. This prevents terminal timeout
+from closing the same core while its disposal is active. The surrounding
+`finally` restores any unfinished claim to session ownership; disposal failure
+also restores ownership, but not TLS reuse, so terminal cleanup can retry
+without handing a failed core to a new operation. Nested idle cleanup holds use
+a depth snapshot, so a reentrant cleanup releases only holds acquired by that
+invocation.
+If terminal timeout completes while a detached disposal is still active, the
+terminal snapshot excludes that claim and cannot close it concurrently. A late
+failure restores the claim to the closed session; repeated internal terminal
+cleanup, triggered by that returning disposer, retries only those late claims
+and does not rerun factory shutdown or retry failures from the original
+terminal snapshot.
 Ordinary failures participate in exception-note priority; non-ordinary
 `BaseException` values propagate after ownership is restored. An unmatched
 release cannot decrement another thread's active count. After terminal timeout,
 a late operation exit clears its local bookkeeping without disposing the core
 that terminal shutdown already claimed.
+
+Operation acquisition publishes two ownership facts: session operation depth
+and the manager's operation-session stack entry. Rollback snapshots both. A
+failure before stack publication releases only a newly acquired session
+operation; a failure after publication pops and releases that exact operation.
+This prevents a failed nested acquisition from consuming its outer operation.
 
 Shared non-SQLite SQL cores carry a private successful-release latch inside
 `BrokerCore.close()`. Explicit repeated close and `__del__()` therefore cannot
@@ -142,6 +164,17 @@ foreign cleanup thread. Peek traversal is `[SB-DELIVERY-4]`; ownership for
 read, move, and stream iterators is `[SB-DELIVERY-6]`; the common public shape
 is `[SB-API-5]`. This section records the implementation reason for those
 contracts.
+
+### Watcher finalization boundary
+
+A watcher weak-reference finalizer captures only a weak reference. During
+ordinary collection that reference is dead and the callback takes no action.
+During interpreter-exit finalization, a still-live watcher is stopped through
+its normal serialized lifecycle, preserving daemon-thread shutdown without
+calling Queue thread-local cleanup directly. A running watcher owns runtime
+cleanup in its run `finally`. Collection of an idle watcher lets an internally
+created Queue follow its own finalizer; a Queue supplied by the caller remains
+caller-owned and usable.
 
 ### Trusted first-party operational probes
 
