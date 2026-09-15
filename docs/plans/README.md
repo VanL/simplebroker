@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-09-15-broker-session-plan.md | draft — class 5; owner-selected design: revert unreleased last-user inference to lease-only persistent close, then add `BrokerSession` as the public process-session handle; six one-commit slices; implementation not yet started |
 | 2026-09-15-session-lifecycle-integrity-remediation-plan.md | completed — class 5; repaired exact-session registration, pending-cleanup causes, nested acquisition balance, interruption-safe disposal ownership, terminal late-claim retry, and watcher finalization ownership; full SQLite, PostgreSQL, Redis/Valkey, Weft, static, documentation, and independent review gates passed; owner authorized targeted landing 2026-09-15 |
 | 2026-09-15-close-thread-resource-release-plan.md | retired-pending — soft-retired 2026-09-15; local-only source pin; physical deletion requires publication and a separate verification pass |
 | 2026-09-14-host-path-name-boundary-plan.md | retired-pending — soft-retired 2026-09-15; local-only source pin; physical deletion requires publication and a separate verification pass |
