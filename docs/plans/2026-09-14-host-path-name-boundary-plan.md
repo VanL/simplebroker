@@ -21,7 +21,7 @@ existing 255-character component limit. No storage format changes.
   queue primitive with explicit backend ownership, usable by embedded callers.
 - `docs/specs/10-cli.md` [SB-CLI-2/4]; `docs/specs/16-python-library-api.md`
   [SB-API-2]; `docs/specs/17-ops.md` [SB-OPS-7].
-- `docs/plans/2026-09-13-verified-review-remediation-plan.md`, S5: the selected
+- `1c6898b:docs/plans/2026-09-13-verified-review-remediation-plan.md`, S5: the selected
   name grammar preserved generic ancestor checks under the old contract.
 - `docs/implementation/07-complexity-and-state-machine-map.md`: path admission
   and target normalization are separate owners.

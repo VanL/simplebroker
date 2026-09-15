@@ -37,7 +37,8 @@ Last refreshed: 2026-09-13 (Claude completed the six-finding remediation plan
 review and scoped verification read-only in 296.4 and 127.6 seconds, both PASS;
 implementation slice review and final integrated review completed in 272.8 and
 495.3 seconds with no blockers; findings and dispositions
-are recorded in `docs/plans/2026-09-13-verified-review-remediation-plan.md`)
+are recorded in
+`1c6898b:docs/plans/2026-09-13-verified-review-remediation-plan.md`)
 
 | Agent family | Status | Notes |
 |--------------|--------|-------|
