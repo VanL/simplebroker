@@ -410,6 +410,105 @@ class TestQueueWatcher(WatcherTestBase):
             watcher.stop(join=False)
 
     @pytest.mark.sqlite_only
+    def test_default_data_version_detects_replaced_sqlite_core(self, tmp_path):
+        """Core replacement remains a cache-sync point when raw versions match."""
+        from .helper_scripts.broker_factory import make_target
+
+        broker_target = make_target(tmp_path, backend="sqlite")
+        with Queue(
+            "bootstrap",
+            db_path=broker_target,
+            persistent=False,
+        ) as bootstrap:
+            bootstrap.has_pending()
+
+        watcher = QueueWatcher(
+            "watched_queue",
+            lambda msg, ts: None,
+            db=broker_target,
+        )
+        sibling = Queue("sibling", db_path=broker_target, persistent=True)
+        writer = Queue("watched_queue", db_path=broker_target, persistent=False)
+        try:
+            watcher._start_strategy()
+            assert watcher._strategy._check_data_version() is False
+            old_raw_version = watcher._queue_obj.get_data_version()
+
+            sibling.cleanup_connections()
+            written_ts = writer.write("changed")
+            new_raw_version = watcher._queue_obj.get_data_version()
+            assert new_raw_version == old_raw_version
+
+            assert watcher._strategy._check_data_version() is True
+            assert watcher._queue_obj.last_ts == written_ts
+        finally:
+            writer.close()
+            sibling.close()
+            watcher._strategy.close()
+            watcher.stop(join=False)
+
+    @pytest.mark.sqlite_only
+    def test_default_data_version_stays_quiet_for_ephemeral_queue(self, tmp_path):
+        """Fresh ephemeral cores are not cached-core replacement events."""
+        from .helper_scripts.broker_factory import make_target
+
+        queue = Queue(
+            "watched_queue",
+            db_path=make_target(tmp_path, backend="sqlite"),
+        )
+        watcher = QueueWatcher(queue, lambda msg, ts: None)
+        try:
+            watcher._start_strategy()
+            assert watcher._strategy._check_data_version() is False
+            for _ in range(5):
+                assert watcher._strategy._check_data_version() is False
+        finally:
+            watcher._strategy.close()
+            watcher.stop(join=False)
+            queue.close()
+
+    @pytest.mark.sqlite_only
+    def test_worker_handler_sibling_closes_reuse_watcher_thread_core(self, tmp_path):
+        """Forwarding handlers do not rebuild the watcher thread's shared core."""
+        from .helper_scripts.broker_factory import make_target
+
+        target = make_target(tmp_path, backend="sqlite")
+        with Queue("incoming", db_path=target) as writer:
+            for index in range(20):
+                writer.write(str(index))
+
+        stop_event = threading.Event()
+        handled = threading.Event()
+        observed_cores = []
+
+        def handler(message: str, timestamp: int) -> None:
+            del timestamp
+            with Queue("outgoing", db_path=target, persistent=True) as outgoing:
+                outgoing.write(message)
+                assert outgoing.conn is not None
+                observed_cores.append(outgoing.conn.get_core())
+            if len(observed_cores) == 20:
+                handled.set()
+                stop_event.set()
+
+        watcher = QueueWatcher(
+            "incoming",
+            handler,
+            db=target,
+            stop_event=stop_event,
+        )
+        thread = watcher.run_in_thread()
+        try:
+            assert handled.wait(timeout=5.0)
+        finally:
+            watcher.stop()
+            thread.join(timeout=5.0)
+
+        assert not thread.is_alive()
+        assert len(observed_cores) == 20
+        assert len({id(core) for core in observed_cores}) == 1
+
+    @pytest.mark.sqlite_only
     def test_default_start_strategy_transfers_cached_queue_activity_waiter(
         self, tmp_path, monkeypatch
     ):

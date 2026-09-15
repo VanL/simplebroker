@@ -480,9 +480,26 @@ class BaseWatcher(ABC):
             queue = self._get_queue_for_data_version()
             self._check_stop()
 
-            # Capture queue in closure to avoid B023 warning
+            previous_core: Any | None = None
+            previous_raw_version: int | None = None
+            change_token = 0
+
+            # Capture queue in closure to avoid B023 warning. SQLite data-version
+            # values are connection-local, so replacement is itself a sync point.
             def data_version_getter(q: Queue = queue) -> int | None:
-                return q.get_data_version()
+                nonlocal previous_core, previous_raw_version, change_token
+                with q.get_connection() as connection:
+                    raw_version = connection.get_data_version()
+                if raw_version is None:
+                    return None
+                if previous_core is not None and (
+                    (q.conn is not None and connection is not previous_core)
+                    or raw_version != previous_raw_version
+                ):
+                    change_token += 1
+                previous_core = connection
+                previous_raw_version = raw_version
+                return change_token
 
             # Seed last_ts before polling so watchers have an initial value
             try:

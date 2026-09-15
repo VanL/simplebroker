@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 from types import TracebackType
 from typing import (
@@ -462,12 +462,14 @@ class _ProcessSessionCoreFactory:
                     config=self._config,
                     stop_event=stop_event,
                 )
-            return BrokerCore(
+            core = BrokerCore(
                 runner,
                 config=self._config,
                 backend_plugin=self._backend_plugin,
                 stop_event=stop_event,
             )
+            core._session_managed = True
+            return core
         except Exception as exc:
             if leased:
                 try:
@@ -963,10 +965,11 @@ class DBConnection:
             self._ensure_project_target_initialized()
             session = self._ensure_shared_session()
             connection = session.get_connection(self._stop_event)
+            self._register_thread_use(session)
             try:
                 self._push_shared_operation_session(session)
-            except Exception:
-                session.release_current_thread_connection()
+            except Exception as failure:
+                session.release_current_thread_connection(active_failure=failure)
                 raise
             return connection
 
@@ -974,6 +977,16 @@ class DBConnection:
             open_connection,
             config=effective_config,
         )
+
+    def _register_thread_use(self, session: "_ProcessBrokerSession") -> None:
+        """Register this manager once on each non-main thread that uses it."""
+
+        if threading.current_thread() is threading.main_thread():
+            return
+        if bool(getattr(self._thread_local, "shared_user_registered", False)):
+            return
+        session.add_thread_user()
+        self._thread_local.shared_user_registered = True
 
     def _push_shared_operation_session(self, session: "_ProcessBrokerSession") -> None:
         stack = cast(
@@ -1010,10 +1023,12 @@ class DBConnection:
         self._ensure_project_target_initialized()
         if self._share_in_process:
             session = self._ensure_shared_session()
-            return session.get_connection(
+            core = session.get_connection(
                 self._stop_event,
                 lease_operation=False,
             )
+            self._register_thread_use(session)
+            return core
 
         if self._core is None:
             if (
@@ -1158,7 +1173,11 @@ class DBConnection:
                 if logging_enabled:
                     logger.warning(f"Error closing runner: {exc}")
 
-    def release_connection_after_use(self) -> None:
+    def release_connection_after_use(
+        self,
+        *,
+        active_failure: BaseException | None = None,
+    ) -> None:
         """Release transient pooled resources after one queue operation."""
 
         if self._share_in_process:
@@ -1166,7 +1185,14 @@ class DBConnection:
                 return
             session = self._pop_shared_operation_session()
             if session is not None:
-                session.release_current_thread_connection()
+                session.release_current_thread_connection(
+                    active_failure=active_failure,
+                )
+
+    def _release_connection_after_failure(self, failure: BaseException) -> None:
+        """Release one operation while preserving its unwinding failure."""
+
+        self.release_connection_after_use(active_failure=failure)
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Set the stop event used for interruptible retries."""
@@ -1186,14 +1212,43 @@ class DBConnection:
             self._core.set_stop_event(self._stop_event)
 
     def close(self) -> None:
-        """Release this connection manager's owned resources or shared lease."""
+        """Release this manager's lease and its final registered thread use."""
 
         if self._share_in_process:
             if self._shared_key is not None and not self._shared_released:
-                release_process_broker_session(self._shared_key)
-                self._shared_released = True
-                self._shared_session = None
-                self._shared_key = None
+                cleanup_failure: Exception | None = None
+                if (
+                    not self._has_inherited_shared_session()
+                    and self._shared_session is not None
+                    and bool(
+                        getattr(
+                            self._thread_local,
+                            "shared_user_registered",
+                            False,
+                        )
+                    )
+                ):
+                    delattr(self._thread_local, "shared_user_registered")
+                    cleanup_failure = _broker_session._capture_process_session_cleanup(
+                        cleanup_failure,
+                        self._shared_session.drop_thread_user,
+                    )
+
+                try:
+                    cleanup_failure = _broker_session._capture_process_session_cleanup(
+                        cleanup_failure,
+                        partial(
+                            release_process_broker_session,
+                            self._shared_key,
+                        ),
+                    )
+                finally:
+                    self._shared_released = True
+                    self._shared_session = None
+                    self._shared_key = None
+
+                if cleanup_failure is not None:
+                    raise cleanup_failure
             return
 
         self.cleanup()
@@ -1275,6 +1330,8 @@ class BrokerCore:
         self._orphan_lock = threading.Lock()
         self._poisoned = False
         self._poison_cause: str | None = None
+        self._session_managed = False
+        self._session_resources_released = False
         self._lock = _PoisonAwareRLock(
             threading.RLock(),
             self._raise_if_poisoned,
@@ -4025,6 +4082,8 @@ class BrokerCore:
         :meth:`shutdown` instead.
         """
         with self._lock:
+            if self._session_managed and self._session_resources_released:
+                return
             # Clean up any marker files (especially for mocked paths in tests)
             if hasattr(self._runner, "cleanup_marker_files"):
                 self._runner.cleanup_marker_files()
@@ -4033,8 +4092,10 @@ class BrokerCore:
             )
             if callable(release_thread_connection):
                 release_thread_connection()
-            else:
+            elif not self._session_managed:
                 self._runner.close()
+            if self._session_managed:
+                self._session_resources_released = True
 
     def shutdown(self) -> None:
         """Shut down the underlying runner when this core owns it."""

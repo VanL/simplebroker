@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Closing the last persistent Queue used by a worker thread now releases that
+  thread's cached broker core and backend checkout while preserving any shared
+  session and any cache still used by a sibling Queue. The main thread retains
+  its cache until explicit cleanup or final session shutdown. Release defers
+  until an active caller-thread operation exits, and repeated close cannot
+  release a replacement core's resources.
+  Thread-local use registration prevents garbage collection from disposing the
+  collector thread's unrelated core; same-thread finalization can release only
+  the finalized manager's own recorded use.
+  Cleanup interruptions remain owned for retry, iterator-close failures remain
+  visible, and hookless shared runners stay factory-owned. Built-in SQLite
+  watchers treat persistent cached-core replacement as a cache sync point while
+  ignoring the fresh core identity of each ephemeral operation.
+
 ## [8.2.2] - 2026-09-14
 
 ### Fixed

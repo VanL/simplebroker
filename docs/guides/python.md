@@ -98,10 +98,12 @@ with closing(q.peek_generator(with_timestamps=True)) as messages:
 Exhaustion means advancing until `StopIteration`; merely receiving the last
 row leaves the iterator suspended. Close it before closing its Queue or
 higher-level client. Cleanup ends the iterator-owned Queue operation. It does
-not destroy a persistent Queue's cached resources or take ownership of a
-caller-injected runner. Message settlement still follows the selected delivery
-mode. For peek, cleanup does not acknowledge messages or turn live offset
-paging into a snapshot.
+not by itself destroy a persistent Queue's cached resources or take ownership
+of a caller-injected runner. If Queue close or `cleanup_connections()` was
+requested while the iterator was suspended, this outermost operation exit also
+completes the deferred caller-thread release. Message settlement still follows
+the selected delivery mode. For peek, cleanup does not acknowledge messages or
+turn live offset paging into a snapshot.
 
 Peeks can also inspect claimed (consumed but not yet vacuumed) messages:
 
@@ -863,7 +865,11 @@ Rules of the road:
   `messages`, `meta`, the aliases table, or broker-owned indexes are
   unsupported reserved-object changes, not sidecars.
 - Connection lifetime follows the `Queue`: ephemeral queues get in and get out
-  per session; `persistent=True` queues reuse their connection.
+  per session; `persistent=True` queues reuse their connection until explicit
+  `cleanup_connections()` releases the caller thread's cached resources. On a
+  worker thread, closing its last used Queue also releases that thread's cache;
+  an open sibling retains it. The main thread retains its cache until explicit
+  cleanup or final shared-session shutdown.
 - Use `?` (qmark) placeholders. They work natively on SQLite and are translated
   by the Postgres backend (where sidecar tables live in the broker's configured
   schema). Other SQL dialect differences are yours to manage.

@@ -227,9 +227,9 @@ class _ProcessBrokerSession:
 
             self._factory.close_core(core)
             raise RuntimeError("Broker session is closed")
-        except Exception:
+        except Exception as failure:
             if lease_operation:
-                self._end_operation()
+                self._end_operation(active_failure=failure)
             raise
         finally:
             if creation_started:
@@ -254,22 +254,123 @@ class _ProcessBrokerSession:
             depth = int(getattr(self._thread_local, "operation_depth", 0))
             self._thread_local.operation_depth = depth + 1
 
-    def _end_operation(self) -> None:
+    def _end_operation(self, *, active_failure: BaseException | None = None) -> None:
         """Release one active queue operation lease."""
 
+        core_to_close: BrokerConnection | None = None
         with self._operation_condition:
             depth = int(getattr(self._thread_local, "operation_depth", 0))
+            if depth <= 0:
+                return
+
             if depth > 1:
                 self._thread_local.operation_depth = depth - 1
-            elif depth == 1:
+            else:
                 delattr(self._thread_local, "operation_depth")
 
             if self._active_operations <= 0:
                 return
+            if depth == 1:
+                core_to_close = self._claim_pending_cleanup_locked()
 
-            self._active_operations -= 1
-            if self._active_operations == 0:
-                self._operation_condition.notify_all()
+        cleanup_failure: Exception | None = None
+        try:
+            if core_to_close is not None:
+                cleanup_failure = self._dispose_claimed_core(core_to_close)
+        finally:
+            with self._operation_condition:
+                self._active_operations -= 1
+                if self._active_operations == 0:
+                    self._operation_condition.notify_all()
+
+        if cleanup_failure is not None:
+            if active_failure is not None:
+                _attach_process_session_cleanup_failure(
+                    active_failure,
+                    cleanup_failure,
+                )
+            else:
+                raise cleanup_failure
+
+    def _claim_current_thread_core_locked(self) -> BrokerConnection | None:
+        """Detach this thread's core while the operation condition is held."""
+
+        core = cast(
+            BrokerConnection | None,
+            getattr(self._thread_local, "core", None),
+        )
+        if core is None:
+            return None
+        delattr(self._thread_local, "core")
+        self._cores.discard(core)
+        return core
+
+    def _claim_pending_cleanup_locked(self) -> BrokerConnection | None:
+        """Consume a pending outermost cleanup after operation guards pass."""
+
+        if not bool(getattr(self._thread_local, "cleanup_pending", False)):
+            return None
+        delattr(self._thread_local, "cleanup_pending")
+        if self._closed:
+            if hasattr(self._thread_local, "core"):
+                delattr(self._thread_local, "core")
+            return None
+        return self._claim_current_thread_core_locked()
+
+    def _restore_failed_core(self, core: BrokerConnection) -> None:
+        """Retain a failed detached core for terminal session cleanup."""
+
+        with self._operation_condition:
+            if not self._closed:
+                self._cores.add(core)
+
+    def _dispose_claimed_core(self, core: BrokerConnection) -> Exception | None:
+        """Dispose one detached core, restoring ownership after any failure."""
+
+        try:
+            self._factory.close_core(core)
+        except Exception as failure:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-035] exception
+            self._restore_failed_core(core)
+            return failure
+        except BaseException:
+            self._restore_failed_core(core)
+            raise
+        return None
+
+    def _request_current_thread_cleanup_locked(self) -> BrokerConnection | None:
+        """Request cleanup while the operation condition is held."""
+
+        if self._closed or self._closing:
+            return None
+        core = cast(
+            BrokerConnection | None,
+            getattr(self._thread_local, "core", None),
+        )
+        if core is None:
+            return None
+        depth = int(getattr(self._thread_local, "operation_depth", 0))
+        if depth > 0:
+            self._thread_local.cleanup_pending = True
+            return None
+        core = self._claim_current_thread_core_locked()
+        assert core is not None
+        # A raw drain hold keeps terminal factory close behind disposal without
+        # changing this thread's operation depth.
+        self._active_operations += 1
+        return core
+
+    def _dispose_idle_claimed_core(self, core: BrokerConnection) -> None:
+        """Dispose an idle claimed core and release its terminal-drain hold."""
+
+        try:
+            cleanup_failure = self._dispose_claimed_core(core)
+            if cleanup_failure is not None:
+                raise cleanup_failure
+        finally:
+            with self._operation_condition:
+                self._active_operations -= 1
+                if self._active_operations == 0:
+                    self._operation_condition.notify_all()
 
     def _end_core_creation(self) -> None:
         close_factory = False
@@ -287,16 +388,38 @@ class _ProcessBrokerSession:
     def cleanup_current_thread(self) -> None:
         """Recycle the current thread's cached core without releasing the session."""
 
-        with self._lock:
-            core = getattr(self._thread_local, "core", None)
-            if core is None:
+        with self._operation_condition:
+            core = self._request_current_thread_cleanup_locked()
+        if core is not None:
+            self._dispose_idle_claimed_core(core)
+
+    def add_thread_user(self) -> None:
+        """Register one connection manager using this thread's cached core."""
+
+        with self._operation_condition:
+            count = int(getattr(self._thread_local, "user_count", 0))
+            self._thread_local.user_count = count + 1
+
+    def drop_thread_user(self) -> None:
+        """Release this thread's core when its last registered manager closes."""
+
+        with self._operation_condition:
+            count = int(getattr(self._thread_local, "user_count", 0))
+            if count <= 0:
                 return
-            delattr(self._thread_local, "core")
-            self._cores.discard(core)
+            if count > 1:
+                self._thread_local.user_count = count - 1
+                return
+            delattr(self._thread_local, "user_count")
+            core = self._request_current_thread_cleanup_locked()
+        if core is not None:
+            self._dispose_idle_claimed_core(core)
 
-        self._factory.close_core(core)
-
-    def release_current_thread_connection(self) -> None:
+    def release_current_thread_connection(
+        self,
+        *,
+        active_failure: BaseException | None = None,
+    ) -> None:
         """Release this operation while keeping the backend checkout cached.
 
         Persistent queues multiplex queue operations through the same
@@ -306,7 +429,7 @@ class _ProcessBrokerSession:
         actual close lifecycle.
         """
 
-        self._end_operation()
+        self._end_operation(active_failure=active_failure)
 
     def close_all(self) -> None:
         """Close all owned resources for this session."""

@@ -441,9 +441,13 @@ def test_closeable_queue_iterator_releases_operation_on_same_thread(
 
     next(iterator)
     assert _active_operations(source) == baseline + 1
+    session = source.conn._shared_session
+    assert session is not None
+    active_core = session._thread_local.core
 
     iterator.close()
     assert _active_operations(source) == baseline
+    assert session._thread_local.core is active_core
     iterator.close()
     assert _active_operations(source) == baseline
 

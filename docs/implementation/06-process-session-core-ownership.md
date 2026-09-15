@@ -71,6 +71,48 @@ verbs, `close()` and `shutdown()`, no-ops while continuing to delegate
 operational runner methods. This keeps the SQL borrowed-wrapper teardown paths
 ownership-safe without adding an owner flag to the public runner surface.
 
+### Caller-thread release on persistent Queue close
+
+The process session keeps one cached core per thread. On every thread except the
+main thread, each connection manager registers once on first shared use and
+deregisters when explicitly closed on that thread. The last registered manager
+asks the session to detach and dispose that thread's core before surrendering
+its Queue lease. An earlier sibling close retains the core. The main thread
+keeps its cached core until final session shutdown or explicit
+`cleanup_connections()`, preserving controller-loop reuse.
+
+The manager's registration flag is thread-local. A Queue or `DBConnection`
+finalizer running on a thread where that manager never used the shared session
+therefore surrenders only the abandoned handle's registry lease; it cannot
+decrement that thread's users or dispose an unrelated core. Same-thread
+finalization can deregister its own recorded use. If the abandoned handle held
+the final lease, the registry still performs normal terminal session shutdown.
+
+If the thread is inside a Queue operation, the session records one thread-local
+pending cleanup request. The outermost operation exit claims the core and
+disposes it before decrementing the final active-operation count. Idle cleanup
+uses the same count as a raw drain hold while disposal runs outside the session
+condition. This keeps final factory shutdown behind local disposal without
+turning cleanup into a nested Queue operation or waiting for the caller thread
+to resume itself.
+
+Claiming removes the core from TLS and the session-owned set under the session
+condition. Any disposal failure restores only session ownership, not TLS reuse,
+so terminal cleanup can retry without handing a failed core to a new operation.
+Ordinary failures participate in exception-note priority; non-ordinary
+`BaseException` values propagate after ownership is restored. An unmatched
+release cannot decrement another thread's active count. After terminal timeout,
+a late operation exit clears its local bookkeeping without disposing the core
+that terminal shutdown already claimed.
+
+Shared non-SQLite SQL cores carry a private successful-release latch inside
+`BrokerCore.close()`. Explicit repeated close and `__del__()` therefore cannot
+surrender a replacement core's runner lease. A session-managed core calls only
+a backend's optional thread-checkout release hook; without that hook, final
+factory shutdown remains the sole owner of runner close. SQLite keeps its
+existing tracked-snapshot retry behavior: successful connections leave the
+snapshot; failed closes remain tracked.
+
 ### Suspended closeable Queue operations
 
 `Queue.read_generator()`, `Queue.peek_generator()`,
@@ -84,8 +126,9 @@ ordinary iterators and do not acquire a second public lifecycle interface.
 
 The first advancement enters the context on the caller's thread. Exhaustion,
 an advancement failure, or explicit close unwinds it on that same thread. For
-a persistent Queue, context exit ends the process-session operation while the
-thread-local core and backend checkout remain cached. For a no-runner
+a persistent Queue, context exit ends the process-session operation. Its
+thread-local core and backend checkout remain cached unless Queue close or
+explicit connection cleanup requested deferred release. For a no-runner
 ephemeral Queue, it closes the operation-owned `DBConnection` and releases its
 private core. For a Queue with an injected runner, it invokes the lexical
 operation release hook but retains the Queue-owned borrowed core until
@@ -406,6 +449,9 @@ When changing this area:
 The core lifecycle proof is in `tests/test_process_broker_session.py`.
 Public closeable Queue-operation release is proved in
 `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`.
+Finalizer-thread isolation, cleanup failure priority, non-ordinary ownership
+restoration, terminal-timeout behavior, hookless runner ownership, never-used
+close, and cleanup-before-close are proved in `tests/test_process_broker_session.py`.
 Owned-runner verb selection is proved in `tests/test_runner_lifecycle.py`.
 Caller-owned injected-runner retention across direct and manager-driven
 teardown is proved in

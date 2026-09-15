@@ -296,8 +296,24 @@ PROCESS_SESSION_TRANSITIONS = (
         "shared with two leases",
         "release one lease",
         "shared with one lease",
-        "retain the process session",
-        "remaining manager stays usable",
+        "retain the main-thread core and the process session",
+        "remaining manager sees the same usable core",
+    ),
+    _case(
+        "WORKER_RETAIN_NON_LAST_USER",
+        "worker thread with two registered managers",
+        "close one manager",
+        "worker thread with one registered manager",
+        "retain the worker thread core",
+        "remaining manager sees the same usable core",
+    ),
+    _case(
+        "WORKER_RELEASE_LAST_USER",
+        "worker thread with one registered manager",
+        "close its last manager",
+        "shared session with no worker core",
+        "release the worker thread core",
+        "the anchor lease keeps the session open",
     ),
     _case(
         "CLOSE_LAST",
@@ -346,6 +362,31 @@ class _FailingSessionFactory:
         return
 
 
+def _assert_worker_user_transition(
+    path: str,
+    session: _ProcessBrokerSession,
+    *,
+    release_last: bool,
+) -> None:
+    def operation() -> None:
+        first = DBConnection(path, share_in_process=True)
+        second = DBConnection(path, share_in_process=True)
+        core = first.get_core()
+        assert second.get_core() is core
+        first.close()
+        assert core in session._cores
+        if release_last:
+            second.close()
+            assert core not in session._cores
+        else:
+            assert second.get_core() is core
+            second.close()
+
+    error, _ = _foreign_call(operation)
+    assert error is None
+    assert not session._closed
+
+
 @fires_transition_table("SM-PROCESS-SESSION", PROCESS_SESSION_TRANSITIONS)
 def test_process_session_fires_transition_table(
     transition_case: TransitionCase[str],
@@ -362,6 +403,25 @@ def test_process_session_fires_transition_table(
         failing_session.close_all()
         return
 
+    if transition_case.payload in {
+        "WORKER_RETAIN_NON_LAST_USER",
+        "WORKER_RELEASE_LAST_USER",
+    }:
+        path = str(tmp_path / f"{transition_case.payload}.db")
+        anchor = DBConnection(path, share_in_process=True)
+        session = anchor._shared_session
+        assert session is not None
+
+        try:
+            _assert_worker_user_transition(
+                path,
+                session,
+                release_last=(transition_case.payload == "WORKER_RELEASE_LAST_USER"),
+            )
+        finally:
+            anchor.close()
+        return
+
     path = str(tmp_path / f"{transition_case.payload}.db")
     first = DBConnection(path, share_in_process=True)
     second = DBConnection(path, share_in_process=True)
@@ -375,6 +435,7 @@ def test_process_session_fires_transition_table(
         pass
     elif transition_case.payload == "RETAIN_WHILE_REFERENCED":
         first.close()
+        assert second._shared_session is session
         assert second.get_core() is first_core
     elif transition_case.payload == "ACTIVE_OPERATION_CLOSE":
         # get_connection leases one active operation through the real manager.

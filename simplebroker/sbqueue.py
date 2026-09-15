@@ -332,7 +332,13 @@ class Queue:
             self.conn.set_stop_event(self._stop_event)
             try:
                 yield self.conn.get_connection()
-            finally:
+            except GeneratorExit:
+                self.conn.release_connection_after_use()
+                raise
+            except BaseException as failure:
+                self.conn._release_connection_after_failure(failure)
+                raise
+            else:
                 self.conn.release_connection_after_use()
         else:
             with DBConnection(self._db_path, self._runner, config=self._config) as conn:
@@ -2048,10 +2054,11 @@ class Queue:
                 _close_iterator(generator)
 
     def cleanup_connections(self) -> None:
-        """Clean up active database handles without releasing the queue lease.
+        """Release caller-thread database resources without the queue lease.
 
-        Watchers use this during stop/error recovery. The queue remains usable
-        afterward; call close() to release persistent session ownership.
+        Release is deferred until the caller thread's outermost active operation
+        exits when needed. The queue remains usable afterward; call close() to
+        release persistent session ownership.
         """
         if self.conn:
             self.conn.cleanup()
@@ -2063,11 +2070,13 @@ class Queue:
             delattr(self, "_watcher_conn")
 
     def close(self) -> None:
-        """Close the queue and release resources.
+        """Release this queue's lease and its final worker-thread use.
 
         This is called automatically when using the queue as a context manager.
-        In ephemeral mode, this is a no-op as connections are closed after each
-        operation.
+        A worker thread releases its cached session core after its last Queue
+        closes. Main-thread caching lasts until session end or explicit cleanup.
+        Repeated calls are safe. In ephemeral mode, connections are already
+        closed after each operation.
         """
         if self._activity_waiter is not None:
             self._activity_waiter.close()
