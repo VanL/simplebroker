@@ -968,7 +968,6 @@ class DBConnection:
             stack_depth = self._shared_operation_stack_depth()
             try:
                 connection = session.get_connection(self._stop_event)
-                self._register_thread_use(session)
                 self._push_shared_operation_session(session)
                 return connection
             except BaseException as failure:
@@ -982,16 +981,6 @@ class DBConnection:
             open_connection,
             config=effective_config,
         )
-
-    def _register_thread_use(self, session: "_ProcessBrokerSession") -> None:
-        """Register this manager once on each non-main thread that uses it."""
-
-        if threading.current_thread() is threading.main_thread():
-            return
-        if getattr(self._thread_local, "shared_user_session", None) is session:
-            return
-        session.add_thread_user()
-        self._thread_local.shared_user_session = session
 
     def _shared_operation_stack_depth(self) -> int:
         """Return this manager's operation-session stack depth."""
@@ -1041,7 +1030,6 @@ class DBConnection:
                 self._stop_event,
                 lease_operation=False,
             )
-            self._register_thread_use(session)
             return core
 
         if self._core is None:
@@ -1221,28 +1209,11 @@ class DBConnection:
             self._core.set_stop_event(self._stop_event)
 
     def close(self) -> None:
-        """Release this manager's lease and its final registered thread use."""
+        """Release this manager's process-session lease."""
 
         if self._share_in_process:
             if self._shared_key is not None and not self._shared_released:
                 cleanup_failure: Exception | None = None
-                shared_session = self._shared_session
-                registered_session = getattr(
-                    self._thread_local,
-                    "shared_user_session",
-                    None,
-                )
-                if shared_session is not None and (
-                    not self._has_inherited_shared_session()
-                    and registered_session is shared_session
-                ):
-                    delattr(self._thread_local, "shared_user_session")
-                    session_to_drop = cast("_ProcessBrokerSession", shared_session)
-                    cleanup_failure = _broker_session._capture_process_session_cleanup(
-                        cleanup_failure,
-                        session_to_drop.drop_thread_user,
-                    )
-
                 try:
                     cleanup_failure = _broker_session._capture_process_session_cleanup(
                         cleanup_failure,

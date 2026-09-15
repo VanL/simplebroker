@@ -301,18 +301,18 @@ PROCESS_SESSION_TRANSITIONS = (
     ),
     _case(
         "WORKER_RETAIN_NON_LAST_USER",
-        "worker thread with two registered managers",
+        "worker thread with two managers sharing one cache",
         "close one manager",
-        "worker thread with one registered manager",
+        "worker thread with one manager sharing that cache",
         "retain the worker thread core",
         "remaining manager sees the same usable core",
     ),
     _case(
-        "WORKER_RELEASE_LAST_USER",
-        "worker thread with one registered manager",
-        "close its last manager",
-        "shared session with no worker core",
-        "release the worker thread core",
+        "WORKER_CLOSE_RETAINS_CACHE",
+        "worker thread with one manager and a shared cache",
+        "close the manager while an anchor keeps the session live",
+        "shared session with the worker core retained",
+        "retain the worker thread core until explicit cleanup or session end",
         "the anchor lease keeps the session open",
     ),
     _case(
@@ -365,8 +365,6 @@ class _FailingSessionFactory:
 def _assert_worker_user_transition(
     path: str,
     session: _ProcessBrokerSession,
-    *,
-    release_last: bool,
 ) -> None:
     def operation() -> None:
         first = DBConnection(path, share_in_process=True)
@@ -375,12 +373,9 @@ def _assert_worker_user_transition(
         assert second.get_core() is core
         first.close()
         assert core in session._cores
-        if release_last:
-            second.close()
-            assert core not in session._cores
-        else:
-            assert second.get_core() is core
-            second.close()
+        assert second.get_core() is core
+        second.close()
+        assert core in session._cores
 
     error, _ = _foreign_call(operation)
     assert error is None
@@ -405,7 +400,7 @@ def test_process_session_fires_transition_table(
 
     if transition_case.payload in {
         "WORKER_RETAIN_NON_LAST_USER",
-        "WORKER_RELEASE_LAST_USER",
+        "WORKER_CLOSE_RETAINS_CACHE",
     }:
         path = str(tmp_path / f"{transition_case.payload}.db")
         anchor = DBConnection(path, share_in_process=True)
@@ -413,11 +408,7 @@ def test_process_session_fires_transition_table(
         assert session is not None
 
         try:
-            _assert_worker_user_transition(
-                path,
-                session,
-                release_last=(transition_case.payload == "WORKER_RELEASE_LAST_USER"),
-            )
+            _assert_worker_user_transition(path, session)
         finally:
             anchor.close()
         return

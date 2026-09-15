@@ -900,3 +900,18 @@ forked-handle cases have firing tests. Runbook feedback: no new candidate.
   automatic cleanup for hand-written thread pools. Comprehension gate answers,
   red evidence, promotion baseline identifiers, and gate results are appended
   here per commit.
+- 2026-09-15, slice 2: comprehension gates answered as written above. Red
+  evidence: the restored worker-retention cases failed against `004a7e9`
+  because Queue close released the last registered thread user. Promotion
+  baseline `849d4df`. Subtracted user counts, cause sentinels, registration,
+  hold counters, and late-claim retry; retained nested-acquisition unwind,
+  `GeneratorExit`, the claim carrier, and one explicit-cleanup drain hold.
+  Verification: targeted lifecycle selection 422 passed, 2 skipped; full
+  SQLite suite 3841 passed, 18 skipped; PostgreSQL wrapper 1721 passed, 11
+  skipped plus extension suite 324 passed, 6 skipped; Redis wrapper 1713
+  passed, 19 skipped plus extension suite 360 passed, 1 skipped; Ruff, format,
+  mypy, suppression, DOM-15, plan-context, doc-path, and diff gates passed.
+  Weft gate used `PYTHONPATH=/Users/van/Developer/simplebroker` in Weft's own
+  locked environment; imported
+  `/Users/van/Developer/simplebroker/simplebroker/__init__.py`; task-runtime
+  connection and lifecycle-state-machine selection passed 42 tests.

@@ -71,55 +71,34 @@ verbs, `close()` and `shutdown()`, no-ops while continuing to delegate
 operational runner methods. This keeps the SQL borrowed-wrapper teardown paths
 ownership-safe without adding an owner flag to the public runner surface.
 
-### Caller-thread release on persistent Queue close
+### Explicit caller-thread release
 
-The process session keeps one cached core per thread. On every thread except the
-main thread, each connection manager registers once on first shared use and
-deregisters when explicitly closed on that thread. The last registered manager
-asks the session to detach and dispose that thread's core before surrendering
-its Queue lease. An earlier sibling close retains the core. The main thread
-keeps its cached core until final session shutdown or explicit
-`cleanup_connections()`, preserving controller-loop reuse.
+The process session keeps one cached core per thread. Closing a persistent
+Queue releases its registry lease only. It does not infer that the calling
+thread is finished with the shared cache from the set or order of Queue closes.
+Final session shutdown still drains active operations, disposes every cached
+core, and closes the shared factory.
 
-The manager's registration record is thread-local and stores the exact session
-object. Session replacement can reuse a target key, so a boolean or key-only
-record is insufficient. A Queue or `DBConnection`
-finalizer running on a thread where that manager never used the shared session
-therefore surrenders only the abandoned handle's registry lease; it cannot
-decrement that thread's users or dispose an unrelated core. Same-thread
-finalization can deregister its own recorded use. If the abandoned handle held
-the final lease, the registry still performs normal terminal session shutdown.
+Before session end, only `Queue.cleanup_connections()` or
+`BrokerSession.recycle_thread()` explicitly asks the process session to release
+the calling thread's cached core. Other threads' caches are unaffected. If the
+thread is inside a Queue operation, one boolean thread-local cleanup request is
+deferred until the outermost operation exits. The Queue remains usable and
+reacquires a core on its next operation.
 
-If the thread is inside a Queue operation, the session records one thread-local
-pending cleanup request and its cause. A newly registered user cancels a
-last-user request because that user now owns the cache; it cannot cancel an
-explicit `cleanup_connections()` request. The outermost operation exit claims
-the core and
-disposes it before decrementing the final active-operation count. Idle cleanup
-uses the same count as a raw drain hold while disposal runs outside the session
-condition. This keeps final factory shutdown behind local disposal without
-turning cleanup into a nested Queue operation or waiting for the caller thread
-to resume itself.
+Idle cleanup takes one raw active-operation hold before detaching the core and
+releases that hold exactly once in its surrounding `finally`. Claiming first
+publishes the core into an invocation-owned carrier, then removes it from
+reusable TLS and the session-owned set. This prevents terminal timeout from
+closing the same core while its disposal is active. An unfinished claim is
+restored to session ownership while the session remains live, but never
+re-adopted after terminal shutdown. A late failure after terminal timeout is
+therefore surfaced to the disposer and is not retried by the closed session.
 
-Claiming first publishes the core into an invocation-owned claim, then removes
-it from reusable TLS and the session-owned set. This prevents terminal timeout
-from closing the same core while its disposal is active. The surrounding
-`finally` restores any unfinished claim to session ownership; disposal failure
-also restores ownership, but not TLS reuse, so terminal cleanup can retry
-without handing a failed core to a new operation. Nested idle cleanup holds use
-a depth snapshot, so a reentrant cleanup releases only holds acquired by that
-invocation.
-If terminal timeout completes while a detached disposal is still active, the
-terminal snapshot excludes that claim and cannot close it concurrently. A late
-failure restores the claim to the closed session; repeated internal terminal
-cleanup, triggered by that returning disposer, retries only those late claims
-and does not rerun factory shutdown or retry failures from the original
-terminal snapshot.
 Ordinary failures participate in exception-note priority; non-ordinary
-`BaseException` values propagate after ownership is restored. An unmatched
-release cannot decrement another thread's active count. After terminal timeout,
-a late operation exit clears its local bookkeeping without disposing the core
-that terminal shutdown already claimed.
+`BaseException` values propagate after live-session ownership is restored.
+After terminal timeout, a late operation exit clears its local bookkeeping
+without disposing the core that terminal shutdown already claimed.
 
 Operation acquisition publishes two ownership facts: session operation depth
 and the manager's operation-session stack entry. Rollback snapshots both. A

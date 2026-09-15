@@ -105,10 +105,9 @@ completes the deferred caller-thread release. Message settlement still follows
 the selected delivery mode. For peek, cleanup does not acknowledge messages or
 turn live offset paging into a snapshot.
 
-If another Queue starts using the same worker-thread cache before that exit, it
-cancels a release requested only because the prior Queue was the last user.
-An explicit `cleanup_connections()` request remains pending. A failed nested
-Queue acquisition never closes or releases the still-running outer operation.
+An explicit `cleanup_connections()` request remains pending until that
+outermost operation exits. A failed nested Queue acquisition never closes or
+releases the still-running outer operation.
 
 Peeks can also inspect claimed (consumed but not yet vacuumed) messages:
 

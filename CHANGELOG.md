@@ -9,26 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Closing the last persistent Queue used by a worker thread now releases that
-  thread's cached broker core and backend checkout while preserving any shared
-  session and any cache still used by a sibling Queue. The main thread retains
-  its cache until explicit cleanup or final session shutdown. Release defers
-  until an active caller-thread operation exits, and repeated close cannot
-  release a replacement core's resources.
-  Thread-local use registration prevents garbage collection from disposing the
-  collector thread's unrelated core; same-thread finalization can release only
-  the finalized manager's own recorded use.
-  Cleanup interruptions remain owned for retry, iterator-close failures remain
-  visible, and hookless shared runners stay factory-owned. Built-in SQLite
-  watchers treat persistent cached-core replacement as a cache sync point while
-  ignoring the fresh core identity of each ephemeral operation.
-- Session replacement now renews each worker manager's registration against the
-  exact replacement session. A new same-thread user cancels only a deferred
-  last-user release, while explicit cleanup remains pending. Failed nested
-  acquisitions and interruptions at acquisition or disposal handoffs preserve
-  their outer operation, core ownership, and drain accounting. Terminal timeout
-  neither double-closes an active disposal nor loses a late failed claim; the
-  closed session can retry that claim without rerunning factory shutdown.
+- Persistent Queue close once again releases only that Queue's process-session
+  lease. A worker thread that must release its cached broker core while another
+  lease keeps the session alive now does so explicitly with
+  `cleanup_connections()`; deferred explicit cleanup still waits for the
+  outermost operation, preserves application-failure priority, and never
+  affects another thread's cache. Failed nested acquisitions and interruptions
+  at the claim/disposal handoff preserve their outer operation, live-session
+  ownership, and drain accounting. A late disposal failure after terminal
+  timeout surfaces to its caller without retry. Iterator-close failures remain
+  visible, hookless shared runners stay factory-owned, and built-in SQLite
+  watchers still distinguish persistent cached-core replacement from each
+  ephemeral operation's fresh core identity.
 - Ordinary watcher garbage collection no longer claims stop or thread-local
   cleanup authority. Interpreter-exit finalization still routes a live watcher
   through its normal stop lifecycle, while active runs and Queue owners retain

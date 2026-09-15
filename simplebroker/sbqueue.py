@@ -2075,13 +2075,12 @@ class Queue:
             delattr(self, "_watcher_conn")
 
     def close(self) -> None:
-        """Release this queue's lease and its final worker-thread use.
+        """Release this queue's persistent session lease.
 
         This is called automatically when using the queue as a context manager.
-        A worker thread releases its cached session core after its last Queue
-        closes. Main-thread caching lasts until session end or explicit cleanup.
-        Repeated calls are safe. In ephemeral mode, connections are already
-        closed after each operation.
+        Thread-local caching lasts until session end or explicit
+        cleanup_connections(). Repeated calls are safe. In ephemeral mode,
+        connections are already closed after each operation.
         """
         if self._activity_waiter is not None:
             self._activity_waiter.close()

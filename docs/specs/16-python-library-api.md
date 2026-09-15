@@ -381,56 +381,46 @@ _Implementation mapping_:
   ephemeral operations and later lazy backend/core creation. Any documented
   per-call config replaces the retained snapshot for that call.
 
-For a persistent Queue using a process-shared session, each thread that uses a
-Queue caches one core and backend checkout for that session. `close()` releases
-that Queue's session lease. On a thread other than the main thread, `close()`
-also requests release of the calling thread's cached core when this Queue was
-the last Queue still using it; other Queues on that thread keep the core until
-their own last close. Registration is bound to the exact session object, so a
-manager reused after terminal session replacement registers with the replacement
-session even when its target key is unchanged. On the main thread, the cached
-core is released only when
-the shared session ends or by explicit `cleanup_connections()`. With no active
-Queue operation on the calling thread, a requested release completes
-synchronously. Other threads' cached cores and a still-referenced shared
-session remain usable. A Queue whose thread released its core reacquires
-resources on its next operation on that thread. Returning a backend checkout
-need not disconnect a pooled connection. Repeated close without intervening
-reuse is a no-op for that Queue's connection manager.
+For a persistent Queue using a process-shared session, each thread that uses
+the Queue caches one core and backend checkout for that session. `close()`
+releases that Queue's session lease and nothing else. When the last lease on
+that session in this process is released, the session ends: in-flight
+operations are drained under the existing bounded policy, every cached core
+is disposed, and the shared runner or pool is closed. Repeated close is a
+no-op for that Queue's connection manager. A Queue closed on a thread that
+never used it, including finalization on an arbitrary thread, releases the
+lease only.
 
-If the calling thread has a suspended or nested Queue operation, a requested
-local release is deferred until its outermost operation exits on that thread.
-Another Queue registering on that thread before exit cancels a deferred
-last-user release because the core has a new user. It does not cancel a release
-requested explicitly by `cleanup_connections()`. A failed nested acquisition
-does not release or alter the outer operation.
-This does not relax the requirement to close a Queue's iterators before closing
-that Queue, or alter final-session shutdown's bounded drain policy. Closing a
-Queue on a thread that never used it, including finalization on an arbitrary
-thread, releases the lease only; it does not reclaim a departed worker's cache,
-release another Queue's cached core, or settle abandoned operations. Normal
-final-session shutdown still runs when that was the final lease. A shared SQL
-runner without an independent thread-checkout release hook remains owned by the
-session factory until final session shutdown.
+A thread's cached core is released before session end only by explicit
+request: `cleanup_connections()` on that thread, or
+`BrokerSession.recycle_thread()` on that thread. With no open Queue operation
+on the calling thread the release completes synchronously; otherwise it is
+deferred until the outermost Queue operation on that thread exits, then
+performed once. This does not relax the requirement to close a Queue's
+iterators before closing that Queue. Other threads' caches are never affected.
+The Queue remains usable afterward and reacquires on its next operation.
+Returning a backend checkout need not disconnect a pooled connection. These
+operations do not create a backend connection just to close it.
 
-`cleanup_connections()` requests the same caller-thread resource release
-without releasing the Queue's session lease. Calling it before `close()`
-remains safe. Ephemeral and caller-injected-runner ownership is unchanged.
-These lifecycle operations do not create a backend connection just to close it.
+Worker threads that must not leave a cached core behind while another handle
+keeps the session alive release it explicitly before exiting: hold a
+`BrokerSession` in a `with` block on that thread (its exit recycles the
+thread's cache), or call `cleanup_connections()`.
 
-An ordinary local-release failure is surfaced, but the Queue's session-lease
-release is still attempted. Later cleanup failures are retained as exception
-diagnostics. If deferred cleanup fails during operation unwind, an already
-active exception remains primary; otherwise the cleanup failure propagates. A
-failed core is not reused and remains owned for later cleanup while its session
-remains live. If disposal fails only after terminal session timeout, the closed
-session retains that late claim for an internal terminal-cleanup retry; this
-retry is driven by the returning disposer and does not make repeated public
-Queue close perform the release twice.
+An ordinary local-release failure is surfaced, but the Queue's lease release
+is still attempted; later cleanup failures are retained as exception
+diagnostics. If deferred release fails during operation unwind, an active
+application exception remains primary; otherwise the release failure
+propagates. A failed core is not reused and remains owned by its session for
+terminal cleanup while the session is live; after the session has ended, a
+late release failure is surfaced to its caller and not retried. A failed
+nested acquisition does not release or alter the outer operation.
 Non-ordinary `BaseException` behavior retains the existing propagation
-priority and failed-core ownership. `GeneratorExit` raised to close
-an iterator is lifecycle control rather than an application failure, so a
-deferred cleanup failure propagates from the iterator's `close()`.
+priority and failed-core ownership. `GeneratorExit` raised to close an
+iterator is lifecycle control rather than an application failure, so a
+deferred release failure propagates from the iterator's `close()`. A shared
+SQL runner without an independent thread-checkout release hook remains owned
+by the session factory until session end.
 
 `Queue.backend_name` is a read-only string containing the resolved backend
 plugin name. Built-in names are `"sqlite"`, `"redis"`, and `"postgres"`;
@@ -1087,7 +1077,7 @@ _Implementation mapping_:
 |--------|-----------------|
 | [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`, `::test_api_moved_message_is_package_root_public`, `::test_api_closeable_peek_iterator_contract`; `tests/test_queue_typing_contract.py`; `tests/test_dev_scripts.py` (isolated root wheel/sdist import and published-artifact verification); `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
 | [SB-API-2] | `tests/test_path_security.py::test_host_ancestors_public_queue_and_project_discovery`; `tests/test_config_transport.py`; `tests/test_config_builder.py`; `tests/test_config_coexistence.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`; `tests/test_project_config.py` (recursive plugin-owned options, TOML-native normalization/rejection, target serialization, and SQLite rejection); `tests/test_process_broker_session.py` (type/opaque identity, one recursive key/factory snapshot, and all SQLite public option paths); `tests/test_activity_waiter_api.py::test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers`; `tests/test_config_builder.py::test_numeric_coercion_failure_uses_warning_and_final_value_policy`; `tests/test_connection_config.py`; `tests/test_constants.py`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_queue_move_rejects_config_derived_namespaces` |
-| [SB-API-3] | `tests/test_connection_config.py::test_explicit_config_is_retained_at_constructor`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_backend_plugin_resolution.py` (built-in, third-party, and injected-runner backend identity without target I/O); `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; `tests/test_process_broker_session.py` (session-specific registration after replacement, main-thread retention and direct guard, worker last-user release and sibling reuse, last-user cancellation versus explicit cleanup, nested-acquisition balance, foreign-thread and finalizer isolation, deferral, repeated close, cleanup-before-close, never-used close, ordinary and non-ordinary failure priority/ownership, iterator-close failure, unmatched release, terminal timeout, hookless runner ownership, and drain); `tests/test_connection_transition_tables.py::test_process_session_fires_transition_table`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
+| [SB-API-3] | `tests/test_connection_config.py::test_explicit_config_is_retained_at_constructor`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_backend_plugin_resolution.py` (built-in, third-party, and injected-runner backend identity without target I/O); `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; `tests/test_process_broker_session.py` (worker cache retention after Queue close, explicit worker-thread cleanup remedy, nested-acquisition balance, foreign-thread and finalizer isolation, deferred release, repeated close, cleanup-before-close, never-used close, ordinary and non-ordinary failure priority/ownership, iterator-close failure, terminal-timeout no-retry behavior, hookless runner ownership, and drain); `tests/test_connection_transition_tables.py::test_process_session_fires_transition_table`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_timestamp_selection_contract_sb_select.py::test_bounded_one_and_many_order_matrix`, `::test_invalid_or_unbounded_order_fails_before_target_acquisition`, `::test_generator_signatures_do_not_expose_order`; `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py` (high-level `all_messages=True` path); `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`, `::test_queue_delete_explicit_none_is_rejected_without_mutation`, `::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py::test_api_write_keep_newest_signatures_and_public_validator`; `tests/test_keep_newest.py`; delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_closeable_peek_iterator_contract`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_retains_explicit_config_on_first_iteration`; Queue generator / `*_many` suites |
 | [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_watcher_start_stop_cleanup_ownership_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_polling_strategy_defaults_match_canonical_config`; `tests/test_watcher_cleanup.py::TestWatcherCleanup::test_collected_watcher_does_not_take_caller_thread_cleanup`; `tests/test_watcher_error_handler_contract.py`, including `test_batch_iterator_close_failure_is_secondary_to_error_handler_failure`; `tests/test_watcher_stop_contract.py::test_stop_racing_start_has_one_cleanup_owner`, `test_join_timeout_does_not_transfer_cleanup_from_live_run`, `test_cleanup_failure_keeps_lifecycle_retryable`, `test_context_exit_suppresses_stop_failure_without_replacing_body_exception`, `test_context_exit_cleanup_failure_remains_retryable`, `test_context_exit_propagates_base_exception_from_stop`, `test_batch_iterators_close_once_on_exhaustion_after_handler_continuation`, `test_batch_iterator_close_failure_without_active_failure_surfaces`, `test_batch_iterator_close_failure_is_note_on_retryable_failure`, `test_batch_iterator_close_failure_during_clean_stop_is_terminal`, `test_batch_iterator_close_base_exception_keeps_cleanup_priority`; `tests/test_watcher_transition_tables.py::test_watcher_lifecycle_fires_transition_table`; `tests/test_watcher.py::TestQueueWatcher::test_default_data_version_detects_replaced_sqlite_core`, `tests/test_watcher.py::TestQueueWatcher::test_default_data_version_stays_quiet_for_ephemeral_queue`, `tests/test_watcher.py::TestPollingStrategy::test_defaults_use_ambient_free_canonical_config_snapshot`, `tests/test_watcher.py::TestPollingStrategy::test_all_defaults_derive_from_one_isolated_canonical_snapshot`; `tests/test_connection_config.py::test_watcher_instance_config_maps_into_strategy_fields`, `tests/test_connection_config.py::test_polling_strategy_fields_determine_delay_schedule`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py::test_config_derived_namespace_wakes_public_waiter` |

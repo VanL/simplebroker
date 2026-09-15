@@ -811,42 +811,54 @@ def test_closing_one_queue_does_not_close_shared_runner(
     assert counting_backend.create_runner_calls == 1
 
 
-def test_worker_close_releases_its_sqlite_core_while_session_stays_live(
+@pytest.mark.parametrize("explicit_cleanup", [False, True])
+def test_worker_queue_close_retains_cache_until_explicit_cleanup_or_session_end(
     tmp_path: Path,
+    explicit_cleanup: bool,
 ) -> None:
-    target = str(tmp_path / "worker-close.db")
+    target = str(tmp_path / f"worker-explicit-cleanup-{explicit_cleanup}.db")
     anchor = Queue("anchor", db_path=target, persistent=True)
     assert anchor.conn is not None
     session = anchor.conn._shared_session
     assert session is not None
-    core_refs: list[weakref.ReferenceType[BrokerCore]] = []
-    connections: list[sqlite3.Connection] = []
+    raw_connections: list[sqlite3.Connection] = []
+    errors: list[BaseException] = []
 
-    def worker() -> None:
-        with Queue("jobs", db_path=target, persistent=True) as queue:
-            queue.write("payload")
-            assert queue.conn is not None
-            core = cast(BrokerCore, queue.conn.get_core())
-            core_refs.append(weakref.ref(core))
-            runner = cast(SQLiteRunner, core._runner)
-            connections.extend(runner._all_connections)
+    def worker(index: int) -> None:
+        try:
+            with Queue(f"jobs-{index}", db_path=target, persistent=True) as queue:
+                queue.write("payload")
+                assert queue.conn is not None
+                core = cast(BrokerDB, queue.conn.get_core())
+                raw_connections.append(
+                    cast(SQLiteRunner, core._runner).get_connection()
+                )
+                if explicit_cleanup:
+                    queue.cleanup_connections()
+        except BaseException as failure:  # pragma: no cover - asserted in parent  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            errors.append(failure)
 
-    try:
-        for _ in range(5):
-            thread = threading.Thread(target=worker)
-            thread.start()
-            thread.join(timeout=_LIVENESS)
-            assert not thread.is_alive()
-            assert session._cores == set()
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=_LIVENESS)
 
-        assert len(connections) == 5
-        for connection in connections:
+    assert errors == []
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(session._cores) == (0 if explicit_cleanup else 5)
+    for raw_connection in raw_connections:
+        if explicit_cleanup:
             with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
-                connection.execute("SELECT 1")
-        gc.collect()
-        assert all(core_ref() is None for core_ref in core_refs)
-    finally:
-        anchor.close()
+                raw_connection.execute("SELECT 1")
+        else:
+            raw_connection.execute("SELECT 1")
+
+    anchor.close()
+    assert session._closed
+    for raw_connection in raw_connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            raw_connection.execute("SELECT 1")
 
 
 def test_retired_shared_sql_core_close_and_finalizer_are_idempotent(
@@ -1125,298 +1137,6 @@ def test_close_does_not_release_another_threads_core(tmp_path: Path) -> None:
     assert session._closed
 
 
-def test_worker_last_registered_manager_releases_thread_core(tmp_path: Path) -> None:
-    target = str(tmp_path / "worker-last-user.db")
-    anchor = Queue("anchor", db_path=target, persistent=True)
-    assert anchor.conn is not None
-    session = anchor.conn._shared_session
-    assert session is not None
-    observations: list[tuple[bool, bool]] = []
-    errors: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            first = Queue("first", db_path=target, persistent=True)
-            second = Queue("second", db_path=target, persistent=True)
-            first.write("one")
-            second.has_pending()
-            assert first.conn is not None
-            assert second.conn is not None
-            core = cast(BrokerDB, first.conn.get_core())
-            assert second.conn.get_core() is core
-            runner = cast(SQLiteRunner, core._runner)
-            raw_connection = runner.get_connection()
-
-            first.close()
-            observations.append((core in session._cores, False))
-            raw_connection.execute("SELECT 1")
-
-            second.close()
-            closed = False
-            try:
-                raw_connection.execute("SELECT 1")
-            except sqlite3.ProgrammingError:
-                closed = True
-            observations.append((core in session._cores, closed))
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
-            errors.append(exc)
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-    thread.join(timeout=_LIVENESS)
-    try:
-        assert not thread.is_alive()
-        assert errors == []
-        assert observations == [(True, False), (False, True)]
-        assert session._cores == set()
-    finally:
-        anchor.close()
-
-
-def test_worker_sibling_queue_closes_reuse_registered_thread_core(
-    tmp_path: Path,
-) -> None:
-    target = str(tmp_path / "worker-forwarding.db")
-    anchor = Queue("anchor", db_path=target, persistent=True)
-    assert anchor.conn is not None
-    session = anchor.conn._shared_session
-    assert session is not None
-    observed_cores: list[BrokerDB] = []
-    errors: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            watcher_queue = Queue("incoming", db_path=target, persistent=True)
-            watcher_queue.has_pending()
-            assert watcher_queue.conn is not None
-            watcher_core = cast(BrokerDB, watcher_queue.conn.get_core())
-            for index in range(20):
-                with Queue("outgoing", db_path=target, persistent=True) as outgoing:
-                    outgoing.write(str(index))
-                    assert outgoing.conn is not None
-                    observed_cores.append(cast(BrokerDB, outgoing.conn.get_core()))
-                assert watcher_queue.conn.get_core() is watcher_core
-            watcher_queue.close()
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
-            errors.append(exc)
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-    thread.join(timeout=_LIVENESS)
-    try:
-        assert not thread.is_alive()
-        assert errors == []
-        assert len(observed_cores) == 20
-        assert len({id(core) for core in observed_cores}) == 1
-        assert session._cores == set()
-    finally:
-        anchor.close()
-
-
-def test_reopened_manager_registers_again_for_replacement_session(
-    tmp_path: Path,
-) -> None:
-    target = str(tmp_path / "replacement-registration.db")
-    manager = Queue("manager", db_path=target, persistent=True)
-    first_use_complete = threading.Event()
-    allow_reopen = threading.Event()
-    observations: dict[str, object] = {}
-    errors: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            manager.write("first-session")
-            assert manager.conn is not None
-            first_session = manager.conn._shared_session
-            assert first_session is not None
-            observations["first_session"] = first_session
-            first_use_complete.set()
-            assert allow_reopen.wait(timeout=_LIVENESS)
-
-            sibling = Queue("sibling", db_path=target, persistent=True)
-            sibling.write("sibling")
-            assert sibling.conn is not None
-            second_session = sibling.conn._shared_session
-            assert second_session is not None
-            sibling_core = cast(BrokerDB, sibling.conn.get_core())
-            sibling_runner = cast(SQLiteRunner, sibling_core._runner)
-            sibling_raw = sibling_runner.get_connection()
-
-            manager.write("second-session")
-            observations["replacement_session"] = manager.conn._shared_session
-            observations["registered_users"] = getattr(
-                second_session._thread_local,
-                "user_count",
-                None,
-            )
-            manager.close()
-
-            sibling_raw.execute("SELECT 1")
-            observations["sibling_core_retained"] = (
-                sibling.conn.get_core() is sibling_core
-                and sibling_core in second_session._cores
-            )
-            sibling.close()
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
-            errors.append(exc)
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-    assert first_use_complete.wait(timeout=_LIVENESS)
-    manager.close()
-    allow_reopen.set()
-    thread.join(timeout=_LIVENESS)
-
-    assert not thread.is_alive()
-    assert errors == []
-    assert observations["replacement_session"] is not observations["first_session"]
-    assert observations["registered_users"] == 2
-    assert observations["sibling_core_retained"] is True
-
-
-def test_new_user_cancels_pending_last_user_release(tmp_path: Path) -> None:
-    target = str(tmp_path / "cancel-last-user-release.db")
-    first = Queue("first", db_path=target, persistent=True)
-    sibling = Queue("sibling", db_path=target, persistent=True)
-    observations: dict[str, object] = {}
-    errors: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            assert first.conn is not None
-            session = first.conn._shared_session
-            assert session is not None
-            with first.get_connection() as original_core:
-                first.close()
-                assert getattr(session._thread_local, "cleanup_pending", None)
-                sibling.write("retains-session")
-                observations["pending_after_sibling"] = getattr(
-                    session._thread_local,
-                    "cleanup_pending",
-                    None,
-                )
-            assert sibling.conn is not None
-            observations["same_core"] = sibling.conn.get_core() is original_core
-            observations["core_owned"] = original_core in session._cores
-            sibling.close()
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
-            errors.append(exc)
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-    thread.join(timeout=_LIVENESS)
-
-    assert not thread.is_alive()
-    assert errors == []
-    assert observations == {
-        "pending_after_sibling": None,
-        "same_core": True,
-        "core_owned": True,
-    }
-
-
-def test_new_user_does_not_cancel_pending_explicit_cleanup(tmp_path: Path) -> None:
-    target = str(tmp_path / "retain-explicit-release.db")
-    first = Queue("first", db_path=target, persistent=True)
-    sibling = Queue("sibling", db_path=target, persistent=True)
-    observations: dict[str, object] = {}
-    errors: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            assert first.conn is not None
-            session = first.conn._shared_session
-            assert session is not None
-            with first.get_connection() as original_core:
-                first.cleanup_connections()
-                sibling.write("does-not-cancel-explicit-cleanup")
-                observations["pending_after_sibling"] = bool(
-                    getattr(session._thread_local, "cleanup_pending", None)
-                )
-            assert sibling.conn is not None
-            observations["replacement_core"] = (
-                sibling.conn.get_core() is not original_core
-            )
-            observations["old_core_released"] = original_core not in session._cores
-            first.close()
-            sibling.close()
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
-            errors.append(exc)
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-    thread.join(timeout=_LIVENESS)
-
-    assert not thread.is_alive()
-    assert errors == []
-    assert observations == {
-        "pending_after_sibling": True,
-        "replacement_core": True,
-        "old_core_released": True,
-    }
-
-
-def test_worker_last_close_defers_until_sibling_iterator_exits(
-    tmp_path: Path,
-) -> None:
-    target = str(tmp_path / "worker-close-with-iterator.db")
-    anchor = Queue("anchor", db_path=target, persistent=True)
-    first = Queue("first", db_path=target, persistent=True)
-    second = Queue("second", db_path=target, persistent=True)
-    observations: dict[str, object] = {}
-    errors: list[BaseException] = []
-
-    def worker() -> None:
-        iterator = None
-        try:
-            second.write("message")
-            first.has_pending()
-            assert first.conn is not None
-            assert second.conn is not None
-            session = first.conn._shared_session
-            assert session is not None
-            core = cast(BrokerDB, first.conn.get_core())
-            runner = cast(SQLiteRunner, core._runner)
-            raw_connection = runner.get_connection()
-
-            iterator = second.peek_generator()
-            assert next(iterator) == "message"
-            first.close()
-            second.close()
-            observations["pending"] = bool(
-                getattr(session._thread_local, "cleanup_pending", None)
-            )
-            observations["owned_before_iterator_close"] = core in session._cores
-            raw_connection.execute("SELECT 1")
-
-            iterator.close()
-            iterator = None
-            observations["released_after_iterator_close"] = core not in session._cores
-            with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
-                raw_connection.execute("SELECT 1")
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
-            errors.append(exc)
-        finally:
-            if iterator is not None:
-                iterator.close()
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-    thread.join(timeout=_LIVENESS)
-    try:
-        assert not thread.is_alive()
-        assert errors == []
-        assert observations == {
-            "pending": True,
-            "owned_before_iterator_close": True,
-            "released_after_iterator_close": True,
-        }
-    finally:
-        first.close()
-        second.close()
-        anchor.close()
-
-
 def test_anchorless_main_contexts_reuse_core_while_worker_retains_session(
     tmp_path: Path,
 ) -> None:
@@ -1523,60 +1243,6 @@ def test_failed_nested_acquisition_does_not_release_outer_operation(
     }
 
 
-def test_session_user_count_cannot_override_main_thread_exemption(
-    tmp_path: Path,
-) -> None:
-    session = build_process_session(str(tmp_path / "main-session-guard.db"))
-    core = cast(BrokerDB, session.get_connection(None, lease_operation=False))
-    runner = cast(SQLiteRunner, core._runner)
-    raw_connection = runner.get_connection()
-
-    session.add_thread_user()
-    session.drop_thread_user()
-
-    assert not hasattr(session._thread_local, "user_count")
-    assert session._thread_local.core is core
-    assert core in session._cores
-    raw_connection.execute("SELECT 1")
-
-    session.cleanup_current_thread()
-    assert core not in session._cores
-    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
-        raw_connection.execute("SELECT 1")
-    session.close_all()
-
-
-@pytest.mark.parametrize("acquire_replacement", [False, True])
-def test_reentrant_cleanup_releases_only_its_own_disposal_hold(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    acquire_replacement: bool,
-) -> None:
-    session = build_process_session(str(tmp_path / "reentrant-cleanup-hold.db"))
-    core = cast(BrokerDB, session.get_connection(None, lease_operation=False))
-    real_close_core = session._factory.close_core
-    active_during_close: list[int] = []
-
-    def close_with_reentrant_cleanup(closing_core: Any) -> None:
-        if closing_core is not core:
-            real_close_core(closing_core)
-            return
-        active_during_close.append(session._active_operations)
-        if acquire_replacement:
-            session.get_connection(None, lease_operation=False)
-        session.cleanup_current_thread()
-        active_during_close.append(session._active_operations)
-        real_close_core(closing_core)
-
-    monkeypatch.setattr(session._factory, "close_core", close_with_reentrant_cleanup)
-    session.cleanup_current_thread()
-
-    assert active_during_close == [1, 1]
-    assert session._active_operations == 0
-    assert core not in session._cores
-    session.close_all()
-
-
 def test_terminal_timeout_does_not_close_core_during_active_disposal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1627,78 +1293,6 @@ def test_terminal_timeout_does_not_close_core_during_active_disposal(
 
     assert session._active_operations == 0
     assert factory.close_core_calls == 1
-
-
-@pytest.mark.parametrize("deferred", [False, True])
-@pytest.mark.parametrize("retry_succeeds", [False, True])
-def test_late_disposal_failure_gets_closed_session_retry(
-    monkeypatch: pytest.MonkeyPatch,
-    deferred: bool,
-    retry_succeeds: bool,
-) -> None:
-    disposal_started = threading.Event()
-    allow_failure = threading.Event()
-
-    class Core:
-        def __init__(self) -> None:
-            self.closed = False
-
-        def set_stop_event(self, stop_event: threading.Event | None) -> None:
-            del stop_event
-
-    class Factory:
-        def __init__(self) -> None:
-            self.core = Core()
-            self.close_core_calls = 0
-            self.close_calls = 0
-            self.failure = RuntimeError("late disposal failure")
-
-        def create(self, stop_event: threading.Event | None) -> Core:
-            del stop_event
-            return self.core
-
-        def close_core(self, core: Core) -> None:
-            self.close_core_calls += 1
-            if self.close_core_calls == 1:
-                disposal_started.set()
-                assert allow_failure.wait(timeout=_LIVENESS)
-                raise self.failure
-            if not retry_succeeds:
-                raise self.failure
-            core.closed = True
-
-        def close(self) -> None:
-            self.close_calls += 1
-
-    factory = Factory()
-    session = _ProcessBrokerSession(cast(Any, factory))
-    monkeypatch.setattr(broker_session_module, "_CLOSE_ACTIVE_OPERATION_TIMEOUT", 0.0)
-
-    def dispose_on_worker() -> None:
-        session.get_connection(None, lease_operation=deferred)
-        session.cleanup_current_thread()
-        session.release_current_thread_connection()
-
-    executor = cf.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(dispose_on_worker)
-    try:
-        assert disposal_started.wait(timeout=_LIVENESS)
-        session.close_all()
-        allow_failure.set()
-        with pytest.raises(RuntimeError, match="late disposal failure") as caught:
-            future.result(timeout=_LIVENESS)
-    finally:
-        allow_failure.set()
-        executor.shutdown()
-
-    assert session._closed
-    assert session._active_operations == 0
-    assert caught.value is factory.failure
-    assert factory.close_core_calls == 2
-    assert factory.close_calls == 1
-    assert (factory.core in session._cores) is (not retry_succeeds)
-    assert factory.core.closed is retry_succeeds
-    assert len(getattr(caught.value, "__notes__", ())) == int(not retry_succeeds)
 
 
 class _InjectedLifecycleAbort(BaseException):
@@ -2167,53 +1761,6 @@ def test_successful_queue_operation_inside_except_propagates_cleanup_failure(
         second.close()
 
 
-def test_queue_close_surrenders_lease_once_when_local_cleanup_fails(
-    tmp_path: Path,
-) -> None:
-    target = str(tmp_path / "cleanup-failure.db")
-    anchor = Queue("anchor", db_path=target, persistent=True)
-    assert anchor.conn is not None
-    session = anchor.conn._shared_session
-    assert session is not None
-    original_drop = session.drop_thread_user
-    cleanup_calls = 0
-    errors: list[BaseException] = []
-    released: list[bool] = []
-
-    def fail_drop() -> None:
-        nonlocal cleanup_calls
-        cleanup_calls += 1
-        raise RuntimeError("local cleanup failed")
-
-    session.drop_thread_user = fail_drop  # type: ignore[method-assign]
-
-    def worker() -> None:
-        queue = Queue("worker", db_path=target, persistent=True)
-        queue.write("one")
-        assert queue.conn is not None
-        try:
-            queue.close()
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
-            errors.append(exc)
-        released.append(queue.conn._shared_released)
-        queue.close()
-
-    thread = threading.Thread(target=worker)
-    try:
-        thread.start()
-        thread.join(timeout=_LIVENESS)
-        assert not thread.is_alive()
-        assert cleanup_calls == 1
-        assert len(errors) == 1
-        assert isinstance(errors[0], RuntimeError)
-        assert str(errors[0]) == "local cleanup failed"
-        assert released == [True]
-        assert anchor.conn._shared_session is session
-    finally:
-        session.drop_thread_user = original_drop  # type: ignore[method-assign]
-        anchor.close()
-
-
 def test_failed_shared_core_release_is_not_reused_and_retries_at_session_close(
     tmp_path: Path,
     counting_backend: CountingBackendPlugin,
@@ -2256,48 +1803,6 @@ def test_failed_shared_core_release_is_not_reused_and_retries_at_session_close(
     assert release_attempts == 3
     assert counting_backend.runner_release_calls == 1
     assert session._closed
-
-
-def test_queue_close_retains_local_and_final_cleanup_failures(
-    tmp_path: Path,
-    counting_backend: CountingBackendPlugin,
-) -> None:
-    target = counting_target(tmp_path, schema="combined-failure")
-    release_attempts = 0
-    caught_failures: list[RuntimeError] = []
-
-    def fail_release() -> None:
-        nonlocal release_attempts
-        release_attempts += 1
-        raise RuntimeError("checkout release failed")
-
-    def worker() -> None:
-        queue = Queue("only", db_path=target, persistent=True)
-        queue.write("one")
-        assert queue.conn is not None
-        core = cast(BrokerCore, queue.conn.get_core())
-        runner = cast(CountingSQLiteRunner, core._runner)
-        runner.release_thread_connection = fail_release  # type: ignore[method-assign]
-        try:
-            queue.close()
-        except RuntimeError as failure:
-            caught_failures.append(failure)
-        queue.close()
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-    thread.join(timeout=_LIVENESS)
-    assert not thread.is_alive()
-
-    assert release_attempts == 2
-    assert len(caught_failures) == 1
-    assert str(caught_failures[0]) == "checkout release failed"
-    assert getattr(caught_failures[0], "__notes__", []) == [
-        (
-            "Additional process-session cleanup failure: "
-            "RuntimeError: checkout release failed"
-        )
-    ]
 
 
 @pytest.mark.parametrize("fail_first_disposal", [False, True])
