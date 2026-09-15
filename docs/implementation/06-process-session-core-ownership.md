@@ -150,10 +150,12 @@ A watcher weak-reference finalizer captures only a weak reference. During
 ordinary collection that reference is dead and the callback takes no action.
 During interpreter-exit finalization, a still-live watcher is stopped through
 its normal serialized lifecycle, preserving daemon-thread shutdown without
-calling Queue thread-local cleanup directly. A running watcher owns runtime
-cleanup in its run `finally`. Collection of an idle watcher lets an internally
-created Queue follow its own finalizer; a Queue supplied by the caller remains
-caller-owned and usable.
+calling Queue thread-local cleanup directly. A running watcher releases its
+own thread's cached core in its run `finally`, regardless of whether the Queue
+was supplied by the caller; the Queue reacquires on its next use on that
+thread. An idle stop closes the strategy and an internally created Queue's
+lease, but does not release the stop caller's cached core. A Queue supplied by
+the caller remains caller-owned: the watcher never closes its lease.
 
 ### Trusted first-party operational probes
 

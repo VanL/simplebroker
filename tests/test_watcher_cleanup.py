@@ -91,6 +91,64 @@ class TestWatcherCleanup:
         supplied_queue.close()
         anchor.close()
 
+    def test_idle_stop_closes_only_an_internally_owned_queue_lease(
+        self,
+        tmp_path,
+    ) -> None:
+        target = str(tmp_path / "idle-stop-ownership.db")
+        anchor = Queue("anchor", db_path=target, persistent=True)
+        anchor.write("anchor")
+        assert anchor.conn is not None
+        session = anchor.conn._shared_session
+        assert session is not None
+        main_core = anchor.conn.get_core()
+
+        supplied = Queue("supplied", db_path=target, persistent=True)
+        supplied.has_pending()
+        supplied_watcher = QueueWatcher(supplied, lambda *_: None)
+        supplied_watcher.stop(join=False)
+        assert supplied.conn is not None
+        assert not supplied.conn._shared_released
+        assert supplied.conn.get_core() is main_core
+
+        owned_watcher = QueueWatcher("owned", lambda *_: None, db=target)
+        owned_watcher._queue_obj.has_pending()
+        assert owned_watcher._queue_obj.conn is not None
+        owned_watcher.stop(join=False)
+        assert owned_watcher._queue_obj.conn._shared_released
+        assert main_core in session._cores
+
+        supplied.close()
+        anchor.close()
+
+    def test_run_thread_recycles_cache_without_closing_supplied_queue(
+        self,
+        tmp_path,
+    ) -> None:
+        target = str(tmp_path / "run-thread-ownership.db")
+        supplied = Queue("supplied", db_path=target, persistent=True)
+        observed: dict[str, Any] = {}
+
+        class OneUseWatcher(QueueWatcher):
+            def _run_with_retries(self, max_retries: int = 3) -> None:
+                del max_retries
+                self._queue_obj.has_pending()
+                assert self._queue_obj.conn is not None
+                observed["session"] = self._queue_obj.conn._shared_session
+                observed["core"] = self._queue_obj.conn.get_core()
+
+        watcher = OneUseWatcher(supplied, lambda *_: None)
+        thread = watcher.run_in_thread()
+        thread.join(timeout=scale_timeout_for_ci(5.0))
+
+        assert not thread.is_alive()
+        assert supplied.conn is not None
+        assert not supplied.conn._shared_released
+        session = observed["session"]
+        assert observed["core"] not in session._cores
+
+        supplied.close()
+
     def test_live_watcher_finalizer_uses_normal_stop_lifecycle(
         self,
         tmp_path,

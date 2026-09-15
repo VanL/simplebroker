@@ -915,3 +915,12 @@ forked-handle cases have firing tests. Runbook feedback: no new candidate.
   locked environment; imported
   `/Users/van/Developer/simplebroker/simplebroker/__init__.py`; task-runtime
   connection and lifecycle-state-machine selection passed 42 tests.
+- 2026-09-15, slice 3: split idle-stop lease cleanup from run-thread cache
+  recycling. An idle stop closes the strategy and only an internally created
+  Queue lease; run exit always recycles the run thread's cache and leaves a
+  caller-supplied Queue lease open. Focused lifecycle selection 424 passed, 2
+  skipped; full SQLite suite 3843 passed, 18 skipped; PostgreSQL wrapper 1723
+  passed, 11 skipped plus extension suite 324 passed, 6 skipped; Redis wrapper
+  1715 passed, 19 skipped plus extension suite 360 passed, 1 skipped. Ruff,
+  format, mypy, suppression, DOM-15, plan-context, doc-path, and diff gates
+  passed.

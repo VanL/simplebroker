@@ -355,11 +355,13 @@ class BaseWatcher(ABC):
         """
         # Handle queue parameter - either Queue object or string name
         if isinstance(queue, Queue):
+            self._owns_queue = False
             self._queue_obj = queue
             resolved_config = (
                 queue._config if config is None else resolve_config(config=config)
             )
         else:
+            self._owns_queue = True
             resolved_config = resolve_config(config=config)
             # Create Queue object with persistent=True by default for watchers.
             # ``None`` means Queue should resolve the target from config.
@@ -754,7 +756,7 @@ class BaseWatcher(ABC):
         """Run cleanup claimed by an idle stop and publish its outcome."""
         resources_released = False
         try:
-            self._cleanup_runtime_resources()
+            self._cleanup_stop_resources()
             resources_released = True
         finally:
             with self._stop_lock:
@@ -777,12 +779,28 @@ class BaseWatcher(ABC):
         self._queue_obj.cleanup_connections()
 
     def _cleanup_runtime_resources(self) -> None:
-        """Release strategy-owned resources before queue-owned resources."""
+        """Release strategy-owned resources."""
+        if hasattr(self._strategy, "close"):
+            self._strategy.close()
+
+    def _cleanup_stop_resources(self) -> None:
+        """Release resources owned by an idle watcher without recycling a cache."""
         try:
-            if hasattr(self._strategy, "close"):
-                self._strategy.close()
+            self._cleanup_runtime_resources()
         finally:
-            self._cleanup_thread_local()
+            if self._owns_queue:
+                self._queue_obj.close()
+
+    def _cleanup_run_resources(self) -> None:
+        """Release the run thread's cache and resources owned by the watcher."""
+        try:
+            self._cleanup_runtime_resources()
+        finally:
+            try:
+                self._cleanup_thread_local()
+            finally:
+                if self._owns_queue:
+                    self._queue_obj.close()
 
     def is_running(self) -> bool:
         """Return whether run execution, including final cleanup, is active."""
@@ -1092,7 +1110,7 @@ class BaseWatcher(ABC):
         resources_released = False
         try:
             try:
-                self._cleanup_runtime_resources()
+                self._cleanup_run_resources()
             except Exception as cleanup_error:
                 if terminal_failure is None:
                     raise

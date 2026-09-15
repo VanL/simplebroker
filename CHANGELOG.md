@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cleanup authority. Interpreter-exit finalization still routes a live watcher
   through its normal stop lifecycle, while active runs and Queue owners retain
   their established cleanup scopes.
+- Watcher cleanup now separates thread-cache ownership from Queue-lease
+  ownership. A watcher run releases its own thread's cached core on exit, even
+  for a caller-supplied Queue, while leaving that Queue's lease open. Stopping
+  an idle watcher closes its strategy and any Queue it constructed without
+  releasing the stop caller's thread cache.
 
 ## [8.2.2] - 2026-09-14
 

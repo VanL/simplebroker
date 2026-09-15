@@ -490,6 +490,14 @@ thread.join()
 remains true while stop cleanup is still running, and becomes false after a
 normal stop or fatal exit.
 
+The watcher run thread releases its own cached broker core when `run()` or
+`run_forever()` exits. This also applies to a Queue supplied by the caller: the
+watcher leaves that Queue's lease open, but the Queue reacquires its run-thread
+cache on its next use there. If `stop()` runs while the watcher is idle, it
+closes the polling strategy and any Queue the watcher constructed; it does not
+release the thread cache of the caller that invoked `stop()`. Close a
+caller-supplied Queue through its owner or its `BrokerSession`.
+
 ### Context manager support
 
 For cleaner resource management, watchers can be used as context managers which automatically start the thread and ensure proper cleanup:
