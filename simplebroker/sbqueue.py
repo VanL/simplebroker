@@ -234,14 +234,23 @@ class Queue:
         ...         queue.write(f"task_{i}")
     """
 
-    # Type annotations for instance attributes
-    conn: DBConnection | None
-    """Deprecated compatibility access to the Queue's connection manager.
+    _conn: DBConnection | None
 
-    Use ``queue.session`` for the minting scope, ``session.connection()`` for
-    shared connection-level work, or ``open_broker()`` for an independent
-    connection. This attribute remains readable through the 8.3 release line.
-    """
+    @property
+    def conn(self) -> DBConnection | None:
+        """Deprecated compatibility access to the Queue's connection manager.
+
+        Use ``queue.session`` for the minting scope, ``session.connection()``
+        for shared connection-level work, or ``open_broker()`` for an
+        independent connection. This attribute remains readable through the
+        8.3 release line.
+        """
+
+        return self._conn
+
+    @conn.setter
+    def conn(self, value: DBConnection | None) -> None:
+        self._conn = value
 
     def __init__(
         self,
@@ -310,12 +319,7 @@ class Queue:
         """Report the bound target without exposing its mutable options."""
 
         if isinstance(self._db_path, BrokerTarget):
-            return replace(
-                self._db_path,
-                backend_options=cast(
-                    dict[str, Any], snapshot_key_material(self._db_path.backend_options)
-                ),
-            )
+            return self._db_path.detached()
         return self._db_path
 
     @property

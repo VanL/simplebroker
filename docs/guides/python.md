@@ -492,12 +492,13 @@ remains true while stop cleanup is still running, and becomes false after a
 normal stop or fatal exit.
 
 The watcher run thread releases its own cached broker core when `run()` or
-`run_forever()` exits. This also applies to a Queue supplied by the caller: the
-watcher leaves that Queue's lease open, but the Queue reacquires its run-thread
-cache on its next use there. If `stop()` runs while the watcher is idle, it
-closes the polling strategy and any Queue the watcher constructed; it does not
-release the thread cache of the caller that invoked `stop()`. Close a
-caller-supplied Queue through its owner or its `BrokerSession`.
+`run_forever()` exits. It also closes the lease of a Queue it constructed from
+a name. For a Queue supplied by the caller, the watcher leaves that Queue's
+lease open, but the Queue reacquires its run-thread cache on its next use there.
+If `stop()` runs while the watcher is idle, it closes the polling strategy and
+any Queue the watcher constructed; it does not release the thread cache of the
+caller that invoked `stop()`. Close a caller-supplied Queue through its owner or
+its `BrokerSession`.
 
 ### Context manager support
 
@@ -991,9 +992,10 @@ its cache on the calling thread too: there is one cache per process-session key
 and thread, not one per handle. Use `session.connection()` for broadcast,
 statistics, and alias operations that should share the same runner or pool.
 Create a fresh session in a forked child; inherited session handles reject use.
-Close Queue iterators and exit Queue or session connection contexts before the
-session exits; closing a session inside one of its same-thread operations is
-rejected.
+Close all Queue iterators and exit all Queue or session connection contexts on
+the same process-session key before the session exits. This includes operations
+opened through a sibling handle or a directly constructed persistent Queue;
+closing the session while one is active on the calling thread is rejected.
 
 A retained minted Queue can be used after the session closes, like any closed
 persistent Queue that is reused. If no other lease remains, that operation

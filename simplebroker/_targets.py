@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+from ._key_material import snapshot_key_material
 
 _CONNINFO_PASSWORD_RE = re.compile(
     r"(?i)(\bpassword\s*=\s*)(?:"
@@ -111,6 +113,14 @@ class BrokerTarget:
         if self.backend_name == "sqlite":
             return self.target
         return redact_backend_target(self.target)
+
+    def detached(self) -> BrokerTarget:
+        """Return a descriptor whose nested options cannot mutate this target."""
+
+        return replace(
+            self,
+            backend_options=snapshot_key_material(self.backend_options),
+        )
 
     def __repr__(self) -> str:
         """Return a diagnostic representation without connection credentials."""

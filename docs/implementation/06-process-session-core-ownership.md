@@ -96,9 +96,20 @@ remain in the handle's scope inventory until close. `session.connection()`
 uses a temporary shared `DBConnection` lease so connection-level work reuses
 the same runner or pool without joining that Queue inventory.
 
-The calling thread must close its iterators and exit Queue or session
-connection contexts before closing the handle. Close rejects an active
-same-thread operation before changing scope state; otherwise it admits no new
+The inventory is the owning edge. A minted Queue holds only a weak reference
+back to the handle for `queue.session`, so dropping the handle can run its
+lease-only finalizer immediately instead of waiting for cyclic garbage
+collection. A strong Queue-to-handle edge would add no ownership guarantee:
+the handle already retains every minted Queue, while a retained Queue is
+allowed to outlive the handle and reacquire an ordinary persistent-Queue lease
+through a new process session when reused.
+
+The calling thread must close all iterators and exit all Queue or session
+connection contexts using the same process-session key before closing the
+handle. The active-operation depth belongs to the key and thread, so an
+operation opened through a sibling handle or a directly constructed persistent
+Queue also blocks close on that thread. Close rejects such an operation before
+changing scope state; otherwise it admits no new
 queues or connections, releases the calling thread's cache, closes every
 minted Queue, and drops the handle lease. Queue and process session calls occur
 outside the handle lock. Ordinary failures do not prevent later independent

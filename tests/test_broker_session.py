@@ -14,7 +14,7 @@ from typing import Any, cast
 
 import pytest
 
-from simplebroker import BrokerSession, Queue
+from simplebroker import BrokerSession, BrokerTarget, Queue, resolve_config
 from simplebroker.db import BrokerDB, SQLiteRunner
 
 pytestmark = [pytest.mark.shared]
@@ -114,6 +114,33 @@ def test_session_scope_closes_early_reused_queue_lease(tmp_path: Path) -> None:
     assert process_session._closed
     assert queue.session is session
     assert queue.read_many(2) == ["first", "second"]
+    queue.close()
+
+
+def test_retained_queue_reuse_starts_a_new_process_session_and_runner(
+    tmp_path: Path,
+) -> None:
+    session = BrokerSession.connect(str(tmp_path / "retained.db"))
+    queue = session.queue("jobs")
+    queue.write("payload")
+    assert queue.conn is not None
+    original_session = queue.conn._shared_session
+    original_core = queue.conn.get_core()
+    assert original_session is not None
+    assert isinstance(original_core, BrokerDB)
+    original_runner = original_core._runner
+
+    session.close()
+    assert original_session._closed
+
+    assert queue.read_one() == "payload"
+    replacement_session = queue.conn._shared_session
+    replacement_core = queue.conn.get_core()
+    assert replacement_session is not None
+    assert replacement_session is not original_session
+    assert replacement_core is not original_core
+    assert isinstance(replacement_core, BrokerDB)
+    assert replacement_core._runner is not original_runner
     queue.close()
 
 
@@ -235,7 +262,7 @@ def test_recycle_thread_is_deferred_until_open_operation_exits(tmp_path: Path) -
     session.close()
 
 
-def test_close_rejects_an_open_same_thread_operation_without_closing_scope(
+def test_close_rejects_an_open_same_key_same_thread_operation_without_closing_scope(
     tmp_path: Path,
 ) -> None:
     session = BrokerSession.connect(str(tmp_path / "open-operation.db"))
@@ -243,12 +270,61 @@ def test_close_rejects_an_open_same_thread_operation_without_closing_scope(
 
     with (
         queue.get_connection(),
-        pytest.raises(RuntimeError, match="Close its iterators"),
+        pytest.raises(RuntimeError, match="same process-session key"),
     ):
         session.close()
 
     session.queue("still-open").write("payload")
     session.close()
+
+
+@pytest.mark.parametrize("operation_kind", ["queue_iterator", "session_connection"])
+@pytest.mark.parametrize("body_failure_type", [None, ValueError, KeyboardInterrupt])
+def test_context_exit_preserves_body_failure_when_same_key_operation_blocks_close(
+    tmp_path: Path,
+    operation_kind: str,
+    body_failure_type: type[BaseException] | None,
+) -> None:
+    target = str(tmp_path / f"exit-{operation_kind}.db")
+    session = BrokerSession.connect(target)
+    operation: Any
+    operation_owner: Queue | BrokerSession
+    if operation_kind == "queue_iterator":
+        queue = Queue("jobs", db_path=target, persistent=True)
+        operation_owner = queue
+        queue.write("payload")
+        operation = queue.read(all_messages=True)
+        assert next(operation) == "payload"
+    else:
+        sibling = BrokerSession.connect(target)
+        operation_owner = sibling
+        operation = sibling.connection()
+        operation.__enter__()
+
+    try:
+        if body_failure_type is None:
+            with (
+                pytest.raises(RuntimeError, match="same process-session key"),
+                session,
+            ):
+                pass
+        else:
+            body_failure = body_failure_type("body")
+            with pytest.raises(body_failure_type) as raised, session:
+                raise body_failure
+            assert raised.value is body_failure
+            assert str(raised.value) == "body"
+            assert any(
+                "same process-session key" in note
+                for note in getattr(raised.value, "__notes__", ())
+            )
+    finally:
+        if operation_kind == "queue_iterator":
+            operation.close()
+        else:
+            operation.__exit__(None, None, None)
+        session.close()
+        operation_owner.close()
 
 
 def test_foreign_thread_close_does_not_recycle_worker_cache(tmp_path: Path) -> None:
@@ -351,12 +427,26 @@ def test_injected_runner_queue_has_no_session(tmp_path: Path) -> None:
 
 
 def test_session_descriptors_report_detached_identity(tmp_path: Path) -> None:
-    target = str(tmp_path / "descriptors.db")
-    session = BrokerSession.connect(target)
+    target = BrokerTarget(
+        backend_name="sqlite",
+        target=str(tmp_path / "descriptors.db"),
+        backend_options={"outer": {"value": "bound"}},
+    )
+    config = resolve_config(override={"BROKER_BUSY_TIMEOUT": 1234})
+    session = BrokerSession.connect(target, config=config)
 
-    assert session.target == str(Path(target).resolve())
+    first_target = cast(BrokerTarget, session.target)
+    first_target.backend_options["outer"]["value"] = "mutated"
+    first_target.backend_options["added"] = True
+    second_target = cast(BrokerTarget, session.target)
+
+    assert second_target is not first_target
+    assert second_target.target == str((tmp_path / "descriptors.db").resolve())
+    assert second_target.backend_options == {"outer": {"value": "bound"}}
     assert session.backend_name == "sqlite"
-    assert session.config == session._config
+    assert session.config is config
+    assert session.config["BUSY_TIMEOUT"] == 1234
+    assert session.config.prefix == config.prefix
 
     session.close()
 
@@ -491,18 +581,23 @@ def test_close_attempts_remaining_steps_after_ordinary_cleanup_failure(
     queue = session.queue("jobs")
     queue.write("payload")
     assert queue.conn is not None
+    real_shutdown = BrokerDB.shutdown
+    shutdown_calls = 0
 
-    def fail_recycle() -> None:
-        raise RuntimeError("recycle failed")
+    def fail_first_shutdown(core: BrokerDB) -> None:
+        nonlocal shutdown_calls
+        shutdown_calls += 1
+        if shutdown_calls == 1:
+            raise RuntimeError("recycle failed")
+        real_shutdown(core)
 
-    monkeypatch.setattr(
-        session._process_session, "cleanup_current_thread", fail_recycle
-    )
+    monkeypatch.setattr(BrokerDB, "shutdown", fail_first_shutdown)
     with pytest.raises(RuntimeError, match="recycle failed"):
         session.close()
 
     assert queue.conn._shared_released
     assert session._released
+    assert shutdown_calls == 2
 
 
 def test_close_retains_first_ordinary_failure_and_notes_later_failures(
@@ -514,16 +609,20 @@ def test_close_retains_first_ordinary_failure_and_notes_later_failures(
     second_queue = session.queue("second")
     second_queue.write("payload")
     real_first_close = first_queue.close
+    real_shutdown = BrokerDB.shutdown
+    shutdown_calls = 0
 
-    def fail_recycle() -> None:
-        raise RuntimeError("recycle failed")
+    def fail_first_shutdown(core: BrokerDB) -> None:
+        nonlocal shutdown_calls
+        shutdown_calls += 1
+        if shutdown_calls == 1:
+            raise RuntimeError("recycle failed")
+        real_shutdown(core)
 
     def fail_queue_close() -> None:
         raise ValueError("queue close failed")
 
-    monkeypatch.setattr(
-        session._process_session, "cleanup_current_thread", fail_recycle
-    )
+    monkeypatch.setattr(BrokerDB, "shutdown", fail_first_shutdown)
     monkeypatch.setattr(first_queue, "close", fail_queue_close)
     with pytest.raises(RuntimeError, match="recycle failed") as raised:
         session.close()
@@ -533,6 +632,7 @@ def test_close_retains_first_ordinary_failure_and_notes_later_failures(
     assert second_queue.conn is not None
     assert second_queue.conn._shared_released
     real_first_close()
+    assert shutdown_calls == 2
 
 
 def test_interrupted_close_keeps_admission_closed_and_later_close_finishes(
@@ -667,6 +767,7 @@ def test_inherited_handle_rejects_use_and_close_is_silent(tmp_path: Path) -> Non
                 pass
             session.close()
             fresh = BrokerSession.connect(str(tmp_path / "fork.db"))
+            assert fresh._process_session is not session._process_session
             fresh.close()
             child_status = b"passed"
         finally:

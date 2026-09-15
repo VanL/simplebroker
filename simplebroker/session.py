@@ -6,16 +6,18 @@ import threading
 import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
-from typing import Self, cast
+from typing import Self
 
 from . import _broker_session
 from ._backend_plugins import BrokerConnection
 from ._constants import Config, resolve_config
-from ._key_material import snapshot_key_material
 from ._targets import BrokerTarget
 from .db import DBConnection, _build_process_session_core_factory
 from .sbqueue import Queue, _canonicalize_queue_target, _default_target_from_config
+
+
+class _ActiveOperationCloseError(RuntimeError):
+    """Refuse scope close while this key has an operation on this thread."""
 
 
 class BrokerSession:
@@ -112,9 +114,8 @@ class BrokerSession:
     def recycle_thread(self) -> None:
         """Release this session's cache for the calling thread."""
         self._ensure_process_owner()
-        with self._lock:
-            if self._released:
-                return
+        if self._released:
+            return
         self._process_session.cleanup_current_thread()
 
     @contextmanager
@@ -138,6 +139,7 @@ class BrokerSession:
     def close(self) -> None:
         """Recycle this thread, close minted Queues, and release this lease."""
         if not self._is_process_owner():
+            self._closing = True
             self._released = True
             self._finalizer.detach()
             return
@@ -147,10 +149,11 @@ class BrokerSession:
                 if self._released:
                     return
                 if self._process_session.current_thread_operation_depth() > 0:
-                    raise RuntimeError(
+                    raise _ActiveOperationCloseError(
                         "BrokerSession cannot close while this thread has an open "
-                        "Queue or connection operation. Close its iterators and "
-                        "exit its connection contexts first."
+                        "Queue or connection operation on the same process-session "
+                        "key. Close all such iterators and exit all such connection "
+                        "contexts first."
                     )
                 self._closing = True
                 queues = list(self._queues)
@@ -187,20 +190,27 @@ class BrokerSession:
             self._ensure_open_locked()
         return self
 
-    def __exit__(self, *_exc: object) -> None:
-        self.close()
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        _traceback: object,
+    ) -> None:
+        try:
+            self.close()
+        except _ActiveOperationCloseError as close_failure:
+            if exc is None:
+                raise
+            _broker_session._attach_process_session_cleanup_failure(
+                exc,
+                close_failure,
+            )
 
     @property
     def target(self) -> str | BrokerTarget:
         """Return the bound target without exposing mutable backend options."""
         if isinstance(self._target, BrokerTarget):
-            return replace(
-                self._target,
-                backend_options=cast(
-                    dict[str, object],
-                    snapshot_key_material(self._target.backend_options),
-                ),
-            )
+            return self._target.detached()
         return self._target
 
     @property

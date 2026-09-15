@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recycling, and closes its scoped Queues and lease on exit. Inherited handles
   reject use in forked children; create a new session there. Omitted, `None`,
   and empty targets follow Queue's configured-default resolution. Close rejects
-  a same-thread operation that is still open, and `queue.session` weakly names
-  its live minting handle without delaying lease release.
+  an open operation on the same process-session key and calling thread, and
+  `queue.session` weakly names its live minting handle without delaying lease
+  release.
+  Follow-up lifecycle proof and corrections landed in `b8fa87e` and `8ec60a0`.
 
 ### Deprecated
 

@@ -482,9 +482,11 @@ block ends the session only after that lease drops.
 `session.close()` performs three steps in order: it releases the calling
 thread's cached core exactly as `recycle_thread()` does, closes every Queue the
 handle minted through the public `Queue.close()`, then drops the handle's
-lease. The calling thread must first close its Queue iterators and exit its
-Queue or session connection contexts; `close()` rejects an open same-thread
-operation before closing the scope. Closing is idempotent, and the handle
+lease. The calling thread must first close every Queue iterator and exit every
+Queue or session connection context open on this process-session key;
+`close()` rejects any such same-thread operation before closing the scope,
+including one opened through another handle or a directly constructed
+persistent Queue. Closing is idempotent, and the handle
 admits no new Queues or connections once closing has begun. Every step is
 attempted after an ordinary failure, and the first failure is raised with
 later ones attached as notes. A
@@ -498,10 +500,14 @@ a thread with no cache releases nothing there. When that lease was the last on
 the session in this process, the session ends as described above. A minted
 Queue still in use on another thread observes exactly what a cross-thread
 `Queue.close()` observes today. The handle is a context manager whose exit
-calls `close()`, so `with BrokerSession.connect(...) as session:` is complete
-cleanup for the thread that runs it. A handle that is garbage-collected without
-`close()` releases only its lease and never touches the collecting thread's
-cache.
+calls `close()`, subject to the same precondition that this thread has no open
+operation on the process-session key. If exit refuses while a body exception
+is already propagating, that exception remains primary and the refusal is
+attached as a note; without a body exception, exit raises the refusal. Thus
+`with BrokerSession.connect(...) as session:` is complete cleanup for the
+thread that runs it when the precondition holds. A handle that is
+garbage-collected without `close()` releases only its lease and never touches
+the collecting thread's cache.
 
 Read-only attributes: `target` (the normalized target, as `Queue.db_target`
 reports it), `backend_name`, and `config` (the retained snapshot).
