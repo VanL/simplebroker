@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `BrokerSession` is a package-root lifetime handle for one resolved target and
+  configuration. It mints persistent Queues that share the process session,
+  offers shared connection-level access and explicit caller-thread cache
+  recycling, and closes its scoped Queues and lease on exit. Inherited handles
+  reject use in forked children; create a new session there.
+
 ### Fixed
 
 - Persistent Queue close once again releases only that Queue's process-session

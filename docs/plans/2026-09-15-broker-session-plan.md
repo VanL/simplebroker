@@ -531,7 +531,8 @@ class BrokerSession:
   `_queues: list[Queue]` (append-only until close; never pruned),
   `_lock: threading.Lock` (non-reentrant; never held while calling into a
   Queue or the process session), `_closing: bool` (set once, never cleared),
-  `_released: bool`,
+  `_released: bool`, and `_close_lock: threading.Lock` (serializes cleanup
+  attempts so concurrent callers cannot release the handle lease twice),
   `_finalizer = weakref.finalize(self, release_process_broker_session, key)`
   detached in the same `finally` that marks the lease released.
 - `queue(name)`: fork guard; then under `_lock`: if `_closing` raise
@@ -699,7 +700,7 @@ and Review Log completed.
 
 ## Tasks (one commit each)
 
-1. [ ] **Commit 1 — plan.** This file plus its Status Index row (`draft`).
+1. [x] **Commit 1 — plan.** This file plus its Status Index row (`draft`).
    Independent review of the plan and the four spec deltas before commit 2
    (different agent family preferred; PASS/BLOCKED with dispositions recorded
    below). Interface review of the [SB-API-1/3/6/11] prose with all eleven
@@ -707,7 +708,7 @@ and Review Log completed.
    review on the measured private-pool-per-call cost of `open_broker`).
    Done signal: review verdicts and dispositions recorded; gates below pass.
    Commit subject: `Plan BrokerSession and last-user subtraction`.
-2. [ ] **Commit 2 — subtraction.** Slice 2 exactly as designed. Red first:
+2. [x] **Commit 2 — subtraction.** Slice 2 exactly as designed. Red first:
    the new retention, remedy, no-retry, and hold-once tests fail on `004a7e9`;
    record their failures. Then delete, implement, promote [SB-API-3], align
    docs, regenerate the suppression registry, supersede the remediation
@@ -717,11 +718,11 @@ and Review Log completed.
    against this tree through Weft's own environment (record the imported
    path).
    Commit subject: `Restore lease-only persistent Queue close and remove last-user inference`.
-3. [ ] **Commit 3 — watcher ownership.** Slice 3. Red first for the idle-stop
+3. [x] **Commit 3 — watcher ownership.** Slice 3. Red first for the idle-stop
    and caller-supplied-Queue cases.
    Done signal: watcher suites, transition tables, examples tests green.
    Commit subject: `Make watcher stop release only what the watcher owns`.
-4. [ ] **Commit 4 — BrokerSession.** Slice 4. Red first for every bullet in
+4. [x] **Commit 4 — BrokerSession.** Slice 4. Red first for every bullet in
    its test list. Adversarial floors from
    `docs/agent-context/runbooks/adversarial-acceptance-probes.md`: this adds a
    public type but no parser, CLI grammar, output format, or persistence; the
@@ -891,6 +892,26 @@ Queues, reject-all inherited handles, silent inherited close, and prose-only
 deprecation. No enumerable enum/status/flag contract was added; closed and
 forked-handle cases have firing tests. Runbook feedback: no new candidate.
 
+2026-09-15, slice 4 independent implementation review: **PASS after required
+test dispositions.** The reviewer found no implementation defect or excess
+mechanism, and confirmed that `_close_lock` directly serves the concurrent
+close invariant. Four claimed acceptance areas lacked their decisive probes:
+backend-specific sharing and fork behavior, exact runner/lease ownership,
+deferred and cross-thread lifecycle behavior, and interruption at the
+registry-release seam. All were accepted. SQLite lifecycle tests, the
+counting backend, PostgreSQL runner sharing, and Redis real-fork coverage now
+fire those contracts. The separate handle row was removed from the complete
+state-machine inventory: `BrokerSession` is a façade over
+`SM-PROCESS-SESSION`, not a second resource machine.
+
+2026-09-15, promoted interface re-review: **PASS after two required
+dispositions.** Direct construction no longer exposes registry types and now
+fails with `BrokerSession.connect()` guidance; the public contract test pins
+that shape. [SB-API-11] now says every active lifecycle method checks the pid,
+leaving read-only descriptors explicitly outside that claim. All eleven
+principles pass; the visible session setup remains the recorded deliberate
+departure. No new runbook candidate.
+
 ## Execution Log
 
 - 2026-09-15: Plan authored against `004a7e9`. Design selected by the owner
@@ -924,3 +945,18 @@ forked-handle cases have firing tests. Runbook feedback: no new candidate.
   1715 passed, 19 skipped plus extension suite 360 passed, 1 skipped. Ruff,
   format, mypy, suppression, DOM-15, plan-context, doc-path, and diff gates
   passed.
+- 2026-09-15, slice 4: added the package-root `BrokerSession` lifetime handle,
+  scope-owned minted Queues, shared connection access, explicit caller-thread
+  recycling, reject-all inherited-handle behavior, and the read-only
+  `Queue.session` back-reference. Admission and close are serialized only at
+  the handle boundary; cleanup runs outside the admission lock, ordinary
+  failures retain ordered evidence, and interruptions keep completed work
+  without rollback or re-admission. Independent implementation and promoted
+  interface reviews passed after their test and constructor-shape findings
+  were incorporated. Full SQLite suite: 3866 passed, 18 skipped. PostgreSQL:
+  1737 passed, 11 skipped plus 325 passed, 6 skipped. Redis: 1729 passed, 19
+  skipped plus 361 passed, 1 skipped. Ruff, format, mypy, suppression,
+  DOM-15, plan-context, doc-path, and diff gates passed. The Weft gate used
+  `PYTHONPATH=/Users/van/Developer/simplebroker`, imported
+  `/Users/van/Developer/simplebroker/simplebroker/__init__.py`, and passed its
+  42 task-runtime connection and lifecycle-state-machine tests.

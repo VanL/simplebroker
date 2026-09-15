@@ -86,6 +86,29 @@ thread is inside a Queue operation, one boolean thread-local cleanup request is
 deferred until the outermost operation exits. The Queue remains usable and
 reacquires a core on its next operation.
 
+### Public session handle
+
+`BrokerSession` is a lifetime façade over the existing registry, not a second
+registry or an operation surface. The handle acquires one lease for a resolved
+target and Config snapshot. Queues minted through `session.queue(name)` use the
+same target and snapshot, acquire their ordinary persistent-Queue leases, and
+remain in the handle's scope inventory until close. `session.connection()`
+uses a temporary shared `DBConnection` lease so connection-level work reuses
+the same runner or pool without joining that Queue inventory.
+
+Close admits no new queues or connections, then releases the calling thread's
+cache, closes every minted Queue, and drops the handle lease. Queue and process
+session calls occur outside the handle lock. Ordinary failures do not prevent
+later independent cleanup steps; interruptions preserve completed idempotent
+steps and leave admission closed. The finalizer releases only the handle lease
+because the collector thread does not own another thread's cache.
+
+The handle is strictly process-local. Every active method rejects an inherited
+handle before acquiring its lock, for every backend. Inherited `close()` is a
+silent no-op and detaches the child copy of the finalizer, so child cleanup
+cannot release parent resources. A child constructs a new handle; Queues minted
+by the parent retain their separate existing backend-specific fork policy.
+
 Idle cleanup takes one raw active-operation hold before detaching the core and
 releases that hold exactly once in its surrounding `finally`. Claiming first
 publishes the core into an invocation-owned carrier, then removes it from

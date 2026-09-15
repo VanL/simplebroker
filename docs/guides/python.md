@@ -968,6 +968,28 @@ broker target once, translate your application's settings into `BROKER_*`
 config keys, and hand out queues bound to that target. Application code should
 call the client instead of open-coding `Queue(...)` across the codebase.
 
+For a worker or task scope that uses several queues, `BrokerSession` names the
+lifetime of their shared process resources:
+
+```python
+from simplebroker import BrokerSession
+
+with BrokerSession.connect(target, config=config) as session:
+    jobs = session.queue("jobs")
+    failures = session.queue("failures")
+    jobs.write("render invoice")
+```
+
+The `with` block must run and exit on the thread whose cache it owns. Exit
+recycles that thread's cached core, closes every Queue minted by the session,
+and drops the session's own lease. Closing the session from a different thread
+recycles only that other thread's cache. If another live handle or Queue shares
+the same resolved target and configuration, `session.recycle_thread()` affects
+its cache on the calling thread too: there is one cache per process-session key
+and thread, not one per handle. Use `session.connection()` for broadcast,
+statistics, and alias operations that should share the same runner or pool.
+Create a fresh session in a forked child; inherited session handles reject use.
+
 Weft is the reference implementation of this pattern. Its public
 `WeftClient` owns a resolved `WeftContext`; `WeftContext.queue(name)` constructs
 `Queue(name, db_path=context.broker_target, config=context.broker_config)`, and

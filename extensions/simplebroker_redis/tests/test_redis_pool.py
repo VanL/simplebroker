@@ -16,7 +16,7 @@ from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis import plugin as redis_plugin_module
 from simplebroker_redis.core import RedisBrokerCore
 
-from simplebroker import resolve_config
+from simplebroker import BrokerSession, BrokerTarget, resolve_config
 from simplebroker._exceptions import DatabaseError, OperationalError
 
 pytestmark = [pytest.mark.redis_only]
@@ -165,6 +165,69 @@ def test_fork_check_recreates_pool(redis_url: str, redis_namespace: str) -> None
         assert runner._pool is not first_pool
     finally:
         runner.shutdown()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_inherited_broker_session_rejects_while_queue_recovers(
+    redis_url: str,
+    redis_namespace: str,
+) -> None:
+    target = BrokerTarget("redis", redis_url, {"namespace": redis_namespace})
+    plugin = get_backend_plugin()
+    session = BrokerSession.connect(target)
+    queue = session.queue("parent")
+    queue.write("before")
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_handle_lock() -> None:
+        with session._lock:
+            lock_held.set()
+            assert release_lock.wait(10.0)
+
+    holder = threading.Thread(target=hold_handle_lock)
+    holder.start()
+    assert lock_held.wait(10.0)
+    read_fd, write_fd = os.pipe()
+    child = os.fork()
+    if child == 0:
+        os.close(read_fd)
+        result = b"failed"
+        try:
+            for action in (
+                lambda: session.queue("child"),
+                session.recycle_thread,
+                session.__enter__,
+            ):
+                with pytest.raises(RuntimeError, match="Create a new session"):
+                    action()
+            with (
+                pytest.raises(RuntimeError, match="Create a new session"),
+                session.connection(),
+            ):
+                pass
+            session.close()
+            queue.write("from-child")
+            fresh = BrokerSession.connect(target)
+            fresh.queue("fresh").write("payload")
+            fresh.close()
+            result = b"passed"
+        finally:
+            os.write(write_fd, result)
+            os._exit(0)
+
+    os.close(write_fd)
+    try:
+        assert os.read(read_fd, 32) == b"passed"
+        _, wait_status = os.waitpid(child, 0)
+        assert os.WIFEXITED(wait_status) and os.WEXITSTATUS(wait_status) == 0
+    finally:
+        release_lock.set()
+        holder.join(timeout=10.0)
+        queue.close()
+        session.close()
+        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")

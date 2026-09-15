@@ -11,7 +11,22 @@ from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, Protocol, TypedDict, TypeVar, Union, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
+
+if TYPE_CHECKING:
+    from .session import BrokerSession as BrokerSessionType
+else:
+    BrokerSessionType = Any
 
 from ._backend_plugins import (
     ActivityWaiter,
@@ -262,6 +277,7 @@ class Queue:
             resolved_db_path, config=self._config, runner=runner
         )
         self._stop_event: threading.Event | None = None
+        self._session: BrokerSessionType | None = None
 
         # Create DBConnection for persistent queues and injected-runner queues.
         # The built-in no-runner path keeps its current "get in, get out"
@@ -301,6 +317,11 @@ class Queue:
         """Return the resolved backend plugin name without opening a connection."""
 
         return self._activity_waiter_identity().backend_name
+
+    @property
+    def session(self) -> BrokerSessionType | None:
+        """Return the BrokerSession that minted this Queue, when present."""
+        return self._session
 
     def _move_destination_name(self, destination: Union[str, "Queue"]) -> str:
         if not isinstance(destination, Queue):

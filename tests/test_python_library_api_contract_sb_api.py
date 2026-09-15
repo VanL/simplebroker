@@ -12,6 +12,7 @@ import pytest
 import simplebroker
 import simplebroker.sbqueue as sbqueue_module
 from simplebroker import (
+    BrokerSession,
     Config,
     DumpClockSkewWarning,
     Queue,
@@ -84,6 +85,19 @@ def test_api_root_ext_commands_all_are_importable() -> None:
         assert hasattr(ext, name), name
     for name in commands.__all__:
         assert hasattr(commands, name), name
+
+
+def test_broker_session_is_a_lifetime_only_root_surface() -> None:
+    assert simplebroker.BrokerSession is BrokerSession
+    assert "BrokerSession" in simplebroker.__all__
+    operation_verbs = {"write", "read", "peek", "move", "stats", "alias"}
+    assert operation_verbs.isdisjoint(vars(BrokerSession))
+    assert {"connect", "queue", "recycle_thread", "connection", "close"} <= set(
+        vars(BrokerSession)
+    )
+    assert not inspect.signature(BrokerSession).parameters
+    with pytest.raises(TypeError, match=r"BrokerSession\.connect"):
+        BrokerSession()
 
 
 def test_api_public_message_id_formatter_contract() -> None:

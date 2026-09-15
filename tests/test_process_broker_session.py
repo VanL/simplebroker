@@ -23,6 +23,7 @@ import pytest
 import simplebroker._broker_session as broker_session_module
 from simplebroker import (
     DEFAULT_CONFIG,
+    BrokerSession,
     Config,
     ConfigField,
     Queue,
@@ -352,6 +353,26 @@ def build_process_session(
         resolve_config() if config is None else config,
     )
     return _ProcessBrokerSession(_build_process_session_core_factory(spec))
+
+
+def test_broker_session_handles_and_queues_build_one_runner(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+) -> None:
+    target = counting_target(tmp_path, schema="broker-session")
+    first = BrokerSession.connect(target)
+    second = BrokerSession.connect(target)
+    queues = [first.queue(f"first-{index}") for index in range(3)]
+    queues.extend(second.queue(f"second-{index}") for index in range(2))
+
+    for queue in queues:
+        queue.write("payload")
+
+    assert counting_backend.create_runner_calls == 1
+    first.close()
+    assert counting_backend.runner_close_calls == 0
+    second.close()
+    assert counting_backend.runner_close_calls == 1
 
 
 def test_persistent_queues_same_resolved_target_share_backend_runner_in_process(

@@ -244,6 +244,27 @@ Evidence:
 - contemporaneous: `docs/specs/11-delivery.md` `[SB-DELIVERY-6]`
 - contemporaneous: `CHANGELOG.md` section `5.5.0` and implementation commit `9d03e77d258127acfff4352435251e892daa8493`
 
+### [REV-THEORY-006] Process session named publicly
+
+Current account: The process session is a public lifetime concept through
+`BrokerSession`. The handle names ownership of reusable backend resources,
+mints persistent Queue handles on one resolved target and configuration, and
+lets the calling thread explicitly release its shared cache. Queue remains the
+operation surface.
+Supersedes: The process session existed only as private sharing machinery, so
+embedders could hold Queue leases but had no public owner for the lifetime that
+spans several Queues and caller-thread cache cleanup.
+Pressure: Weft's task scope needs several named Queues and connection-level
+operations to share one runner or pool, while repeated lifecycle review showed
+that inferring a thread's completion from the order of Queue closes was not a
+coherent ownership rule.
+Evidence:
+- contemporaneous: [THEORY-3] process-session concept and [THEORY-4] explicit
+  safety and concrete-pressure principles
+- contemporaneous: [2026-09-15 BrokerSession plan](plans/2026-09-15-broker-session-plan.md)
+- contemporaneous: [`[SB-API-3]`](specs/16-python-library-api.md) process
+  session handle contract and [process-session ownership](implementation/06-process-session-core-ownership.md)
+
 ## Related plan
 
 - Retired source plan: `2026-07-29-program-theory-and-negative-knowledge-plan.md`

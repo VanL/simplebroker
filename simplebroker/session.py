@@ -1,0 +1,211 @@
+"""Public lifetime handle for process-shared broker resources [SB-API-3]."""
+
+from __future__ import annotations
+
+import threading
+import weakref
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import replace
+from typing import Self, cast
+
+from . import _broker_session
+from ._backend_plugins import BrokerConnection
+from ._constants import Config, resolve_config
+from ._key_material import snapshot_key_material
+from ._targets import BrokerTarget
+from .db import DBConnection, _build_process_session_core_factory
+from .sbqueue import Queue, _canonicalize_queue_target
+
+
+class BrokerSession:
+    """Own a scoped lease on one process-shared broker session."""
+
+    def __init__(self) -> None:
+        raise TypeError(
+            "BrokerSession cannot be constructed directly. "
+            "Create a session with BrokerSession.connect()."
+        )
+
+    def _initialize(
+        self,
+        key: _broker_session._SessionKey,
+        process_session: _broker_session._ProcessBrokerSession,
+        target: str | BrokerTarget,
+        config: Config,
+    ) -> None:
+        self._key = key
+        self._process_session = process_session
+        self._target = target
+        self._config = config
+        self._queues: list[Queue] = []
+        self._lock = threading.Lock()
+        self._close_lock = threading.Lock()
+        self._closing = False
+        self._released = False
+        self._finalizer = weakref.finalize(
+            self,
+            _broker_session.release_process_broker_session,
+            key,
+        )
+
+    @classmethod
+    def connect(
+        cls,
+        db_path: str | BrokerTarget,
+        *,
+        config: Config | None = None,
+    ) -> BrokerSession:
+        """Acquire a process-session lease for one resolved target."""
+        resolved = resolve_config(config=config)
+        target = _canonicalize_queue_target(
+            db_path,
+            config=resolved,
+            runner=None,
+        )
+        key, process_session = _broker_session.acquire_process_broker_session(
+            target,
+            config=resolved,
+            factory_builder=_build_process_session_core_factory,
+        )
+        session = object.__new__(cls)
+        session._initialize(key, process_session, target, resolved)
+        return session
+
+    def _ensure_process_owner(self) -> None:
+        if self._key.pid != _broker_session._getpid():
+            raise RuntimeError(
+                "BrokerSession used in a forked process. "
+                "Create a new session in the child process."
+            )
+
+    def _ensure_open_locked(self) -> None:
+        if self._closing or self._released:
+            raise RuntimeError(
+                "BrokerSession is closed. Create a new session with "
+                "BrokerSession.connect()."
+            )
+
+    def queue(self, name: str) -> Queue:
+        """Create a scope-owned persistent Queue on this session's target."""
+        self._ensure_process_owner()
+        with self._lock:
+            self._ensure_open_locked()
+            queue = Queue(
+                name,
+                db_path=self._target,
+                persistent=True,
+                config=self._config,
+            )
+            queue._session = self
+            self._queues.append(queue)
+            return queue
+
+    def recycle_thread(self) -> None:
+        """Release this session's cache for the calling thread."""
+        self._ensure_process_owner()
+        with self._lock:
+            if self._released:
+                return
+        self._process_session.cleanup_current_thread()
+
+    @contextmanager
+    def connection(self) -> Iterator[BrokerConnection]:
+        """Yield a connection over this handle's shared process session."""
+        self._ensure_process_owner()
+        with self._lock:
+            self._ensure_open_locked()
+            conn = DBConnection(
+                self._target,
+                None,
+                config=self._config,
+                share_in_process=True,
+            )
+        try:
+            connection = conn.get_connection()
+            try:
+                yield connection
+            except GeneratorExit:
+                conn.release_connection_after_use()
+                raise
+            except BaseException as failure:
+                conn.release_connection_after_use(active_failure=failure)
+                raise
+            else:
+                conn.release_connection_after_use()
+        finally:
+            conn.close()
+
+    def close(self) -> None:
+        """Recycle this thread, close minted Queues, and release this lease."""
+        if self._key.pid != _broker_session._getpid():
+            self._released = True
+            self._finalizer.detach()
+            return
+
+        with self._close_lock:
+            with self._lock:
+                if self._released:
+                    return
+                self._closing = True
+                queues = list(self._queues)
+
+            cleanup_failure: Exception | None = None
+            cleanup_failure = _broker_session._capture_process_session_cleanup(
+                cleanup_failure,
+                self._process_session.cleanup_current_thread,
+            )
+            for queue in queues:
+                cleanup_failure = _broker_session._capture_process_session_cleanup(
+                    cleanup_failure,
+                    queue.close,
+                )
+
+            def release_lease() -> None:
+                try:
+                    _broker_session.release_process_broker_session(self._key)
+                finally:
+                    with self._lock:
+                        self._released = True
+                    self._finalizer.detach()
+
+            cleanup_failure = _broker_session._capture_process_session_cleanup(
+                cleanup_failure,
+                release_lease,
+            )
+            if cleanup_failure is not None:
+                raise cleanup_failure
+
+    def __enter__(self) -> Self:
+        self._ensure_process_owner()
+        with self._lock:
+            self._ensure_open_locked()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    @property
+    def target(self) -> str | BrokerTarget:
+        """Return the bound target without exposing mutable backend options."""
+        if isinstance(self._target, BrokerTarget):
+            return replace(
+                self._target,
+                backend_options=cast(
+                    dict[str, object],
+                    snapshot_key_material(self._target.backend_options),
+                ),
+            )
+        return self._target
+
+    @property
+    def backend_name(self) -> str:
+        return (
+            self._target.backend_name
+            if isinstance(self._target, BrokerTarget)
+            else "sqlite"
+        )
+
+    @property
+    def config(self) -> Config:
+        return self._config

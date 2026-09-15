@@ -29,12 +29,14 @@ from .sbqueue import (
     Queue,
     create_activity_waiter_for_queues,
 )
+from .session import BrokerSession
 from .watcher import QueueMoveWatcher, QueueWatcher
 
 # Only export the new API
 __all__ = [
     "DEFAULT_CONFIG",
     "ActivityWaiter",
+    "BrokerSession",
     "BrokerTarget",
     "CloseableIterator",
     "Config",

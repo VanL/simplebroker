@@ -938,6 +938,18 @@ its own; call `resolve_config(env=os.environ)` once at startup to honor them, or
 `resolve_config()` for defaults only. Pass the read-only `Config` to every
 handle. Weft is the reference implementation of the client shape.
 
+For a worker that reuses backend resources across several queues, hold one
+`BrokerSession` for that worker's task scope. Exiting on the worker thread
+closes the queues it minted, releases that thread's cached core, and drops the
+session lease:
+
+```python
+from simplebroker import BrokerSession
+
+with BrokerSession.connect(target, config=config) as session:
+    session.queue("jobs").write("render invoice")
+```
+
 The full pattern — client shape, configuration snapshots, redaction rules,
 and the `simplebroker.commands` command layer (`[SB-API-10]`, the
 programmatic CLI equivalent) — is in the

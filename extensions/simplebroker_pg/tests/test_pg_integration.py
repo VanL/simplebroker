@@ -17,7 +17,7 @@ from psycopg import conninfo as pg_conninfo
 from simplebroker_pg import PostgresRunner, get_backend_plugin
 from simplebroker_pg.validation import connect
 
-from simplebroker import BrokerTarget, Config, Queue
+from simplebroker import BrokerSession, BrokerTarget, Config, Queue
 from simplebroker._runner import SetupPhase, SQLRunner
 from simplebroker.db import BrokerCore
 
@@ -355,6 +355,45 @@ def test_postgres_project_persistent_queues_share_plugin_runner(
     # persistent handles then share exactly one process-session runner.
     assert create_runner_calls == 2
     assert len(set(runner_ids)) == 2
+
+
+def test_broker_session_queues_and_connection_share_one_postgres_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dsn = _require_test_dsn()
+    schema = _schema_name("broker_session")
+    target = BrokerTarget("postgres", dsn, {"schema": schema})
+    plugin = get_backend_plugin()
+    original_create_runner = plugin.create_runner
+    create_runner_calls = 0
+
+    def tracked_create_runner(
+        target_value: str,
+        *,
+        backend_options: Mapping[str, Any] | None = None,
+        config: Config | None = None,
+    ) -> SQLRunner:
+        nonlocal create_runner_calls
+        create_runner_calls += 1
+        return original_create_runner(
+            target_value,
+            backend_options=backend_options,
+            config=config,
+        )
+
+    monkeypatch.setattr(plugin, "create_runner", tracked_create_runner)
+    try:
+        with BrokerSession.connect(target) as session:
+            session.queue("first").write("one")
+            session.queue("second").write("two")
+            with session.connection() as connection:
+                assert sorted(connection.list_queues()) == ["first", "second"]
+    finally:
+        plugin.cleanup_target(dsn, backend_options={"schema": schema})
+
+    # The explicit target needs no project bootstrap runner. Both queues and
+    # the temporary connection share one process-session runner.
+    assert create_runner_calls == 1
 
 
 def test_postgres_cli_env_selected_backend_roundtrip(tmp_path: Path) -> None:
