@@ -500,6 +500,34 @@ any Queue the watcher constructed; it does not release the thread cache of the
 caller that invoked `stop()`. Close a caller-supplied Queue through its owner or
 its `BrokerSession`.
 
+That idle-stop rule also applies when the thread calling `stop()` is the
+watcher's own worker. A subclass that replaces `run()` with its own loop, then
+calls `stop()` from that loop's `finally`, is stopping an idle watcher as far
+as `BaseWatcher` can tell, so its worker's cached core stays retained while
+any other Queue or session keeps the process session alive. Release it on the
+run thread before that thread exits, after the last operation has finished:
+
+```python
+class ReactorWatcher(BaseWatcher):
+    def __init__(self, queue: Queue, handler) -> None:
+        self.jobs = queue  # constructed by this subclass, so it owns the lease
+        super().__init__(queue, handler)
+
+    def run_forever(self) -> None:
+        try:
+            self.run_until_stopped()  # the subclass's own loop
+        finally:
+            try:
+                self.jobs.cleanup_connections()  # or close a BrokerSession here
+            finally:
+                self.stop(join=False)
+```
+
+`cleanup_connections()` defers until an open operation on this thread unwinds
+and never refuses; closing a `BrokerSession` also drops its lease but refuses
+while this thread still has an open queue or connection operation on the same
+target.
+
 ### Context manager support
 
 For cleaner resource management, watchers can be used as context managers which automatically start the thread and ensure proper cleanup:
@@ -757,7 +785,10 @@ See `[SB-API-6]` in the
 [Python library contract](../specs/16-python-library-api.md#watchers-and-activity-waiters-sb-api-6).
 
 For watcher subclasses, `BaseWatcher` and `PollingStrategy` are exported from
-`simplebroker.ext`. If a subclass needs a custom native waiter, override
+`simplebroker.ext`. A subclass that runs its own loop instead of `run()` owns
+its run thread's cache release; see the idle-stop note under
+"Thread-based background processing" above.
+If a subclass needs a custom native waiter, override
 `BaseWatcher._create_activity_waiter(queue)` instead of copying the watcher retry
 loop. If a caller-owned waiter is attached to a strategy and later closed by the
 caller, use `PollingStrategy.detach_activity_waiter(expected=waiter)` first so

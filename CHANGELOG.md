@@ -49,7 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while leaving a caller-supplied Queue open. Stopping an idle watcher does not
   clear the stop caller's unrelated thread cache, and ordinary garbage
   collection no longer stops a live watcher or claims another owner's cleanup;
-  interpreter shutdown still follows the normal stop path.
+  interpreter shutdown still follows the normal stop path. Subclasses that
+  drive their own loop instead of `run()` and call `stop()` from that loop's
+  thread no longer get their thread cache released by that `stop()`: release
+  it on the run thread with `cleanup_connections()` on a queue used there, or
+  by closing a `BrokerSession` on that thread, before the thread exits.
 - `BrokerSession` context cleanup no longer replaces an exception raised by the
   application body. The original exception remains primary, with any cleanup
   failure attached for diagnosis.
