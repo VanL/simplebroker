@@ -86,6 +86,7 @@ def _build_sleep_spec(tid: str, root: Path) -> Any:
             args=["-c", "import time; time.sleep(10)"],
             timeout=30.0,
             working_dir=str(root),
+            weft_context=str(root),
             runner=RunnerSection(name="host", options={}),
         ),
         io=IOSection(
