@@ -15,7 +15,7 @@ import simplebroker.watcher as watcher_module
 from simplebroker import Queue
 from simplebroker.commands import cmd_watch
 from simplebroker.watcher import PollingStrategy, QueueWatcher, StopWatching
-from tests.helper_scripts import drive_until
+from tests.helper_scripts import drive_until, scale_timeout_for_ci
 from tests.helper_scripts.managed_subprocess import managed_subprocess
 from tests.helpers.state_machine_contracts import TransitionCase, fires_transition_table
 
@@ -410,11 +410,26 @@ def _assert_stop_wait_transition(payload: str, tmp_path: Path) -> None:
         return
 
     thread = watcher.start()
-    assert waiter.wait_entered.wait(2)
-    watcher.stop()
-    thread.join(2)
-    assert not thread.is_alive()
-    assert waiter.close_calls == 1
+    lifecycle_timeout = scale_timeout_for_ci(2.0)
+    try:
+        drive_until(
+            waiter.wait_entered.is_set,
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message="watcher did not enter the activity wait",
+            diagnostics=lambda: {
+                "thread_alive": thread.is_alive(),
+                "watcher_running": watcher.is_running(),
+                "waiter_close_calls": waiter.close_calls,
+            },
+        )
+        watcher.stop(timeout=lifecycle_timeout)
+        thread.join(lifecycle_timeout)
+        assert not thread.is_alive()
+        assert waiter.close_calls == 1
+    finally:
+        watcher.stop(join=False)
+        thread.join(lifecycle_timeout)
 
 
 def _assert_stop_races_start(tmp_path: Path) -> None:
