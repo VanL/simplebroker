@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Configuration resolution now rejects negative `BUSY_TIMEOUT` and
+  `WAL_AUTOCHECKPOINT` values; non-positive `CACHE_MB`, `MAX_MESSAGE_SIZE`, and
+  `READ_COMMIT_INTERVAL` values; and `SYNC_MODE` values other than
+  `FULL`, `NORMAL`, or `OFF`. Valid lowercase sync modes remain accepted.
+- PostgreSQL process sessions now borrow one pool checkout per active operation,
+  retaining it only for a transaction or suspended iterator. The lazy pool
+  defaults to three command connections; its separate shared listener gives
+  one process-session target a four-connection default ceiling. Idle worker
+  threads do not consume pool slots.
+- Redis and Valkey writes now use the existing bounded retry engine for
+  explicit pre-mutation conflicts. Transport failures and ambiguous outcomes
+  remain one-shot. Stale high-water fences refresh and retry immediately,
+  while ID collisions retain bounded backoff; retry sleeps now observe the
+  core stop event.
+
+### Fixed
+
+- A watcher given an existing Queue now restores that Queue's prior stop event
+  when the watcher releases it, including when watcher cleanup fails.
+- PostgreSQL alias add, remove, and rename operations now acquire the alias
+  advisory lock before metadata or row locks, removing their conflicting lock
+  order.
+
 ## [8.3.0] - 2026-09-15
 
 ### Added
@@ -120,7 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4.2.0 extension or newer, because the configuration and live-peek changes
   span the shared backend contract.
 - Configuration now uses uppercase unprefixed keys, with no aliases. Removed
-  the old snapshot/isolated/builder APIs and separate config module. Resolver
+  `ResolvedConfig`, `resolve_isolated_config()`, and `snapshot_config()`, along
+  with the old builder APIs and separate config module. Resolver
   env input is explicit; precedence is defaults, TOML, env, override.
   CLI argv handling remains separate.
 - Only the `broker` command reads `BROKER_*` environment variables, once at
@@ -533,13 +559,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added public `resolve_isolated_config()` and immutable `ResolvedConfig` for
-  embedders that need a complete configuration independent of ambient
-  `BROKER_*`. The marker remains ambient-free through Queue, project, watcher,
-  runner, broker, and dump/load configuration boundaries. `ResolvedConfig`
-  guarantees all canonical keys and can carry opaque extra keys;
-  `resolve_isolated_config()` remains strict by default and adds
-  `preserve_unknown=True` as an explicit extension-key opt-in.
+- Added `preserve_unknown=True` to the existing `resolve_isolated_config()` as
+  an explicit extension-key opt-in. Direct `ResolvedConfig` construction now
+  preserves opaque extra keys while retaining all canonical keys.
 - Added package-root `snapshot_config()` so applications can capture the
   current ambient configuration once and reuse the same `ResolvedConfig`
   across handles.
@@ -619,6 +641,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `simplebroker>=7.4.0`. Backend, pool, and runner creation now preserve the
   core-owned configuration snapshot instead of re-reading ambient
   configuration.
+
+## [7.3.2] - 2026-08-13
+
+### Added
+
+- Added public `resolve_isolated_config()` and immutable `ResolvedConfig` for
+  embedders that need a complete configuration independent of ambient
+  `BROKER_*`. The marker remains ambient-free through Queue, project, watcher,
+  runner, broker, and dump/load configuration boundaries. Ordinary mappings
+  retain their environment-base and unknown-key compatibility.
 
 ## [7.3.1] - 2026-08-13
 

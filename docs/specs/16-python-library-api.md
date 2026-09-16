@@ -248,6 +248,12 @@ booleans and boolean strings such as `"true"` are rejected.
 Maintenance callers divide by 100 when passing a fractional threshold.
 `JITTER_FACTOR` remains fractional.
 
+Integer coercion precedes range validation for the core bounded settings.
+`BUSY_TIMEOUT` and `WAL_AUTOCHECKPOINT` accept zero or a positive integer;
+`CACHE_MB`, `MAX_MESSAGE_SIZE`, and `READ_COMMIT_INTERVAL` require a positive
+integer. `SYNC_MODE` is case-insensitive and accepts only `FULL`, `NORMAL`, or
+`OFF`; any other effective value is invalid rather than selecting a fallback.
+
 `Config` exposes uppercase unprefixed keys only, with no namespaced or
 case-folded aliases. Top-level mutation is prevented.
 
@@ -390,12 +396,34 @@ _Implementation mapping_:
   or `open_broker()` for an independent connection.
 
 For a persistent Queue using a process-shared session, each thread that uses
-the Queue caches one core and backend checkout for that session. `close()`
-releases that Queue's session lease and nothing else. When the last lease on
-that session in this process is released, the session ends: in-flight
+the Queue caches one core for that session. SQLite uses a connection per
+thread. PostgreSQL borrows a checkout from a bounded session pool for each
+operation and retains it only while a transaction or suspended iterator needs
+connection continuity. Redis borrows command connections from its session
+pool. PostgreSQL checkout exhaustion raises after the pool timeout; an idle
+thread-local core does not consume a pool slot.
+Queue operations and `BrokerSession.connection()` acquire and return
+PostgreSQL checkouts automatically. Callers do not select physical connections,
+check them into the pool, or recycle thread caches to preserve pool capacity.
+The default command pool permits three simultaneous checkouts per
+process-session target. Further operations wait for capacity and raise after
+the checkout timeout with `OperationalError`; the driver pool's exception type
+does not escape the backend boundary. A suspended iterator or open transaction
+occupies its checkout until it is exhausted, closed, committed, or rolled back.
+Pool exhaustion is backpressure: an operation waits for a checkout and should
+make forward progress as soon as another bounded operation returns one. The
+finite checkout timeout detects a checkout that was retained too long instead
+of allowing a permanent wait. PostgreSQL sidecar users must enter through the
+public Queue or broker sidecar API and keep transactional sidecar blocks
+bounded; a sidecar transaction left open retains one checkout, and enough such
+transactions can exhaust the pool.
+`close()` releases that Queue's session lease and nothing else. When the last
+lease on that session in this process is released, the session ends: in-flight
 operations are drained under the existing bounded policy, every cached core
-is disposed, and the shared runner or pool is closed. Repeated close is a
-no-op for that Queue's connection manager. A Queue closed on a thread that
+is disposed, and the shared runner or pool is closed. The bounded drain is not
+a deadline for all shutdown work: close iterators before closing their owner,
+because disposing a core can wait for its active operation. Repeated close is
+a no-op for that Queue's connection manager. A Queue closed on a thread that
 never used it, including finalization on an arbitrary thread, releases the
 lease only.
 
@@ -409,6 +437,10 @@ iterators before closing that Queue. Other threads' caches are never affected.
 The Queue remains usable afterward and reacquires on its next operation.
 Returning a backend checkout need not disconnect a pooled connection. These
 operations do not create a backend connection just to close it.
+
+`cleanup_connections()` and `BrokerSession.recycle_thread()` remain explicit
+core-cache cleanup controls, including for SQLite's thread-owned connections.
+They are not required to return completed PostgreSQL operation checkouts.
 
 Worker threads that must not leave a cached core behind while another handle
 keeps the session alive release it explicitly before exiting: hold a
@@ -774,6 +806,17 @@ application tables:
 Sidecar schema and application tables are the embedder’s product, not
 SimpleBroker queue semantics.
 
+Sidecar work must use this public session surface rather than opening an
+independent backend connection. Keep `transaction=True` blocks short and exit
+them on every path. On PostgreSQL, sidecars opened from a persistent Queue or
+`BrokerSession` share that process session's bounded pool. A transactional
+sidecar session retains one checkout until commit or rollback. Enough open
+sidecar transactions can exhaust that pool, causing later operations on the
+session to wait and eventually fail at the checkout timeout. Non-transactional
+sidecar statements borrow and return their checkouts automatically. An
+ephemeral Queue owns an independent runner for its sidecar session and does not
+consume a slot in an existing process-session pool.
+
 SQL schema migration may rewrite only SimpleBroker-owned tables, indexes,
 constraints, and sequence state. Successful and failed migration leaves each
 caller-owned sidecar table definition, row, index, constraint, and sequence
@@ -819,6 +862,9 @@ _Implementation mapping_:
 - `docs/specs/15-persistence-io.md`
 
 ## Errors [SB-API-9]
+
+Backend-specific issues preventing the successful opening of the database
+connection will cause operations to fail.
 
 Public exception types for library and shared code are importable from
 **`simplebroker.ext`** (including `BrokerError`, `DatabaseError`,
@@ -1192,10 +1238,10 @@ _Implementation mapping_:
 |--------|-----------------|
 | [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`, `::test_api_moved_message_is_package_root_public`, `::test_api_closeable_peek_iterator_contract`, `::test_broker_session_is_a_lifetime_only_root_surface`; `tests/test_broker_session.py`; `tests/test_queue_typing_contract.py`; `tests/test_dev_scripts.py` (isolated root wheel/sdist import and published-artifact verification); `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
 | [SB-API-2] | `tests/test_path_security.py::test_host_ancestors_public_queue_and_project_discovery`; `tests/test_config_transport.py`; `tests/test_config_builder.py`; `tests/test_config_coexistence.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`; `tests/test_project_config.py` (recursive plugin-owned options, TOML-native normalization/rejection, target serialization, and SQLite rejection); `tests/test_process_broker_session.py` (type/opaque identity, one recursive key/factory snapshot, and all SQLite public option paths); `tests/test_activity_waiter_api.py::test_create_activity_waiter_for_queues_rejects_distinct_same_repr_options`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers`; `tests/test_config_builder.py::test_numeric_coercion_failure_uses_warning_and_final_value_policy`; `tests/test_connection_config.py`; `tests/test_constants.py`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_queue_move_rejects_config_derived_namespaces` |
-| [SB-API-3] | `tests/test_connection_config.py::test_explicit_config_is_retained_at_constructor`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_broker_session.py` (shared identity, minted Queue ownership, thread recycle, shared connection, close ordering/failure/interruption, finalization, admission race, and Weft-shaped task lifecycle); `tests/test_backend_plugin_resolution.py` (built-in, third-party, and injected-runner backend identity without target I/O); `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; `tests/test_process_broker_session.py` (worker cache retention after Queue close, explicit worker-thread cleanup remedy, nested-acquisition balance, foreign-thread and finalizer isolation, deferred release, repeated close, cleanup-before-close, never-used close, ordinary and non-ordinary failure priority/ownership, iterator-close failure, terminal-timeout no-retry behavior, hookless runner ownership, and drain); `tests/test_connection_transition_tables.py::test_process_session_fires_transition_table`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
+| [SB-API-3] | `tests/test_connection_config.py::test_explicit_config_is_retained_at_constructor`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_broker_session.py` (shared identity, minted Queue ownership, thread recycle, shared connection, close ordering/failure/interruption, finalization, admission race, and Weft-shaped task lifecycle); `tests/test_backend_plugin_resolution.py` (built-in, third-party, and injected-runner backend identity without target I/O); `tests/test_connection_config.py::test_library_handles_without_config_ignore_environment`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; `tests/test_process_broker_session.py` (worker cache retention after Queue close, explicit worker-thread cleanup remedy, nested-acquisition balance, foreign-thread and finalizer isolation, deferred release, repeated close, cleanup-before-close, never-used close, ordinary and non-ordinary failure priority/ownership, iterator-close failure, terminal-timeout no-retry behavior, hookless runner ownership, and drain); `tests/test_watcher_race_conditions.py::test_concurrent_pre_checks`; `extensions/simplebroker_pg/tests/test_pg_integration.py::test_broker_session_threads_progress_while_claim_iterator_is_suspended`; `extensions/simplebroker_pg/tests/test_pg_runner_lifecycle.py` (operation checkouts, explicit maintenance pins, pool exhaustion, failure replacement, teardown, and fork recovery); `tests/test_connection_transition_tables.py::test_process_session_fires_transition_table`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_timestamp_selection_contract_sb_select.py::test_bounded_one_and_many_order_matrix`, `::test_invalid_or_unbounded_order_fails_before_target_acquisition`, `::test_generator_signatures_do_not_expose_order`; `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py` (high-level `all_messages=True` path); `tests/test_queue_api_additions.py::test_queue_move_all_closes_transformation_delegate`, `::test_queue_delete_explicit_none_is_rejected_without_mutation`, `::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py::test_api_write_keep_newest_signatures_and_public_validator`; `tests/test_keep_newest.py`; delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py::test_closeable_queue_iterator_releases_operation_on_same_thread`; `tests/test_peek_generator_lifecycle.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_closeable_peek_iterator_contract`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_retains_explicit_config_on_first_iteration`; Queue generator / `*_many` suites |
-| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_watcher_start_stop_cleanup_ownership_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_polling_strategy_defaults_match_canonical_config`; `tests/test_watcher_cleanup.py::TestWatcherCleanup::test_collected_watcher_does_not_take_caller_thread_cleanup`, `::test_idle_stop_closes_only_an_internally_owned_queue_lease`, `::test_run_thread_recycles_cache_without_closing_supplied_queue`; `tests/test_watcher_error_handler_contract.py`, including `test_batch_iterator_close_failure_is_secondary_to_error_handler_failure`; `tests/test_watcher_stop_contract.py::test_stop_racing_start_has_one_cleanup_owner`, `test_join_timeout_does_not_transfer_cleanup_from_live_run`, `test_cleanup_failure_keeps_lifecycle_retryable`, `test_context_exit_suppresses_stop_failure_without_replacing_body_exception`, `test_context_exit_cleanup_failure_remains_retryable`, `test_context_exit_propagates_base_exception_from_stop`, `test_batch_iterators_close_once_on_exhaustion_after_handler_continuation`, `test_batch_iterator_close_failure_without_active_failure_surfaces`, `test_batch_iterator_close_failure_is_note_on_retryable_failure`, `test_batch_iterator_close_failure_during_clean_stop_is_terminal`, `test_batch_iterator_close_base_exception_keeps_cleanup_priority`; `tests/test_watcher_transition_tables.py::test_watcher_lifecycle_fires_transition_table`; `tests/test_watcher.py::TestQueueWatcher::test_default_data_version_detects_replaced_sqlite_core`, `tests/test_watcher.py::TestQueueWatcher::test_default_data_version_stays_quiet_for_ephemeral_queue`, `tests/test_watcher.py::TestPollingStrategy::test_defaults_use_ambient_free_canonical_config_snapshot`, `tests/test_watcher.py::TestPollingStrategy::test_all_defaults_derive_from_one_isolated_canonical_snapshot`; `tests/test_connection_config.py::test_watcher_instance_config_maps_into_strategy_fields`, `tests/test_connection_config.py::test_polling_strategy_fields_determine_delay_schedule`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py::test_config_derived_namespace_wakes_public_waiter` |
+| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_watcher_start_stop_cleanup_ownership_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_polling_strategy_defaults_match_canonical_config`; `tests/test_watcher_cleanup.py::TestWatcherCleanup::test_collected_watcher_does_not_take_caller_thread_cleanup`, `::test_idle_stop_closes_only_an_internally_owned_queue_lease`, `::test_run_thread_recycles_cache_without_closing_supplied_queue`, `::test_constructor_failure_does_not_replace_supplied_queue_stop_event`, `::test_idle_stop_restores_supplied_queue_for_use`, `::test_run_cleanup_restores_supplied_queue_for_another_thread`, `::test_cleanup_restores_supplied_queue_prior_stop_event`, `::test_cleanup_failure_still_restores_supplied_queue`; `tests/test_watcher_error_handler_contract.py`, including `test_batch_iterator_close_failure_is_secondary_to_error_handler_failure`; `tests/test_watcher_stop_contract.py::test_stop_racing_start_has_one_cleanup_owner`, `test_join_timeout_does_not_transfer_cleanup_from_live_run`, `test_cleanup_failure_keeps_lifecycle_retryable`, `test_context_exit_suppresses_stop_failure_without_replacing_body_exception`, `test_context_exit_cleanup_failure_remains_retryable`, `test_context_exit_propagates_base_exception_from_stop`, `test_batch_iterators_close_once_on_exhaustion_after_handler_continuation`, `test_batch_iterator_close_failure_without_active_failure_surfaces`, `test_batch_iterator_close_failure_is_note_on_retryable_failure`, `test_batch_iterator_close_failure_during_clean_stop_is_terminal`, `test_batch_iterator_close_base_exception_keeps_cleanup_priority`; `tests/test_watcher_transition_tables.py::test_watcher_lifecycle_fires_transition_table`; `tests/test_watcher.py::TestQueueWatcher::test_default_data_version_detects_replaced_sqlite_core`, `tests/test_watcher.py::TestQueueWatcher::test_default_data_version_stays_quiet_for_ephemeral_queue`, `tests/test_watcher.py::TestPollingStrategy::test_defaults_use_ambient_free_canonical_config_snapshot`, `tests/test_watcher.py::TestPollingStrategy::test_all_defaults_derive_from_one_isolated_canonical_snapshot`; `tests/test_connection_config.py::test_watcher_instance_config_maps_into_strategy_fields`, `tests/test_connection_config.py::test_polling_strategy_fields_determine_delay_schedule`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py::test_config_derived_namespace_wakes_public_waiter` |
 | [SB-API-7] | `tests/test_python_library_api_contract_sb_api.py::test_api_generators_watchers_sidecar_io_errors_language`; `tests/test_sqlite_schema.py::test_schema_v6_migrates_despite_unsupported_caller_objects`; `extensions/simplebroker_pg/tests/test_pg_message_id_order.py::test_real_postgres_removed_key_dependency_rolls_back_v5_migration`; sidecar suites under tests / examples |
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`, including `test_load_without_config_ignores_environment` |
 | [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_invalid_config_lifecycle.py::test_invalid_environment_does_not_break_package_import`, `tests/test_invalid_config_lifecycle.py::test_sensitive_config_failure_redacts_before_formatting`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers`; `tests/test_malformed_target_diagnostics.py`; `tests/test_config_builder.py::test_sensitive_validator_overflow_keeps_safe_metadata` |
@@ -1205,6 +1251,10 @@ _Implementation mapping_:
 | [SB-API-13] | `tests/test_python_library_api_contract_sb_api.py::test_api_postgres_connection_inspection_contract`; `tests/test_backend_probe.py`; `extensions/simplebroker_pg/tests/test_connection_stats.py` (shape, ordinary role, cross-role/database, lifecycle, autovacuum, PG15, and PG18) |
 
 ## Related Plans
+
+- active: [2026-09-16-deep-dive-review-remediation-plan](../plans/2026-09-16-deep-dive-review-remediation-plan.md)
+  — owns configuration ranges, process-session resources, watcher borrowing,
+  backend connection-opening language, and their implementation evidence.
 
 - active: [2026-09-15-broker-session-plan](../plans/2026-09-15-broker-session-plan.md)
   — names the process session publicly, restores lease-only persistent Queue

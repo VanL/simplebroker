@@ -391,9 +391,12 @@ class BaseWatcher(ABC):
         self._running_event = threading.Event()
         self._signal_stop_requested: int | None = None
 
-        # Ensure underlying queue connections are aware of stop event
-        if hasattr(self._queue_obj, "set_stop_event"):
-            self._queue_obj.set_stop_event(self._stop_event)
+        # A caller-supplied Queue remains caller-owned. Borrow its stop-event
+        # slot only for this watcher's lifetime, then restore the prior value
+        # through Queue's public propagation method during normal cleanup.
+        self._prior_queue_stop_event = (
+            None if self._owns_queue else self._queue_obj._stop_event
+        )
 
         # Store configuration
         self._config = resolved_config
@@ -431,6 +434,10 @@ class BaseWatcher(ABC):
 
         # Set up automatic cleanup finalizer
         self._setup_finalizer()
+
+        # Install only after successful construction. A failing strategy must
+        # not leave a caller-owned Queue pointing at a half-built watcher.
+        self._queue_obj.set_stop_event(self._stop_event)
 
     def _get_queue_for_data_version(self) -> Queue:
         """Get the Queue object for data version checks.
@@ -783,13 +790,19 @@ class BaseWatcher(ABC):
         if hasattr(self._strategy, "close"):
             self._strategy.close()
 
+    def _release_queue_resource(self) -> None:
+        """Close an owned Queue or return a borrowed Queue to its caller."""
+        if self._owns_queue:
+            self._queue_obj.close()
+        else:
+            self._queue_obj.set_stop_event(self._prior_queue_stop_event)
+
     def _cleanup_stop_resources(self) -> None:
         """Release resources owned by an idle watcher without recycling a cache."""
         try:
             self._cleanup_runtime_resources()
         finally:
-            if self._owns_queue:
-                self._queue_obj.close()
+            self._release_queue_resource()
 
     def _cleanup_run_resources(self) -> None:
         """Release the run thread's cache and resources owned by the watcher."""
@@ -799,8 +812,7 @@ class BaseWatcher(ABC):
             try:
                 self._cleanup_thread_local()
             finally:
-                if self._owns_queue:
-                    self._queue_obj.close()
+                self._release_queue_resource()
 
     def is_running(self) -> bool:
         """Return whether run execution, including final cleanup, is active."""

@@ -533,11 +533,15 @@ class BrokerSession:
     @classmethod
     def connect(cls, db_path=None, *, config=None) -> "BrokerSession":
         resolved = resolve_config(config=config)
-        unresolved = (_default_target_from_config(resolved)
-                      if db_path is None or db_path == "" else db_path)
+        unresolved = (
+            _default_target_from_config(resolved)
+            if db_path is None or db_path == ""
+            else db_path
+        )
         target = _canonicalize_queue_target(unresolved, config=resolved, runner=None)
         key, process_session = acquire_process_broker_session(
-            target, config=resolved, factory_builder=_build_process_session_core_factory)
+            target, config=resolved, factory_builder=_build_process_session_core_factory
+        )
         return cls(key, process_session, target, resolved)
 ```
 - Instance state: `_key`, `_process_session`, `_target`, `_config`,

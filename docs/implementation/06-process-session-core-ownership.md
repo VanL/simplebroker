@@ -147,9 +147,10 @@ This prevents a failed nested acquisition from consuming its outer operation.
 
 Shared non-SQLite SQL cores carry a private successful-release latch inside
 `BrokerCore.close()`. Explicit repeated close and `__del__()` therefore cannot
-surrender a replacement core's runner lease. A session-managed core calls only
-a backend's optional thread-checkout release hook; without that hook, final
-factory shutdown remains the sole owner of runner close. SQLite keeps its
+surrender a replacement core's runner lease. A session-managed core calls a
+backend's thread-checkout release hook only when construction acquired that
+lease; otherwise final factory shutdown remains the sole owner of runner close.
+SQLite keeps its
 existing tracked-snapshot retry behavior: successful connections leave the
 snapshot; failed closes remain tracked.
 
@@ -167,8 +168,9 @@ ordinary iterators and do not acquire a second public lifecycle interface.
 The first advancement enters the context on the caller's thread. Exhaustion,
 an advancement failure, or explicit close unwinds it on that same thread. For
 a persistent Queue, context exit ends the process-session operation. Its
-thread-local core and backend checkout remain cached unless Queue close or
-explicit connection cleanup requested deferred release. For a no-runner
+thread-local core remains cached unless Queue close or explicit connection
+cleanup requested deferred release. PostgreSQL returns an operation checkout
+unless an open transaction still needs it. For a no-runner
 ephemeral Queue, it closes the operation-owned `DBConnection` and releases its
 private core. For a Queue with an injected runner, it invokes the lexical
 operation release hook but retains the Queue-owned borrowed core until
@@ -211,12 +213,22 @@ and at-least-once batch isolation, not only write transactions.
 
 `simplebroker_pg.get_connection_stats()` enters `Queue.get_connection()` and
 uses this seam. A target-resolved persistent Queue therefore reuses its
-thread-local process-session core and held PostgreSQL checkout. An ephemeral
+thread-local process-session core and borrows a PostgreSQL checkout. An ephemeral
 Queue owns and releases one operation connection. An injected runner is
 supported through its borrowed core, but `persistent=True` does not strengthen
 the runner owner's checkout contract. Psycopg pool statistics are not a
 substitute for the PostgreSQL catalog probe because each process owns its own
 pool and cannot see other processes or unrelated clients.
+
+The same operation-scoped rule applies to sidecars on a persistent Queue or
+`BrokerSession`. A non-transactional sidecar statement borrows and returns a
+checkout through the shared runner. A transactional sidecar block retains that
+checkout because commit and rollback must use the same PostgreSQL session. An
+ephemeral Queue instead owns a runner for the sidecar session and closes it on
+exit. Embedders must use the public sidecar surface and bound transactional
+blocks; independent raw connections bypass session ownership, while abandoned
+transactions on a shared session can consume every bounded checkout and hold
+later operations until the pool timeout.
 
 ### Project-scoped service bootstrap coordination
 
@@ -298,16 +310,47 @@ connection. Deliberately shared SQLite reads and writes both wait behind an
 active transaction, and that wait is bounded by the configured SQLite busy
 timeout.
 
-PostgreSQL uses its existing backend-specific equivalents: a leased operation
-lock for a shared retained connection, or a pool checkout retained for a
-non-leased transaction. Redis uses a direct core and does not enter the SQL
-runner transaction protocol.
+PostgreSQL keeps one bounded pool per process-session key. Each operation
+borrows a checkout; transaction and iterator boundaries keep that checkout
+until settlement, after which it returns to the pool. Idle thread-local cores
+therefore consume no pool slots, while active threads can make independent
+progress within the bound. The default pool maximum is 3 and checkout timeout is
+30 seconds. The activity listener owns one separate connection, so one active
+process-session target uses at most four PostgreSQL connections by default.
+Deployment sizing starts with the database-wide connection budget and maximum
+broker process count, with capacity reserved for other clients. Pool exhaustion
+is translated to SimpleBroker `OperationalError` and reported instead of
+sharing another operation's connection or leaking a driver-pool exception.
+Redis
+uses a direct core and its session-owned command pool; it does not enter the
+SQL runner transaction protocol.
+
+This checkout lifecycle stays below the public Queue and `BrokerSession`
+surfaces. Ordinary callers do not check physical connections in or out and do
+not recycle thread caches to restore PostgreSQL pool capacity. The visible
+constraints are bounded simultaneous operations, the checkout timeout, and the
+existing obligation to close suspended iterators.
+
+PostgreSQL's explicit lease registry is reserved for maintenance that needs
+connection identity across several operations, such as its session-level
+vacuum advisory lock. Entries are keyed by `threading.Thread`, so a successor
+cannot inherit an earlier owner's pin. Failure discard removes only the
+owner's uncertain checkout while retaining logical lease depth. Fork recovery
+abandons the inherited pool and clears the registry. Terminal shutdown detaches
+remaining explicit pins before returning them, preventing a duplicate return.
 
 `SQLiteRunner.close()` observes the same admission boundary. An explicit close
 behind a foreign live owner can wait through the configured busy timeout and
 raise the retryable admission error without closing other tracked connections.
 First-party best-effort shutdown paths suppress that bounded cleanup failure;
 explicit callers must handle it. A foreign orphan is still restart-required.
+
+The process session's bounded drain is not a deadline for all shutdown work.
+It closes admission and waits before disposing cached cores, but core disposal
+still takes each core's operation lock and can wait for a slow operation. The
+caller therefore closes iterators before their owner. PostgreSQL operation
+checkout ownership does not add abandoned-iterator recovery or make concurrent
+standalone runner shutdown a supported cancellation mechanism.
 
 Runner close is resource-scoped, not terminal. At its linearization point,
 `SQLiteRunner.close()` advances the connection generation and snapshots all

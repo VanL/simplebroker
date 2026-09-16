@@ -205,28 +205,32 @@ def test_custom_sync_mode_off(tmp_path: Path) -> None:
         assert sync_mode == 0  # OFF = 0
 
 
-def test_invalid_sync_mode_defaults_to_full(tmp_path: Path) -> None:
-    """Test that invalid BROKER_SYNC_MODE defaults to FULL."""
+def test_invalid_sync_mode_is_rejected_before_database_open(tmp_path: Path) -> None:
+    """Invalid sync modes fail during config resolution, before target I/O."""
     db_path = tmp_path / "test.db"
 
-    with BrokerDB(
-        str(db_path), config=resolve_config(override={"BROKER_SYNC_MODE": "INVALID"})
-    ) as db:
-        result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
-        sync_mode = result[0][0]
-        assert sync_mode == 2  # FULL = 2
+    with (
+        pytest.warns(UserWarning, match="ignoring invalid BROKER_SYNC_MODE"),
+        pytest.raises(ValueError, match="expected FULL, NORMAL, or OFF"),
+    ):
+        BrokerDB(
+            str(db_path),
+            config=resolve_config(override={"BROKER_SYNC_MODE": "INVALID"}),
+        )
+
+    assert not db_path.exists()
 
 
 def test_optimization_settings_use_resolved_sync_mode() -> None:
     conn = sqlite3.connect(":memory:")
     try:
         config = resolve_config(
-            override={"BROKER_CACHE_MB": 8, "BROKER_SYNC_MODE": "INVALID"}
+            override={"BROKER_CACHE_MB": 8, "BROKER_SYNC_MODE": "normal"}
         )
-        assert config["SYNC_MODE"] == "FULL"
+        assert config["SYNC_MODE"] == "NORMAL"
         sqlite_runtime.apply_optimization_settings(conn, config=config)
 
-        assert conn.execute("PRAGMA synchronous").fetchone() == (2,)
+        assert conn.execute("PRAGMA synchronous").fetchone() == (1,)
     finally:
         conn.close()
 
@@ -256,22 +260,28 @@ def test_custom_wal_autocheckpoint(tmp_path: Path) -> None:
         assert autocheckpoint == 5000
 
 
-def test_invalid_wal_autocheckpoint_defaults(tmp_path: Path) -> None:
-    """Test that invalid BROKER_WAL_AUTOCHECKPOINT defaults to 1000 with warning."""
+def test_invalid_wal_autocheckpoint_is_rejected_before_database_open(
+    tmp_path: Path,
+) -> None:
+    """Negative autocheckpoint values fail before target I/O."""
     db_path = tmp_path / "test.db"
 
-    with pytest.warns(
-        UserWarning,
-        match="Invalid BROKER_WAL_AUTOCHECKPOINT '-100'",
+    with (
+        pytest.warns(
+            UserWarning,
+            match="ignoring invalid BROKER_WAL_AUTOCHECKPOINT",
+        ),
+        pytest.raises(
+            ValueError,
+            match="expected a non-negative integer page count",
+        ),
     ):
-        db = BrokerDB(
+        BrokerDB(
             str(db_path),
             config=resolve_config(override={"BROKER_WAL_AUTOCHECKPOINT": -100}),
         )
-    with db:
-        result = _rows(db._runner.run("PRAGMA wal_autocheckpoint", fetch=True))
-        autocheckpoint = result[0][0]
-        assert autocheckpoint == 1000  # Default value
+
+    assert not db_path.exists()
 
 
 def test_wal_autocheckpoint_zero_disables(tmp_path: Path) -> None:

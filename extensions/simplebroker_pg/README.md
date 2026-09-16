@@ -44,6 +44,38 @@ first trim therefore stalls row mutations on unrelated queues; measured
 100k/220k displaced rows took about 425/1000 ms on PostgreSQL 18. Cost is
 linear in displaced rows and has no bounded-time guarantee.
 
+Persistent Queues for one process-session target share one bounded connection
+pool. Each operation borrows a checkout and returns it when the operation
+finishes. A transaction or suspended iterator retains its checkout until it
+commits, rolls back, or closes; an idle thread-local core consumes no pool slot.
+Normal Queue operations and `BrokerSession.connection()` manage this
+automatically. Applications do not check physical connections in or out and do
+not need `cleanup_connections()` or `BrokerSession.recycle_thread()` to free a
+completed PostgreSQL operation's pool slot.
+The default pool maximum is 3 and checkout timeout is 30 seconds. The activity
+listener uses one separate connection, so one active process-session target
+uses at most four PostgreSQL connections by default. Size a deployment from
+its database-wide connection budget and maximum broker process count, with
+capacity reserved for other clients. Checkout exhaustion is reported to the
+caller. Separate checkouts allow
+unrelated threads to make progress independently, but PostgreSQL row and
+advisory locks can still serialize conflicting transactions.
+
+With the default bound, a fourth simultaneous command operation waits until a
+slot returns and raises SimpleBroker `OperationalError` after the checkout
+timeout if none does. Close or exhaust iterators promptly: a suspended iterator
+intentionally keeps its transaction and checkout until settlement.
+
+Use `Queue.sidecar()` or the broker connection's `sidecar()` context for
+caller-owned tables. Sidecars from a persistent Queue or `BrokerSession` share
+that process session's bounded pool. Keep `transaction=True` blocks short and
+always exit them: an open sidecar transaction retains one checkout until commit
+or rollback. Enough retained transactions can exhaust the pool, making later
+operations on that session wait and, if no slot returns, fail at the checkout
+timeout. Non-transactional sidecar statements return their checkouts
+automatically. An ephemeral Queue owns a separate runner for its sidecar
+session and is outside another session's three-checkout ceiling.
+
 Timestamp resynchronization uses a guarded compare-and-advance update. If a
 concurrent allocator publishes a higher durable `last_ts` after repair begins,
 the repair preserves that winner and refreshes its local cache from the
@@ -134,10 +166,10 @@ database-attached workers can be included even when they do not consume a
 must retain a safety margin and tolerate concurrent change.
 
 The helper executes one read-only statement through the Queue's normal
-connection lease, core lock, and retry path. It does not use sidecar or create
-database objects. A target-resolved persistent Queue reuses its existing
-process-session checkout on that thread; an ephemeral Queue may open one
-connection for the operation. Malformed result data raises `ValueError`;
+operation checkout, core lock, and retry path. It does not use sidecar or
+create database objects. A target-resolved persistent Queue borrows from its
+process-session pool; an ephemeral Queue may open one connection for the
+operation. Malformed result data raises `ValueError`;
 database and permission failures retain SimpleBroker's database exception
 types.
 

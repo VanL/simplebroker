@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import psycopg
 from psycopg import conninfo
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 from simplebroker._backend_plugins import BackendPlugin
 from simplebroker._exceptions import DataError, IntegrityError, OperationalError
@@ -22,10 +22,10 @@ from ._failure_order import capture_ordinary_pg_cleanup
 from ._identifiers import activity_channel_name
 from .validation import quote_ident
 
-# Default pool bounds — enough for typical watcher workloads, low enough
-# to stay well under Postgres's default max_connections=100.
+# The listener owns one separate connection, so the default bounds each active
+# process-session target to at most four PostgreSQL connections in total.
 _DEFAULT_MIN_SIZE = 0
-_DEFAULT_MAX_SIZE = 16
+_DEFAULT_MAX_SIZE = 3
 
 # A forked child must not finalize a pool whose locks belong to parent threads.
 _ABANDONED_FORK_POSTGRES_POOLS: list[Any] = []
@@ -67,6 +67,14 @@ class RunnerMetaState:
     schema_version: int
     last_ts: int
     alias_version: int
+
+
+@dataclass(slots=True)
+class _ThreadLease:
+    """One thread's retained checkout and nested lease count."""
+
+    conn: psycopg.Connection[Any] | None
+    depth: int
 
 
 @dataclass(slots=True)
@@ -678,9 +686,7 @@ class PostgresRunner:
         self._setup_lock = threading.RLock()
         self._completed_phases: set[SetupPhase] = set()
         self._lease_lock = threading.RLock()
-        self._leased_operation_lock = threading.RLock()
-        self._leased_conn: psycopg.Connection[Any] | None = None
-        self._lease_depth = 0
+        self._lease_entries: dict[threading.Thread, _ThreadLease] = {}
         self._meta_cache_lock = threading.Lock()
         self._meta_cache: RunnerMetaState | None = None
         self._schema_bootstrapped = False
@@ -719,6 +725,22 @@ class PostgresRunner:
         return self._schema
 
     @property
+    def _leased_conn(self) -> psycopg.Connection[Any] | None:
+        """Expose the calling thread's retained checkout for diagnostics."""
+
+        with self._lease_lock:
+            entry = self._lease_entries.get(threading.current_thread())
+            return None if entry is None else entry.conn
+
+    @property
+    def _lease_depth(self) -> int:
+        """Expose the calling thread's nested lease count for diagnostics."""
+
+        with self._lease_lock:
+            entry = self._lease_entries.get(threading.current_thread())
+            return 0 if entry is None else entry.depth
+
+    @property
     def backend_plugin(self) -> BackendPlugin:
         from .plugin import get_backend_plugin
 
@@ -728,15 +750,38 @@ class PostgresRunner:
         """Get or checkout a pooled connection for the current thread."""
         self._check_fork()
 
+        owner = threading.current_thread()
         with self._lease_lock:
-            if self._lease_depth > 0:
-                if self._leased_conn is None:
-                    self._leased_conn = self._pool.getconn()
-                return self._leased_conn
+            entry = self._lease_entries.get(owner)
+            if entry is not None and entry.conn is not None:
+                return entry.conn
+
+        if entry is not None:
+            candidate = self._checkout_pool_connection()
+            installed = False
+            try:
+                with self._lease_lock:
+                    current = self._lease_entries.get(owner)
+                    if current is entry and current.conn is None:
+                        current.conn = candidate
+                        installed = True
+                        return candidate
+            finally:
+                if not installed:
+                    with contextlib.suppress(BaseException):
+                        self._pool.putconn(candidate)
 
         if not hasattr(self._thread_local, "conn"):
-            self._thread_local.conn = self._pool.getconn()
+            self._thread_local.conn = self._checkout_pool_connection()
         return cast(psycopg.Connection[Any], self._thread_local.conn)
+
+    def _checkout_pool_connection(self) -> psycopg.Connection[Any]:
+        """Checkout one connection and keep pool exhaustion backend-neutral."""
+
+        try:
+            return self._pool.getconn()
+        except PoolTimeout as exc:
+            raise OperationalError(str(exc)) from exc
 
     def _check_fork(self) -> None:
         """Recreate pool-owned process state after fork."""
@@ -749,10 +794,8 @@ class PostgresRunner:
         self._thread_local = threading.local()
         self._setup_lock = threading.RLock()
         self._lease_lock = threading.RLock()
-        self._leased_operation_lock = threading.RLock()
         self._meta_cache_lock = threading.Lock()
-        self._leased_conn = None
-        self._lease_depth = 0
+        self._lease_entries = {}
         self._pool = self._create_pool()
         self._completed_phases.clear()
         self._meta_cache = None
@@ -764,38 +807,56 @@ class PostgresRunner:
 
         self._check_fork()
 
+        owner = threading.current_thread()
         with self._lease_lock:
-            if self._lease_depth == 0 and self._leased_conn is None:
-                conn = getattr(self._thread_local, "conn", None)
-                if conn is not None:
-                    delattr(self._thread_local, "conn")
-                    if hasattr(self._thread_local, "in_transaction"):
-                        delattr(self._thread_local, "in_transaction")
-                    if hasattr(self._thread_local, "transaction_uses_leased_conn"):
-                        delattr(self._thread_local, "transaction_uses_leased_conn")
-                    self._leased_conn = conn
+            entry = self._lease_entries.get(owner)
+            if entry is not None:
+                entry.depth += 1
+                return
+
+        conn = getattr(self._thread_local, "conn", None)
+        borrowed_from_pool = conn is None
+        if not borrowed_from_pool:
+            delattr(self._thread_local, "conn")
+            self._clear_transaction_state()
+        else:
+            conn = self._checkout_pool_connection()
+        leased_conn = cast(psycopg.Connection[Any], conn)
+
+        installed = False
+        try:
+            with self._lease_lock:
+                self._lease_entries[owner] = _ThreadLease(conn=leased_conn, depth=1)
+                installed = True
+        finally:
+            if not installed:
+                if borrowed_from_pool:
+                    with contextlib.suppress(BaseException):
+                        self._pool.putconn(leased_conn)
                 else:
-                    self._leased_conn = self._pool.getconn()
-            self._lease_depth += 1
+                    self._thread_local.conn = leased_conn
+
+    def lease_session_core_connection(self) -> bool:
+        """Use operation-scoped pool checkouts for cached session cores."""
+
+        return False
 
     def _has_leased_connection(self) -> bool:
         with self._lease_lock:
-            return self._lease_depth > 0
+            return threading.current_thread() in self._lease_entries
 
     def _thread_connection_leased(self) -> bool:
         return self._has_leased_connection()
 
     def _uses_leased_connection(self, conn: psycopg.Connection[Any]) -> bool:
         with self._lease_lock:
-            return self._lease_depth > 0 and conn is self._leased_conn
+            entry = self._lease_entries.get(threading.current_thread())
+            return entry is not None and conn is entry.conn
 
     def _return_thread_conn(self) -> None:
         """Return the current thread's connection to the pool."""
         conn = getattr(self._thread_local, "conn", None)
         if conn is not None:
-            with self._lease_lock:
-                if conn is self._leased_conn:
-                    return
             delattr(self._thread_local, "conn")
             if hasattr(self._thread_local, "in_transaction"):
                 delattr(self._thread_local, "in_transaction")
@@ -804,15 +865,6 @@ class PostgresRunner:
             # Pool may already be closed during teardown
             with contextlib.suppress(Exception):
                 self._pool.putconn(conn)
-
-    def _return_leased_conn(self, conn: psycopg.Connection[Any]) -> None:
-        with self._lease_lock:
-            if conn is not self._leased_conn:
-                return
-            self._leased_conn = None
-        # Pool may already be closed during teardown
-        with contextlib.suppress(Exception):
-            self._pool.putconn(conn)
 
     def _return_thread_conn_after_operation(self) -> None:
         """Return non-leased operation checkouts to the pool."""
@@ -825,21 +877,16 @@ class PostgresRunner:
 
         self._check_fork()
         conn_to_discard: psycopg.Connection[Any] | None = None
-        with self._leased_operation_lock, self._lease_lock:
-            transaction_held_operation_lock = self._transaction_uses_leased_connection()
-            if self._leased_conn is not None:
-                conn_to_discard = self._leased_conn
-                self._leased_conn = None
-            else:
-                conn_to_discard = getattr(self._thread_local, "conn", None)
-                if conn_to_discard is not None:
-                    delattr(self._thread_local, "conn")
-            self._clear_transaction_state()
-            if transaction_held_operation_lock:
-                # begin_immediate() retains one acquisition until transaction
-                # settlement. Discard is that settlement for an uncertain
-                # checkout; the context manager releases its own acquisition.
-                self._leased_operation_lock.release()
+        with self._lease_lock:
+            entry = self._lease_entries.get(threading.current_thread())
+            if entry is not None:
+                conn_to_discard = entry.conn
+                entry.conn = None
+        if entry is None:
+            conn_to_discard = getattr(self._thread_local, "conn", None)
+            if conn_to_discard is not None:
+                delattr(self._thread_local, "conn")
+        self._clear_transaction_state()
 
         if conn_to_discard is None:
             return
@@ -871,9 +918,7 @@ class PostgresRunner:
 
     def _finish_transaction(self, *, leased: bool) -> None:
         self._clear_transaction_state()
-        if leased:
-            self._leased_operation_lock.release()
-        else:
+        if not leased:
             self._return_thread_conn()
 
     def _in_transaction(self) -> bool:
@@ -890,9 +935,6 @@ class PostgresRunner:
         fetch: bool = False,
     ) -> Iterable[tuple[Any, ...]]:
         self._check_fork()
-        if self._has_leased_connection():
-            with self._leased_operation_lock:
-                return self._run(sql, params, fetch=fetch)
         return self._run(sql, params, fetch=fetch)
 
     def _run(
@@ -904,6 +946,9 @@ class PostgresRunner:
     ) -> Iterable[tuple[Any, ...]]:
         conn = self._get_thread_conn()
         leased = self._uses_leased_connection(conn)
+        failure: Exception | None = None
+        cause: psycopg.Error | None = None
+        invalidate_bootstrap = False
         try:
             with conn.cursor() as cur:
                 adapted_sql = _adapt_sql(sql) if params else sql
@@ -912,39 +957,29 @@ class PostgresRunner:
                     return cur.fetchall()
                 return []
         except psycopg.Error as exc:
-            if _invalidates_bootstrap(exc):
-                self.invalidate_bootstrap_state()
-            raise _translate_error(exc) from exc
+            failure = _translate_error(exc)
+            cause = exc
+            invalidate_bootstrap = _invalidates_bootstrap(exc)
         finally:
             if not leased and not self._in_transaction():
                 self._return_thread_conn_after_operation()
 
+        if invalidate_bootstrap:
+            self.invalidate_bootstrap_state()
+        assert failure is not None
+        raise failure from cause
+
     def _checkout_begin_connection(
         self,
-    ) -> tuple[psycopg.Connection[Any], bool, bool]:
-        """Checkout for BEGIN and retain the shared lock only for a lease."""
+    ) -> tuple[psycopg.Connection[Any], bool]:
+        """Checkout the current thread's connection for BEGIN."""
 
-        shared_lock_acquired = False
-        if self._has_leased_connection():
-            self._leased_operation_lock.acquire()
-            shared_lock_acquired = True
-
-        try:
-            conn = self._get_thread_conn()
-            leased = self._uses_leased_connection(conn)
-        except BaseException:
-            if shared_lock_acquired:
-                self._leased_operation_lock.release()
-            raise
-
-        if shared_lock_acquired and not leased:
-            self._leased_operation_lock.release()
-            shared_lock_acquired = False
-        return conn, leased, shared_lock_acquired
+        conn = self._get_thread_conn()
+        return conn, self._uses_leased_connection(conn)
 
     def begin_immediate(self) -> None:
         self._check_fork()
-        conn, leased, shared_lock_acquired = self._checkout_begin_connection()
+        conn, leased = self._checkout_begin_connection()
 
         try:
             with conn.cursor() as cur:
@@ -953,24 +988,16 @@ class PostgresRunner:
             self._thread_local.transaction_uses_leased_conn = leased
         except psycopg.Error as exc:
             failure = _translate_error(exc)
-            try:
-                if leased:
-                    self._discard_thread_connection_after_failure(failure)
-                else:
-                    self._return_thread_conn()
-            finally:
-                if shared_lock_acquired:
-                    self._leased_operation_lock.release()
+            if leased:
+                self._discard_thread_connection_after_failure(failure)
+            else:
+                self._return_thread_conn()
             raise failure from exc
         except BaseException as failure:
-            try:
-                if leased:
-                    self._discard_thread_connection_after_failure(failure)
-                else:
-                    self._return_thread_conn()
-            finally:
-                if shared_lock_acquired:
-                    self._leased_operation_lock.release()
+            if leased:
+                self._discard_thread_connection_after_failure(failure)
+            else:
+                self._return_thread_conn()
             raise
 
     def commit(self) -> None:
@@ -1027,36 +1054,32 @@ class PostgresRunner:
                 self._finish_transaction(leased=leased)
 
     def release_thread_connection(self) -> None:
-        """Release this handle's lease, returning the shared checkout on last close."""
+        """Release this thread's lease, returning its checkout on last close."""
 
         self._check_fork()
-        conn_to_return: psycopg.Connection[Any] | None = None
+        owner = threading.current_thread()
         with self._lease_lock:
-            if self._lease_depth == 0:
-                self._return_thread_conn()
+            entry = self._lease_entries.get(owner)
+            if entry is None:
+                conn_to_return = None
+            elif entry.depth > 1:
+                entry.depth -= 1
                 return
-            if self._lease_depth > 1:
-                self._lease_depth -= 1
-                return
-            conn_to_return = self._leased_conn
+            else:
+                conn_to_return = entry.conn
+                del self._lease_entries[owner]
 
-        if conn_to_return is None:
-            with self._lease_lock:
-                self._lease_depth = 0
+        if entry is None:
+            if self._in_transaction():
+                return
+            self._return_thread_conn()
             return
 
-        with self._leased_operation_lock, self._lease_lock:
-            if self._lease_depth > 1:
-                self._lease_depth -= 1
-                return
-            if self._lease_depth == 0 or self._leased_conn is not conn_to_return:
-                return
-            self._lease_depth = 0
-            self._leased_conn = None
-
+        self._clear_transaction_state()
         # Pool may already be closed during teardown
-        with contextlib.suppress(Exception):
-            self._pool.putconn(conn_to_return)
+        if conn_to_return is not None:
+            with contextlib.suppress(Exception):
+                self._pool.putconn(conn_to_return)
 
     def close(self) -> None:
         """Permanently close the connection pool and all connections."""
@@ -1065,14 +1088,16 @@ class PostgresRunner:
     def shutdown(self) -> None:
         """Permanently close the connection pool and all connections."""
         self._check_fork()
-        with self._leased_operation_lock:
-            with self._lease_lock:
-                leased_conn = self._leased_conn
-                self._leased_conn = None
-                self._lease_depth = 0
-            if leased_conn is not None:
-                with contextlib.suppress(Exception):
-                    self._pool.putconn(leased_conn)
+        with self._lease_lock:
+            leased_connections = [
+                entry.conn
+                for entry in self._lease_entries.values()
+                if entry.conn is not None
+            ]
+            self._lease_entries.clear()
+        for leased_conn in leased_connections:
+            with contextlib.suppress(Exception):
+                self._pool.putconn(leased_conn)
         self._return_thread_conn()
         with contextlib.suppress(Exception):
             self._pool.close()

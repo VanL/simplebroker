@@ -133,6 +133,10 @@ allowed character set in the diagnostic. A bad environment default retains
 the preparse exit-1 rule; a bad explicit filename uses the established plain
 or JSON error dialect. No existing database is renamed automatically.
 
+Choose a database name so that every complete filename, including any
+SimpleBroker sidecar suffix, is fewer than 255 characters long. This limit
+applies to the filename component, not the full directory path.
+
 For an ordinary relative legacy-SQLite target, the CLI must establish the
 target's physical containment within the selected working directory before
 backend command dispatch or a target-opening `--status`, `--vacuum`, or
@@ -425,6 +429,10 @@ _Implementation mapping_:
 - `simplebroker/commands.py` (`cmd_write`)
 
 ## Related Plans
+
+- [Deep-dive review remediation](../plans/2026-09-16-deep-dive-review-remediation-plan.md),
+  unit 6: complete-filename guidance only; existing admission and phase-lock
+  behavior are unchanged.
 
 - retired: 2026-09-14-host-path-name-boundary-plan — source `c844476`;
   see the ledger in `docs/plans/README.md`. It preserves host ancestors while

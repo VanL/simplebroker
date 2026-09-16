@@ -155,6 +155,14 @@ injected non-autocommit runners as well as the default SQLite runner. Redis
 keeps its separately specified per-queue orchestration and partial-result
 boundary.
 
+**PostgreSQL alias lock order:** Every alias-changing transaction takes the
+existing schema aliases advisory lock before metadata or alias-row locks.
+Rename then locks the singleton metadata row and messages table; alias add and
+remove perform their row work and metadata update after the advisory lock.
+This removes the add/remove-versus-rename inversion without adding a lock or
+changing transaction retry policy. Ordinary message writers do not take the
+aliases lock.
+
 **Buffered CLI delivery seam:** Batched at-least-once `read --all` keeps the
 active claim transaction open across yielded records and commits when the
 generator is resumed after its final yield. The CLI therefore flushes each

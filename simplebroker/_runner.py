@@ -106,9 +106,13 @@ class SQLRunner(Protocol):
     - shutdown() -- release process-wide resources beyond close()
       (probed in _runner connection-lifecycle helpers and db.py
       DBConnection teardown)
+    - lease_session_core_connection() -- optional override for whether a
+      process-session core retains a thread checkout; absent runners use
+      lease_thread_connection()
     - lease_thread_connection() / release_thread_connection() -- explicit
-      thread-connection leasing for process-shared runners (probed in
-      _runner lifecycle helpers and db.py BrokerCore.close)
+      thread-connection leasing for runners that need connection identity
+      across several operations (probed in lifecycle helpers and backend
+      maintenance paths)
     - cleanup_marker_files() -- remove on-disk setup markers
       (probed in db.py BrokerCore.close paths)
     - _setup_operation_context / _db_path -- setup-phase context manager
@@ -199,6 +203,15 @@ def lease_runner_thread_connection(runner: SQLRunner) -> bool:
         lease_thread_connection()
         return True
     return False
+
+
+def lease_runner_session_core_connection(runner: SQLRunner) -> bool:
+    """Retain a checkout for one cached session core when the runner needs it."""
+
+    lease_session_core = getattr(runner, "lease_session_core_connection", None)
+    if callable(lease_session_core):
+        return bool(lease_session_core())
+    return lease_runner_thread_connection(runner)
 
 
 def release_runner_thread_connection(runner: SQLRunner) -> None:

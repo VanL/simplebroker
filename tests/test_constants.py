@@ -214,10 +214,12 @@ class TestLoadConfig:
                 config = resolve_config(env=os.environ)
                 assert config["SYNC_MODE"] == mode
 
-        # Invalid mode should default to FULL
-        with patch.dict(os.environ, {"BROKER_SYNC_MODE": "INVALID"}):
-            config = resolve_config(env=os.environ)
-            assert config["SYNC_MODE"] == "FULL"
+        # Invalid modes are configuration errors rather than silent fallback.
+        with (
+            patch.dict(os.environ, {"BROKER_SYNC_MODE": "INVALID"}),
+            pytest.raises(ValueError),
+        ):
+            resolve_config(env=os.environ)
 
         # Case sensitivity
         with patch.dict(os.environ, {"BROKER_SYNC_MODE": "full"}):
@@ -668,6 +670,74 @@ class TestParseBool:
 
 class TestConfigValidation:
     """Test configuration field validation."""
+
+    def test_busy_timeout_rejects_negative_value(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match="expected a non-negative integer number of milliseconds",
+        ):
+            resolve_config(env={}, override={"BROKER_BUSY_TIMEOUT": "-1"})
+
+    def test_cache_size_rejects_zero(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match="expected a positive integer number of megabytes",
+        ):
+            resolve_config(env={}, override={"BROKER_CACHE_MB": "0"})
+
+    def test_wal_autocheckpoint_accepts_zero_and_rejects_negative(self) -> None:
+        assert (
+            resolve_config(env={}, override={"BROKER_WAL_AUTOCHECKPOINT": "0"})[
+                "WAL_AUTOCHECKPOINT"
+            ]
+            == 0
+        )
+        with pytest.raises(
+            ValueError,
+            match="expected a non-negative integer page count",
+        ):
+            resolve_config(env={}, override={"BROKER_WAL_AUTOCHECKPOINT": "-1"})
+
+    @pytest.mark.parametrize(
+        ("key", "description"),
+        [
+            ("MAX_MESSAGE_SIZE", "a positive integer byte count"),
+            ("READ_COMMIT_INTERVAL", "a positive integer message count"),
+        ],
+    )
+    def test_positive_message_settings_reject_zero(
+        self, key: str, description: str
+    ) -> None:
+        with pytest.raises(ValueError, match=f"expected {description}"):
+            resolve_config(env={}, override={f"BROKER_{key}": "0"})
+
+    @pytest.mark.parametrize(
+        ("key", "value", "expected"),
+        [
+            ("BUSY_TIMEOUT", "0", 0),
+            ("CACHE_MB", "1", 1),
+            ("WAL_AUTOCHECKPOINT", "0", 0),
+            ("MAX_MESSAGE_SIZE", "1", 1),
+            ("READ_COMMIT_INTERVAL", "1", 1),
+        ],
+    )
+    def test_bounded_integer_settings_accept_their_boundary(
+        self, key: str, value: str, expected: int
+    ) -> None:
+        config = resolve_config(env={}, override={f"BROKER_{key}": value})
+        assert config[key] == expected
+
+    def test_later_valid_source_repairs_range_invalid_value(self) -> None:
+        with pytest.warns(
+            UserWarning,
+            match="ignoring invalid BROKER_CACHE_MB='0' from the environment",
+        ):
+            config = resolve_config(
+                env={"BROKER_CACHE_MB": "0"},
+                override={"BROKER_CACHE_MB": "2"},
+            )
+
+        assert config["CACHE_MB"] == 2
 
     def test_load_future_skew_reads_non_negative_env_value(self) -> None:
         with patch.dict(

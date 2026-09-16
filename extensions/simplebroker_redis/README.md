@@ -90,6 +90,17 @@ snapshot can miss that broadcast; a queue deleted after the snapshot can be
 recreated by it. Use a patternless or exact-target broadcast when atomic
 registry selection is required.
 
+Writes and broadcasts retry only explicit timestamp and message-ID conflicts
+that Redis reports before mutation. ID collisions use bounded exponential
+backoff for up to 30 seconds, with each sleep capped at 250 ms. A stale
+high-water fence refreshes and retries immediately so another writer cannot
+make the refreshed value stale during a backoff sleep. Retry sleeps observe the
+core stop event; interruption raises the same repeated-conflict error as budget
+exhaustion. A write holds the process-local write lock for this retry interval,
+so sustained ID collisions can delay sibling writers. Transport errors and
+lost responses are not retried because the server may already have committed
+the operation.
+
 Exact-target broadcast requires backend API v5: SimpleBroker 5.6.1 or newer
 and `simplebroker-redis` 3.3.1 or newer.
 

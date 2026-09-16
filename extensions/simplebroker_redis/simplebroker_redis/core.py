@@ -11,10 +11,10 @@ import warnings
 import weakref
 from _thread import LockType
 from collections import deque
-from collections.abc import Generator, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import AbstractContextManager
 from fnmatch import fnmatchcase
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import redis
 
@@ -46,6 +46,15 @@ from simplebroker._message_search import (
     validate_body_contains,
     validate_body_search_limit,
 )
+from simplebroker._retry import (
+    RetryInterrupted,
+    Wait,
+    apply_jitter,
+    execute_retry,
+    expo,
+    interruptible_sleep,
+    stop_after_delay,
+)
 from simplebroker._selection import SelectionOrder, validate_selection_order
 from simplebroker._sidecar import SidecarSession
 from simplebroker._timestamp import TimestampGenerator, validate_timestamp_bound
@@ -70,6 +79,79 @@ from .runner import RedisRunner
 from .validation import is_namespace_key
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+_CONFLICT_RETRY_MAX_ELAPSED = 30.0
+_CONFLICT_RETRY_MAX_SLEEP = 0.25
+_CONFLICT_RETRY_FACTOR = 0.001
+_retry_sleep = interruptible_sleep
+
+
+class _RedisConflict(Exception):
+    """A script result that guarantees the attempted mutation did not occur."""
+
+    def __init__(self, *, backoff: bool = True) -> None:
+        super().__init__()
+        self.backoff = backoff
+
+
+class _RedisInsertConflict(IntegrityError):
+    """A definite ID conflict reported before INSERT_MESSAGES mutates state."""
+
+
+def _execute_conflict_retry(
+    operation: Callable[[], T],
+    *,
+    exhaustion_message: str,
+    stop_event: threading.Event | None = None,
+) -> T:
+    """Retry only explicit, pre-mutation Redis conflicts within a time budget."""
+
+    backoff_required = True
+    id_conflict_wait = expo(
+        base=2,
+        factor=_CONFLICT_RETRY_FACTOR,
+        max_value=_CONFLICT_RETRY_MAX_SLEEP,
+    )
+    id_conflict_wait.send(None)
+
+    def tracked_operation() -> T:
+        nonlocal backoff_required
+        if stop_event is not None and stop_event.is_set():
+            raise RetryInterrupted
+        try:
+            return operation()
+        except _RedisConflict as exc:
+            backoff_required = exc.backoff
+            raise
+
+    def selective_wait() -> Generator[float, Any, None]:
+        yield 0.0
+        while True:
+            if backoff_required:
+                yield id_conflict_wait.send(None)
+            else:
+                yield 0.0
+
+    def selective_jitter(base_wait: float) -> float:
+        if not backoff_required:
+            return 0.0
+        return apply_jitter(base_wait)
+
+    try:
+        return execute_retry(
+            tracked_operation,
+            retry_on=lambda exc: isinstance(exc, _RedisConflict),
+            wait_gen=Wait(selective_wait),
+            jitter=selective_jitter,
+            stop=stop_after_delay(_CONFLICT_RETRY_MAX_ELAPSED),
+            max_delay=_CONFLICT_RETRY_MAX_ELAPSED,
+            sleep=_retry_sleep,
+            stop_event=stop_event,
+        )
+    except (_RedisConflict, RetryInterrupted) as exc:
+        raise RuntimeError(exhaustion_message) from exc
 
 
 class _ProcessWriteLockRegistry:
@@ -338,11 +420,11 @@ class RedisBrokerCore:
             self._record_maintenance_activity(len(normalized_records))
             return
         if code == -1:
-            raise IntegrityError("message ID already exists")
+            raise _RedisInsertConflict("message ID already exists")
         if code == -2:
             raise OperationalError("Redis namespace is not initialized")
         if code == -3:
-            raise IntegrityError("duplicate message ID in insert batch")
+            raise _RedisInsertConflict("duplicate message ID in insert batch")
         raise OperationalError(f"Unexpected Redis insert result: {code}")
 
     def _reserve_write_candidate(self) -> int:
@@ -360,8 +442,7 @@ class RedisBrokerCore:
         *,
         keep_newest: int | None,
     ) -> int:
-        conflict_attempts = 0
-        while True:
+        def attempt() -> int:
             timestamp = self._reserve_write_candidate()
             code = self._eval_write_message(
                 queue,
@@ -374,17 +455,19 @@ class RedisBrokerCore:
             if code not in (-1, -6):
                 self._raise_write_result(code)
             self._ts_conflict_count += 1
-            conflict_attempts += 1
-            if conflict_attempts >= 3:
-                raise RuntimeError(
-                    "Failed to write message after repeated timestamp conflicts"
-                )
             if code == -6:
                 self._timestamp_gen.refresh_last_ts()
-            elif conflict_attempts == 1:
-                time.sleep(0.001)
             else:
                 self._resync_timestamp_generator()
+            raise _RedisConflict(backoff=code != -6)
+
+        return _execute_conflict_retry(
+            attempt,
+            exhaustion_message=(
+                "Failed to write message after repeated timestamp conflicts"
+            ),
+            stop_event=self._stop_event,
+        )
 
     def _eval_write_message(
         self,
@@ -1666,91 +1749,90 @@ class RedisBrokerCore:
             queue_count = response_int(self._client.scard(self._keys.queues))
             timestamp_capacity = queue_count + max(8, (queue_count // 4) + 1)
         growth_attempts = 0
-        conflict_attempts = 0
-        while True:
-            try:
-                timestamps = self._timestamp_gen._reserve_candidates(timestamp_capacity)
-            except TimestampError as exc:
-                if isinstance(exc.__cause__, OperationalError):
-                    raise OperationalError(str(exc.__cause__)) from exc
-                raise
 
-            try:
-                result = response_list(
-                    self._client.eval(
-                        scripts.BROADCAST_MESSAGE,
-                        4,
-                        self._keys.meta,
-                        self._keys.bodies,
-                        self._keys.all_ids,
-                        self._keys.queues,
-                        str(timestamps[-1]),
-                        encode_id(timestamps[-1]),
-                        str(timestamp_capacity),
-                        message,
-                        self._key("q", ""),
-                        selector_mode,
-                        str(len(requested_queues)),
-                        *requested_queues,
-                        *(encode_id(timestamp) for timestamp in timestamps),
+        def attempt() -> list[str]:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-021] exception
+            nonlocal growth_attempts, timestamp_capacity
+            while True:
+                try:
+                    timestamps = self._timestamp_gen._reserve_candidates(
+                        timestamp_capacity
                     )
-                )
-            except redis.RedisError as exc:
-                raise _translate_redis_error(exc) from exc
+                except TimestampError as exc:
+                    if isinstance(exc.__cause__, OperationalError):
+                        raise OperationalError(str(exc.__cause__)) from exc
+                    raise
 
-            code = int(result[0])
-            if code == self._BROADCAST_RESULT_SUCCESS:
-                affected_queues = [str(queue) for queue in result[1:]]
-                self.refresh_last_timestamp()
-                for queue in affected_queues:
-                    self._publish(queue)
-                self._record_maintenance_activity(len(affected_queues))
-                return len(affected_queues)
-            if code == self._BROADCAST_RESULT_CAPACITY:
-                if selector_mode != self._BROADCAST_SELECTOR_ALL:
-                    raise OperationalError(
-                        "Unexpected Redis broadcast capacity result for exact selector"
+                try:
+                    result = response_list(
+                        self._client.eval(
+                            scripts.BROADCAST_MESSAGE,
+                            4,
+                            self._keys.meta,
+                            self._keys.bodies,
+                            self._keys.all_ids,
+                            self._keys.queues,
+                            str(timestamps[-1]),
+                            encode_id(timestamps[-1]),
+                            str(timestamp_capacity),
+                            message,
+                            self._key("q", ""),
+                            selector_mode,
+                            str(len(requested_queues)),
+                            *requested_queues,
+                            *(encode_id(timestamp) for timestamp in timestamps),
+                        )
                     )
-                growth_attempts += 1
-                required = int(result[1])
-                if growth_attempts >= 3:
-                    raise RuntimeError(
-                        "Failed to broadcast message after repeated queue growth"
+                except redis.RedisError as exc:
+                    raise _translate_redis_error(exc) from exc
+
+                code = int(result[0])
+                if code == self._BROADCAST_RESULT_SUCCESS:
+                    return [str(queue) for queue in result[1:]]
+                if code == self._BROADCAST_RESULT_CAPACITY:
+                    if selector_mode != self._BROADCAST_SELECTOR_ALL:
+                        raise OperationalError(
+                            "Unexpected Redis broadcast capacity result for exact selector"
+                        )
+                    growth_attempts += 1
+                    required = int(result[1])
+                    if growth_attempts >= 3:
+                        raise RuntimeError(
+                            "Failed to broadcast message after repeated queue growth"
+                        )
+                    timestamp_capacity = max(
+                        timestamp_capacity * 2,
+                        required + max(8, (required // 4) + 1),
                     )
-                timestamp_capacity = max(
-                    timestamp_capacity * 2,
-                    required + max(8, (required // 4) + 1),
-                )
-                continue
-            if code in (
-                self._BROADCAST_RESULT_ID_EXISTS,
-                self._BROADCAST_RESULT_DUPLICATE_ID,
-            ):
-                self._ts_conflict_count += 1
-                conflict_attempts += 1
-                if conflict_attempts == 1:
-                    time.sleep(0.001)
-                elif conflict_attempts == 2:
+                    continue
+                if code in (
+                    self._BROADCAST_RESULT_ID_EXISTS,
+                    self._BROADCAST_RESULT_DUPLICATE_ID,
+                ):
+                    self._ts_conflict_count += 1
                     self._resync_timestamp_generator()
-                else:
-                    raise RuntimeError(
-                        "Failed to broadcast message after repeated timestamp conflicts"
-                    )
-                continue
-            if code == self._BROADCAST_RESULT_STALE_FENCE:
-                self._ts_conflict_count += 1
-                conflict_attempts += 1
-                if conflict_attempts >= 3:
-                    raise RuntimeError(
-                        "Failed to broadcast message after repeated timestamp conflicts"
-                    )
-                self._timestamp_gen.refresh_last_ts()
-                continue
-            if code == self._BROADCAST_RESULT_NAMESPACE_MISSING:
-                raise OperationalError("Redis namespace is not initialized")
-            if code == self._BROADCAST_RESULT_MALFORMED:
-                raise OperationalError("Malformed Redis broadcast script arguments")
-            raise OperationalError(f"Unexpected Redis broadcast result: {code}")
+                    raise _RedisConflict
+                if code == self._BROADCAST_RESULT_STALE_FENCE:
+                    self._ts_conflict_count += 1
+                    self._timestamp_gen.refresh_last_ts()
+                    raise _RedisConflict(backoff=False)
+                if code == self._BROADCAST_RESULT_NAMESPACE_MISSING:
+                    raise OperationalError("Redis namespace is not initialized")
+                if code == self._BROADCAST_RESULT_MALFORMED:
+                    raise OperationalError("Malformed Redis broadcast script arguments")
+                raise OperationalError(f"Unexpected Redis broadcast result: {code}")
+
+        affected_queues = _execute_conflict_retry(
+            attempt,
+            exhaustion_message=(
+                "Failed to broadcast message after repeated timestamp conflicts"
+            ),
+            stop_event=self._stop_event,
+        )
+        self.refresh_last_timestamp()
+        for queue in affected_queues:
+            self._publish(queue)
+        self._record_maintenance_activity(len(affected_queues))
+        return len(affected_queues)
 
     _BROADCAST_SELECTOR_ALL = "all"
     _BROADCAST_SELECTOR_EXACT = "exact"
@@ -1770,7 +1852,8 @@ class RedisBrokerCore:
         queues = [queue for queue in queues if fnmatchcase(queue, pattern)]
         if not queues:
             return 0
-        for attempt in range(3):
+
+        def attempt() -> int:
             try:
                 records = [
                     (queue, message, self.generate_timestamp()) for queue in queues
@@ -1783,19 +1866,17 @@ class RedisBrokerCore:
             try:
                 self.insert_messages(records)
                 return len(queues)
-            except IntegrityError as exc:
+            except _RedisInsertConflict as exc:
                 self._ts_conflict_count += 1
-                if attempt == 0:
-                    time.sleep(0.001)
-                elif attempt == 1:
-                    self._resync_timestamp_generator()
-                else:
-                    raise RuntimeError(
-                        "Failed to broadcast message after repeated timestamp conflicts"
-                    ) from exc
+                self._resync_timestamp_generator()
+                raise _RedisConflict from exc
 
-        raise RuntimeError(
-            "Failed to broadcast message after repeated timestamp conflicts"
+        return _execute_conflict_retry(
+            attempt,
+            exhaustion_message=(
+                "Failed to broadcast message after repeated timestamp conflicts"
+            ),
+            stop_event=self._stop_event,
         )
 
     def queue_exists_and_has_messages(self, queue: str) -> bool:

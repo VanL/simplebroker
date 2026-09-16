@@ -10,7 +10,7 @@ import threading
 import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from psycopg import conninfo as pg_conninfo
@@ -366,6 +366,7 @@ def test_broker_session_queues_and_connection_share_one_postgres_runner(
     plugin = get_backend_plugin()
     original_create_runner = plugin.create_runner
     create_runner_calls = 0
+    created_runners: list[PostgresRunner] = []
 
     def tracked_create_runner(
         target_value: str,
@@ -375,11 +376,16 @@ def test_broker_session_queues_and_connection_share_one_postgres_runner(
     ) -> SQLRunner:
         nonlocal create_runner_calls
         create_runner_calls += 1
-        return original_create_runner(
-            target_value,
-            backend_options=backend_options,
-            config=config,
+        runner = cast(
+            PostgresRunner,
+            original_create_runner(
+                target_value,
+                backend_options=backend_options,
+                config=config,
+            ),
         )
+        created_runners.append(runner)
+        return runner
 
     monkeypatch.setattr(plugin, "create_runner", tracked_create_runner)
     try:
@@ -388,12 +394,112 @@ def test_broker_session_queues_and_connection_share_one_postgres_runner(
             session.queue("second").write("two")
             with session.connection() as connection:
                 assert sorted(connection.list_queues()) == ["first", "second"]
+            assert len(created_runners) == 1
+            assert created_runners[0]._lease_entries == {}
+            assert not hasattr(created_runners[0]._thread_local, "conn")
     finally:
         plugin.cleanup_target(dsn, backend_options={"schema": schema})
 
     # The explicit target needs no project bootstrap runner. Both queues and
     # the temporary connection share one process-session runner.
     assert create_runner_calls == 1
+
+
+def test_broker_session_threads_progress_while_claim_iterator_is_suspended() -> None:
+    dsn = _require_test_dsn()
+    schema = _schema_name("thread_progress")
+    target = BrokerTarget("postgres", dsn, {"schema": schema})
+    claim_open = threading.Event()
+    release_claim = threading.Event()
+    write_finished = threading.Event()
+    errors: list[BaseException] = []
+
+    try:
+        with BrokerSession.connect(target) as session:
+            seed = session.queue("source")
+            seed.write("payload")
+            seed.close()
+
+            def hold_claim() -> None:
+                queue = session.queue("source")
+                iterator = queue.read_generator(
+                    delivery_guarantee="at_least_once",
+                )
+                try:
+                    assert next(iterator) == "payload"
+                    claim_open.set()
+                    assert release_claim.wait(timeout=5.0)
+                except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+                    errors.append(exc)
+                finally:
+                    iterator.close()
+                    queue.close()
+
+            def write_other_queue() -> None:
+                try:
+                    assert claim_open.wait(timeout=5.0)
+                    queue = session.queue("other")
+                    try:
+                        queue.write("independent")
+                    finally:
+                        queue.close()
+                except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+                    errors.append(exc)
+                finally:
+                    write_finished.set()
+
+            claim_thread = threading.Thread(target=hold_claim)
+            writer_thread = threading.Thread(target=write_other_queue)
+            claim_thread.start()
+            writer_thread.start()
+            try:
+                assert claim_open.wait(timeout=5.0)
+                assert write_finished.wait(timeout=5.0)
+                assert errors == []
+            finally:
+                release_claim.set()
+                claim_thread.join(timeout=5.0)
+                writer_thread.join(timeout=5.0)
+            assert not claim_thread.is_alive()
+            assert not writer_thread.is_alive()
+            assert session.queue("other").read() == "independent"
+    finally:
+        get_backend_plugin().cleanup_target(dsn, backend_options={"schema": schema})
+
+
+def test_suspended_claim_iterator_retains_then_returns_pool_checkout() -> None:
+    dsn = _require_test_dsn()
+    schema = _schema_name("iterator_checkout")
+    target = BrokerTarget("postgres", dsn, {"schema": schema})
+    queue = Queue("source", db_path=target, persistent=True)
+    iterator = None
+
+    try:
+        queue.write("payload")
+        assert queue.conn is not None
+        core = cast(BrokerCore, queue.conn.get_core())
+        runner = cast(PostgresRunner, core._runner)
+        assert not hasattr(runner._thread_local, "conn")
+
+        iterator = queue.read_generator(delivery_guarantee="at_least_once")
+        assert next(iterator) == "payload"
+
+        assert runner._thread_local.in_transaction is True
+        assert hasattr(runner._thread_local, "conn")
+        suspended_stats = runner._pool.get_stats()
+        assert suspended_stats["pool_available"] == suspended_stats["pool_size"] - 1
+
+        iterator.close()
+        iterator = None
+
+        assert not hasattr(runner._thread_local, "conn")
+        settled_stats = runner._pool.get_stats()
+        assert settled_stats["pool_available"] == settled_stats["pool_size"]
+    finally:
+        if iterator is not None:
+            iterator.close()
+        queue.close()
+        get_backend_plugin().cleanup_target(dsn, backend_options={"schema": schema})
 
 
 def test_postgres_cli_env_selected_backend_roundtrip(tmp_path: Path) -> None:

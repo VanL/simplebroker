@@ -186,22 +186,26 @@ and is absent unless supplied.
 ## Environment variables
 
 **Core Settings:**
-- `BROKER_BUSY_TIMEOUT` - SQLite busy timeout in milliseconds (default: 5000)
-- `BROKER_CACHE_MB` - SQLite page cache size in megabytes (default: 10)
+- `BROKER_BUSY_TIMEOUT` - Non-negative SQLite busy timeout in milliseconds
+  (default: 5000)
+- `BROKER_CACHE_MB` - Positive SQLite page cache size in megabytes (default: 10)
   - Larger cache improves performance for repeated queries and large scans
   - Recommended: 10-50 MB for typical workloads, 100+ MB for heavy use
-- `BROKER_SYNC_MODE` - SQLite synchronous mode: FULL, NORMAL, or OFF (default: FULL)
+- `BROKER_SYNC_MODE` - SQLite synchronous mode: FULL, NORMAL, or OFF
+  (default: FULL); other values are invalid
   - `FULL`: Maximum durability, safe against power loss (default)
   - `NORMAL`: Can improve write throughput, safe against app crashes, small risk on power loss
-- `BROKER_WAL_AUTOCHECKPOINT` - WAL auto-checkpoint threshold in pages (default: 1000)
+  - `OFF`: Fastest but unsafe - only for testing or non-critical data
+- `BROKER_WAL_AUTOCHECKPOINT` - Non-negative WAL auto-checkpoint threshold in
+  pages (default: 1000)
   - Controls when SQLite automatically moves WAL data to the main database
   - Default of 1000 pages ≈ 1MB (with 1KB page size)
   - Increase for high-traffic scenarios to reduce checkpoint frequency
   - Set to 0 to disable automatic checkpoints (manual control only)
-  - `OFF`: Fastest but unsafe - only for testing or non-critical data
 
 **Read Performance:**
-- `BROKER_READ_COMMIT_INTERVAL` - Number of messages to read before committing in `--all` mode (default: 1)
+- `BROKER_READ_COMMIT_INTERVAL` - Positive number of messages to read before
+  committing in `--all` mode (default: 1)
   - Default of 1 keeps the per-message consume claim boundary
     (`[SB-DELIVERY-1]` in [`docs/specs/11-delivery.md`](../specs/11-delivery.md))
   - Increase for better throughput with at-least-once batch semantics
@@ -695,7 +699,8 @@ fi
 ### General security considerations
 
 - **Queue names**: Validated (alphanumeric + underscore + hyphen + period only)
-- **Message size**: Limited to 10MB by default; override with `BROKER_MAX_MESSAGE_SIZE`
+- **Message size**: Limited to 10MB by default; `BROKER_MAX_MESSAGE_SIZE`
+  accepts positive byte counts
 - **SQLite filesystem access**: For access by more than one OS user, the
   filesystem must grant every intended writer effective read and write access
   to the broker database and every associated file that exists or may be

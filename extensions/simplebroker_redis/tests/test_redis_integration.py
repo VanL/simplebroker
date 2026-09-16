@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 import redis
+import simplebroker_redis.core as redis_core_module
 from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys, encode_id
@@ -186,6 +187,11 @@ def test_broadcast_is_atomic_when_generated_ids_collide(
             "_reserve_candidates",
             lambda count: [colliding_ts] * count,
         )
+        monkeypatch.setattr(
+            redis_core_module,
+            "_CONFLICT_RETRY_MAX_ELAPSED",
+            0.0,
+        )
 
         with pytest.raises(RuntimeError, match="timestamp conflicts"):
             core.broadcast("announcement")
@@ -210,6 +216,11 @@ def test_exact_broadcast_is_atomic_when_candidate_ids_collide(
             core._timestamp_gen,
             "_reserve_candidates",
             lambda count: [core.refresh_last_timestamp() + 1] * count,
+        )
+        monkeypatch.setattr(
+            redis_core_module,
+            "_CONFLICT_RETRY_MAX_ELAPSED",
+            0.0,
         )
 
         with pytest.raises(RuntimeError, match="timestamp conflicts"):

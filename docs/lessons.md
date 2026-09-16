@@ -97,6 +97,12 @@ pass; bootstrap source `2f93ee5`)
 
 ## Ledger
 
+- 2026-09-16: Run normal and acceptance test commands at the repository
+  harness's standard concurrency. Lower concurrency is permitted only to
+  diagnose a specific failure. A lower-concurrency pass is supplementary
+  evidence and never satisfies an acceptance gate because it can hide the
+  concurrency behavior the standard harness is meant to exercise.
+
 - 2026-09-15: A finalizer runs on the thread that performs collection, not
   necessarily the thread that used or owns a resource. Thread-local cleanup
   must require positive owner registration before decrementing users or

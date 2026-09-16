@@ -155,16 +155,19 @@ body, all-ID index, pending index, and queue registry in the same server-side
 operation.
 
 Result `-1` means the candidate already exists. Result `-6` means the
-high-water fence is stale. Both consume one three-conflict budget. An ID
-collision keeps the prior sleep-then-resync posture; a stale fence refreshes
-persisted state before reserving again. A third conflict is terminal. Redis
-transport failure after `EVAL` remains outcome-ambiguous and is translated
-without retry.
+high-water fence is stale. Both are proven pre-mutation outcomes and share one
+30-second elapsed retry budget. An ID collision resynchronizes and advances a
+bounded exponential backoff sequence. A stale fence refreshes persisted state
+and retries immediately; it neither sleeps nor consumes the ID-collision
+backoff sequence, because a peer write during that sleep could make the next
+candidate stale again. Retry sleeps observe the core stop event and translate
+interruption through the operation's existing exhaustion error. Redis transport
+failure after `EVAL` remains outcome-ambiguous and is translated without retry.
 
 All `RedisBrokerCore` instances for the same target and namespace serialize
 candidate reservation through the data `EVAL` within one process. Without that
 boundary, concurrent cores can repeatedly reserve below a competing commit and
-spend the three-conflict budget on local scheduling. The weak process registry
+spend the elapsed conflict budget on local scheduling. The weak process registry
 does not retain dead targets, and it resets both its guard and target locks
 after a fork so a child cannot inherit a lock held by a vanished parent thread.
 Different processes remain concurrent and are reconciled by the Lua fence and

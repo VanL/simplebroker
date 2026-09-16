@@ -105,7 +105,7 @@ from ._runner import (
     SQLiteRunner,
     SQLRunner,
     close_owned_runner,
-    lease_runner_thread_connection,
+    lease_runner_session_core_connection,
     release_runner_thread_connection,
 )
 from ._selection import SelectionOrder, validate_selection_order
@@ -454,7 +454,7 @@ class _ProcessSessionCoreFactory:
             )
 
         runner = self._ensure_runner()
-        leased = lease_runner_thread_connection(runner)
+        leased = lease_runner_session_core_connection(runner)
         try:
             if _is_direct_backend(self._backend_plugin):
                 return self._backend_plugin.create_core_from_runner(
@@ -469,6 +469,7 @@ class _ProcessSessionCoreFactory:
                 stop_event=stop_event,
             )
             core._session_managed = True
+            core._session_thread_connection_leased = leased
             return core
         except Exception as exc:
             if leased:
@@ -1328,6 +1329,7 @@ class BrokerCore:
         self._poison_cause: str | None = None
         self._session_managed = False
         self._session_resources_released = False
+        self._session_thread_connection_leased = False
         self._lock = _PoisonAwareRLock(
             threading.RLock(),
             self._raise_if_poisoned,
@@ -4061,6 +4063,11 @@ class BrokerCore:
 
             self._runner.begin_immediate()
             try:
+                prepare_alias_mutation = getattr(
+                    self._backend_plugin, "prepare_alias_mutation", None
+                )
+                if callable(prepare_alias_mutation):
+                    prepare_alias_mutation(self._runner)
                 self._runner.run(self._sql.DELETE_ALIAS, (alias,))
                 self._increment_alias_version_locked()
                 self._load_aliases_locked()
@@ -4086,9 +4093,15 @@ class BrokerCore:
             release_thread_connection = getattr(
                 self._runner, "release_thread_connection", None
             )
-            if callable(release_thread_connection):
+            if self._session_managed:
+                if self._session_thread_connection_leased and callable(
+                    release_thread_connection
+                ):
+                    release_thread_connection()
+            elif callable(release_thread_connection):
+                # A caller-supplied shared runner retains ownership.
                 release_thread_connection()
-            elif not self._session_managed:
+            else:
                 self._runner.close()
             if self._session_managed:
                 self._session_resources_released = True

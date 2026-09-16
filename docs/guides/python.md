@@ -413,7 +413,7 @@ def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
 
 
 watcher = QueueWatcher(
-    queue=Queue("tasks"),
+    queue="tasks",
     handler=process_message,
     error_handler=handle_error,
     peek=True,  # observe without claiming; delete by id to acknowledge
@@ -865,9 +865,10 @@ a `max_connections` client slot. Treat it as a conservative pressure signal,
 not an exact client count.
 
 The helper uses the Queue's normal connection lease, lock, and retry path. A
-target-resolved persistent Queue reuses its thread's process-session checkout;
-an ephemeral Queue releases the operation-owned connection afterward. It does
-not use sidecar and creates no table, function, role, grant, or schema object.
+target-resolved persistent Queue reuses its thread's process-session core and,
+on PostgreSQL, borrows a checkout for the operation. An ephemeral Queue
+releases its operation-owned connection afterward. The helper does not use
+sidecar and creates no table, function, role, grant, or schema object.
 
 This is an observation, not a reservation. Other clients can connect after the
 statement. Admission control must retain a safety margin and tolerate both
@@ -914,13 +915,14 @@ Rules of the road:
   migration never uses `CASCADE`. Columns or constraints added inside
   `messages`, `meta`, the aliases table, or broker-owned indexes are
   unsupported reserved-object changes, not sidecars.
-- Connection lifetime follows the `Queue`: ephemeral queues get in and get out
-  per session; `persistent=True` queues reuse their connection until explicit
-  `cleanup_connections()` releases the caller thread's cached resources.
-  Closing a persistent Queue releases only its lease. Release a worker's cache
-  on that worker with `cleanup_connections()` or by closing a `BrokerSession`
-  used as the worker's context manager. A thread otherwise retains its cache
-  until explicit cleanup or final shared-session shutdown.
+- Connection lifetime is backend-specific. SQLite persistent queues retain a
+  caller-thread connection in the cached core until explicit cleanup or final
+  shared-session shutdown. PostgreSQL persistent queues share a bounded
+  process-session pool and automatically return each completed operation's
+  checkout; callers do not check connections in or out. Closing a persistent
+  Queue releases only its lease. `cleanup_connections()` and
+  `BrokerSession.recycle_thread()` remain core-cache controls, but completed
+  PostgreSQL operations do not need them to free pool capacity.
 - Use `?` (qmark) placeholders. They work natively on SQLite and are translated
   by the Postgres backend (where sidecar tables live in the broker's configured
   schema). Other SQL dialect differences are yours to manage.
@@ -929,6 +931,15 @@ Rules of the road:
 - Don't nest sidecar transactions and don't call queue operations inside a
   `sidecar(transaction=True)` block on the same persistent handle — SQLite
   cannot nest write transactions.
+- On PostgreSQL, use this sidecar API rather than a separate raw connection and
+  keep `transaction=True` blocks short. Sidecars opened from a persistent Queue
+  or `BrokerSession` share that process session's three default command
+  checkouts. An open transaction retains one until commit or rollback; enough
+  retained transactions make later operations on that session wait and
+  eventually fail at the checkout timeout. Non-transactional sidecar statements
+  return their checkouts automatically. An ephemeral Queue owns a separate
+  runner for its sidecar session and is outside the shared process-session
+  ceiling.
 - Schema setup: idempotent `CREATE TABLE IF NOT EXISTS` (plus additive
   `ALTER TABLE`) inside a `transaction=True` session is race-safe across
   processes.

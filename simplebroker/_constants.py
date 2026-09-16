@@ -517,10 +517,28 @@ def _load_max_future_skew(value: Any) -> int:
     return result
 
 
+def _non_negative_int(value: Any) -> int:
+    """Preserve integer coercion while rejecting negative values."""
+    result = int(value)
+    if result < 0:
+        raise ValueError("must be non-negative")
+    return result
+
+
+def _positive_int(value: Any) -> int:
+    """Preserve integer coercion while requiring a positive value."""
+    result = int(value)
+    if result <= 0:
+        raise ValueError("must be positive")
+    return result
+
+
 def _sync_mode(value: Any) -> str:
-    """Normalize SQLite sync mode, retaining the FULL fallback."""
+    """Normalize and validate the SQLite synchronous mode."""
     result = str(value).upper()
-    return result if result in ("FULL", "NORMAL", "OFF") else DEFAULT_SYNC_MODE
+    if result not in ("FULL", "NORMAL", "OFF"):
+        raise ValueError("must be FULL, NORMAL, or OFF")
+    return result
 
 
 def _db_location_path(value: Any) -> str:
@@ -601,18 +619,28 @@ DEFAULT_PREFIX: Final[str] = "BROKER"
 DEFAULT_CONFIG: Final[Mapping[str, ConfigField]] = MappingProxyType(
     {
         "BUSY_TIMEOUT": ConfigField(
-            DEFAULT_BUSY_TIMEOUT_MS, "an integer number of milliseconds", int
+            DEFAULT_BUSY_TIMEOUT_MS,
+            "a non-negative integer number of milliseconds",
+            _non_negative_int,
         ),
         "CACHE_MB": ConfigField(
-            DEFAULT_CACHE_MB, "an integer number of megabytes", int
+            DEFAULT_CACHE_MB,
+            "a positive integer number of megabytes",
+            _positive_int,
         ),
         "SYNC_MODE": ConfigField(DEFAULT_SYNC_MODE, "FULL, NORMAL, or OFF", _sync_mode),
         "WAL_AUTOCHECKPOINT": ConfigField(
-            DEFAULT_WAL_AUTOCHECKPOINT, "an integer page count", int
+            DEFAULT_WAL_AUTOCHECKPOINT,
+            "a non-negative integer page count",
+            _non_negative_int,
         ),
-        "MAX_MESSAGE_SIZE": ConfigField(MAX_MESSAGE_SIZE, "an integer byte count", int),
+        "MAX_MESSAGE_SIZE": ConfigField(
+            MAX_MESSAGE_SIZE, "a positive integer byte count", _positive_int
+        ),
         "READ_COMMIT_INTERVAL": ConfigField(
-            DEFAULT_READ_COMMIT_INTERVAL, "an integer message count", int
+            DEFAULT_READ_COMMIT_INTERVAL,
+            "a positive integer message count",
+            _positive_int,
         ),
         "GENERATOR_BATCH_SIZE": ConfigField(
             DEFAULT_GENERATOR_BATCH_SIZE, "an integer message count", int

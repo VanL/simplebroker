@@ -21,6 +21,111 @@ pytestmark = [pytest.mark.shared]
 class TestWatcherCleanup:
     """Test watcher cleanup functionality."""
 
+    def test_constructor_failure_does_not_replace_supplied_queue_stop_event(
+        self,
+        tmp_path,
+    ) -> None:
+        queue = Queue(
+            "constructor-failure",
+            db_path=str(tmp_path / "constructor-failure.db"),
+            persistent=True,
+        )
+        prior_stop_event = threading.Event()
+        queue.set_stop_event(prior_stop_event)
+
+        class StrategyFailureWatcher(QueueWatcher):
+            def _create_strategy(self, *, config=None):
+                del config
+                raise RuntimeError("strategy construction failed")
+
+        with pytest.raises(RuntimeError, match="strategy construction failed"):
+            StrategyFailureWatcher(queue, lambda *_: None)
+
+        assert queue._stop_event is prior_stop_event
+        queue.close()
+
+    def test_idle_stop_restores_supplied_queue_for_use(self, tmp_path) -> None:
+        queue = Queue(
+            "idle-restored",
+            db_path=str(tmp_path / "idle-restored.db"),
+            persistent=True,
+        )
+        watcher = QueueWatcher(queue, lambda *_: None)
+
+        watcher.stop(join=False)
+
+        queue.write("after-stop")
+        assert queue.read() == "after-stop"
+        queue.close()
+
+    def test_run_cleanup_restores_supplied_queue_for_another_thread(
+        self,
+        tmp_path,
+    ) -> None:
+        queue = Queue(
+            "run-restored",
+            db_path=str(tmp_path / "run-restored.db"),
+            persistent=True,
+        )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(queue.write, "before-run").result(
+                timeout=scale_timeout_for_ci(5.0)
+            )
+
+            class OneUseWatcher(QueueWatcher):
+                def _run_with_retries(self, max_retries: int = 3) -> None:
+                    del max_retries
+
+            watcher = OneUseWatcher(queue, lambda *_: None)
+            thread = watcher.run_in_thread()
+            thread.join(timeout=scale_timeout_for_ci(5.0))
+            assert not thread.is_alive()
+
+            executor.submit(queue.write, "after-run").result(
+                timeout=scale_timeout_for_ci(5.0)
+            )
+        assert queue.read() == "before-run"
+        assert queue.read() == "after-run"
+        queue.close()
+
+    def test_cleanup_restores_supplied_queue_prior_stop_event(self, tmp_path) -> None:
+        queue = Queue(
+            "prior-event",
+            db_path=str(tmp_path / "prior-event.db"),
+            persistent=True,
+        )
+        prior_stop_event = threading.Event()
+        queue.set_stop_event(prior_stop_event)
+        watcher = QueueWatcher(queue, lambda *_: None)
+
+        watcher.stop(join=False)
+
+        assert queue._stop_event is prior_stop_event
+        queue.write("after-stop")
+        assert queue.read() == "after-stop"
+        queue.close()
+
+    def test_cleanup_failure_still_restores_supplied_queue(self, tmp_path) -> None:
+        queue = Queue(
+            "cleanup-failure",
+            db_path=str(tmp_path / "cleanup-failure.db"),
+            persistent=True,
+        )
+
+        class CleanupFailureWatcher(QueueWatcher):
+            def _cleanup_runtime_resources(self) -> None:
+                raise RuntimeError("strategy cleanup failed")
+
+        watcher = CleanupFailureWatcher(queue, lambda *_: None)
+
+        with pytest.raises(RuntimeError, match="strategy cleanup failed"):
+            watcher.stop(join=False)
+
+        queue.write("after-failed-stop")
+        assert queue.read() == "after-failed-stop"
+        queue.close()
+
     def test_tracker_stop_all_stops_registered_watchers(self, broker_target):
         """The cleanup tracker stops every watcher it owns before returning."""
         tracker = WatcherTracker()

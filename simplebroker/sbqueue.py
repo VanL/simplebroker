@@ -406,9 +406,11 @@ class Queue:
         same thread. Foreign-thread finalization permanently poisons the
         underlying broker instance; restart the process.
 
-        Connection lifetime follows this queue's mode: ephemeral queues open
-        and close a connection for the session ("get in, get out");
-        persistent queues reuse their held connection. See
+        Connection lifetime follows this queue's mode and backend: ephemeral
+        queues open and close an operation-owned connection for the session
+        ("get in, get out"); persistent queues reuse cached process-session
+        core state. A backend may borrow physical connections per operation.
+        See
         ``BrokerCore.sidecar`` for transaction semantics and
         ``simplebroker.ext.RESERVED_TABLE_NAMES`` for tables you must not
         touch.

@@ -13,6 +13,7 @@ from typing import cast
 
 import pytest
 import redis
+import simplebroker_redis.core as redis_core_module
 import simplebroker_redis.plugin as redis_plugin_module
 import simplebroker_redis.runner as redis_runner_module
 from simplebroker_redis import scripts
@@ -24,6 +25,7 @@ from simplebroker_redis.plugin import (
 from simplebroker_redis.runner import RedisRunner
 
 from simplebroker._exceptions import IntegrityError, OperationalError, QueueNameError
+from simplebroker._retry import remove_backoff
 from simplebroker._timestamp import TimestampError
 from tests.helper_scripts import drive_until
 from tests.helpers.state_machine_contracts import (
@@ -34,6 +36,17 @@ from tests.helpers.state_machine_contracts import (
 pytestmark = [pytest.mark.redis_only]
 
 _CLOSED = object()
+
+
+def _capture_retry_sleep(
+    sleeps: list[float],
+) -> Callable[[float, threading.Event | None], bool]:
+    def sleep(seconds: float, stop_event: threading.Event | None) -> bool:
+        del stop_event
+        sleeps.append(seconds)
+        return True
+
+    return sleep
 
 
 class _ScriptedPubSub:
@@ -728,6 +741,7 @@ class _WriteProtocolScenario:
     expected_sleeps: int = 0
     expected_resyncs: int = 0
     expected_refreshes: int = 0
+    retry_budget: float | None = None
 
 
 def _write_script_protocol(
@@ -736,6 +750,12 @@ def _write_script_protocol(
     scenario: _WriteProtocolScenario,
 ) -> None:
     core = RedisBrokerCore(redis_runner)
+    if scenario.retry_budget is not None:
+        monkeypatch.setattr(
+            redis_core_module,
+            "_CONFLICT_RETRY_MAX_ELAPSED",
+            scenario.retry_budget,
+        )
     responses = list(scenario.responses)
     eval_calls: list[tuple[object, ...]] = []
     reserve_calls: list[int] = []
@@ -766,7 +786,11 @@ def _write_script_protocol(
     monkeypatch.setattr(core._timestamp_gen, "_reserve_candidates", reserve)
     monkeypatch.setattr(core._client, "eval", evaluate)
     monkeypatch.setattr(core, "_maybe_recover_stale_batches", lambda: None)
-    monkeypatch.setattr(time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        redis_core_module,
+        "_retry_sleep",
+        _capture_retry_sleep(sleeps),
+    )
     monkeypatch.setattr(
         core, "_resync_timestamp_generator", lambda: resyncs.append(None)
     )
@@ -838,15 +862,16 @@ REDIS_WRITE_TRANSITIONS = (
         transition_id="EXISTING-ID-SLEEP",
         start_state="executing first Lua attempt",
         event="Lua returns -1 then succeeds",
-        guard="one conflict retry remains before resync",
+        guard="the elapsed retry budget remains",
         next_state="complete",
-        effects="records conflict, sleeps, reserves again, and retries",
+        effects="records conflict, resynchronizes, backs off, and retries",
         expected_result="returns the second candidate",
         payload=_write_case(
             _WriteProtocolScenario(
                 responses=((-1,), (1,)),
                 expected_conflicts=1,
                 expected_sleeps=1,
+                expected_resyncs=1,
             )
         ),
     ),
@@ -854,7 +879,7 @@ REDIS_WRITE_TRANSITIONS = (
         transition_id="EXISTING-ID-RESYNC",
         start_state="executing after one ID conflict",
         event="Lua returns -1 again then succeeds",
-        guard="the shared conflict budget permits a final attempt",
+        guard="the elapsed retry budget remains",
         next_state="complete",
         effects="resynchronizes monotonically, reserves again, and retries",
         expected_result="returns the third candidate",
@@ -862,26 +887,26 @@ REDIS_WRITE_TRANSITIONS = (
             _WriteProtocolScenario(
                 responses=((-1,), (-1,), (1,)),
                 expected_conflicts=2,
-                expected_sleeps=1,
-                expected_resyncs=1,
+                expected_sleeps=2,
+                expected_resyncs=2,
             )
         ),
     ),
     TransitionCase(
-        transition_id="EXISTING-ID-TERMINAL",
-        start_state="executing after two ID conflicts",
-        event="Lua returns -1 a third time",
-        guard="the shared conflict budget is exhausted",
+        transition_id="EXISTING-ID-ELAPSED-BUDGET",
+        start_state="executing Lua",
+        event="Lua returns -1 after the elapsed budget is exhausted",
+        guard="the elapsed retry budget is zero",
         next_state="failed",
-        effects="records the third conflict without another retry",
+        effects="records the conflict and stops without another attempt",
         expected_result="RuntimeError reports repeated conflicts",
         payload=_write_case(
             _WriteProtocolScenario(
-                responses=((-1,), (-1,), (-1,)),
+                responses=((-1,),),
                 expected_error="repeated timestamp conflicts",
-                expected_conflicts=3,
-                expected_sleeps=1,
+                expected_conflicts=1,
                 expected_resyncs=1,
+                retry_budget=0.0,
             )
         ),
     ),
@@ -922,7 +947,7 @@ REDIS_WRITE_TRANSITIONS = (
         transition_id="STALE-FENCE-SECOND",
         start_state="executing after one stale fence",
         event="Lua returns -6 again then succeeds",
-        guard="the shared conflict budget permits a final attempt",
+        guard="the elapsed retry budget remains",
         next_state="complete",
         effects="refreshes a second time and retries",
         expected_result="returns the third candidate",
@@ -935,20 +960,20 @@ REDIS_WRITE_TRANSITIONS = (
         ),
     ),
     TransitionCase(
-        transition_id="MIXED-CONFLICT-TERMINAL",
-        start_state="executing after one ID conflict and one stale fence",
-        event="Lua returns -1 as the third shared conflict",
-        guard="both result codes consume one common budget",
+        transition_id="STALE-FENCE-ELAPSED-BUDGET",
+        start_state="executing Lua",
+        event="Lua returns -6 after the elapsed budget is exhausted",
+        guard="the elapsed retry budget is zero",
         next_state="failed",
-        effects="stops without another resync or reservation",
+        effects="refreshes the timestamp state and stops without another attempt",
         expected_result="RuntimeError reports repeated conflicts",
         payload=_write_case(
             _WriteProtocolScenario(
-                responses=((-1,), (-6,), (-1,)),
+                responses=((-6,),),
                 expected_error="repeated timestamp conflicts",
-                expected_conflicts=3,
-                expected_sleeps=1,
+                expected_conflicts=1,
                 expected_refreshes=1,
+                retry_budget=0.0,
             )
         ),
     ),
@@ -1087,6 +1112,122 @@ def test_redis_write_fires_transition_table(
     transition_case.payload(redis_runner, monkeypatch)
 
 
+def test_redis_write_recovers_after_more_than_three_safe_conflicts(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    responses = iter(((-1,), (-6,), (-1,), (-6,), (1,)))
+    eval_calls = 0
+    publishes: list[str | None] = []
+    maintenance: list[int] = []
+
+    def evaluate(script: str, *args: object) -> object:
+        nonlocal eval_calls
+        del args
+        assert script == scripts.WRITE_MESSAGE
+        eval_calls += 1
+        return next(responses)
+
+    monkeypatch.setattr(core._client, "eval", evaluate)
+    monkeypatch.setattr(core, "_publish", publishes.append)
+    monkeypatch.setattr(core, "_record_maintenance_activity", maintenance.append)
+    monkeypatch.setattr(core, "_resync_timestamp_generator", lambda: None)
+    monkeypatch.setattr(core._timestamp_gen, "refresh_last_ts", lambda: 0)
+    try:
+        with remove_backoff():
+            assert core.write("jobs", "message") > 0
+        assert eval_calls == 5
+        assert core.get_conflict_metrics()["ts_conflict_count"] == 4
+        assert publishes == ["jobs"]
+        assert maintenance == [1]
+    finally:
+        core.close()
+
+
+def test_redis_atomic_broadcast_recovers_after_more_than_three_safe_conflicts(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    responses = iter(((-1,), (-3,), (-6,), (-1,), (1, "jobs")))
+    eval_calls = 0
+    next_timestamp = 100
+    publishes: list[str | None] = []
+    maintenance: list[int] = []
+
+    def reserve(count: int) -> list[int]:
+        nonlocal next_timestamp
+        result = list(range(next_timestamp, next_timestamp + count))
+        next_timestamp += count
+        return result
+
+    def evaluate(script: str, *args: object) -> object:
+        nonlocal eval_calls
+        del args
+        assert script == scripts.BROADCAST_MESSAGE
+        eval_calls += 1
+        return next(responses)
+
+    monkeypatch.setattr(core._timestamp_gen, "_reserve_candidates", reserve)
+    monkeypatch.setattr(core._client, "eval", evaluate)
+    monkeypatch.setattr(core, "_publish", publishes.append)
+    monkeypatch.setattr(core, "_record_maintenance_activity", maintenance.append)
+    monkeypatch.setattr(core, "_resync_timestamp_generator", lambda: None)
+    monkeypatch.setattr(core._timestamp_gen, "refresh_last_ts", lambda: 0)
+    monkeypatch.setattr(core, "refresh_last_timestamp", lambda: 0)
+    try:
+        with remove_backoff():
+            assert core.broadcast("message", queue_names=("jobs",)) == 1
+        assert eval_calls == 5
+        assert core.get_conflict_metrics()["ts_conflict_count"] == 4
+        assert publishes == ["jobs"]
+        assert maintenance == [1]
+    finally:
+        core.close()
+
+
+def test_redis_pattern_broadcast_retries_only_insert_conflicts(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    insert_calls = 0
+    unrelated_calls = 0
+
+    def insert_with_safe_conflicts(records: object) -> None:
+        nonlocal insert_calls
+        del records
+        insert_calls += 1
+        if insert_calls <= 4:
+            raise redis_core_module._RedisInsertConflict("safe conflict")
+
+    monkeypatch.setattr(core, "_queue_names", lambda: {"jobs"})
+    monkeypatch.setattr(core, "generate_timestamp", lambda: 100 + insert_calls)
+    monkeypatch.setattr(core, "insert_messages", insert_with_safe_conflicts)
+    monkeypatch.setattr(core, "_resync_timestamp_generator", lambda: None)
+    try:
+        with remove_backoff():
+            assert core.broadcast("message", pattern="job*") == 1
+        assert insert_calls == 5
+
+        insert_calls = 0
+
+        def insert_with_unrelated_failure(records: object) -> None:
+            nonlocal unrelated_calls
+            del records
+            unrelated_calls += 1
+            raise IntegrityError("corrupt state")
+
+        monkeypatch.setattr(core, "insert_messages", insert_with_unrelated_failure)
+        with pytest.raises(IntegrityError, match="corrupt state"):
+            core.broadcast("message", pattern="job*")
+        assert core.get_conflict_metrics()["ts_conflict_count"] == 4
+        assert unrelated_calls == 1
+    finally:
+        core.close()
+
+
 @dataclass(frozen=True, slots=True)
 class _BroadcastProtocolScenario:
     responses: tuple[tuple[object, ...] | BaseException, ...]
@@ -1097,6 +1238,7 @@ class _BroadcastProtocolScenario:
     expected_sleeps: int = 0
     expected_resyncs: int = 0
     expected_refreshes: int = 0
+    retry_budget: float | None = None
 
 
 def _broadcast_guard(
@@ -1450,6 +1592,7 @@ class _PatternProtocolScenario:
     expected_error: str | None = None
     expected_sleeps: int = 0
     expected_resyncs: int = 0
+    retry_budget: float | None = None
 
 
 def _broadcast_pattern_protocol(
@@ -1458,6 +1601,12 @@ def _broadcast_pattern_protocol(
     scenario: _PatternProtocolScenario,
 ) -> None:
     core = RedisBrokerCore(redis_runner)
+    if scenario.retry_budget is not None:
+        monkeypatch.setattr(
+            redis_core_module,
+            "_CONFLICT_RETRY_MAX_ELAPSED",
+            scenario.retry_budget,
+        )
     core.write("jobs", "seed")
     original_insert = core.insert_messages
     insert_attempts = 0
@@ -1468,14 +1617,16 @@ def _broadcast_pattern_protocol(
         nonlocal insert_attempts
         insert_attempts += 1
         if insert_attempts <= scenario.conflicts:
-            raise IntegrityError(f"pattern conflict {insert_attempts}")
+            raise redis_core_module._RedisInsertConflict(
+                f"pattern conflict {insert_attempts}"
+            )
         original_insert(records)  # type: ignore[arg-type]
 
     monkeypatch.setattr(core, "insert_messages", insert_with_conflicts)
     monkeypatch.setattr(
-        redis_plugin_module.time,
-        "sleep",
-        lambda seconds: sleeps.append(seconds),
+        redis_core_module,
+        "_retry_sleep",
+        _capture_retry_sleep(sleeps),
     )
     monkeypatch.setattr(
         core,
@@ -1501,7 +1652,9 @@ def _broadcast_pattern_protocol(
         with expectation:
             assert core.broadcast("announcement", pattern="job*") == 1
         assert insert_attempts == (
-            0 if scenario.timestamp_error else min(scenario.conflicts + 1, 3)
+            0
+            if scenario.timestamp_error
+            else (1 if scenario.retry_budget == 0 else scenario.conflicts + 1)
         )
         assert core._ts_conflict_count == scenario.conflicts
         assert len(sleeps) == scenario.expected_sleeps
@@ -1525,6 +1678,12 @@ def _broadcast_script_protocol(
     scenario: _BroadcastProtocolScenario,
 ) -> None:
     core = RedisBrokerCore(redis_runner)
+    if scenario.retry_budget is not None:
+        monkeypatch.setattr(
+            redis_core_module,
+            "_CONFLICT_RETRY_MAX_ELAPSED",
+            scenario.retry_budget,
+        )
     responses = iter(scenario.responses)
     eval_calls = 0
     sleeps: list[float] = []
@@ -1543,9 +1702,9 @@ def _broadcast_script_protocol(
 
     monkeypatch.setattr(core._client, "eval", eval_script)
     monkeypatch.setattr(
-        redis_plugin_module.time,
-        "sleep",
-        lambda seconds: sleeps.append(seconds),
+        redis_core_module,
+        "_retry_sleep",
+        _capture_retry_sleep(sleeps),
     )
     monkeypatch.setattr(
         core,
@@ -1806,6 +1965,7 @@ REDIS_BROADCAST_TRANSITIONS = (
             _PatternProtocolScenario(
                 conflicts=1,
                 expected_sleeps=1,
+                expected_resyncs=1,
             )
         ),
     ),
@@ -1813,32 +1973,32 @@ REDIS_BROADCAST_TRANSITIONS = (
         transition_id="PATTERN-CONFLICT-RESYNC",
         start_state="inserting-pattern-snapshot after one conflict",
         event="the second multi-insert conflicts",
-        guard="the final retry remains",
+        guard="the elapsed retry budget remains",
         next_state="complete",
         effects="resynchronizes timestamp state, regenerates IDs, and retries",
         expected_result="the third insert succeeds",
         payload=_pattern_case(
             _PatternProtocolScenario(
                 conflicts=2,
-                expected_sleeps=1,
-                expected_resyncs=1,
+                expected_sleeps=2,
+                expected_resyncs=2,
             )
         ),
     ),
     TransitionCase(
-        transition_id="PATTERN-CONFLICT-TERMINAL",
-        start_state="inserting-pattern-snapshot after two conflicts",
-        event="the third multi-insert conflicts",
-        guard="the retry budget is exhausted",
+        transition_id="PATTERN-CONFLICT-ELAPSED-BUDGET",
+        start_state="inserting-pattern-snapshot",
+        event="the multi-insert conflicts after the elapsed budget is exhausted",
+        guard="the elapsed retry budget is zero",
         next_state="failed",
-        effects="records the third conflict and stops",
+        effects="records the conflict, resynchronizes, and stops",
         expected_result="RuntimeError reports repeated conflicts",
         payload=_pattern_case(
             _PatternProtocolScenario(
-                conflicts=3,
+                conflicts=1,
                 expected_error="repeated timestamp conflicts",
-                expected_sleeps=1,
                 expected_resyncs=1,
+                retry_budget=0.0,
             )
         ),
     ),
@@ -1969,6 +2129,7 @@ REDIS_BROADCAST_TRANSITIONS = (
                 expected_count=1,
                 expected_conflicts=1,
                 expected_sleeps=1,
+                expected_resyncs=1,
             )
         ),
     ),
@@ -1986,6 +2147,7 @@ REDIS_BROADCAST_TRANSITIONS = (
                 expected_count=1,
                 expected_conflicts=1,
                 expected_sleeps=1,
+                expected_resyncs=1,
             )
         ),
     ),
@@ -2002,8 +2164,8 @@ REDIS_BROADCAST_TRANSITIONS = (
                 responses=((-1,), (-1,), (1, "jobs")),
                 expected_count=1,
                 expected_conflicts=2,
-                expected_sleeps=1,
-                expected_resyncs=1,
+                expected_sleeps=2,
+                expected_resyncs=2,
             )
         ),
     ),
@@ -2020,44 +2182,44 @@ REDIS_BROADCAST_TRANSITIONS = (
                 responses=((-3,), (-3,), (1, "jobs")),
                 expected_count=1,
                 expected_conflicts=2,
-                expected_sleeps=1,
-                expected_resyncs=1,
+                expected_sleeps=2,
+                expected_resyncs=2,
             )
         ),
     ),
     TransitionCase(
-        transition_id="CONFLICT-EXISTING-FAIL-THIRD",
-        start_state="executing-lua after two timestamp conflicts",
-        event="Lua returns -1 a third time",
-        guard="conflict retry budget is exhausted",
+        transition_id="CONFLICT-EXISTING-ELAPSED-BUDGET",
+        start_state="executing-lua",
+        event="Lua returns -1 after the elapsed budget is exhausted",
+        guard="the elapsed retry budget is zero",
         next_state="failed",
         effects="records the conflict and stops retrying",
         expected_result="RuntimeError reports repeated conflicts",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-1,), (-1,), (-1,)),
+                responses=((-1,),),
                 expected_error="repeated timestamp conflicts",
-                expected_conflicts=3,
-                expected_sleeps=1,
+                expected_conflicts=1,
                 expected_resyncs=1,
+                retry_budget=0.0,
             )
         ),
     ),
     TransitionCase(
-        transition_id="CONFLICT-DUPLICATE-FAIL-THIRD",
-        start_state="executing-lua after two timestamp conflicts",
-        event="Lua returns -3 a third time",
-        guard="conflict retry budget is exhausted",
+        transition_id="CONFLICT-DUPLICATE-ELAPSED-BUDGET",
+        start_state="executing-lua",
+        event="Lua returns -3 after the elapsed budget is exhausted",
+        guard="the elapsed retry budget is zero",
         next_state="failed",
         effects="records the conflict and stops retrying",
         expected_result="RuntimeError reports repeated conflicts",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-3,), (-3,), (-3,)),
+                responses=((-3,),),
                 expected_error="repeated timestamp conflicts",
-                expected_conflicts=3,
-                expected_sleeps=1,
+                expected_conflicts=1,
                 expected_resyncs=1,
+                retry_budget=0.0,
             )
         ),
     ),
@@ -2096,19 +2258,20 @@ REDIS_BROADCAST_TRANSITIONS = (
         ),
     ),
     TransitionCase(
-        transition_id="STALE-FENCE-FAIL-THIRD",
-        start_state="executing-lua after two stale fences",
-        event="Lua returns -6 a third time",
-        guard="refresh retry budget is exhausted",
+        transition_id="STALE-FENCE-ELAPSED-BUDGET",
+        start_state="executing-lua",
+        event="Lua returns -6 after the elapsed budget is exhausted",
+        guard="the elapsed retry budget is zero",
         next_state="failed",
         effects="records the conflict and stops retrying",
         expected_result="RuntimeError reports repeated conflicts",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-6,), (-6,), (-6,)),
+                responses=((-6,),),
                 expected_error="repeated timestamp conflicts",
-                expected_conflicts=3,
-                expected_refreshes=2,
+                expected_conflicts=1,
+                expected_refreshes=1,
+                retry_budget=0.0,
             )
         ),
     ),

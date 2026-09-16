@@ -69,7 +69,7 @@ def test_load_config_reports_invalid_environment_field(
     assert error.key == "BROKER_BUSY_TIMEOUT"
     assert error.source == "environment"
     assert error.value_display == "'not-an-integer'"
-    assert error.expected == "an integer number of milliseconds"
+    assert error.expected == "a non-negative integer number of milliseconds"
 
 
 def test_every_recognized_config_field_has_an_expected_form() -> None:
@@ -175,7 +175,7 @@ def test_cli_reports_invalid_environment_before_parsing(args: tuple[str, ...]) -
     assert result.stdout == ""
     assert result.stderr.splitlines()[0] == (
         "simplebroker: warning: ignoring invalid BROKER_BUSY_TIMEOUT='not-an-integer' "
-        "from the environment (expected an integer number of milliseconds)"
+        "from the environment (expected a non-negative integer number of milliseconds)"
     )
     assert "UserWarning" not in result.stderr
     assert "warnings.warn" not in result.stderr
@@ -183,7 +183,7 @@ def test_cli_reports_invalid_environment_before_parsing(args: tuple[str, ...]) -
         "simplebroker: invalid configuration"
     )
     assert "BROKER_BUSY_TIMEOUT='not-an-integer'" in result.stderr
-    assert "expected an integer number of milliseconds" in result.stderr
+    assert "expected a non-negative integer number of milliseconds" in result.stderr
     assert "Traceback" not in result.stderr
 
 
@@ -228,6 +228,7 @@ def test_cli_prints_misspelled_environment_name_when_os_preserves_case() -> None
     ("env_updates", "expected_key"),
     [
         ({"BROKER_JITTER_FACTOR": "not-a-float"}, "BROKER_JITTER_FACTOR"),
+        ({"BROKER_CACHE_MB": "-1"}, "BROKER_CACHE_MB"),
         (
             {"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "-1"},
             "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS",

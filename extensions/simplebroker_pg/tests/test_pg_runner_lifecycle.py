@@ -12,7 +12,7 @@ import psycopg
 import pytest
 import simplebroker_pg.runner as pg_runner_module
 from psycopg import OperationalError as PsycopgOperationalError
-from psycopg_pool import PoolClosed
+from psycopg_pool import PoolClosed, PoolTimeout
 from simplebroker_pg import PostgresRunner
 from simplebroker_pg._identifiers import stable_lock_key
 from simplebroker_pg.plugin import PostgresBackendPlugin
@@ -114,9 +114,7 @@ def _runner_with_thread_connection() -> tuple[PostgresRunner, FakePool]:
     runner._setup_lock = threading.RLock()
     runner._completed_phases = set()
     runner._lease_lock = threading.RLock()
-    runner._leased_operation_lock = threading.RLock()
-    runner._leased_conn = None
-    runner._lease_depth = 0
+    runner._lease_entries = {}
     runner._meta_cache_lock = threading.Lock()
     runner._meta_cache = None
     runner._schema_bootstrapped = False
@@ -132,9 +130,7 @@ def _runner_with_fake_pool() -> tuple[PostgresRunner, FakePool]:
     runner._setup_lock = threading.RLock()
     runner._completed_phases = set()
     runner._lease_lock = threading.RLock()
-    runner._leased_operation_lock = threading.RLock()
-    runner._leased_conn = None
-    runner._lease_depth = 0
+    runner._lease_entries = {}
     runner._meta_cache_lock = threading.Lock()
     runner._meta_cache = None
     runner._schema_bootstrapped = False
@@ -169,6 +165,52 @@ def test_lease_thread_connection_keeps_operation_checkout_until_release() -> Non
     assert runner._leased_conn is None
 
 
+def test_pool_timeout_is_translated_at_operation_and_lease_boundaries() -> None:
+    runner, pool = _runner_with_fake_pool()
+
+    def timeout() -> FakeConnection:
+        raise PoolTimeout("pool exhausted")
+
+    pool.getconn = timeout  # type: ignore[method-assign]
+
+    with pytest.raises(OperationalError, match="pool exhausted") as operation:
+        runner.run("SELECT 1")
+    assert isinstance(operation.value.__cause__, PoolTimeout)
+
+    with pytest.raises(OperationalError, match="pool exhausted") as lease:
+        runner.lease_thread_connection()
+    assert isinstance(lease.value.__cause__, PoolTimeout)
+
+
+def test_unmatched_release_does_not_return_an_active_transaction_checkout() -> None:
+    runner, pool = _runner_with_fake_pool()
+    runner.begin_immediate()
+
+    runner.release_thread_connection()
+
+    assert runner._thread_local.conn is pool.conn
+    assert runner._thread_local.in_transaction is True
+    assert pool.putconn_calls == 0
+
+    runner.rollback()
+    assert pool.putconn_calls == 1
+
+
+def test_final_explicit_release_clears_transaction_markers() -> None:
+    runner, pool = _runner_with_fake_pool()
+    runner.lease_thread_connection()
+    runner.begin_immediate()
+
+    assert runner._thread_local.in_transaction is True
+    assert runner._thread_local.transaction_uses_leased_conn is True
+
+    runner.release_thread_connection()
+
+    assert pool.putconn_calls == 1
+    assert not hasattr(runner._thread_local, "in_transaction")
+    assert not hasattr(runner._thread_local, "transaction_uses_leased_conn")
+
+
 def test_multiple_leases_share_one_checkout_until_last_release() -> None:
     runner, pool = _runner_with_fake_pool()
 
@@ -187,8 +229,75 @@ def test_multiple_leases_share_one_checkout_until_last_release() -> None:
     assert runner._leased_conn is None
 
 
-def test_leased_checkout_is_shared_across_threads() -> None:
-    runner, pool = _runner_with_fake_pool()
+class _InterruptingLock:
+    def __enter__(self) -> None:
+        raise KeyboardInterrupt
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def test_lease_publication_interrupt_returns_new_pool_checkout() -> None:
+    runner, _ = _runner_with_fake_pool()
+
+    class InterruptingPool(FakePool):
+        def getconn(self) -> FakeConnection:
+            conn = super().getconn()
+            runner._lease_lock = cast(Any, _InterruptingLock())
+            return conn
+
+    pool = InterruptingPool()
+    runner._pool = cast(Any, pool)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.lease_thread_connection()
+
+    assert pool.getconn_calls == 1
+    assert pool.putconn_calls == 1
+    assert runner._lease_entries == {}
+
+
+def test_replacement_publication_interrupt_returns_new_pool_checkout() -> None:
+    runner, _ = _runner_with_fake_pool()
+    owner = threading.current_thread()
+    entry = pg_runner_module._ThreadLease(conn=None, depth=1)
+    runner._lease_entries[owner] = entry
+
+    class InterruptingPool(FakePool):
+        def getconn(self) -> FakeConnection:
+            conn = super().getconn()
+            runner._lease_lock = cast(Any, _InterruptingLock())
+            return conn
+
+    pool = InterruptingPool()
+    runner._pool = cast(Any, pool)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner._get_thread_conn()
+
+    assert pool.getconn_calls == 1
+    assert pool.putconn_calls == 1
+    assert entry.conn is None
+
+
+def test_leased_checkout_is_distinct_across_threads() -> None:
+    class PerThreadPool(FakePool):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connections = [FakeConnection(), FakeConnection()]
+
+        def getconn(self) -> FakeConnection:
+            connection = self.connections[self.getconn_calls]
+            self.getconn_calls += 1
+            return connection
+
+        def putconn(self, conn: object) -> None:
+            assert conn in self.connections
+            self.putconn_calls += 1
+
+    runner, _ = _runner_with_fake_pool()
+    pool = PerThreadPool()
+    runner._pool = cast(Any, pool)
     runner.lease_thread_connection()
     main_conn = runner._get_thread_conn()
     worker_conns: list[object] = []
@@ -204,12 +313,58 @@ def test_leased_checkout_is_shared_across_threads() -> None:
     thread.start()
     thread.join()
 
-    assert worker_conns == [main_conn]
-    assert pool.getconn_calls == 1
-    assert pool.putconn_calls == 0
+    assert worker_conns == [pool.connections[1]]
+    assert worker_conns[0] is not main_conn
+    assert pool.getconn_calls == 2
+    assert pool.putconn_calls == 1
 
     runner.release_thread_connection()
-    assert pool.putconn_calls == 1
+    assert pool.putconn_calls == 2
+
+
+def test_lease_registry_distinguishes_thread_objects_with_same_ident(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TwoConnectionPool(FakePool):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connections = [FakeConnection(), FakeConnection()]
+
+        def getconn(self) -> FakeConnection:
+            connection = self.connections[self.getconn_calls]
+            self.getconn_calls += 1
+            return connection
+
+        def putconn(self, conn: object) -> None:
+            assert conn in self.connections
+            self.putconn_calls += 1
+
+    runner, _ = _runner_with_fake_pool()
+    pool = TwoConnectionPool()
+    runner._pool = cast(Any, pool)
+    first_owner = threading.Thread()
+    second_owner = threading.Thread()
+    cast(Any, first_owner)._ident = 7
+    cast(Any, second_owner)._ident = 7
+    current_owner = first_owner
+    monkeypatch.setattr(
+        pg_runner_module.threading,
+        "current_thread",
+        lambda: current_owner,
+    )
+
+    runner.lease_thread_connection()
+    current_owner = second_owner
+    runner.lease_thread_connection()
+
+    assert len(runner._lease_entries) == 2
+    assert runner._lease_entries[first_owner].conn is pool.connections[0]
+    assert runner._lease_entries[second_owner].conn is pool.connections[1]
+
+    runner.release_thread_connection()
+    current_owner = first_owner
+    runner.release_thread_connection()
+    assert pool.putconn_calls == 2
 
 
 def test_leased_commit_failure_discards_failed_checkout() -> None:
@@ -256,9 +411,6 @@ def test_leased_commit_failure_notes_ordinary_discard_failure() -> None:
     assert pool.putconn_calls == 1
     assert runner._lease_depth == 1
     assert runner._leased_conn is None
-    assert runner._leased_operation_lock.acquire(blocking=False)
-    runner._leased_operation_lock.release()
-
     runner.release_thread_connection()
     assert runner._lease_depth == 0
 
@@ -330,19 +482,6 @@ def test_transaction_base_exception_settles_owned_checkout(
         assert runner._lease_depth == 1
         assert runner._leased_conn is None
 
-        acquired_from_another_thread = threading.Event()
-
-        def acquire_after_abort() -> None:
-            if runner._leased_operation_lock.acquire(timeout=1.0):
-                acquired_from_another_thread.set()
-                runner._leased_operation_lock.release()
-
-        contender = threading.Thread(target=acquire_after_abort)
-        contender.start()
-        contender.join(timeout=2.0)
-        assert not contender.is_alive()
-        assert acquired_from_another_thread.is_set()
-
         runner.release_thread_connection()
         assert runner._lease_depth == 0
     else:
@@ -390,19 +529,6 @@ def test_discard_thread_connection_preserves_nested_lease_for_replacement() -> N
     assert runner._leased_conn is None
     assert not hasattr(runner._thread_local, "in_transaction")
     assert not hasattr(runner._thread_local, "transaction_uses_leased_conn")
-
-    acquired_from_another_thread = threading.Event()
-
-    def acquire_after_discard() -> None:
-        if runner._leased_operation_lock.acquire(timeout=1.0):
-            acquired_from_another_thread.set()
-            runner._leased_operation_lock.release()
-
-    contender = threading.Thread(target=acquire_after_discard)
-    contender.start()
-    contender.join(timeout=2.0)
-    assert not contender.is_alive()
-    assert acquired_from_another_thread.is_set()
 
     runner.release_thread_connection()
     assert runner._lease_depth == 1
@@ -487,19 +613,6 @@ def test_vacuum_body_base_exception_settles_transaction_before_definite_unlock(
     assert pool.conn.rollback_calls == 1
     assert runner._lease_depth == 0
 
-    acquired_from_another_thread = threading.Event()
-
-    def acquire_after_vacuum() -> None:
-        if runner._leased_operation_lock.acquire(timeout=1.0):
-            acquired_from_another_thread.set()
-            runner._leased_operation_lock.release()
-
-    contender = threading.Thread(target=acquire_after_vacuum)
-    contender.start()
-    contender.join(timeout=2.0)
-    assert not contender.is_alive()
-    assert acquired_from_another_thread.is_set()
-
 
 def test_close_returns_thread_connection_and_closes_pool() -> None:
     runner, pool = _runner_with_thread_connection()
@@ -532,8 +645,7 @@ def test_fork_check_rebuilds_all_process_owned_runner_state(
     assert runner._pid == 1002
     assert runner._pool is new_pool
     assert not hasattr(runner._thread_local, "conn")
-    assert runner._lease_depth == 0
-    assert runner._leased_conn is None
+    assert runner._lease_entries == {}
     assert runner._completed_phases == set()
     assert runner._meta_cache is None
     assert runner._schema_bootstrapped is False
@@ -596,14 +708,14 @@ def test_postgres_setup_recovers_before_inherited_runner_locks() -> None:
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 @pytest.mark.parametrize("operation", ["run", "shutdown"])
-def test_postgres_lease_paths_recover_before_inherited_locks(operation: str) -> None:
+def test_postgres_lease_paths_recover_before_inherited_lock(operation: str) -> None:
     runner, _ = _runner_with_fake_pool()
     cast(Any, runner)._create_pool = lambda: FakePool()
     locks_held = threading.Event()
     release_locks = threading.Event()
 
     def hold_runner_locks() -> None:
-        with runner._leased_operation_lock, runner._lease_lock:
+        with runner._lease_lock:
             locks_held.set()
             release_locks.wait(10.0)
 
@@ -659,6 +771,27 @@ def test_lease_adopts_thread_checkout_and_clears_transaction_markers() -> None:
     assert pool.getconn_calls == 0
 
 
+def test_missing_object_run_returns_checkout_before_bootstrap_invalidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, pool = _runner_with_fake_pool()
+    pool.conn.execute_error = PsycopgOperationalError("missing table")
+    return_counts: list[int] = []
+
+    monkeypatch.setattr(pg_runner_module, "_invalidates_bootstrap", lambda exc: True)
+    monkeypatch.setattr(
+        runner,
+        "invalidate_bootstrap_state",
+        lambda: return_counts.append(pool.putconn_calls),
+    )
+
+    with pytest.raises(OperationalError, match="missing table"):
+        runner.run("SELECT * FROM missing")
+
+    assert return_counts == [1]
+    assert not hasattr(runner._thread_local, "conn")
+
+
 @pytest.mark.parametrize("leased", [False, True])
 @pytest.mark.parametrize(
     ("execute_error", "expected_error"),
@@ -667,7 +800,7 @@ def test_lease_adopts_thread_checkout_and_clears_transaction_markers() -> None:
         (RuntimeError("cursor failed"), RuntimeError),
     ],
 )
-def test_begin_failure_returns_checkout_and_releases_operation_lock(
+def test_begin_failure_returns_checkout(
     leased: bool,
     execute_error: Exception,
     expected_error: type[Exception],
@@ -682,11 +815,9 @@ def test_begin_failure_returns_checkout_and_releases_operation_lock(
 
     assert pool.putconn_calls == 1
     assert not hasattr(runner._thread_local, "in_transaction")
-    assert runner._leased_operation_lock.acquire(blocking=False)
-    runner._leased_operation_lock.release()
 
 
-def test_leased_begin_base_exception_releases_checkout_and_operation_lock() -> None:
+def test_leased_begin_base_exception_releases_checkout() -> None:
     class BeginAbort(BaseException):
         pass
 
@@ -705,24 +836,11 @@ def test_leased_begin_base_exception_releases_checkout_and_operation_lock() -> N
     assert pool.conn.close_calls == 1
     assert not hasattr(runner._thread_local, "in_transaction")
 
-    acquired_from_another_thread = threading.Event()
-
-    def acquire_after_begin_abort() -> None:
-        if runner._leased_operation_lock.acquire(timeout=1.0):
-            acquired_from_another_thread.set()
-            runner._leased_operation_lock.release()
-
-    contender = threading.Thread(target=acquire_after_begin_abort)
-    contender.start()
-    contender.join(timeout=2.0)
-    assert not contender.is_alive()
-    assert acquired_from_another_thread.is_set()
-
     runner.release_thread_connection()
     assert runner._lease_depth == 0
 
 
-def test_leased_begin_checkout_failure_releases_operation_lock() -> None:
+def test_leased_begin_checkout_failure_preserves_lease() -> None:
     checkout_failure = RuntimeError("replacement checkout failed")
 
     class ReplacementFailurePool(FakePool):
@@ -746,19 +864,6 @@ def test_leased_begin_checkout_failure_releases_operation_lock() -> None:
     assert runner._leased_conn is None
     assert not hasattr(runner._thread_local, "in_transaction")
 
-    acquired_from_another_thread = threading.Event()
-
-    def acquire_after_checkout_failure() -> None:
-        if runner._leased_operation_lock.acquire(timeout=1.0):
-            acquired_from_another_thread.set()
-            runner._leased_operation_lock.release()
-
-    contender = threading.Thread(target=acquire_after_checkout_failure)
-    contender.start()
-    contender.join(timeout=2.0)
-    assert not contender.is_alive()
-    assert acquired_from_another_thread.is_set()
-
     runner.release_thread_connection()
     assert runner._lease_depth == 0
 
@@ -775,14 +880,13 @@ def test_nonleased_commit_failure_returns_checkout() -> None:
 
 
 @pytest.mark.parametrize("leased", [False, True])
-def test_rollback_failure_returns_checkout_and_releases_operation_lock(
+def test_rollback_failure_returns_checkout(
     leased: bool,
 ) -> None:
     runner, pool = _runner_with_fake_pool()
     pool.conn.rollback_error = PsycopgOperationalError("rollback failed")
     if leased:
         runner.lease_thread_connection()
-        runner._leased_operation_lock.acquire()
     runner._thread_local.in_transaction = True
     runner._thread_local.transaction_uses_leased_conn = leased
 
@@ -791,8 +895,6 @@ def test_rollback_failure_returns_checkout_and_releases_operation_lock(
 
     assert pool.putconn_calls == 1
     assert not hasattr(runner._thread_local, "in_transaction") or not leased
-    assert runner._leased_operation_lock.acquire(blocking=False)
-    runner._leased_operation_lock.release()
 
 
 def test_shutdown_swallows_pool_failures_after_releasing_local_state() -> None:
@@ -807,13 +909,40 @@ def test_shutdown_swallows_pool_failures_after_releasing_local_state() -> None:
     pool = BrokenPool()
     runner_state = cast(Any, runner)
     runner_state._pool = pool
-    runner_state._leased_conn = pool.conn
-    runner_state._lease_depth = 1
+    runner_state._lease_entries = {
+        threading.current_thread(): pg_runner_module._ThreadLease(
+            cast(Any, pool.conn), 1
+        )
+    }
 
     runner.shutdown()
 
     assert runner._leased_conn is None
     assert runner._lease_depth == 0
+
+
+def test_shutdown_sweep_prevents_late_worker_duplicate_return() -> None:
+    runner, pool = _runner_with_fake_pool()
+    worker_leased = threading.Event()
+    release_worker = threading.Event()
+
+    def lease_until_shutdown() -> None:
+        runner.lease_thread_connection()
+        worker_leased.set()
+        assert release_worker.wait(timeout=5.0)
+        runner.release_thread_connection()
+
+    worker = threading.Thread(target=lease_until_shutdown)
+    worker.start()
+    assert worker_leased.wait(timeout=5.0)
+
+    runner.shutdown()
+    release_worker.set()
+    worker.join(timeout=5.0)
+
+    assert not worker.is_alive()
+    assert pool.putconn_calls == 1
+    assert pool.close_calls == 1
 
 
 def test_update_meta_cache_is_noop_before_metadata_is_loaded() -> None:
@@ -931,40 +1060,21 @@ def test_activity_waiters_clamp_versions_and_translate_driver_errors() -> None:
 
 def test_connection_return_helpers_handle_active_and_mismatched_leases() -> None:
     runner, pool = _runner_with_thread_connection()
-    runner_state = cast(Any, runner)
-    runner_state._leased_conn = pool.conn
-    runner_state._lease_depth = 1
+    runner.lease_thread_connection()
 
     runner._return_thread_conn()
-    runner._return_leased_conn(object())  # type: ignore[arg-type]
     runner._return_thread_conn_after_operation()
 
-    assert runner._thread_local.conn is pool.conn
+    assert not hasattr(runner._thread_local, "conn")
     assert runner._leased_conn is pool.conn
     assert pool.putconn_calls == 0
 
 
-def test_begin_handles_lease_ending_between_precheck_and_checkout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner, pool = _runner_with_fake_pool()
-    monkeypatch.setattr(runner, "_has_leased_connection", lambda: True)
-    monkeypatch.setattr(runner, "_uses_leased_connection", lambda conn: False)
-
-    runner.begin_immediate()
-
-    assert runner._thread_local.in_transaction is True
-    assert runner._thread_local.transaction_uses_leased_conn is False
-    assert runner._leased_operation_lock.acquire(blocking=False)
-    runner._leased_operation_lock.release()
-    runner.rollback()
-    assert pool.putconn_calls == 1
-
-
 def test_release_empty_lease_and_mark_bootstrap_are_idempotent() -> None:
     runner, pool = _runner_with_fake_pool()
-    runner._lease_depth = 1
-    runner._leased_conn = None
+    runner._lease_entries[threading.current_thread()] = pg_runner_module._ThreadLease(
+        None, 1
+    )
 
     runner.release_thread_connection()
 
@@ -1024,6 +1134,17 @@ def test_release_thread_connection_returns_real_pool_connection(
     assert list(pg_runner.run("SELECT 1", fetch=True)) == [(1,)]
 
 
+def test_ordinary_operation_returns_real_pool_checkout(
+    pg_runner: PostgresRunner,
+) -> None:
+    assert list(pg_runner.run("SELECT 1", fetch=True)) == [(1,)]
+
+    assert pg_runner._leased_conn is None
+    assert not hasattr(pg_runner._thread_local, "conn")
+    stats = pg_runner._pool.get_stats()
+    assert stats["pool_available"] == stats["pool_size"]
+
+
 def test_leased_commit_failure_closes_advisory_lock_session_before_replacement(
     pg_runner: PostgresRunner,
     pg_dsn: str,
@@ -1075,6 +1196,112 @@ def test_leased_commit_failure_closes_advisory_lock_session_before_replacement(
         assert replacement_pid != lock_owner_pid
     finally:
         pg_runner.release_thread_connection()
+
+
+def test_leased_threads_make_independent_progress(
+    pg_runner: PostgresRunner,
+) -> None:
+    """One retained transaction must not monopolize the session pool."""
+
+    worker_finished = threading.Event()
+    worker_errors: list[BaseException] = []
+    pg_runner.lease_thread_connection()
+    pg_runner.begin_immediate()
+
+    def run_independent_query() -> None:
+        try:
+            pg_runner.lease_thread_connection()
+            try:
+                assert list(pg_runner.run("SELECT 1", fetch=True)) == [(1,)]
+            finally:
+                pg_runner.release_thread_connection()
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_errors.append(exc)
+        finally:
+            worker_finished.set()
+
+    worker = threading.Thread(target=run_independent_query)
+    worker.start()
+    try:
+        assert worker_finished.wait(timeout=5.0)
+        assert worker_errors == []
+    finally:
+        pg_runner.rollback()
+        pg_runner.release_thread_connection()
+        worker.join(timeout=5.0)
+    assert not worker.is_alive()
+
+
+def test_default_pool_bound_is_three_command_connections(
+    pg_runner: PostgresRunner,
+) -> None:
+    assert pg_runner._pool_max_size == 3
+
+
+def test_per_thread_lease_surfaces_pool_exhaustion(
+    pg_dsn: str,
+    pg_schema: str,
+) -> None:
+    runner = PostgresRunner(pg_dsn, schema=pg_schema, pool_max_size=1)
+    cast(Any, runner._pool).timeout = 0.1
+    worker_errors: list[BaseException] = []
+    runner.lease_thread_connection()
+
+    def exhaust_pool() -> None:
+        try:
+            runner.lease_thread_connection()
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_errors.append(exc)
+
+    worker = threading.Thread(target=exhaust_pool)
+    worker.start()
+    worker.join(timeout=5.0)
+    try:
+        assert not worker.is_alive()
+        assert len(worker_errors) == 1
+        assert isinstance(worker_errors[0], OperationalError)
+        assert isinstance(worker_errors[0].__cause__, PoolTimeout)
+    finally:
+        runner.release_thread_connection()
+        runner.shutdown()
+
+
+def test_released_thread_lease_makes_single_pool_slot_reusable(
+    pg_dsn: str,
+    pg_schema: str,
+) -> None:
+    runner = PostgresRunner(pg_dsn, schema=pg_schema, pool_max_size=1)
+    cast(Any, runner._pool).timeout = 2.0
+    checkout_started = threading.Event()
+    checkout_finished = threading.Event()
+    worker_errors: list[BaseException] = []
+    runner.lease_thread_connection()
+
+    def acquire_recycled_slot() -> None:
+        checkout_started.set()
+        try:
+            runner.lease_thread_connection()
+            try:
+                assert list(runner.run("SELECT 1", fetch=True)) == [(1,)]
+            finally:
+                runner.release_thread_connection()
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_errors.append(exc)
+        finally:
+            checkout_finished.set()
+
+    worker = threading.Thread(target=acquire_recycled_slot)
+    worker.start()
+    try:
+        assert checkout_started.wait(timeout=5.0)
+        runner.release_thread_connection()
+        assert checkout_finished.wait(timeout=5.0)
+        assert worker_errors == []
+    finally:
+        runner.release_thread_connection()
+        runner.shutdown()
+        worker.join(timeout=5.0)
+    assert not worker.is_alive()
 
 
 def test_close_closes_real_pool(pg_runner: PostgresRunner) -> None:

@@ -324,7 +324,7 @@ def test_connection_stats_optional_reserved_setting_matches_server_version(
         assert stats["reserved_connections"] == int(raw_value)
 
 
-def test_connection_stats_reuses_target_resolved_persistent_checkout(
+def test_connection_stats_returns_target_resolved_persistent_checkout(
     pg_dsn: str,
     pg_schema: str,
     raw_pg_conn: psycopg.Connection[Any],
@@ -339,15 +339,15 @@ def test_connection_stats_reuses_target_resolved_persistent_checkout(
         core = cast(Any, queue.conn.get_core())
         runner = cast(PostgresRunner, core._runner)
         requests_before = runner._pool.get_stats()["requests_num"]
-        retained_connection = runner._leased_conn
-        assert retained_connection is not None
+        assert runner._leased_conn is None
 
         first = get_connection_stats(queue)
         second = get_connection_stats(queue)
 
         assert first["max_connections"] == second["max_connections"]
-        assert runner._pool.get_stats()["requests_num"] == requests_before
-        assert runner._leased_conn is retained_connection
+        assert runner._pool.get_stats()["requests_num"] == requests_before + 2
+        assert runner._leased_conn is None
+        assert not hasattr(runner._thread_local, "conn")
         assert _application_connection_count(raw_pg_conn, application_name) == 1
     finally:
         queue.close()
