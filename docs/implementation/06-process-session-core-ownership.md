@@ -577,7 +577,7 @@ subprocess tests for both module import orders plus registry atexit shutdown.
   sidecar adaptation.
 
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
-  source `23d6c9d1` (local-only pin); see the ledger in
+  source `23d6c9d1`; see the ledger in
   `docs/plans/README.md`
 - retired: 2026-08-11-activity-waiter-terminal-close-contract-plan — source
   `27f9ae4`; see the ledger in `docs/plans/README.md`

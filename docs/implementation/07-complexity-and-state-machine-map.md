@@ -150,8 +150,9 @@ The 2026-08-10 test-signal remediation then replaced a test-owned herd
 scenario with smaller real-watcher behavior and reduced the live inventory to
 50.
 All 26 removed findings crossed a real same-owner phase, validation, cleanup,
-dispatch, or contract-narrowing seam. The remaining 50 are reviewed P3 exceptions in
-[DOM-10.1.1], including former P2 candidates whose executable transition
+dispatch, or contract-narrowing seam. The remaining findings are the reviewed
+P3 exceptions owned by the live suppression registry in [DOM-10.1.1], including
+former P2 candidates whose executable transition
 contracts showed that further splitting would separate live state from its
 failure or cleanup order.
 
@@ -447,7 +448,7 @@ findings must update source, registry, and policy evidence atomically.
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It adds the
   terminal watcher callback-failure lifecycle row.
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
-  source `23d6c9d1` (local-only pin); see the ledger in
+  source `23d6c9d1`; see the ledger in
   `docs/plans/README.md`
 - retired: 2026-08-11-activity-waiter-terminal-close-contract-plan — source
   `27f9ae4`; see the ledger in `docs/plans/README.md`

@@ -45,6 +45,9 @@ The human registry columns are `Group`, `Rules`, `Approved cardinality`,
 the only codes the group may own. Approved cardinality records the permitted
 directive count and raw-diagnostic count by code. Every human group must have
 at least one live source directive.
+Reconsider each live suppression group when its source moves, cardinality
+changes, named proof stops firing, protected invariant changes, or a smaller
+compliant refactor becomes available.
 Retired group IDs remain unassigned and are not reused; live group numbering
 therefore need not be contiguous. `[RUFF-SUP-013]` was retired when the
 integral-only timestamp grammar simplified both former parser owners below the
@@ -78,7 +81,6 @@ increase lands; synchronizing the count is never the whole task.
 | `[RUFF-SUP-010]` | `C901` | `2` directives; raw: `C901=2` | Darwin provider discovery and durable phase completion keep cache publication, fallback, cancellation, lock ownership, and marker state local. | `tests/test_phaselock.py`; SM-DARWIN-XATTR and SM-PHASE-LOCK transition tables. | Moving lock stages across modules obscures unwind ownership. A generic state-machine layer adds indirection without a second adapter. Advisory acquisition was simplified at a real retry seam; further splitting these two owners would separate state publication from its failure order. | P3 retained after T9/T12 refactor and transition-contract review; user approved 2026-07-29. |
 | `[RUFF-SUP-011]` | `C901` | `1` directive; raw: `C901=1` | Retry attempt, elapsed-budget, stop, notification, and wait-generator decisions remain readable as one bounded retry algorithm. | `tests/test_retry.py`, watcher/setup retry integration, and interruption tests. | Callback wrappers or a generic retry DSL would scatter stop and error precedence while leaving the same decisions. | P3 retained; initial C901 activation; user approved 2026-07-29. |
 | `[RUFF-SUP-012]` | `C901` | `1` directive; raw: `C901=1` | Pytest override parsing keeps ordered argument-shape, worker, timeout, and compatibility precedence in one parser. | Script argument, development-tool, and subprocess suites. | A generic command framework enlarges the seam. Tiny branch wrappers hide rather than remove parser precedence. Packaging smoke orchestration was separately simplified into build, inspection, and install phases. | P3 retained after T12 refactor review; user approved 2026-07-29. |
-| `[RUFF-SUP-014]` | `C901` | `1` directive; raw: `C901=1` | Queue fetch keeps selection, delivery, output, and empty-result precedence beside the public command result. | Command helper, fetch, CLI subprocess, and delivery suites. | A generic command runner obscures command-specific exit and cleanup contracts. Move, watch, and init were simplified through owner-local mode and lifecycle seams. | P3 retained after T12 refactor review; user approved 2026-07-29. |
 | `[RUFF-SUP-015]` | `C901` | `2` directives; raw: `C901=2` | Suspended sidecar and transactional-batch frames retain lock, transaction, owner-thread, poison, and cleanup-failure precedence in one frame. | Sidecar, generator-method, exactly-once, cross-thread poisoning, and SM-DELIVERY-POISON transition suites. | Extraction would pass live transaction state across helpers or create a second unsafe cleanup path. A generic state-machine runtime weakens locality. | P3 retained after transition-contract review; user approved 2026-07-29. |
 | `[RUFF-SUP-016]` | `C901` | `1` directive; raw: `C901=1` | Queue move retains delivery-mode selection, return semantics, generator closure, and public error translation at the queue interface. | Queue move, generator, delivery, watcher, typing, and public behavior suites. | Moving public-mode logic into detached helpers enlarges the interface. Stream cleanup now uses one shared iterator-close path and no longer needs an exception. | P3 retained after T12 refactor review; user approved 2026-07-29. |
 | `[RUFF-SUP-017]` | `C901` | `1` directive; raw: `C901=1` | Polling mode, burst/backoff, activity hints, waiter replacement, data-version checks, and stop behavior remain one debuggable state owner. | Watcher, activity-replacement, burst, edge, race, and SM-POLLING transition suites. | Fragmenting the decision loop would spread live counters and waiter ownership. A generic state-machine framework adds no adapter. | P3 retained; initial C901 activation; user approved 2026-07-29. |
@@ -103,7 +105,7 @@ increase lands; synchronizing the count is never the whole task.
 | `[RUFF-SUP-037]` | `PLR2004` | `3` directives; raw: `PLR2004=3` | Preparse argv lookahead and target-string splitting compare lengths against 2 where the literal is the definition of a pair (queue plus message; scheme plus rest). | Preparse grammar conservation tests and backend target-parsing tests. | A named PAIR constant restates the definition it names and obscures the positional scan. | P3 retained; PLR2004 activation by the 2026-08-25 test-suite audit plan Task 6.6; owner-directed enforcement boundary. |
 | `[RUFF-SUP-038]` | `TRY004` | `2` directives; raw: `TRY004=2` | Config transport rejects malformed envelope shape with the agreed ValueError contract, distinct from unsupported nested JSON types. | `tests/test_config_transport.py::test_invalid_envelope_is_rejected_without_values` | Written TypeError alternative failed nine envelope cases; independent review judged it changes the public contract without readability or locality benefit. A lint-only helper would add needless indirection. | Independent implementation review approved 2026-09-14 under the owner-approved config transport plan. |
 
-Global raw-`noqa` inventory: `BLE001=148`, `C901=48`, `E402=2`, `F401=4`, `PLR2004=7`, `PYI034=6`, `PYI036=19`, `SIM115=1`, `TRY004=2`
+Global raw-`noqa` inventory: `BLE001=148`, `C901=47`, `E402=2`, `F401=4`, `PLR2004=7`, `PYI034=6`, `PYI036=19`, `SIM115=1`, `TRY004=2`
 
 The generated location index is enclosed by the unique markers below. Its
 columns are `Group`, `Locations`, `Directives`, and `Raw diagnostics`.
@@ -127,7 +129,6 @@ regeneration.
 | `[RUFF-SUP-010]` | `simplebroker/_phaselock.py::PhaseLockService.run_phases`; `simplebroker/_phaselock.py::_discover_darwin_xattr_provider` | 2 | `C901=2` |
 | `[RUFF-SUP-011]` | `simplebroker/_retry.py::execute_retry` | 1 | `C901=1` |
 | `[RUFF-SUP-012]` | `simplebroker/_scripts.py::_extract_pytest_runner_overrides` | 1 | `C901=1` |
-| `[RUFF-SUP-014]` | `simplebroker/commands.py::_process_queue_fetch` | 1 | `C901=1` |
 | `[RUFF-SUP-015]` | `simplebroker/db.py::BrokerCore._yield_transactional_batches`; `simplebroker/db.py::BrokerCore.sidecar` | 2 | `C901=2` |
 | `[RUFF-SUP-016]` | `simplebroker/sbqueue.py::Queue.move` | 1 | `C901=1` |
 | `[RUFF-SUP-017]` | `simplebroker/watcher.py::PollingStrategy.wait_for_activity` | 1 | `C901=1` |

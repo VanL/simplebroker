@@ -297,7 +297,7 @@ not pass/fail thresholds.
   timestamp-bound admission, integer ISO conversion, and message-ID diagnostic
   ownership.
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
-  source `23d6c9d1` (local-only pin); see the ledger in
+  source `23d6c9d1`; see the ledger in
   `docs/plans/README.md`
 - retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9`; see the
   ledger in `docs/plans/README.md`

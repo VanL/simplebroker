@@ -487,12 +487,12 @@ _Implementation mapping_:
   ownership are implemented and verified; owner directed targeted closure with
   exact-SHA Windows retained as post-commit evidence
 - retired: 2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan
-  — source `00fb9f77` (local-only pin); see the ledger in
+  — source `00fb9f77`; see the ledger in
   `docs/plans/README.md`
 - retired: 2026-08-23-maintainability-and-isolation-remediation-plan — source
-  `a490dcc4` (local-only pin); see the ledger in `docs/plans/README.md`
+  `a490dcc4`; see the ledger in `docs/plans/README.md`
 - retired: 2026-08-23-public-api-and-cli-review-remediation-plan — source
-  `2605b79a` (local-only pin); see the ledger in `docs/plans/README.md`
+  `2605b79a`; see the ledger in `docs/plans/README.md`
 - retired: 2026-08-13-invalid-environment-import-lifecycle-plan — source
   `6b5b3044`; see the ledger in `docs/plans/README.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;

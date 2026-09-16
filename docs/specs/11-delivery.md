@@ -388,7 +388,7 @@ _Implementation mapping_:
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns terminal
   watcher callback-failure delivery state at baseline `1b8ecfa0`.
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
-  source `23d6c9d1` (local-only pin); see the ledger in
+  source `23d6c9d1`; see the ledger in
   `docs/plans/README.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
   see the ledger in `docs/plans/README.md`

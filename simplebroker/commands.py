@@ -541,7 +541,27 @@ FetchManyFn = Callable[..., list[str] | list[tuple[str, int]]]
 FetchGeneratorFn = Callable[..., Iterator[str | tuple[str, int]]]
 
 
-def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exception
+def _output_fetched_message(
+    result: str | tuple[str, int],
+    *,
+    with_timestamps: bool,
+    json_output: bool,
+    show_timestamps: bool,
+) -> None:
+    """Emit one fetched message while preserving closed-stdout semantics."""
+    try:
+        if with_timestamps:
+            message, timestamp = cast(tuple[str, int], result)
+            _output_message(message, timestamp, json_output, show_timestamps, False)
+        else:
+            message = cast(str, result)
+            _warn_message_newlines(message, False)
+            _print_stdout(message)
+    except _StdoutClosed:
+        pass
+
+
+def _process_queue_fetch(
     *,
     fetch_one: FetchOneFn,
     fetch_many: FetchManyFn,
@@ -567,16 +587,12 @@ def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exc
         if result is None:
             return EXIT_QUEUE_EMPTY
 
-        try:
-            if with_timestamps:
-                message, timestamp = cast(tuple[str, int], result)
-                _output_message(message, timestamp, json_output, show_timestamps, False)
-            else:
-                message = cast(str, result)
-                _warn_message_newlines(message, False)
-                _print_stdout(message)
-        except _StdoutClosed:
-            pass
+        _output_fetched_message(
+            result,
+            with_timestamps=with_timestamps,
+            json_output=json_output,
+            show_timestamps=show_timestamps,
+        )
         return EXIT_SUCCESS
 
     if all_messages:
@@ -634,16 +650,12 @@ def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exc
     if result is None:
         return EXIT_QUEUE_EMPTY
 
-    try:
-        if with_timestamps:
-            message, timestamp = cast(tuple[str, int], result)
-            _output_message(message, timestamp, json_output, show_timestamps, False)
-        else:
-            message = cast(str, result)
-            _warn_message_newlines(message, False)
-            _print_stdout(message)
-    except _StdoutClosed:
-        pass
+    _output_fetched_message(
+        result,
+        with_timestamps=with_timestamps,
+        json_output=json_output,
+        show_timestamps=show_timestamps,
+    )
     return EXIT_SUCCESS
 
 

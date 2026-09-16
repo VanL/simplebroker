@@ -301,7 +301,7 @@ _Implementation mapping_:
   SQL transaction ownership for queue/all delete at baseline
   `1b8ecfa0`; Redis behavior unchanged
 - retired: 2026-08-23-public-api-and-cli-review-remediation-plan — source
-  `2605b79a` (local-only pin); see the ledger in `docs/plans/README.md`
+  `2605b79a`; see the ledger in `docs/plans/README.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-pre-release-review-remediation-plan — source `84159198`;

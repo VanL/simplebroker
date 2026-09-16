@@ -343,7 +343,10 @@ change; then regenerate with
 An approved exception uses exactly `# noqa: <codes> approved [DOM-10.1.1]
 [RUFF-SUP-NNN] exception`. Its registry row records the stable group ID,
 allowed rules and cardinalities, protected invariant, real proof, rejected
-alternatives, and approval. The checker reconciles those human approvals,
+alternatives, and approval. The registry also records a reconsideration
+condition for every live group: source movement, a cardinality change,
+invalidated proof, a changed protected invariant, or a newly smaller
+compliant refactor. The checker reconciles those human approvals,
 every tagged source directive, raw Ruff diagnostics, the complete global
 aggregate, and the generated location index. The generator may replace only
 its delimited generated block; it must never create or edit human approval

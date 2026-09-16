@@ -93,7 +93,6 @@ class _DeleteAllSentinel:
 
 
 _DELETE_ALL = _DeleteAllSentinel()
-_IteratorItem = TypeVar("_IteratorItem")
 
 
 def _close_iterator(iterator: object) -> None:
@@ -101,16 +100,6 @@ def _close_iterator(iterator: object) -> None:
     close = getattr(iterator, "close", None)
     if callable(close):
         close()
-
-
-def _next_or_none_and_close(iterator: Iterator[_IteratorItem]) -> _IteratorItem | None:
-    """Take one item from an owned iterator and release it deterministically."""
-    try:
-        return next(iterator)
-    except StopIteration:
-        return None
-    finally:
-        _close_iterator(iterator)
 
 
 def _moved_message(message: str, timestamp: int) -> MovedMessage:

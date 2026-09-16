@@ -256,6 +256,59 @@ def test_cleanup_reuses_one_snapshot_for_runner_and_core(
     assert core_config == [marker]
 
 
+def test_cleanup_does_not_swallow_runner_close_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client_closed: list[bool] = []
+    monkeypatch.setattr(
+        redis_plugin_module,
+        "inspect_namespace",
+        lambda *args, **kwargs: NamespaceInspection(
+            "tenant",
+            NamespaceState.OWNED,
+            1,
+        ),
+    )
+
+    class Client:
+        def scan_iter(self, pattern: str) -> list[str]:
+            return []
+
+        def close(self) -> None:
+            client_closed.append(True)
+
+    class Runner:
+        stale_batch_seconds = 30
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def close(self) -> None:
+            raise UnboundLocalError("close failed")
+
+    class Core:
+        def __init__(self, runner: object, *, config: object) -> None:
+            return None
+
+        def recover_stale_batches(self, *, max_age_seconds: int) -> None:
+            return None
+
+    monkeypatch.setattr(
+        redis_plugin_module.redis.Redis,
+        "from_url",
+        lambda *args, **kwargs: Client(),
+    )
+    monkeypatch.setattr(redis_plugin_module, "RedisRunner", Runner)
+    monkeypatch.setattr(redis_plugin_module, "RedisBrokerCore", Core)
+
+    with pytest.raises(UnboundLocalError, match="close failed"):
+        RedisBackendPlugin().cleanup_target(
+            "redis://example/0",
+            backend_options={"namespace": "tenant"},
+        )
+    assert client_closed == [True]
+
+
 def test_listener_channel_and_wait_state_transitions() -> None:
     listener = _listener()
     registration = listener.register("jobs")

@@ -519,6 +519,7 @@ class RedisBackendPlugin:
                 f"({inspection.state.value})"
             )
         client = redis.Redis.from_url(target, decode_responses=True)
+        runner: RedisRunner | None = None
         try:
             runner = RedisRunner(target, namespace=namespace, config=resolved_config)
             core = RedisBrokerCore(runner, config=resolved_config)
@@ -552,10 +553,10 @@ class RedisBackendPlugin:
             raise DatabaseError(str(exc)) from exc
         finally:
             try:
-                runner.close()
-            except UnboundLocalError:
-                pass
-            client.close()
+                if runner is not None:
+                    runner.close()
+            finally:
+                client.close()
 
     def check_version(self) -> None:
         return None

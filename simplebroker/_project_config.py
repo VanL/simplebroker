@@ -45,11 +45,9 @@ def _validated_backend_options(
     *,
     config_path: Path,
 ) -> dict[str, Any]:
-    match raw_options:
-        case dict() as raw_options_dict:
-            return dict(raw_options_dict)
-        case _:
-            raise ValueError(f"'backend_options' must be a table in {config_path}")
+    if isinstance(raw_options, dict):
+        return dict(raw_options)
+    raise ValueError(f"'backend_options' must be a table in {config_path}")
 
 
 def load_project_config(config_path: Path) -> dict[str, Any]:
