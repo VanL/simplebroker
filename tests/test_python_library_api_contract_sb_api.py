@@ -90,11 +90,16 @@ def test_api_root_ext_commands_all_are_importable() -> None:
 def test_broker_session_is_a_lifetime_only_root_surface() -> None:
     assert simplebroker.BrokerSession is BrokerSession
     assert "BrokerSession" in simplebroker.__all__
-    operation_verbs = {"write", "read", "peek", "move", "stats", "alias"}
-    assert operation_verbs.isdisjoint(vars(BrokerSession))
-    assert {"connect", "queue", "recycle_thread", "connection", "close"} <= set(
-        vars(BrokerSession)
-    )
+    assert {name for name in vars(BrokerSession) if not name.startswith("_")} == {
+        "backend_name",
+        "close",
+        "config",
+        "connect",
+        "connection",
+        "queue",
+        "recycle_thread",
+        "target",
+    }
     assert not inspect.signature(BrokerSession).parameters
     with pytest.raises(TypeError, match=r"BrokerSession\.connect"):
         BrokerSession()

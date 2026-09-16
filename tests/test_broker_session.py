@@ -2,22 +2,65 @@
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import os
 import select
+import signal
 import sqlite3
 import sys
 import threading
 import weakref
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pytest
 
 from simplebroker import BrokerSession, BrokerTarget, Queue, resolve_config
 from simplebroker.db import BrokerDB, SQLiteRunner
+from tests.helper_scripts import drive_until, scale_timeout_for_ci
 
-pytestmark = [pytest.mark.shared]
+
+class _ObservedLock:
+    """Real lock that exposes one named thread's acquisition attempt."""
+
+    def __init__(self, thread_name: str, attempted: threading.Event) -> None:
+        self._lock = threading.Lock()
+        self._thread_name = thread_name
+        self._attempted = attempted
+
+    def __enter__(self) -> Self:
+        if threading.current_thread().name == self._thread_name:
+            self._attempted.set()
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        del args
+        self._lock.release()
+
+
+def _attempt_session_admission(session: BrokerSession, admission_kind: str) -> None:
+    if admission_kind == "queue":
+        session.queue("late")
+        return
+    with session.connection():
+        pass
+
+
+@pytest.mark.shared
+def test_session_scope_uses_the_active_backend(broker_target: BrokerTarget) -> None:
+    with contextlib.ExitStack() as cleanup:
+        session = BrokerSession.connect(broker_target)
+        cleanup.callback(session.close)
+        queue = session.queue("jobs")
+        cleanup.callback(queue.close)
+        queue.write("payload")
+        with session.connection() as connection:
+            assert connection.list_queues() == ["jobs"]
+        assert session.backend_name == broker_target.backend_name
+        session.close()
+        assert queue.read_one() == "payload"
 
 
 @pytest.mark.parametrize("implicit_target", [None, ""])
@@ -179,24 +222,32 @@ def test_worker_context_recycles_its_thread_cache(tmp_path: Path) -> None:
     target = str(tmp_path / "worker.db")
     anchor = Queue("anchor", db_path=target, persistent=True)
     observed: dict[str, Any] = {}
+    worker_failures: list[BaseException] = []
+    lifecycle_timeout = scale_timeout_for_ci(5.0)
 
     def worker() -> None:
-        with BrokerSession.connect(target) as session:
-            queue = session.queue("jobs")
-            queue.write("payload")
-            assert queue.conn is not None
-            process_session = queue.conn._shared_session
-            assert process_session is not None
-            core = queue.conn.get_core()
-            observed["session"] = process_session
-            observed["core"] = core
+        try:
+            with BrokerSession.connect(target) as session:
+                queue = session.queue("jobs")
+                queue.write("payload")
+                assert queue.conn is not None
+                process_session = queue.conn._shared_session
+                assert process_session is not None
+                core = queue.conn.get_core()
+                observed["session"] = process_session
+                observed["core"] = core
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_failures.append(failure)
 
     thread = threading.Thread(target=worker)
     thread.start()
-    thread.join(timeout=5.0)
-    assert not thread.is_alive()
-    assert observed["core"] not in observed["session"]._cores
-    anchor.close()
+    try:
+        thread.join(timeout=lifecycle_timeout)
+        assert not thread.is_alive()
+        assert worker_failures == []
+        assert observed["core"] not in observed["session"]._cores
+    finally:
+        anchor.close()
 
 
 def test_worker_contexts_leave_no_thread_cores_even_when_body_raises(
@@ -209,7 +260,8 @@ def test_worker_contexts_leave_no_thread_cores_even_when_body_raises(
     process_session = anchor.conn._shared_session
     assert process_session is not None
     anchor_core = anchor.conn.get_core()
-    failures: list[BaseException] = []
+    failures: list[tuple[int, BaseException]] = []
+    lifecycle_timeout = scale_timeout_for_ci(5.0)
 
     def worker(index: int) -> None:
         try:
@@ -217,19 +269,25 @@ def test_worker_contexts_leave_no_thread_cores_even_when_body_raises(
                 session.queue(f"jobs-{index}").write("payload")
                 if index == 0:
                     raise ValueError("task failed")
-        except ValueError as failure:
-            failures.append(failure)
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            failures.append((index, failure))
 
     threads = [threading.Thread(target=worker, args=(index,)) for index in range(5)]
     for thread in threads:
         thread.start()
-    for thread in threads:
-        thread.join(timeout=5.0)
+    try:
+        for thread in threads:
+            thread.join(timeout=lifecycle_timeout)
 
-    assert all(not thread.is_alive() for thread in threads)
-    assert len(failures) == 1
-    assert process_session._cores == {anchor_core}
-    anchor.close()
+        assert all(not thread.is_alive() for thread in threads)
+        assert len(failures) == 1
+        failure_index, failure = failures[0]
+        assert failure_index == 0
+        assert isinstance(failure, ValueError)
+        assert str(failure) == "task failed"
+        assert process_session._cores == {anchor_core}
+    finally:
+        anchor.close()
 
 
 def test_recycle_thread_closes_sqlite_core_and_queue_reacquires(tmp_path: Path) -> None:
@@ -249,17 +307,32 @@ def test_recycle_thread_closes_sqlite_core_and_queue_reacquires(tmp_path: Path) 
     session.close()
 
 
-def test_recycle_thread_is_deferred_until_open_operation_exits(tmp_path: Path) -> None:
+def test_recycle_thread_is_deferred_until_public_iterator_exits(tmp_path: Path) -> None:
     session = BrokerSession.connect(str(tmp_path / "deferred.db"))
     queue = session.queue("jobs")
+    queue.write("payload")
     assert queue.conn is not None
+    iterator = queue.read(all_messages=True)
 
-    with queue.get_connection() as core:
-        session.recycle_thread()
-        assert core in session._process_session._cores
+    try:
+        try:
+            assert next(iterator) == "payload"
+            core = queue.conn.get_core()
+            assert isinstance(core, BrokerDB)
+            raw = cast(SQLiteRunner, core._runner).get_connection()
 
-    assert core not in session._process_session._cores
-    session.close()
+            session.recycle_thread()
+
+            assert core in session._process_session._cores
+            raw.execute("SELECT 1")
+        finally:
+            iterator.close()
+
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            raw.execute("SELECT 1")
+        assert core not in session._process_session._cores
+    finally:
+        session.close()
 
 
 def test_close_rejects_an_open_same_key_same_thread_operation_without_closing_scope(
@@ -396,26 +469,49 @@ def test_foreign_thread_close_does_not_recycle_worker_cache(tmp_path: Path) -> N
     ready = threading.Event()
     finish = threading.Event()
     state: dict[str, Any] = {}
+    worker_failures: list[BaseException] = []
+    lifecycle_timeout = scale_timeout_for_ci(5.0)
 
     def worker() -> None:
-        session = BrokerSession.connect(target)
-        queue = session.queue("jobs")
-        queue.write("payload")
-        assert queue.conn is not None
-        state.update(session=session, core=queue.conn.get_core())
-        ready.set()
-        assert finish.wait(5.0)
+        try:
+            session = BrokerSession.connect(target)
+            queue = session.queue("jobs")
+            queue.write("payload")
+            assert queue.conn is not None
+            state.update(session=session, core=queue.conn.get_core())
+            ready.set()
+            if not finish.wait(lifecycle_timeout):
+                raise AssertionError("worker release was not signaled in time")
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_failures.append(failure)
 
     thread = threading.Thread(target=worker)
     thread.start()
-    assert ready.wait(5.0)
-    state["session"].close()
+    try:
+        drive_until(
+            lambda: ready.is_set() or not thread.is_alive(),
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message="worker did not create its session cache",
+            diagnostics=lambda: {
+                "thread_alive": thread.is_alive(),
+                "worker_failures": list(worker_failures),
+            },
+        )
+        assert worker_failures == []
+        assert ready.is_set()
+        state["session"].close()
+        assert state["core"] in process_session._cores
+    finally:
+        finish.set()
+        thread.join(timeout=lifecycle_timeout)
+        worker_session = state.get("session")
+        if worker_session is not None and not worker_session._released:
+            worker_session.close()
+        anchor.close()
 
-    assert state["core"] in process_session._cores
-    finish.set()
-    thread.join(timeout=5.0)
     assert not thread.is_alive()
-    anchor.close()
+    assert worker_failures == []
 
 
 def test_connection_uses_the_shared_session(tmp_path: Path) -> None:
@@ -440,23 +536,47 @@ def test_connection_lease_keeps_process_session_live_during_concurrent_close(
     process_session = session._process_session
     connection_open = threading.Event()
     allow_connection_close = threading.Event()
+    worker_failures: list[BaseException] = []
+    lifecycle_timeout = scale_timeout_for_ci(5.0)
 
     def hold_connection() -> None:
-        with session.connection():
-            connection_open.set()
-            assert allow_connection_close.wait(5.0)
+        try:
+            with session.connection():
+                connection_open.set()
+                if not allow_connection_close.wait(lifecycle_timeout):
+                    raise AssertionError("connection lease was not released in time")
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_failures.append(failure)
 
     thread = threading.Thread(target=hold_connection)
     thread.start()
-    assert connection_open.wait(5.0)
+    try:
+        drive_until(
+            lambda: connection_open.is_set() or not thread.is_alive(),
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message="worker did not acquire the connection lease",
+            diagnostics=lambda: {
+                "thread_alive": thread.is_alive(),
+                "worker_failures": list(worker_failures),
+                "session_released": session._released,
+                "process_session_closed": process_session._closed,
+            },
+        )
+        assert worker_failures == []
+        assert connection_open.is_set()
 
-    session.close()
-    assert session._released
-    assert not process_session._closed
+        session.close()
+        assert session._released
+        assert not process_session._closed
+    finally:
+        allow_connection_close.set()
+        thread.join(timeout=lifecycle_timeout)
+        if not session._released:
+            session.close()
 
-    allow_connection_close.set()
-    thread.join(timeout=5.0)
     assert not thread.is_alive()
+    assert worker_failures == []
     assert process_session._closed
 
 
@@ -557,14 +677,30 @@ def test_dropped_handle_releases_only_its_lease(tmp_path: Path) -> None:
 
 def test_close_on_thread_without_cache_builds_no_core(tmp_path: Path) -> None:
     session = BrokerSession.connect(str(tmp_path / "unused.db"))
-    assert not session._process_session._cores
+    process_session = session._process_session
+    assert not process_session._cores
+    worker_failures: list[BaseException] = []
+    lifecycle_timeout = scale_timeout_for_ci(5.0)
 
-    thread = threading.Thread(target=session.close)
+    def close_session() -> None:
+        try:
+            session.close()
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_failures.append(failure)
+
+    thread = threading.Thread(target=close_session, daemon=True)
     thread.start()
-    thread.join(timeout=5.0)
+    try:
+        thread.join(timeout=lifecycle_timeout)
+    finally:
+        if not thread.is_alive() and not session._released:
+            session.close()
 
     assert not thread.is_alive()
-    assert not session._process_session._cores
+    assert worker_failures == []
+    assert session._released
+    assert process_session._closed
+    assert not process_session._cores
 
 
 def test_queue_admission_racing_close_is_included_in_scope(
@@ -576,60 +712,233 @@ def test_queue_admission_racing_close_is_included_in_scope(
     session = BrokerSession.connect(str(tmp_path / "admission.db"))
     constructor_entered = threading.Event()
     finish_constructor = threading.Event()
+    close_lock_attempted = threading.Event()
     real_queue = session_module.Queue
     result: dict[str, Queue] = {}
+    worker_failures: list[tuple[str, BaseException]] = []
+    lifecycle_timeout = scale_timeout_for_ci(5.0)
+    closing_name = "broker-session-admission-close"
+    session._lock = cast(Any, _ObservedLock(closing_name, close_lock_attempted))
 
     def delayed_queue(*args: Any, **kwargs: Any) -> Queue:
         constructor_entered.set()
-        assert finish_constructor.wait(5.0)
+        if not finish_constructor.wait(lifecycle_timeout):
+            raise AssertionError("queue constructor release was not signaled in time")
         return real_queue(*args, **kwargs)
+
+    def admit_queue() -> None:
+        try:
+            result["queue"] = session.queue("jobs")
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_failures.append(("admit", failure))
+
+    def close_session() -> None:
+        try:
+            session.close()
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_failures.append(("close", failure))
 
     monkeypatch.setattr(session_module, "Queue", delayed_queue)
 
-    admitting = threading.Thread(
-        target=lambda: result.setdefault("queue", session.queue("jobs"))
-    )
+    admitting = threading.Thread(target=admit_queue, daemon=True)
     admitting.start()
-    assert constructor_entered.wait(5.0)
-    closing = threading.Thread(target=session.close)
-    closing.start()
-    finish_constructor.set()
-    admitting.join(timeout=5.0)
-    closing.join(timeout=5.0)
+    closing = threading.Thread(target=close_session, name=closing_name, daemon=True)
+    try:
+        drive_until(
+            lambda: constructor_entered.is_set() or not admitting.is_alive(),
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message="queue admission did not enter the constructor",
+            diagnostics=lambda: {"worker_failures": list(worker_failures)},
+        )
+        assert worker_failures == []
+        assert constructor_entered.is_set()
+
+        closing.start()
+        drive_until(
+            lambda: close_lock_attempted.is_set() or not closing.is_alive(),
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message="close did not contend with queue admission",
+            diagnostics=lambda: {"worker_failures": list(worker_failures)},
+        )
+        assert worker_failures == []
+        assert close_lock_attempted.is_set()
+    finally:
+        finish_constructor.set()
+        admitting.join(timeout=lifecycle_timeout)
+        if closing.ident is not None:
+            closing.join(timeout=lifecycle_timeout)
+        if (
+            not admitting.is_alive()
+            and not closing.is_alive()
+            and not session._released
+        ):
+            session.close()
 
     assert not admitting.is_alive()
     assert not closing.is_alive()
+    assert worker_failures == []
     queue = result["queue"]
     assert queue.conn is not None
     assert queue.conn._shared_released
 
 
+@pytest.mark.parametrize("late_admission", ["queue", "connection"])
 def test_handle_lock_is_free_while_queue_close_blocks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    late_admission: str,
 ) -> None:
     session = BrokerSession.connect(str(tmp_path / "close-lock.db"))
     queue = session.queue("jobs")
     close_entered = threading.Event()
     finish_close = threading.Event()
+    admission_finished = threading.Event()
     real_close = queue.close
+    worker_failures: list[tuple[str, BaseException]] = []
+    admission_failure: list[RuntimeError] = []
+    lifecycle_timeout = scale_timeout_for_ci(5.0)
 
     def delayed_close() -> None:
         close_entered.set()
-        assert finish_close.wait(5.0)
+        if not finish_close.wait(lifecycle_timeout):
+            raise AssertionError("queue close release was not signaled in time")
         real_close()
 
+    def close_session() -> None:
+        try:
+            session.close()
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_failures.append(("close", failure))
+
+    def attempt_late_admission() -> None:
+        try:
+            _attempt_session_admission(session, late_admission)
+        except RuntimeError as failure:
+            admission_failure.append(failure)
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_failures.append(("admission", failure))
+        finally:
+            admission_finished.set()
+
     monkeypatch.setattr(queue, "close", delayed_close)
-    closing = threading.Thread(target=session.close)
+    closing = threading.Thread(target=close_session, daemon=True)
     closing.start()
-    assert close_entered.wait(5.0)
+    admitting = threading.Thread(target=attempt_late_admission, daemon=True)
+    try:
+        drive_until(
+            lambda: close_entered.is_set() or not closing.is_alive(),
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message="session close did not reach Queue.close",
+            diagnostics=lambda: {"worker_failures": list(worker_failures)},
+        )
+        assert worker_failures == []
+        assert close_entered.is_set()
 
-    with pytest.raises(RuntimeError, match="Create a new session"):
-        session.queue("late")
+        admitting.start()
+        drive_until(
+            admission_finished.is_set,
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message=f"late {late_admission} admission blocked on the handle lock",
+            diagnostics=lambda: {"worker_failures": list(worker_failures)},
+        )
+        assert worker_failures == []
+        assert len(admission_failure) == 1
+        assert "Create a new session" in str(admission_failure[0])
+    finally:
+        finish_close.set()
+        closing.join(timeout=lifecycle_timeout)
+        if admitting.ident is not None:
+            admitting.join(timeout=lifecycle_timeout)
+        if (
+            not closing.is_alive()
+            and not admitting.is_alive()
+            and not session._released
+        ):
+            session.close()
 
-    finish_close.set()
-    closing.join(timeout=5.0)
     assert not closing.is_alive()
+    assert not admitting.is_alive()
+    assert worker_failures == []
+
+
+def test_concurrent_close_runs_the_idempotent_sequence_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = BrokerSession.connect(str(tmp_path / "concurrent-close.db"))
+    queue = session.queue("jobs")
+    queue.write("payload")
+    first_close_entered = threading.Event()
+    allow_first_close = threading.Event()
+    second_close_attempted = threading.Event()
+    real_queue_close = queue.close
+    queue_close_calls = 0
+    worker_failures: list[tuple[str, BaseException]] = []
+    lifecycle_timeout = scale_timeout_for_ci(5.0)
+    second_name = "broker-session-second-close"
+    session._close_lock = cast(Any, _ObservedLock(second_name, second_close_attempted))
+
+    def delayed_queue_close() -> None:
+        nonlocal queue_close_calls
+        queue_close_calls += 1
+        first_close_entered.set()
+        if not allow_first_close.wait(lifecycle_timeout):
+            raise AssertionError("first close release was not signaled in time")
+        real_queue_close()
+
+    def close_session(label: str) -> None:
+        try:
+            session.close()
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            worker_failures.append((label, failure))
+
+    monkeypatch.setattr(queue, "close", delayed_queue_close)
+    first = threading.Thread(target=close_session, args=("first",), daemon=True)
+    second = threading.Thread(
+        target=close_session,
+        args=("second",),
+        name=second_name,
+        daemon=True,
+    )
+    first.start()
+    try:
+        drive_until(
+            lambda: first_close_entered.is_set() or not first.is_alive(),
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message="first close did not reach Queue.close",
+            diagnostics=lambda: {"worker_failures": list(worker_failures)},
+        )
+        assert worker_failures == []
+        assert first_close_entered.is_set()
+
+        second.start()
+        drive_until(
+            lambda: second_close_attempted.is_set() or not second.is_alive(),
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message="second close did not contend on the close lock",
+            diagnostics=lambda: {"worker_failures": list(worker_failures)},
+        )
+        assert worker_failures == []
+        assert second_close_attempted.is_set()
+    finally:
+        allow_first_close.set()
+        first.join(timeout=lifecycle_timeout)
+        if second.ident is not None:
+            second.join(timeout=lifecycle_timeout)
+        if not first.is_alive() and not second.is_alive() and not session._released:
+            session.close()
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert worker_failures == []
+    assert queue_close_calls == 1
+    assert session._released
 
 
 def test_close_attempts_remaining_steps_after_ordinary_cleanup_failure(
@@ -794,52 +1103,96 @@ def test_interruption_after_registry_release_marks_handle_released_once(
 @pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
 def test_inherited_handle_rejects_use_and_close_is_silent(tmp_path: Path) -> None:
     session = BrokerSession.connect(str(tmp_path / "fork.db"))
+    collected_session = BrokerSession.connect(str(tmp_path / "fork.db"))
     lock_held = threading.Event()
     release_lock = threading.Event()
+    holder_failures: list[BaseException] = []
+    lifecycle_timeout = scale_timeout_for_ci(5.0)
 
     def hold_handle_lock() -> None:
-        with session._lock:
-            lock_held.set()
-            assert release_lock.wait(5.0)
+        try:
+            with session._lock:
+                lock_held.set()
+                if not release_lock.wait(lifecycle_timeout):
+                    raise AssertionError("handle lock release was not signaled in time")
+        except BaseException as failure:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            holder_failures.append(failure)
 
     holder = threading.Thread(target=hold_handle_lock)
     holder.start()
-    assert lock_held.wait(5.0)
-    read_fd, write_fd = os.pipe()
-    child = os.fork()
-    if child == 0:
-        os.close(read_fd)
-        child_status = b"failed"
-        try:
-            actions = (
-                lambda: session.queue("child"),
-                session.recycle_thread,
-                session.__enter__,
-            )
-            for action in actions:
-                with pytest.raises(RuntimeError, match="Create a new session"):
-                    action()
-            with (
-                pytest.raises(RuntimeError, match="Create a new session"),
-                session.connection(),
-            ):
-                pass
-            session.close()
-            fresh = BrokerSession.connect(str(tmp_path / "fork.db"))
-            assert fresh._process_session is not session._process_session
-            fresh.close()
-            child_status = b"passed"
-        finally:
-            os.write(write_fd, child_status)
-            os._exit(0)
+    read_fd = -1
+    write_fd = -1
+    child: int | None = None
+    try:
+        drive_until(
+            lambda: lock_held.is_set() or not holder.is_alive(),
+            timeout=lifecycle_timeout,
+            interval=0.01,
+            message="holder did not acquire the handle lock",
+            diagnostics=lambda: {"holder_failures": list(holder_failures)},
+        )
+        assert holder_failures == []
+        assert lock_held.is_set()
 
-    os.close(write_fd)
-    readable, _, _ = select.select([read_fd], [], [], 5.0)
-    assert readable
-    assert os.read(read_fd, 32) == b"passed"
-    _, wait_status = os.waitpid(child, 0)
-    assert os.WIFEXITED(wait_status) and os.WEXITSTATUS(wait_status) == 0
-    release_lock.set()
-    holder.join(timeout=5.0)
+        read_fd, write_fd = os.pipe()
+        child = os.fork()
+        if child == 0:
+            os.close(read_fd)
+            child_status = b"failed"
+            try:
+                inherited_process_session = session._process_session
+                actions = (
+                    lambda: session.queue("child"),
+                    session.recycle_thread,
+                    session.__enter__,
+                )
+                for action in actions:
+                    with pytest.raises(RuntimeError, match="Create a new session"):
+                        action()
+                with (
+                    pytest.raises(RuntimeError, match="Create a new session"),
+                    session.connection(),
+                ):
+                    pass
+                session.close()
+
+                collected_reference = weakref.ref(collected_session)
+                del collected_session
+                gc.collect()
+                assert collected_reference() is None
+                assert not inherited_process_session._closed
+
+                fresh = BrokerSession.connect(str(tmp_path / "fork.db"))
+                assert fresh._process_session is not inherited_process_session
+                fresh.close()
+                child_status = b"passed"
+            finally:
+                os.write(write_fd, child_status)
+                os.close(write_fd)
+                os._exit(0)
+
+        os.close(write_fd)
+        write_fd = -1
+        readable, _, _ = select.select([read_fd], [], [], lifecycle_timeout)
+        assert readable
+        assert os.read(read_fd, 32) == b"passed"
+        _, wait_status = os.waitpid(child, 0)
+        child = None
+        assert os.WIFEXITED(wait_status) and os.WEXITSTATUS(wait_status) == 0
+    finally:
+        if child is not None:
+            waited_pid, _ = os.waitpid(child, os.WNOHANG)
+            if waited_pid == 0:
+                os.kill(child, signal.SIGKILL)
+                os.waitpid(child, 0)
+        if read_fd != -1:
+            os.close(read_fd)
+        if write_fd != -1:
+            os.close(write_fd)
+        release_lock.set()
+        holder.join(timeout=lifecycle_timeout)
+        collected_session.close()
+        session.close()
+
     assert not holder.is_alive()
-    session.close()
+    assert holder_failures == []

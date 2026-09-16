@@ -15,7 +15,12 @@ from simplebroker_redis.keys import RedisKeys, encode_id
 from simplebroker_redis.plugin import RedisMultiQueueActivityWaiter
 from simplebroker_redis.validation import key_prefix
 
-from simplebroker import Queue, create_activity_waiter_for_queues, resolve_config
+from simplebroker import (
+    BrokerSession,
+    Queue,
+    create_activity_waiter_for_queues,
+    resolve_config,
+)
 from simplebroker._broker_session import close_process_broker_sessions
 from simplebroker._exceptions import QueueNameError
 from simplebroker._targets import BrokerTarget
@@ -103,6 +108,69 @@ def test_redis_persistent_queues_share_plugin_runner(
 
     assert create_runner_calls == 1
     assert len(set(runner_ids)) == 1
+
+
+def test_broker_session_handles_queues_and_connection_share_one_redis_runner(
+    redis_url: str,
+    redis_namespace: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plugin = get_backend_plugin()
+    original_create_runner = plugin.create_runner
+    runners: list[RedisRunner] = []
+    target = BrokerTarget(
+        "redis",
+        redis_url,
+        {"namespace": redis_namespace},
+    )
+
+    def tracked_create_runner(
+        target_value: str,
+        *,
+        backend_options: Any = None,
+        config: Any = None,
+    ) -> RedisRunner:
+        runner = original_create_runner(
+            target_value,
+            backend_options=backend_options,
+            config=config,
+        )
+        runners.append(runner)
+        return runner
+
+    monkeypatch.setattr(plugin, "create_runner", tracked_create_runner)
+    with contextlib.ExitStack() as cleanup:
+        cleanup.callback(
+            plugin.cleanup_target,
+            redis_url,
+            backend_options={"namespace": redis_namespace},
+        )
+        cleanup.callback(close_process_broker_sessions)
+        first = BrokerSession.connect(target)
+        cleanup.callback(first.close)
+        second = BrokerSession.connect(target)
+        cleanup.callback(second.close)
+        first_queue = first.queue("first")
+        second_queue = second.queue("second")
+        first_queue.write("one")
+        second_queue.write("two")
+        with first.connection() as connection:
+            assert sorted(connection.list_queues()) == ["first", "second"]
+
+        assert len(runners) == 1
+        runner = runners[0]
+        assert runner.namespace == redis_namespace
+        assert runner._pool is not None
+
+        first.close()
+        assert runner._pool is not None
+        assert second_queue.read_one() == "two"
+
+        second.close()
+        assert runner._pool is None
+        assert runner._client is None
+
+    assert len(runners) == 1
 
 
 def test_broadcast_is_atomic_when_generated_ids_collide(

@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-09-16-broker-session-test-hardening-plan.md | completed — class 3; hardened BrokerSession/process-session concurrency tests, added lifecycle and live backend-parity probes, and pinned existing public acquisition balance without changing runtime behavior |
 | 2026-09-15-broker-session-plan.md | completed — `849d4df` plan; `e1d73bc` lease-only subtraction; `0858c25` watcher ownership; `64c31ee` public `BrokerSession`; `44967ac` `Queue.conn` deprecation; `5f40902` traceability close; `b8fa87e` cross-handle recycle proof; `8ec60a0` lifecycle corrections; `8bb9cdf` context-failure and contract follow-up |
 | 2026-09-15-session-lifecycle-integrity-remediation-plan.md | superseded — by 2026-09-15-broker-session-plan.md (nested acquisition, GeneratorExit, claim carrier, and watcher finalizer decisions retained) |
 | 2026-09-15-close-thread-resource-release-plan.md | retired-pending — soft-retired 2026-09-15; local-only source pin; physical deletion requires publication and a separate verification pass |

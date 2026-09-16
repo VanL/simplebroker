@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import concurrent.futures as cf
 import contextlib
 import gc
 import os
@@ -273,7 +272,7 @@ report("queue-finalizer-detached")
             env=env,
             capture_output=True,
             text=True,
-            timeout=10.0,
+            timeout=_LIVENESS,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
@@ -399,6 +398,7 @@ def test_concurrent_first_use_publishes_one_shared_runner(
 ) -> None:
     target = counting_target(tmp_path, schema="concurrent")
     start_barrier = threading.Barrier(4)
+    errors: list[BaseException] = []
 
     with contextlib.ExitStack() as stack:
         queues = [
@@ -407,31 +407,42 @@ def test_concurrent_first_use_publishes_one_shared_runner(
         ]
 
         def write_once(index: int) -> None:
-            start_barrier.wait(timeout=_LIVENESS)
-            queues[index].write(f"message-{index}")
+            try:
+                start_barrier.wait(timeout=_LIVENESS)
+                queues[index].write(f"message-{index}")
+            except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+                errors.append(exc)
 
-        with cf.ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [executor.submit(write_once, index) for index in range(4)]
+        threads = [
+            threading.Thread(target=write_once, args=(index,), daemon=True)
+            for index in range(4)
+        ]
+        for thread in threads:
+            thread.start()
+        try:
             drive_until(
-                lambda: all(future.done() for future in futures),
-                timeout=10.0,
+                lambda: all(not thread.is_alive() for thread in threads),
+                timeout=_LIVENESS,
                 message="concurrent process-session first use did not settle",
                 diagnostics=lambda: {
                     "barrier_waiting": start_barrier.n_waiting,
                     "create_runner_calls": counting_backend.create_runner_calls,
-                    "future_states": [
+                    "thread_states": [
                         {
-                            "done": future.done(),
-                            "running": future.running(),
-                            "cancelled": future.cancelled(),
+                            "name": thread.name,
+                            "alive": thread.is_alive(),
                         }
-                        for future in futures
+                        for thread in threads
                     ],
                 },
             )
-            for future in futures:
-                future.result()
+        finally:
+            start_barrier.abort()
+            for thread in threads:
+                thread.join(timeout=_LIVENESS)
 
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
         assert counting_backend.create_runner_calls == 1
 
     assert counting_backend.runner_close_calls == 1
@@ -859,7 +870,10 @@ def test_worker_queue_close_retains_cache_until_explicit_cleanup_or_session_end(
         except BaseException as failure:  # pragma: no cover - asserted in parent  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(failure)
 
-    threads = [threading.Thread(target=worker, args=(index,)) for index in range(5)]
+    threads = [
+        threading.Thread(target=worker, args=(index,), daemon=True)
+        for index in range(5)
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -970,31 +984,37 @@ def test_queue_finalizer_does_not_release_collector_thread_core(
     queue_refs: list[weakref.ReferenceType[Queue]] = []
     worker_cores: list[BrokerDB] = []
     worker_connections: list[sqlite3.Connection] = []
+    errors: list[BaseException] = []
     gc_was_enabled = gc.isenabled()
     gc.disable()
 
     def abandon_cyclic_queue() -> None:
-        queue = Queue("worker", db_path=target, persistent=True)
-        queue.write("one")
-        assert queue.conn is not None
-        core = cast(BrokerDB, queue.conn.get_core())
-        runner = cast(SQLiteRunner, core._runner)
-        worker_cores.append(core)
-        worker_connections.extend(runner._all_connections)
-        queue._test_cycle = queue  # type: ignore[attr-defined]
-        queue_refs.append(weakref.ref(queue))
+        try:
+            queue = Queue("worker", db_path=target, persistent=True)
+            queue.write("one")
+            assert queue.conn is not None
+            core = cast(BrokerDB, queue.conn.get_core())
+            runner = cast(SQLiteRunner, core._runner)
+            worker_cores.append(core)
+            worker_connections.extend(runner._all_connections)
+            queue._test_cycle = queue  # type: ignore[attr-defined]
+            queue_refs.append(weakref.ref(queue))
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            errors.append(exc)
 
-    worker = threading.Thread(target=abandon_cyclic_queue)
-    worker.start()
-    worker.join(timeout=_LIVENESS)
-    assert not worker.is_alive()
-
-    main_core = cast(BrokerDB, anchor.conn.get_core())
-    main_runner = cast(SQLiteRunner, main_core._runner)
-    main_connection = main_runner.get_connection()
-    assert main_core in session._cores
-
+    main_connection: sqlite3.Connection | None = None
     try:
+        worker = threading.Thread(target=abandon_cyclic_queue, daemon=True)
+        worker.start()
+        worker.join(timeout=_LIVENESS)
+        assert not worker.is_alive()
+        assert errors == []
+
+        main_core = cast(BrokerDB, anchor.conn.get_core())
+        main_runner = cast(SQLiteRunner, main_core._runner)
+        main_connection = main_runner.get_connection()
+        assert main_core in session._cores
+
         gc.collect()
         assert queue_refs[0]() is None
         assert main_core in session._cores
@@ -1008,6 +1028,7 @@ def test_queue_finalizer_does_not_release_collector_thread_core(
             gc.enable()
         anchor.close()
 
+    assert main_connection is not None
     with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
         main_connection.execute("SELECT 1")
     for connection in worker_connections:
@@ -1033,14 +1054,19 @@ def test_queue_finalizer_on_worker_does_not_release_collector_core(
     gc.disable()
 
     def abandon() -> None:
-        queue = Queue("abandoned", db_path=target, persistent=True)
-        queue.write("message")
-        assert queue.conn is not None
-        core = cast(BrokerDB, queue.conn.get_core())
-        abandoned_cores.append(core)
-        abandoned_connections.extend(cast(SQLiteRunner, core._runner)._all_connections)
-        queue._test_cycle = queue  # type: ignore[attr-defined]
-        abandoned_refs.append(weakref.ref(queue))
+        try:
+            queue = Queue("abandoned", db_path=target, persistent=True)
+            queue.write("message")
+            assert queue.conn is not None
+            core = cast(BrokerDB, queue.conn.get_core())
+            abandoned_cores.append(core)
+            abandoned_connections.extend(
+                cast(SQLiteRunner, core._runner)._all_connections
+            )
+            queue._test_cycle = queue  # type: ignore[attr-defined]
+            abandoned_refs.append(weakref.ref(queue))
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            errors.append(exc)
 
     def collect_on_worker() -> None:
         try:
@@ -1062,14 +1088,15 @@ def test_queue_finalizer_on_worker_does_not_release_collector_core(
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    owner = threading.Thread(target=abandon)
-    collector = threading.Thread(target=collect_on_worker)
-    owner.start()
-    owner.join(timeout=_LIVENESS)
-    collector.start()
-    collector.join(timeout=_LIVENESS)
     try:
+        owner = threading.Thread(target=abandon, daemon=True)
+        collector = threading.Thread(target=collect_on_worker, daemon=True)
+        owner.start()
+        owner.join(timeout=_LIVENESS)
         assert not owner.is_alive()
+        assert errors == []
+        collector.start()
+        collector.join(timeout=_LIVENESS)
         assert not collector.is_alive()
         assert errors == []
         assert observations == {
@@ -1138,13 +1165,19 @@ def test_close_does_not_release_another_threads_core(tmp_path: Path) -> None:
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    thread = threading.Thread(target=worker)
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    assert worker_ready.wait(timeout=_LIVENESS)
-    main_queue.write("main")
-    main_core = cast(BrokerCore, main_queue.conn.get_core())
-
     try:
+        drive_until(
+            lambda: worker_ready.is_set() or not thread.is_alive(),
+            timeout=_LIVENESS,
+            message="worker queue did not become ready",
+            diagnostics=lambda: {"alive": thread.is_alive(), "errors": errors},
+        )
+        assert worker_ready.is_set()
+        assert errors == []
+        main_queue.write("main")
+        main_core = cast(BrokerCore, main_queue.conn.get_core())
         main_queue.close()
         assert main_core in session._cores
         assert worker_cores[0] in session._cores
@@ -1180,13 +1213,21 @@ def test_anchorless_main_contexts_reuse_core_while_worker_retains_session(
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    thread = threading.Thread(target=worker)
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    assert worker_ready.wait(timeout=_LIVENESS)
-    session = worker_session[0]
+    session: _ProcessBrokerSession | None = None
     cores: list[BrokerDB] = []
     raw_connection: sqlite3.Connection | None = None
     try:
+        drive_until(
+            lambda: worker_ready.is_set() or not thread.is_alive(),
+            timeout=_LIVENESS,
+            message="retained worker session did not become ready",
+            diagnostics=lambda: {"alive": thread.is_alive(), "errors": errors},
+        )
+        assert worker_ready.is_set()
+        assert errors == []
+        session = worker_session[0]
         for index in range(3):
             with Queue("main", db_path=target, persistent=True) as queue:
                 queue.write(str(index))
@@ -1205,6 +1246,7 @@ def test_anchorless_main_contexts_reuse_core_while_worker_retains_session(
 
     assert not thread.is_alive()
     assert errors == []
+    assert session is not None
     assert session._closed
     assert raw_connection is not None
     with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
@@ -1250,7 +1292,7 @@ def test_failed_nested_acquisition_does_not_release_outer_operation(
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    thread = threading.Thread(target=worker)
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
     thread.join(timeout=_LIVENESS)
 
@@ -1300,18 +1342,34 @@ def test_terminal_timeout_does_not_close_core_during_active_disposal(
         session.get_connection(None, lease_operation=False)
         session.cleanup_current_thread()
 
-    executor = cf.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(dispose_on_worker)
+    errors: list[BaseException] = []
+
+    def guarded_dispose() -> None:
+        try:
+            dispose_on_worker()
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            errors.append(exc)
+
+    worker = threading.Thread(target=guarded_dispose, daemon=True)
+    worker.start()
     try:
-        assert disposal_started.wait(timeout=_LIVENESS)
+        drive_until(
+            lambda: disposal_started.is_set() or not worker.is_alive(),
+            timeout=_LIVENESS,
+            message="core disposal did not start",
+            diagnostics=lambda: {"alive": worker.is_alive(), "errors": errors},
+        )
+        assert disposal_started.is_set()
+        assert errors == []
         session.close_all()
         assert factory.close_core_calls == 1
         assert factory.close_calls == 1
     finally:
         allow_disposal.set()
-        future.result(timeout=_LIVENESS)
-        executor.shutdown()
+        worker.join(timeout=_LIVENESS)
 
+    assert not worker.is_alive()
+    assert errors == []
     assert session._active_operations == 0
     assert factory.close_core_calls == 1
 
@@ -1354,22 +1412,35 @@ def test_disposal_failure_after_terminal_timeout_surfaces_once_without_retry(
         session.get_connection(None, lease_operation=False)
         session.cleanup_current_thread()
 
-    executor = cf.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(dispose_on_worker)
+    errors: list[BaseException] = []
+
+    def guarded_dispose() -> None:
+        try:
+            dispose_on_worker()
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            errors.append(exc)
+
+    worker = threading.Thread(target=guarded_dispose, daemon=True)
+    worker.start()
     try:
-        assert disposal_started.wait(timeout=_LIVENESS)
+        drive_until(
+            lambda: disposal_started.is_set() or not worker.is_alive(),
+            timeout=_LIVENESS,
+            message="failing core disposal did not start",
+            diagnostics=lambda: {"alive": worker.is_alive(), "errors": errors},
+        )
+        assert disposal_started.is_set()
+        assert errors == []
         session.close_all()
         assert session._closed
         assert session._cores == set()
         assert factory.close_calls == 1
     finally:
         allow_disposal.set()
+        worker.join(timeout=_LIVENESS)
 
-    with pytest.raises(RuntimeError, match="late disposal failed") as caught:
-        future.result(timeout=_LIVENESS)
-    executor.shutdown()
-
-    assert caught.value is disposal_failure
+    assert not worker.is_alive()
+    assert errors == [disposal_failure]
     assert session._cores == set()
     assert factory.close_core_calls == 1
     session.close_all()
@@ -1378,6 +1449,47 @@ def test_disposal_failure_after_terminal_timeout_surfaces_once_without_retry(
 
 class _InjectedLifecycleAbort(BaseException):
     pass
+
+
+def test_public_shared_acquisition_base_exception_preserves_outer_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = DBConnection(
+        str(tmp_path / "nested-acquisition-base-exception.db"),
+        share_in_process=True,
+    )
+    session = connection._shared_session
+    assert session is not None
+    outer_core = connection.get_connection()
+    assert session._active_operations == 1
+    assert session.current_thread_operation_depth() == 1
+    assert connection._shared_operation_stack_depth() == 1
+    real_set_stop_event = outer_core.set_stop_event
+    interruption = _InjectedLifecycleAbort("core setup interrupted")
+
+    def interrupt_set_stop_event(stop_event: threading.Event | None) -> None:
+        del stop_event
+        raise interruption
+
+    monkeypatch.setattr(outer_core, "set_stop_event", interrupt_set_stop_event)
+    try:
+        with pytest.raises(_InjectedLifecycleAbort) as caught:
+            connection.get_connection()
+
+        assert caught.value is interruption
+        assert session._active_operations == 1
+        assert session.current_thread_operation_depth() == 1
+        assert connection._shared_operation_stack_depth() == 1
+        assert outer_core in session._cores
+    finally:
+        monkeypatch.setattr(outer_core, "set_stop_event", real_set_stop_event)
+        connection.release_connection_after_use()
+        connection.close()
+
+    assert session._active_operations == 0
+    assert session.current_thread_operation_depth() == 0
+    assert connection._shared_operation_stack_depth() == 0
 
 
 @pytest.mark.parametrize("deferred", [False, True])
@@ -1714,13 +1826,22 @@ def test_unmatched_release_does_not_consume_another_threads_operation() -> None:
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    thread = threading.Thread(target=worker)
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    assert operation_started.wait(timeout=_LIVENESS)
-    session.release_current_thread_connection()
-    assert session._active_operations == 1
-    allow_release.set()
-    thread.join(timeout=_LIVENESS)
+    try:
+        drive_until(
+            lambda: operation_started.is_set() or not thread.is_alive(),
+            timeout=_LIVENESS,
+            message="worker operation did not start",
+            diagnostics=lambda: {"alive": thread.is_alive(), "errors": errors},
+        )
+        assert operation_started.is_set()
+        assert errors == []
+        session.release_current_thread_connection()
+        assert session._active_operations == 1
+    finally:
+        allow_release.set()
+        thread.join(timeout=_LIVENESS)
     assert not thread.is_alive()
     assert errors == []
     assert session._active_operations == 0
@@ -1770,14 +1891,23 @@ def test_terminal_timeout_does_not_dispose_pending_core_twice(
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    thread = threading.Thread(target=worker)
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    assert operation_started.wait(timeout=_LIVENESS)
-    monkeypatch.setattr(broker_session_module, "_CLOSE_ACTIVE_OPERATION_TIMEOUT", 0)
-    session.close_all()
-    assert factory.close_calls == 1
-    allow_release.set()
-    thread.join(timeout=_LIVENESS)
+    try:
+        drive_until(
+            lambda: operation_started.is_set() or not thread.is_alive(),
+            timeout=_LIVENESS,
+            message="pending cleanup operation did not start",
+            diagnostics=lambda: {"alive": thread.is_alive(), "errors": errors},
+        )
+        assert operation_started.is_set()
+        assert errors == []
+        monkeypatch.setattr(broker_session_module, "_CLOSE_ACTIVE_OPERATION_TIMEOUT", 0)
+        session.close_all()
+        assert factory.close_calls == 1
+    finally:
+        allow_release.set()
+        thread.join(timeout=_LIVENESS)
     assert not thread.is_alive()
     assert errors == []
     assert retained_tls_core == [False]
@@ -1924,9 +2054,8 @@ def test_final_session_close_waits_for_caller_thread_core_disposal(
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    worker = threading.Thread(target=cleanup_owner)
+    worker = threading.Thread(target=cleanup_owner, daemon=True)
     worker.start()
-    assert disposal_entered.wait(timeout=_LIVENESS)
 
     original_wait = session._operation_condition.wait
 
@@ -1943,16 +2072,19 @@ def test_final_session_close_waits_for_caller_thread_core_disposal(
         except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    closer = threading.Thread(target=close_session)
-    closer.start()
+    closer = threading.Thread(target=close_session, daemon=True)
     try:
+        assert disposal_entered.wait(timeout=_LIVENESS)
+        assert errors == []
+        closer.start()
         assert close_waiting.wait(timeout=_LIVENESS)
         assert not cleanup_returned.is_set()
         assert not close_returned.is_set()
     finally:
         allow_disposal.set()
         worker.join(timeout=_LIVENESS)
-        closer.join(timeout=_LIVENESS)
+        with contextlib.suppress(RuntimeError):
+            closer.join(timeout=_LIVENESS)
 
     assert not worker.is_alive()
     assert not closer.is_alive()
@@ -2221,9 +2353,19 @@ def test_persistent_sqlite_queues_keep_thread_local_connection_isolation(
                     runner = cast(SQLiteRunner, cast(Any, connection)._runner)
                     worker_thread_ids.append(runner.instance_id)
 
-        thread = threading.Thread(target=touch_queues)
+        errors: list[BaseException] = []
+
+        def guarded_touch_queues() -> None:
+            try:
+                touch_queues()
+            except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+                errors.append(exc)
+
+        thread = threading.Thread(target=guarded_touch_queues, daemon=True)
         thread.start()
-        thread.join()
+        thread.join(timeout=_LIVENESS)
+        assert not thread.is_alive()
+        assert errors == []
 
     assert len(set(main_thread_ids)) == 1
     assert len(set(worker_thread_ids)) == 1
@@ -2305,10 +2447,30 @@ def test_persistent_sqlite_thread_owners_do_not_reapply_connection_pragmas(
         finally:
             queue.close()
 
-    with cf.ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(worker, index) for index in range(3)]
-        for future in futures:
-            future.result(timeout=10.0)
+    errors: list[BaseException] = []
+
+    def guarded_worker(thread_index: int) -> None:
+        try:
+            worker(thread_index)
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=guarded_worker, args=(index,), daemon=True)
+        for index in range(3)
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        for thread in threads:
+            thread.join(timeout=_LIVENESS)
+    finally:
+        start_barrier.abort()
+        for thread in threads:
+            thread.join(timeout=_LIVENESS)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
 
     with apply_lock:
         assert len(apply_calls) == 3
@@ -2370,28 +2532,38 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
 
     monkeypatch.setattr(BrokerCore, "write", delayed_write)
 
-    operation_thread = threading.Thread(target=write_message)
-    close_thread = threading.Thread(target=close_queue)
+    operation_thread = threading.Thread(target=write_message, daemon=True)
+    close_thread = threading.Thread(target=close_queue, daemon=True)
     operation_thread.start()
-    assert operation_entered.wait(timeout=_LIVENESS)
-
-    # Deterministic close-is-waiting observation: close_all blocks on the
-    # session's operation condition, whose only .wait caller is the close
-    # path, so this fires exactly when close has entered its wait.
-    assert queue.conn is not None
-    session = queue.conn._shared_session
-    assert session is not None
-    close_waiting = threading.Event()
-    original_condition_wait = session._operation_condition.wait
-
-    def observe_close_wait(timeout: float | None = None) -> bool:
-        close_waiting.set()
-        return original_condition_wait(timeout)
-
-    session._operation_condition.wait = observe_close_wait  # type: ignore[method-assign]
-
-    close_thread.start()
     try:
+        drive_until(
+            lambda: operation_entered.is_set() or not operation_thread.is_alive(),
+            timeout=_LIVENESS,
+            message="delayed queue write did not start",
+            diagnostics=lambda: {
+                "alive": operation_thread.is_alive(),
+                "errors": operation_errors,
+            },
+        )
+        assert operation_entered.is_set()
+        assert operation_errors == []
+
+        # Deterministic close-is-waiting observation: close_all blocks on the
+        # session's operation condition, whose only .wait caller is the close
+        # path, so this fires exactly when close has entered its wait.
+        assert queue.conn is not None
+        session = queue.conn._shared_session
+        assert session is not None
+        close_waiting = threading.Event()
+        original_condition_wait = session._operation_condition.wait
+
+        def observe_close_wait(timeout: float | None = None) -> bool:
+            close_waiting.set()
+            return original_condition_wait(timeout)
+
+        session._operation_condition.wait = observe_close_wait  # type: ignore[method-assign]
+
+        close_thread.start()
         assert close_waiting.wait(timeout=_LIVENESS)
         assert not close_returned.is_set()
         # Positive happens-after proof: if close() failed to block on the
@@ -2399,8 +2571,10 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
         # "write-finished" regardless of scheduler timing.
         release_operation.set()
     finally:
+        release_operation.set()
         operation_thread.join(timeout=_LIVENESS)
-        close_thread.join(timeout=_LIVENESS)
+        if close_thread.ident is not None:
+            close_thread.join(timeout=_LIVENESS)
 
     assert not operation_thread.is_alive()
     assert not close_thread.is_alive()
@@ -2418,31 +2592,17 @@ def test_process_session_close_all_times_out_when_operation_never_releases(
 ) -> None:
     monkeypatch.setattr(
         "simplebroker._broker_session._CLOSE_ACTIVE_OPERATION_TIMEOUT",
-        0.05,
+        0.0,
     )
     session = build_process_session(str(tmp_path / "sqlite.db"))
     session._begin_operation()
-    close_returned = threading.Event()
-
-    def close_session() -> None:
-        session.close_all()
-        close_returned.set()
-
-    started_at = time.monotonic()
-    close_thread = threading.Thread(target=close_session)
-    close_thread.start()
-    close_thread.join(timeout=1.0)
-    elapsed = time.monotonic() - started_at
 
     try:
-        assert not close_thread.is_alive()
-        assert close_returned.is_set()
-        assert elapsed < 0.5
+        session.close_all()
         assert session._closed
     finally:
         if session._active_operations > 0:
             session._end_operation()
-        close_thread.join(timeout=1.0)
 
 
 def test_process_session_key_includes_pid(
@@ -2507,18 +2667,27 @@ def test_process_session_close_attempts_every_safe_cleanup_after_exceptions() ->
     factory = FailingFactory()
     session = _ProcessBrokerSession(cast(Any, factory))
     all_created = threading.Barrier(4)
+    errors: list[BaseException] = []
 
     def create_thread_core() -> None:
-        session.get_connection(None, lease_operation=False)
-        all_created.wait(timeout=_LIVENESS)
+        try:
+            session.get_connection(None, lease_operation=False)
+            all_created.wait(timeout=_LIVENESS)
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            errors.append(exc)
 
-    workers = [threading.Thread(target=create_thread_core) for _ in range(3)]
+    workers = [
+        threading.Thread(target=create_thread_core, daemon=True) for _ in range(3)
+    ]
     for worker in workers:
         worker.start()
-    all_created.wait(timeout=_LIVENESS)
-    for worker in workers:
-        worker.join(timeout=_LIVENESS)
+    try:
+        all_created.wait(timeout=_LIVENESS)
+    finally:
+        for worker in workers:
+            worker.join(timeout=_LIVENESS)
     assert all(not worker.is_alive() for worker in workers)
+    assert errors == []
 
     with pytest.raises(RuntimeError, match="close failed") as caught:
         session.close_all()
@@ -2822,9 +2991,8 @@ def test_session_close_timeout_defers_factory_close_until_core_creation_finishes
             errors.append(exc)
 
     monkeypatch.setattr(CountingSQLiteRunner, "setup_with_stop_event", delayed_setup)
-    worker = threading.Thread(target=get_connection)
+    worker = threading.Thread(target=get_connection, daemon=True)
     worker.start()
-    assert core_created.wait(timeout=_LIVENESS)
 
     # Deterministic close-is-waiting observation instead of a negative
     # timing window: wrap the condition close_all() blocks on.
@@ -2837,13 +3005,26 @@ def test_session_close_timeout_defers_factory_close_until_core_creation_finishes
 
     session._operation_condition.wait = observe_close_wait  # type: ignore[method-assign]
 
-    def close_session() -> None:
-        session.close_all()
-        close_returned.set()
+    close_errors: list[BaseException] = []
 
-    close_thread = threading.Thread(target=close_session)
-    close_thread.start()
+    def close_session() -> None:
+        try:
+            session.close_all()
+            close_returned.set()
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+            close_errors.append(exc)
+
+    close_thread = threading.Thread(target=close_session, daemon=True)
     try:
+        drive_until(
+            lambda: core_created.is_set() or not worker.is_alive(),
+            timeout=_LIVENESS,
+            message="SQLite core creation did not reach setup",
+            diagnostics=lambda: {"alive": worker.is_alive(), "errors": errors},
+        )
+        assert core_created.is_set()
+        assert errors == []
+        close_thread.start()
         assert close_waiting.wait(timeout=_LIVENESS)
         assert close_returned.wait(timeout=_LIVENESS)
         assert worker.is_alive()
@@ -2851,11 +3032,13 @@ def test_session_close_timeout_defers_factory_close_until_core_creation_finishes
     finally:
         allow_return.set()
         worker.join(timeout=_LIVENESS)
-        close_thread.join(timeout=_LIVENESS)
+        if close_thread.ident is not None:
+            close_thread.join(timeout=_LIVENESS)
 
     assert not worker.is_alive()
     assert not close_thread.is_alive()
     assert close_returned.is_set()
+    assert close_errors == []
     assert len(errors) == 1
     assert isinstance(errors[0], RuntimeError)
     assert str(errors[0]) == "Broker session is closed"
@@ -2922,22 +3105,37 @@ def test_non_sqlite_core_creation_after_close_does_not_retain_runner(  # noqa: C
         except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    workers = [threading.Thread(target=get_connection) for _ in range(3)]
+    workers = [threading.Thread(target=get_connection, daemon=True) for _ in range(3)]
     for worker in workers:
         worker.start()
-    assert creation_admitted.wait(timeout=_LIVENESS)
-    with session._operation_condition:
-        reached_deadline = time.monotonic() + 5.0
-        while session._active_core_creations < 3:
-            remaining = reached_deadline - time.monotonic()
-            assert remaining > 0
-            session._operation_condition.wait(timeout=remaining)
+    try:
+        drive_until(
+            lambda: (
+                creation_admitted.is_set()
+                or all(not worker.is_alive() for worker in workers)
+            ),
+            timeout=_LIVENESS,
+            message="direct runner creation was not admitted",
+            diagnostics=lambda: {
+                "alive": [worker.is_alive() for worker in workers],
+                "errors": errors,
+            },
+        )
+        assert creation_admitted.is_set()
+        assert errors == []
+        with session._operation_condition:
+            reached_deadline = time.monotonic() + _LIVENESS
+            while session._active_core_creations < 3:
+                remaining = reached_deadline - time.monotonic()
+                assert remaining > 0
+                session._operation_condition.wait(timeout=remaining)
 
-    session.close_all()
-    assert session._closed
-    allow_creation.set()
-    for worker in workers:
-        worker.join(timeout=_LIVENESS)
+        session.close_all()
+        assert session._closed
+    finally:
+        allow_creation.set()
+        for worker in workers:
+            worker.join(timeout=_LIVENESS)
 
     assert all(not worker.is_alive() for worker in workers)
     assert len(errors) == 3
@@ -3009,11 +3207,17 @@ def test_factory_close_does_not_cancel_checkout_rollback(
         except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
-    worker = threading.Thread(target=get_connection)
+    worker = threading.Thread(target=get_connection, daemon=True)
     worker.start()
-    assert release_entered.wait(timeout=_LIVENESS)
-
     try:
+        drive_until(
+            lambda: release_entered.is_set() or not worker.is_alive(),
+            timeout=_LIVENESS,
+            message="checkout rollback did not start",
+            diagnostics=lambda: {"alive": worker.is_alive(), "errors": errors},
+        )
+        assert release_entered.is_set()
+        assert errors == []
         session.close_all()
         assert session._closed
         assert runner.close_calls == 0
@@ -3078,10 +3282,17 @@ def test_deferred_factory_close_failure_keeps_closed_session_error_primary(
         except RuntimeError as exc:
             errors.append(exc)
 
-    worker = threading.Thread(target=get_connection)
+    worker = threading.Thread(target=get_connection, daemon=True)
     worker.start()
-    assert creation_entered.wait(timeout=_LIVENESS)
     try:
+        drive_until(
+            lambda: creation_entered.is_set() or not worker.is_alive(),
+            timeout=_LIVENESS,
+            message="deferred factory creation did not start",
+            diagnostics=lambda: {"alive": worker.is_alive(), "errors": errors},
+        )
+        assert creation_entered.is_set()
+        assert errors == []
         session.close_all()
     finally:
         allow_creation.set()
