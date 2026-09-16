@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.3.1] - 2026-09-16
+
 ### Changed
+
+- SimpleBroker 8.3.1, `simplebroker-pg` 4.3.1, and `simplebroker-redis` 4.3.1
+  are the coordinated release set. Both extensions require SimpleBroker 8.3.1
+  or newer, and the core `pg` and `redis` extras require the matching 4.3.1
+  extension or newer.
 
 - Configuration resolution now rejects negative `BUSY_TIMEOUT` and
   `WAL_AUTOCHECKPOINT` values; non-positive `CACHE_MB`, `MAX_MESSAGE_SIZE`, and
