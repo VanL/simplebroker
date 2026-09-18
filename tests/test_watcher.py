@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -589,7 +589,7 @@ class TestQueueWatcher(WatcherTestBase):
             def notify_activity() -> None:
                 notifications.append("armed")
 
-        watcher._strategy = SignalStrategy()
+        cast(Any, watcher)._strategy = SignalStrategy()
 
         monkeypatch.setattr(
             watcher,
@@ -611,7 +611,7 @@ class TestQueueWatcher(WatcherTestBase):
         """Custom duck-typed strategies need not implement local wakeups."""
         watcher = object.__new__(QueueWatcher)
         watcher._signal_stop_requested = None
-        watcher._strategy = object()
+        cast(Any, watcher)._strategy = object()
 
         watcher._sigint_handler(signal.SIGTERM, None)
 

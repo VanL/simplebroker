@@ -8,7 +8,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -157,7 +157,7 @@ def _assert_native_deferred_signal_handler() -> None:
     watcher._strategy = PollingStrategy(watcher._stop_event)
     watcher._strategy.start(activity_waiter=waiter)
     stop_calls: list[bool] = []
-    watcher.stop = lambda *, join: stop_calls.append(join)
+    cast(Any, watcher).stop = lambda *, join: stop_calls.append(join)
 
     signum = signal.SIGUSR1
     prior_handler = signal.getsignal(signum)
