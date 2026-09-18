@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.4.0] - 2026-09-18
+
 ### Changed
+
+- SimpleBroker 8.4.0, `simplebroker-pg` 4.4.0, and `simplebroker-redis` 4.4.0
+  are the coordinated release set. Both extensions require SimpleBroker 8.4.0
+  or newer, and the core `pg` and `redis` extras require the matching 4.4.0
+  extension or newer.
 
 - `PollingStrategy.wait_for_activity(timeout=None)` can now bound an internally
   looping backend-native wait without changing SQLite's configured polling

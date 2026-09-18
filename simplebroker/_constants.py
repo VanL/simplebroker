@@ -68,7 +68,7 @@ class InvalidConfigError(BrokerError, ValueError):
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "8.3.1"
+__version__: Final[str] = "8.4.0"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
