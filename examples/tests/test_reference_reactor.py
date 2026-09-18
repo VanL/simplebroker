@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -383,8 +383,8 @@ def test_worker_result_latch_wakes_long_strategy_wait_and_enters_burst(
         wait_call_count_at_result.append(len(native_waiter.wait_calls))
         handle_worker_result(result)
 
-    reactor._strategy._consume_local_activity = observe_consume
-    reactor._handle_worker_result = observe_burst
+    cast(Any, reactor._strategy)._consume_local_activity = observe_consume
+    cast(Any, reactor)._handle_worker_result = observe_burst
     thread = threading.Thread(
         target=reactor.run_until_stopped,
         kwargs={"poll_interval": 5.0},
@@ -424,7 +424,7 @@ def test_base_reactor_composes_one_deadline_across_quiet_strategy_passes(
     times = iter([10.0, 10.1, 10.4, 11.0])
     budgets: list[float | None] = []
     monkeypatch.setattr(reference_reactor_module, "_monotonic", lambda: next(times))
-    reactor._strategy.wait_for_activity = budgets.append
+    cast(Any, reactor._strategy).wait_for_activity = budgets.append
     try:
         reactor.wait_for_activity(1.0)
     finally:
