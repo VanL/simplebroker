@@ -925,6 +925,117 @@ def test_activity_waiter_preserves_multiple_queue_notifications(
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
 
 
+def test_polling_strategy_deadline_expires_quietly_on_redis(
+    redis_runner: RedisRunner,
+) -> None:
+    queues = [
+        Queue(name, runner=redis_runner, persistent=True) for name in ("alpha", "beta")
+    ]
+    strategy = PollingStrategy(threading.Event(), burst_sleep=0.2)
+    try:
+        waiter = create_activity_waiter_for_queues(queues, stop_event=threading.Event())
+        assert waiter is not None
+        strategy.start(activity_waiter=waiter)
+        strategy._next_native_idle_poll_at = time.monotonic() + 5.0
+        strategy._check_count = 7
+        strategy._activity_burst_remaining = 3
+
+        started = time.monotonic()
+        strategy.wait_for_activity(timeout=0.05)
+        elapsed = time.monotonic() - started
+
+        assert elapsed >= 0.025
+        assert elapsed < 0.5
+        assert strategy._check_count == 7
+        assert strategy._activity_burst_remaining == 3
+        assert not strategy.consume_native_activity_hint()
+        assert not strategy.consume_local_activity_hint()
+    finally:
+        strategy.close()
+        for queue in queues:
+            queue.close()
+
+
+def test_polling_strategy_zero_timeout_observes_redis_notification(
+    redis_runner: RedisRunner,
+) -> None:
+    queue_wait = Queue("alpha", runner=redis_runner, persistent=True)
+    queue_other = Queue("beta", runner=redis_runner, persistent=True)
+    writer = Queue("alpha", runner=redis_runner, persistent=True)
+    strategy = PollingStrategy(threading.Event())
+    try:
+        created = create_activity_waiter_for_queues(
+            [queue_wait, queue_other], stop_event=threading.Event()
+        )
+        assert isinstance(created, RedisMultiQueueActivityWaiter)
+        strategy.start(activity_waiter=created)
+        alpha_waiter = next(
+            waiter
+            for waiter in created._waiters
+            if waiter._registration.queue_name == "alpha"
+        )
+        baseline = alpha_waiter._registration.version
+        writer.write("ready")
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            with alpha_waiter._listener._lock:
+                current = alpha_waiter._listener._versions.get("alpha", baseline)
+            if current != baseline:
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("Redis listener did not observe the notification")
+
+        strategy.wait_for_activity(timeout=0)
+
+        assert strategy.consume_native_activity_hint()
+        assert not strategy.consume_local_activity_hint()
+        assert writer.peek() == "ready"
+    finally:
+        strategy.close()
+        queue_wait.close()
+        queue_other.close()
+        writer.close()
+
+
+def test_polling_strategy_redis_notification_precedes_deadline(
+    redis_runner: RedisRunner,
+) -> None:
+    queue_wait = Queue("alpha", runner=redis_runner, persistent=True)
+    queue_other = Queue("beta", runner=redis_runner, persistent=True)
+    writer = Queue("alpha", runner=redis_runner, persistent=True)
+    strategy = PollingStrategy(threading.Event())
+    thread: threading.Thread | None = None
+    try:
+        waiter = create_activity_waiter_for_queues(
+            [queue_wait, queue_other], stop_event=threading.Event()
+        )
+        assert waiter is not None
+        strategy.start(activity_waiter=waiter)
+
+        def delayed_write() -> None:
+            time.sleep(0.05)
+            writer.write("ready")
+
+        thread = threading.Thread(target=delayed_write)
+        thread.start()
+        started = time.monotonic()
+        strategy.wait_for_activity(timeout=1.0)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.75
+        assert strategy.consume_native_activity_hint()
+        assert not strategy.consume_local_activity_hint()
+        assert writer.peek() == "ready"
+    finally:
+        if thread is not None:
+            thread.join(timeout=2.0)
+        strategy.close()
+        queue_wait.close()
+        queue_other.close()
+        writer.close()
+
+
 def test_polling_strategy_replaces_redis_waiter_for_dynamic_queue_set(
     redis_runner: RedisRunner,
 ) -> None:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,6 +117,7 @@ class ReactorPayload:
         "claim-idle",
         "dispatch-input",
         "drain-local-result",
+        "deferred-signal-stop",
         "stop-before-turn",
         "foreign-turn",
         "bounded-run",
@@ -173,6 +176,16 @@ REACTOR_TRANSITIONS = (
         effects="durable backlog may drain but ordinary input dispatch is skipped",
         expected_result="the source timestamp is not added to inflight work",
         payload=ReactorPayload("stop-before-turn"),
+    ),
+    TransitionCase(
+        transition_id="deferred-signal-stops-on-owner-thread",
+        start_state="owner waiting",
+        event="receive SIGTERM in the Python handler",
+        guard="the owner loop installed its handlers and entered strategy wait",
+        next_state="stopped-closed",
+        effects="record and latch in the handler, then stop and clean on the owner",
+        expected_result="both stop states and resource closure become visible",
+        payload=ReactorPayload("deferred-signal-stop"),
     ),
     TransitionCase(
         transition_id="foreign-drive-rejected",
@@ -661,6 +674,37 @@ def _fire_scheduling_transition(reactor: Reactor, mode: str) -> None:
         assert reactor._resources_closed
 
 
+def _fire_deferred_signal_transition(reactor: Reactor) -> None:
+    wait_entered = threading.Event()
+    send_complete = threading.Event()
+    readiness: list[bool] = []
+    wait_for_activity = reactor._strategy.wait_for_activity
+
+    def observe_wait(timeout: float | None = None) -> None:
+        wait_entered.set()
+        wait_for_activity(timeout)
+
+    reactor._strategy.wait_for_activity = observe_wait
+
+    def send_signal() -> None:
+        readiness.append(wait_entered.wait(timeout=2.0))
+        os.kill(os.getpid(), signal.SIGTERM)
+        send_complete.set()
+
+    sender = threading.Thread(target=send_signal)
+    sender.start()
+    reactor.run_forever()
+    sender.join(timeout=2.0)
+    assert not sender.is_alive()
+    assert send_complete.is_set()
+    assert readiness == [True]
+    assert reactor._signal_stop_requested == signal.SIGTERM
+    assert reactor._stop_event.is_set()
+    assert reactor._reactor_stop_event.is_set()
+    assert reactor._resources_closed
+    assert reactor._drive_owner_ident == threading.get_ident()
+
+
 @fires_transition_table("SM-REACTOR", REACTOR_TRANSITIONS)
 def test_reference_reactor_fires_transition_table(
     transition_case: TransitionCase[ReactorPayload],
@@ -691,7 +735,9 @@ def test_reference_reactor_fires_transition_table(
         ),
     )
     try:
-        if mode == "backlog-retry-recovery":
+        if mode == "deferred-signal-stop":
+            _fire_deferred_signal_transition(reactor)
+        elif mode == "backlog-retry-recovery":
             _fire_backlog_retry_recovery(reactor, monkeypatch)
         elif mode.startswith("control-"):
             _fire_control_transition(

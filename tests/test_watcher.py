@@ -8,6 +8,9 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any
 
 import pytest
@@ -579,6 +582,14 @@ class TestQueueWatcher(WatcherTestBase):
         watcher._stop_event = threading.Event()
         watcher._signal_stop_requested = None
         join_values: list[bool] = []
+        notifications: list[str] = []
+
+        class SignalStrategy:
+            @staticmethod
+            def notify_activity() -> None:
+                notifications.append("armed")
+
+        watcher._strategy = SignalStrategy()
 
         monkeypatch.setattr(
             watcher,
@@ -590,10 +601,21 @@ class TestQueueWatcher(WatcherTestBase):
 
         assert join_values == []
         assert watcher._signal_stop_requested == signal.SIGTERM
+        assert notifications == ["armed"]
         assert not watcher._stop_event.is_set()
         with pytest.raises(StopWatching):
             watcher._check_stop()
         assert watcher._stop_event.is_set()
+
+    def test_signal_handler_accepts_strategy_without_notification_hook(self) -> None:
+        """Custom duck-typed strategies need not implement local wakeups."""
+        watcher = object.__new__(QueueWatcher)
+        watcher._signal_stop_requested = None
+        watcher._strategy = object()
+
+        watcher._sigint_handler(signal.SIGTERM, None)
+
+        assert watcher._signal_stop_requested == signal.SIGTERM
 
     def test_handler_exception_handling(self, broker, broker_target):
         """Test that handler exceptions don't crash the watcher."""
@@ -1299,6 +1321,240 @@ class TestQueueWatcher(WatcherTestBase):
 class TestPollingStrategy:
     """Test polling strategy behavior."""
 
+    @pytest.mark.parametrize(
+        "timeout",
+        [True, False, "1", object(), Decimal(1), Fraction(1, 2), 1 + 0j],
+    )
+    def test_native_deadline_rejects_non_builtin_numeric_grammar_before_mutation(
+        self,
+        timeout,
+    ):
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        waiter = FakeActivityWaiter()
+        strategy.start(activity_waiter=waiter)
+        state_before = _polling_strategy_state(strategy)
+
+        with pytest.raises(TypeError):
+            strategy.wait_for_activity(timeout=timeout)
+
+        assert _polling_strategy_state(strategy) == state_before
+        assert waiter.wait_calls == []
+
+    @pytest.mark.parametrize("timeout", [-1, float("nan"), float("inf"), 10**400])
+    def test_native_deadline_rejects_invalid_values_before_mutation(
+        self,
+        timeout,
+    ):
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        waiter = FakeActivityWaiter()
+        strategy.start(activity_waiter=waiter)
+        state_before = _polling_strategy_state(strategy)
+
+        with pytest.raises(ValueError):
+            strategy.wait_for_activity(timeout=timeout)
+
+        assert _polling_strategy_state(strategy) == state_before
+        assert waiter.wait_calls == []
+
+    def test_native_deadline_rejects_absolute_overflow_before_wait(
+        self,
+        monkeypatch,
+    ):
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        waiter = FakeActivityWaiter()
+        strategy.start(activity_waiter=waiter)
+        state_before = _polling_strategy_state(strategy)
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: sys.float_info.max)
+
+        with pytest.raises(ValueError):
+            strategy.wait_for_activity(timeout=sys.float_info.max)
+
+        assert _polling_strategy_state(strategy) == state_before
+        assert waiter.wait_calls == []
+
+    @pytest.mark.parametrize("burst_sleep", [0.0, 0.001])
+    def test_zero_timeout_observes_native_waiter_without_advancing_cadence(
+        self,
+        burst_sleep,
+    ):
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event(), burst_sleep=burst_sleep)
+        waiter = FakeActivityWaiter()
+        strategy.start(activity_waiter=waiter)
+        strategy._check_count = 17
+        strategy._activity_burst_remaining = 4
+
+        strategy.wait_for_activity(timeout=0)
+
+        assert waiter.wait_calls == [0.0]
+        assert strategy._check_count == 17
+        assert strategy._activity_burst_remaining == 4
+        assert not strategy.consume_native_activity_hint()
+
+    def test_zero_timeout_does_not_shorten_polling_fallback(
+        self,
+        monkeypatch,
+    ):
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        sleeps: list[float] = []
+        strategy = PollingStrategy(
+            threading.Event(),
+            initial_checks=1,
+            burst_sleep=0.007,
+            jitter_factor=0,
+        )
+
+        def record_sleep(delay, stop_event):
+            del stop_event
+            sleeps.append(delay)
+            return True
+
+        monkeypatch.setattr(watcher_module, "interruptible_sleep", record_sleep)
+        strategy.wait_for_activity(timeout=0)
+
+        assert sleeps == [0.007]
+        assert strategy._check_count == 1
+
+    def test_native_deadline_uses_one_budget_and_preserves_shortened_pass_state(
+        self,
+        monkeypatch,
+    ):
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        now = [100.0]
+
+        class AdvancingWaiter(FakeActivityWaiter):
+            def wait(self, timeout: float) -> bool:
+                self.wait_calls.append(timeout)
+                now[0] += timeout
+                return False
+
+        strategy = PollingStrategy(
+            threading.Event(),
+            initial_checks=0,
+            max_interval=0.4,
+            burst_sleep=0.1,
+            jitter_factor=0,
+        )
+        waiter = AdvancingWaiter()
+        strategy.start(activity_waiter=waiter)
+        strategy._check_count = 7
+        strategy._activity_burst_remaining = 3
+        strategy._next_native_idle_poll_at = 1000.0
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: now[0])
+
+        strategy.wait_for_activity(timeout=0.25)
+
+        assert waiter.wait_calls == pytest.approx([0.1, 0.1, 0.05])
+        assert strategy._check_count == 9
+        assert strategy._activity_burst_remaining == 1
+        assert not strategy.consume_native_activity_hint()
+        assert not strategy.consume_local_activity_hint()
+
+    @pytest.mark.parametrize("coalesce_after_downgrade", [False, True])
+    def test_downgraded_local_notification_has_exact_owner_state_vector(
+        self,
+        monkeypatch,
+        coalesce_after_downgrade,
+    ):
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(
+            threading.Event(),
+            initial_checks=2,
+            max_interval=0.1,
+        )
+        waiter = FakeActivityWaiter()
+        strategy.start(activity_waiter=waiter)
+        strategy._check_count = 7
+        strategy._activity_burst_remaining = 4
+        strategy._next_native_idle_poll_at = 99.0
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: 10.0)
+        monkeypatch.setattr(watcher_module, "_uniform", lambda low, high: low)
+
+        strategy.notify_activity()
+        strategy.mark_local_activity_as_empty_check()
+        armed = list(_polling_strategy_state(strategy))
+        if coalesce_after_downgrade:
+            thread = threading.Thread(target=strategy.notify_activity)
+            thread.start()
+            thread.join(timeout=1.0)
+            assert not thread.is_alive()
+            assert list(_polling_strategy_state(strategy)) == armed
+
+        strategy.wait_for_activity()
+
+        expected = armed.copy()
+        expected[3] = 0
+        expected[12] = False
+        expected[13] = False
+        expected[14] = True
+        expected[15] = 19
+        expected[17] = 11.0
+        assert list(_polling_strategy_state(strategy)) == expected
+        assert strategy.consume_local_empty_check_hint()
+        assert not strategy.consume_local_activity_hint()
+
+    @pytest.mark.skipif(
+        not hasattr(signal, "SIGUSR1"),
+        reason="requires a temporary user-defined Python signal handler",
+    )
+    def test_notify_activity_only_arms_latch_across_supported_contexts(
+        self,
+        monkeypatch,
+    ):
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+
+        def fail(*args, **kwargs):
+            del args, kwargs
+            raise AssertionError("notifier crossed the one-assignment boundary")
+
+        strategy._activity_waiter = FakeActivityWaiter(wait_error=AssertionError())
+        strategy._data_version_provider = fail
+        strategy._data_change_callback = fail
+        monkeypatch.setattr(watcher_module, "_monotonic", fail)
+        monkeypatch.setattr(watcher_module, "_uniform", fail)
+
+        def assert_only_latch_armed(invoke) -> None:
+            strategy._local_activity_pending = False
+            before = _polling_strategy_state(strategy)
+            invoke()
+            after = _polling_strategy_state(strategy)
+            assert after[:12] == before[:12]
+            assert after[12] is True
+            assert after[13:] == before[13:]
+
+        assert_only_latch_armed(strategy.notify_activity)
+
+        def notify_from_thread() -> None:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(strategy.notify_activity).result(timeout=1.0)
+
+        assert_only_latch_armed(notify_from_thread)
+
+        signum = signal.SIGUSR1
+        prior_handler = signal.getsignal(signum)
+        try:
+            signal.signal(signum, lambda _signum, _frame: strategy.notify_activity())
+            assert_only_latch_armed(lambda: os.kill(os.getpid(), signum))
+        finally:
+            signal.signal(signum, prior_handler)
+
     def test_defaults_use_ambient_free_canonical_config_snapshot(
         self,
         monkeypatch,
@@ -1842,6 +2098,7 @@ assert strategy._jitter_factor == injected["JITTER_FACTOR"]
 
                 # Activity should reset counter
                 strategy.notify_activity()
+                strategy.wait_for_activity()
                 assert strategy._check_count == 0
             finally:
                 # Signal the strategy to stop before closing the database

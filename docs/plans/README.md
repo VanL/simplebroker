@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-09-18-polling-strategy-native-deadline-and-local-wake-plan.md | completed — class 5; added a native wait deadline, reduced local notification to a Python-signal-safe coalescing latch, and made the reference reactor use the retained strategy as its sole wake arbiter; focused, full-suite, backend, static and independent-review gates passed |
 | 2026-09-16-reviewer-hygiene-remediation-plan.md | completed — class 3; removed dead and duplicated code, simplified local predicates, corrected Redis cleanup failure handling, repaired documentation and retrieval cues, and added event-based suppression reconsideration guidance |
 | 2026-09-16-broker-session-test-hardening-plan.md | completed — class 3; hardened BrokerSession/process-session concurrency tests, added lifecycle and live backend-parity probes, and pinned existing public acquisition balance without changing runtime behavior |
 | 2026-09-16-deep-dive-review-remediation-plan.md | completed — class 5; restored borrowed watcher state, corrected PG alias lock order, added the bounded PG session pool with per-operation checkouts, routed Redis conflicts through `_retry`, and validated six config fields; used documentation-only resolutions for filename and backend-opening limits; kept SQLite and Redis connection ownership unchanged |

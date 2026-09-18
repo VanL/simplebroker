@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import reference_reactor as reference_reactor_module
 from reference_reactor import (
     BaseReactor,
     PendingOutput,
@@ -332,18 +333,58 @@ def test_base_reactor_centralizes_process_wait_stop_loop(tmp_path: Path) -> None
     assert reactor._resources_closed
 
 
-def test_worker_result_event_wakes_background_reactor(tmp_path: Path) -> None:
+def test_worker_result_latch_wakes_long_strategy_wait_and_enters_burst(
+    tmp_path: Path,
+) -> None:
     db_path = tmp_path / "reactor.db"
     _write_json(Queue(INBOX_A, db_path=str(db_path)), {"id": 1})
 
     worker_started = threading.Event()
+    release_worker = threading.Event()
 
     def processor(item: WorkItem) -> dict[str, Any]:
         worker_started.set()
-        time.sleep(0.05)
+        assert release_worker.wait(timeout=2.0)
         return {"source_queue": item.source_queue, "timestamp": item.timestamp}
 
     reactor = _make_reactor(db_path, processor=processor, worker_count=1)
+
+    class NativePassWaiter:
+        def __init__(self) -> None:
+            self.entered = threading.Event()
+            self.wait_calls: list[float] = []
+            self.closed = False
+
+        def wait(self, timeout: float) -> bool:
+            self.wait_calls.append(timeout)
+            self.entered.set()
+            threading.Event().wait(timeout)
+            return False
+
+        def close(self) -> None:
+            self.closed = True
+
+    native_waiter = NativePassWaiter()
+    reactor._strategy._burst_sleep = 0.05
+    reactor._strategy.start(activity_waiter=native_waiter)
+    reactor._strategy_started = True
+    consume_saw_worker_result: list[bool] = []
+    burst_at_result: list[int] = []
+    wait_call_count_at_result: list[int] = []
+    consume_local_activity = reactor._strategy._consume_local_activity
+    handle_worker_result = reactor._handle_worker_result
+
+    def observe_consume() -> None:
+        consume_saw_worker_result.append(not reactor._worker_results.empty())
+        consume_local_activity()
+
+    def observe_burst(result: WorkerResult) -> None:
+        burst_at_result.append(reactor._strategy._activity_burst_remaining)
+        wait_call_count_at_result.append(len(native_waiter.wait_calls))
+        handle_worker_result(result)
+
+    reactor._strategy._consume_local_activity = observe_consume
+    reactor._handle_worker_result = observe_burst
     thread = threading.Thread(
         target=reactor.run_until_stopped,
         kwargs={"poll_interval": 5.0},
@@ -352,9 +393,44 @@ def test_worker_result_event_wakes_background_reactor(tmp_path: Path) -> None:
     thread.start()
     try:
         assert worker_started.wait(timeout=1.0)
+        assert native_waiter.entered.wait(timeout=1.0)
+        release_worker.set()
         _wait_for_outputs(db_path, 1, timeout=1.0)
+        assert consume_saw_worker_result[-1] is True
+        assert wait_call_count_at_result == [1]
+        assert burst_at_result and burst_at_result[0] > 0
     finally:
+        release_worker.set()
         _stop_reactor(reactor, thread)
+    assert native_waiter.closed
+
+
+def test_base_reactor_composes_one_deadline_across_quiet_strategy_passes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class QuietReactor(BaseReactor):
+        @staticmethod
+        def _unexpected_handler(message: str, timestamp: int) -> None:
+            del message, timestamp
+            raise AssertionError("quiet reactor should not dispatch")
+
+    reactor = QuietReactor(
+        queues=["quiet.reactor"],
+        default_handler=QuietReactor._unexpected_handler,
+        db=tmp_path / "reactor.db",
+        persistent=True,
+    )
+    times = iter([10.0, 10.1, 10.4, 11.0])
+    budgets: list[float | None] = []
+    monkeypatch.setattr(reference_reactor_module, "_monotonic", lambda: next(times))
+    reactor._strategy.wait_for_activity = budgets.append
+    try:
+        reactor.wait_for_activity(1.0)
+    finally:
+        reactor.stop()
+
+    assert budgets == pytest.approx([0.9, 0.6])
 
 
 def test_input_activity_wakes_background_reactor(tmp_path: Path) -> None:

@@ -63,6 +63,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import random
 import signal
 import threading
@@ -997,6 +998,8 @@ class BaseWatcher(ABC):
         # hold their internal locks. Record only plain state here; the normal
         # watcher loop converts it into a stop request at its next safe point.
         self._signal_stop_requested = signum
+        if hasattr(self._strategy, "notify_activity"):
+            self._strategy.notify_activity()
 
     def _safe_call_handler(
         self,
@@ -1384,13 +1387,29 @@ class PollingStrategy:
         self._next_native_idle_poll_at = _monotonic()
         self._schedule_next_native_idle_poll(initial=True)
 
-    def wait_for_activity(self) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-017] exception
-        """Wait for activity with optimized polling."""
+    def wait_for_activity(self, timeout: float | None = None) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-017] exception
+        """Wait for activity, optionally bounding an internally looping native wait.
+
+        The timeout does not shorten the polling fallback's ordinary pass;
+        ``timeout=0`` still performs, and may block for, that one pass.
+        """
+        deadline: float | None = None
+        if timeout is not None:
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+                raise TypeError("timeout must be None or a non-boolean int or float")
+            try:
+                timeout_value = float(timeout)
+            except OverflowError as exc:
+                raise ValueError("timeout must be finite") from exc
+            if not math.isfinite(timeout_value) or timeout_value < 0:
+                raise ValueError("timeout must be finite and non-negative")
+            deadline = _monotonic() + timeout_value
+            if not math.isfinite(deadline):
+                raise ValueError("timeout produces a non-finite monotonic deadline")
+
         while not self._stop_event.is_set():
             if self._local_activity_pending:
-                self._local_activity_pending = False
-                if self._activity_burst_remaining > 0:
-                    self._record_immediate_burst_delays()
+                self._consume_local_activity()
                 return
 
             # Check data version first for immediate activity detection
@@ -1404,16 +1423,31 @@ class PollingStrategy:
                 return
 
             # Calculate delay based on check count
+            burst_before_delay = self._activity_burst_remaining
             delay = self._get_delay()
 
             if self._activity_waiter is not None:
                 wait_timeout = max(delay, self._burst_sleep)
+                shortened = False
+                if deadline is not None:
+                    remaining = max(0.0, deadline - _monotonic())
+                    shortened = remaining <= 0 or remaining < wait_timeout
+                    wait_timeout = min(wait_timeout, remaining)
                 if self._activity_waiter.wait(wait_timeout):
                     self._native_activity_pending = True
+                    return
+                if self._stop_event.is_set():
+                    return
+                if self._local_activity_pending:
+                    continue
+                if shortened:
+                    self._activity_burst_remaining = burst_before_delay
                     return
                 self._check_count += 1
                 if _monotonic() >= self._next_native_idle_poll_at:
                     self._schedule_next_native_idle_poll()
+                    return
+                if deadline is not None and _monotonic() >= deadline:
                     return
                 continue
 
@@ -1438,18 +1472,29 @@ class PollingStrategy:
                     ):
                         return
 
+            if self._stop_event.is_set():
+                return
+            if self._local_activity_pending:
+                continue
+
             # Only increment if we actually waited (no activity detected)
             self._check_count += 1
             return
 
     def notify_activity(self) -> None:
-        """Reset check count on activity."""
-        self._check_count = 0
+        """Arm one coalescing local wake from an owner or foreign context."""
         self._local_activity_pending = True
-        self._local_activity_pending_for_drain = True
+
+    def _consume_local_activity(self) -> None:
+        """Apply useful-activity bookkeeping on the serialized wait owner."""
+        self._local_activity_pending = False
+        self._check_count = 0
+        if not self._local_activity_empty_check:
+            self._local_activity_pending_for_drain = True
         burst_multiplier = 10 if self._activity_waiter is not None else 1
         self._activity_burst_remaining = self._initial_checks * burst_multiplier
         self._schedule_next_native_idle_poll()
+        self._record_immediate_burst_delays()
 
     def consume_local_activity_hint(self) -> bool:
         """Return and clear a same-watcher backlog hint."""

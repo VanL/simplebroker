@@ -872,4 +872,5 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
 
         # Check count should reset on activity
         strategy.notify_activity()
+        strategy.wait_for_activity()
         assert strategy._check_count == 0

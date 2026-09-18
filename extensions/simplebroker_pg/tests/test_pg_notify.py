@@ -36,6 +36,15 @@ def _listener_fan_in_state(waiter: Any) -> tuple[int, list[set[str]]]:
         )
 
 
+def _wait_until(predicate: Any, *, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("listener state did not advance before timeout")
+
+
 def test_activity_waiter_filters_by_queue(
     pg_dsn: str,
     pg_plugin: BackendPlugin,
@@ -250,6 +259,110 @@ def test_multi_queue_activity_waiter_filters_by_watched_queues(
         queue_a_writer.close()
         queue_b_writer.close()
         noise_writer.close()
+
+
+def test_polling_strategy_deadline_expires_quietly_on_postgres(
+    pg_runner: PostgresRunner,
+) -> None:
+    queues = [
+        Queue(name, runner=pg_runner, persistent=True) for name in ("alpha", "beta")
+    ]
+    strategy = PollingStrategy(threading.Event(), burst_sleep=0.2)
+    try:
+        waiter = create_activity_waiter_for_queues(queues, stop_event=threading.Event())
+        assert waiter is not None
+        strategy.start(activity_waiter=waiter)
+        strategy._next_native_idle_poll_at = time.monotonic() + 5.0
+        strategy._check_count = 7
+        strategy._activity_burst_remaining = 3
+
+        started = time.monotonic()
+        strategy.wait_for_activity(timeout=0.05)
+        elapsed = time.monotonic() - started
+
+        assert elapsed >= 0.025
+        assert elapsed < 0.5
+        assert strategy._check_count == 7
+        assert strategy._activity_burst_remaining == 3
+        assert not strategy.consume_native_activity_hint()
+        assert not strategy.consume_local_activity_hint()
+    finally:
+        strategy.close()
+        for queue in queues:
+            queue.close()
+
+
+def test_polling_strategy_zero_timeout_observes_postgres_notification(
+    pg_runner: PostgresRunner,
+) -> None:
+    queue_wait = Queue("alpha", runner=pg_runner, persistent=True)
+    queue_other = Queue("beta", runner=pg_runner, persistent=True)
+    writer = Queue("alpha", runner=pg_runner, persistent=True)
+    strategy = PollingStrategy(threading.Event())
+    try:
+        created = create_activity_waiter_for_queues(
+            [queue_wait, queue_other], stop_event=threading.Event()
+        )
+        assert created is not None
+        waiter = cast(PostgresMultiQueueActivityWaiter, created)
+        strategy.start(activity_waiter=waiter)
+        baseline = waiter._last_queue_versions["alpha"]
+        writer.write("ready")
+
+        def listener_advanced() -> bool:
+            with waiter._listener._lock:
+                return waiter._listener._versions.get("alpha", baseline) != baseline
+
+        _wait_until(listener_advanced)
+
+        strategy.wait_for_activity(timeout=0)
+
+        assert strategy.consume_native_activity_hint()
+        assert not strategy.consume_local_activity_hint()
+        assert writer.peek() == "ready"
+    finally:
+        strategy.close()
+        queue_wait.close()
+        queue_other.close()
+        writer.close()
+
+
+def test_polling_strategy_postgres_notification_precedes_deadline(
+    pg_runner: PostgresRunner,
+) -> None:
+    queue_wait = Queue("alpha", runner=pg_runner, persistent=True)
+    queue_other = Queue("beta", runner=pg_runner, persistent=True)
+    writer = Queue("alpha", runner=pg_runner, persistent=True)
+    strategy = PollingStrategy(threading.Event())
+    thread: threading.Thread | None = None
+    try:
+        waiter = create_activity_waiter_for_queues(
+            [queue_wait, queue_other], stop_event=threading.Event()
+        )
+        assert waiter is not None
+        strategy.start(activity_waiter=waiter)
+
+        def delayed_write() -> None:
+            time.sleep(0.05)
+            writer.write("ready")
+
+        thread = threading.Thread(target=delayed_write)
+        thread.start()
+        started = time.monotonic()
+        strategy.wait_for_activity(timeout=1.0)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.75
+        assert strategy.consume_native_activity_hint()
+        assert not strategy.consume_local_activity_hint()
+        assert writer.peek() == "ready"
+    finally:
+        if thread is not None:
+            thread.join(timeout=2.0)
+        strategy.close()
+        queue_wait.close()
+        queue_other.close()
+        writer.close()
 
 
 def test_polling_strategy_replaces_postgres_waiter_for_dynamic_queue_set(

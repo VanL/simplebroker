@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `PollingStrategy.wait_for_activity(timeout=None)` can now bound an internally
+  looping backend-native wait without changing SQLite's configured polling
+  pass. `notify_activity()` now arms one coalescing latch that is safe to set
+  from a foreign thread or Python signal handler; its drain-hint, cadence, and
+  burst effects become visible when the serialized wait owner consumes it.
+  A notification coalesced after an owner downgrade still wakes the owner but
+  no longer causes the prior harmless empty drain attempt.
+- The reference reactor now uses `PollingStrategy` as its sole wake arbiter.
+  Local worker results and deferred signals are observed within one configured
+  quiet pass, nominally 100 ms plus jitter and scheduler delay, without its
+  former 10 ms Event loop or 50 ms default scheduling cap.
+
 ## [8.3.1] - 2026-09-16
 
 ### Changed

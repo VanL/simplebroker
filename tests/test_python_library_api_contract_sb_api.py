@@ -277,6 +277,14 @@ def test_api_polling_strategy_defaults_match_canonical_config() -> None:
         assert default == config[key]
         assert type(default) is type(config[key])
 
+    wait_parameters = inspect.signature(
+        ext.PollingStrategy.wait_for_activity
+    ).parameters
+    assert list(wait_parameters) == ["self", "timeout"]
+    assert wait_parameters["timeout"].default is None
+    assert "native" in watch.lower()
+    assert "polling fallback" in watch.lower()
+
 
 def test_api_activity_waiter_terminal_close_contract() -> None:
     body = _section("SB-API-6")

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -10,6 +13,7 @@ from typing import Literal
 import pytest
 
 from simplebroker.db import BrokerDB
+from simplebroker.watcher import PollingStrategy, QueueWatcher, StopWatching
 from tests.helper_scripts import WATCHER_SIGINT_SCRIPT_IMPROVED
 from tests.helper_scripts.managed_subprocess import ManagedProcess, managed_subprocess
 from tests.helpers.state_machine_contracts import (
@@ -32,6 +36,7 @@ class SigintProbePayload:
         "retry-exhausted",
         "message",
         "interrupt",
+        "native-deferred-handler",
     ]
 
 
@@ -102,6 +107,16 @@ SIGINT_PROBE_TRANSITIONS = (
         expected_result="the helper exits without signal escalation",
         payload=SigintProbePayload("interrupt"),
     ),
+    TransitionCase(
+        transition_id="native-deferred-handler-stops-on-owner",
+        start_state="native owner idle",
+        event="Python signal handler records a termination signal",
+        guard="the strategy owns a native waiter and no cleanup runs in the handler",
+        next_state="owner stop requested",
+        effects="arm only the local latch, then convert signal state on the owner",
+        expected_result="the waiter is untouched and the owner raises StopWatching",
+        payload=SigintProbePayload("native-deferred-handler"),
+    ),
 )
 
 
@@ -122,6 +137,51 @@ def _interrupt_ready_process(process: ManagedProcess) -> int:
     )
 
 
+def _assert_native_deferred_signal_handler() -> None:
+    class UntouchedWaiter:
+        def __init__(self) -> None:
+            self.wait_calls: list[float] = []
+            self.close_calls = 0
+
+        def wait(self, timeout: float) -> bool:
+            self.wait_calls.append(timeout)
+            return False
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    watcher = object.__new__(QueueWatcher)
+    watcher._stop_event = threading.Event()
+    watcher._signal_stop_requested = None
+    waiter = UntouchedWaiter()
+    watcher._strategy = PollingStrategy(watcher._stop_event)
+    watcher._strategy.start(activity_waiter=waiter)
+    stop_calls: list[bool] = []
+    watcher.stop = lambda *, join: stop_calls.append(join)
+
+    signum = signal.SIGUSR1
+    prior_handler = signal.getsignal(signum)
+    try:
+        signal.signal(signum, watcher._sigint_handler)
+        os.kill(os.getpid(), signum)
+    finally:
+        signal.signal(signum, prior_handler)
+
+    assert watcher._signal_stop_requested == signum
+    assert not watcher._stop_event.is_set()
+    assert stop_calls == []
+    assert waiter.wait_calls == []
+    assert waiter.close_calls == 0
+
+    watcher._strategy.wait_for_activity(timeout=0.5)
+    assert waiter.wait_calls == []
+    with pytest.raises(StopWatching):
+        watcher._check_stop()
+    assert watcher._stop_event.is_set()
+    assert waiter.close_calls == 0
+    watcher._strategy.close()
+
+
 @fires_transition_table("SM-SIGINT-PROBE", SIGINT_PROBE_TRANSITIONS)
 def test_watcher_sigint_probe_fires_transition_table(
     transition_case: TransitionCase[SigintProbePayload],
@@ -130,6 +190,9 @@ def test_watcher_sigint_probe_fires_transition_table(
     """Fire helper phases in real subprocesses under normal CI."""
 
     mode = transition_case.payload.mode
+    if mode == "native-deferred-handler":
+        _assert_native_deferred_signal_handler()
+        return
     if mode == "usage":
         with managed_subprocess(
             [sys.executable, str(WATCHER_SIGINT_SCRIPT_IMPROVED)]

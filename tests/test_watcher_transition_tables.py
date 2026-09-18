@@ -44,12 +44,36 @@ def _case(
 
 POLLING_TRANSITIONS = (
     _case(
-        "LOCAL_NOTIFY",
+        "LOCAL_NOTIFY_ARM",
         "idle fallback",
         "notify local activity",
         "local activity pending",
-        "reset backoff and publish drain hint",
-        "wait returns immediately and hints are one-shot",
+        "arm only the coalescing local latch",
+        "cadence, burst, drain hint, clock, and waiter state stay unchanged",
+    ),
+    _case(
+        "LOCAL_NOTIFY_CONSUME",
+        "local activity pending",
+        "owner waits",
+        "local activity consumed",
+        "reset backoff, publish drain hint, and allocate one burst",
+        "wait returns immediately and the drain hint is one-shot",
+    ),
+    _case(
+        "LOCAL_NOTIFY_COALESCE",
+        "local activity pending",
+        "notify local activity again before owner consumption",
+        "one local activity pending",
+        "retain one coalescing wake",
+        "owner applies useful-activity bookkeeping exactly once",
+    ),
+    _case(
+        "LOCAL_NOTIFY_COALESCE_AFTER_DOWNGRADE",
+        "local activity downgraded to empty check",
+        "foreign notification coalesces before owner consumption",
+        "one downgraded local activity pending",
+        "wake once without republishing a drain hint",
+        "empty-check hint remains authoritative and one-shot",
     ),
     _case(
         "STOP_WAIT",
@@ -86,7 +110,7 @@ POLLING_TRANSITIONS = (
     _case(
         "NATIVE_SIGNAL",
         "native idle",
-        "backend waiter signals",
+        "backend waiter signals before a finite deadline",
         "native activity pending",
         "wake without fallback polling",
         "native hint is one-shot",
@@ -104,8 +128,16 @@ POLLING_TRANSITIONS = (
         "idle",
         "activity notification then immediate waits",
         "burst consumed",
-        "allocate and consume bounded immediate checks",
+        "owner allocates and consumes bounded immediate checks",
         "counter reaches zero before backoff",
+    ),
+    _case(
+        "NATIVE_DEADLINE_QUIET",
+        "native burst",
+        "caller deadline truncates a quiet pass",
+        "native burst unchanged",
+        "publish no hint and preserve cadence counters",
+        "wait returns at the caller deadline",
     ),
 )
 
@@ -123,17 +155,58 @@ class _Waiter:
         self.close_calls += 1
 
 
+def _assert_local_notification_transition(
+    strategy: PollingStrategy,
+    payload: str,
+) -> None:
+    if payload == "LOCAL_NOTIFY_ARM":
+        before = (
+            strategy._check_count,
+            strategy._local_activity_pending_for_drain,
+            strategy._activity_burst_remaining,
+            strategy._next_native_idle_poll_at,
+        )
+        strategy.notify_activity()
+        assert strategy._local_activity_pending
+        assert (
+            strategy._check_count,
+            strategy._local_activity_pending_for_drain,
+            strategy._activity_burst_remaining,
+            strategy._next_native_idle_poll_at,
+        ) == before
+    elif payload == "LOCAL_NOTIFY_CONSUME":
+        strategy.notify_activity()
+        assert not strategy.consume_local_activity_hint()
+        strategy.wait_for_activity()
+        assert strategy.consume_local_activity_hint()
+        assert not strategy.consume_local_activity_hint()
+    elif payload == "LOCAL_NOTIFY_COALESCE":
+        strategy.notify_activity()
+        strategy.notify_activity()
+        strategy.wait_for_activity()
+        assert strategy._check_count == 0
+        assert strategy.consume_local_activity_hint()
+        assert not strategy.consume_local_activity_hint()
+    elif payload == "LOCAL_NOTIFY_COALESCE_AFTER_DOWNGRADE":
+        strategy.notify_activity()
+        strategy.mark_local_activity_as_empty_check()
+        strategy.notify_activity()
+        strategy.wait_for_activity()
+        assert not strategy.consume_local_activity_hint()
+        assert strategy.consume_local_empty_check_hint()
+        assert not strategy.consume_local_empty_check_hint()
+    else:
+        raise AssertionError(f"unhandled local notification transition: {payload}")
+
+
 @fires_transition_table("SM-POLLING", POLLING_TRANSITIONS)
 def test_polling_fires_transition_table(
     transition_case: TransitionCase[str],
 ) -> None:
     stop = threading.Event()
     strategy = PollingStrategy(stop, initial_checks=1, max_interval=0.001)
-    if transition_case.payload == "LOCAL_NOTIFY":
-        strategy.notify_activity()
-        strategy.wait_for_activity()
-        assert strategy.consume_local_activity_hint()
-        assert not strategy.consume_local_activity_hint()
+    if transition_case.payload.startswith("LOCAL_NOTIFY"):
+        _assert_local_notification_transition(strategy, transition_case.payload)
     elif transition_case.payload == "STOP_WAIT":
         stop.set()
         strategy.wait_for_activity()
@@ -151,14 +224,25 @@ def test_polling_fires_transition_table(
     elif transition_case.payload == "BURST_LIFECYCLE":
         strategy.start(activity_waiter=_Waiter())
         strategy.notify_activity()
-        assert strategy._activity_burst_remaining == 10
+        assert strategy._activity_burst_remaining == 0
         strategy.wait_for_activity()
         assert strategy._activity_burst_remaining == 9
+        strategy.close()
+    elif transition_case.payload == "NATIVE_DEADLINE_QUIET":
+        waiter = _Waiter()
+        strategy.start(activity_waiter=waiter)
+        strategy._check_count = 7
+        strategy._activity_burst_remaining = 3
+        strategy.wait_for_activity(timeout=0.0)
+        assert strategy._check_count == 7
+        assert strategy._activity_burst_remaining == 3
+        assert not strategy.consume_native_activity_hint()
+        assert not strategy.consume_local_activity_hint()
         strategy.close()
     elif transition_case.payload == "NATIVE_SIGNAL":
         waiter = _Waiter(signaled=True)
         strategy.start(activity_waiter=waiter)
-        strategy.wait_for_activity()
+        strategy.wait_for_activity(timeout=0.5)
         assert strategy.consume_native_activity_hint()
         assert not strategy.consume_native_activity_hint()
         strategy.close()

@@ -773,6 +773,21 @@ waiter is only a wake hint: `wait(timeout)` means some watched queue may have
 changed, not that a message is guaranteed to be available. Close the returned
 waiter from the caller's watcher lifecycle; it is not owned by any one `Queue`.
 
+An embedding that owns a `PollingStrategy` can pass a finite, non-negative
+timeout to `wait_for_activity(timeout)`. The timeout bounds only a native
+activity waiter that would otherwise retain control across repeated passes.
+The polling fallback still performs one ordinary configured pass, even for
+`timeout=0`; it does not create a second, faster SQLite polling cadence. A
+native zero timeout performs one nonblocking observation.
+
+Publish local result, stop, or signal state before calling
+`strategy.notify_activity()`. The call may come from a foreign thread or
+Python signal handler because it only arms one coalescing latch. The serialized
+wait owner applies the existing activity bookkeeping on its next pass. With
+the default strategy, first observation is bounded by one quiet pass: nominally
+100 ms, plus the configured ±15% jitter and normal scheduler delay. Several
+notifications may coalesce, so the caller-owned state remains the authority.
+
 An activity waiter is a close-only leaf resource. Keep the live waiter
 reference and call `close()` directly; do not keep a set of Python `id()`
 values or another closed-object ledger. The first close is terminal before

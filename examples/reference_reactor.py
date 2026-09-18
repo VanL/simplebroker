@@ -85,6 +85,7 @@ JsonMapping = Mapping[str, Any]
 Processor = Callable[["WorkItem"], JsonMapping]
 TimestampedRows = list[tuple[str, int]]
 _DISCOVERY_PAGE_SIZE = 100
+_monotonic = time.monotonic
 _TERMINAL_SEEN_STATUSES = frozenset(
     {"result_recorded", "output_written", "control_processed"}
 )
@@ -158,7 +159,6 @@ class BaseReactor(MultiQueueWatcher):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._reactor_stop_event = threading.Event()
-        self._reactor_activity_event = threading.Event()
         self._drive_owner_lock = threading.Lock()
         self._drive_owner_ident: int | None = None
         self._drive_thread: threading.Thread | None = None
@@ -212,17 +212,14 @@ class BaseReactor(MultiQueueWatcher):
     def notify_reactor_activity(self) -> None:
         """Wake ``wait_for_activity`` after local broker-free work completes."""
 
-        self._reactor_activity_event.set()
         strategy = getattr(self, "_strategy", None)
         if strategy is not None:
             strategy.notify_activity()
 
-    def _clear_reactor_activity(self) -> None:
-        self._reactor_activity_event.clear()
-
     def _check_stop(self) -> None:
-        if self._reactor_stop_event.is_set() or self._stop_event.is_set():
+        if self._reactor_stop_event.is_set():
             raise StopWatching
+        super()._check_stop()
 
     def request_stop(self) -> None:
         """Request a graceful reactor-loop stop without closing resources yet."""
@@ -288,38 +285,34 @@ class BaseReactor(MultiQueueWatcher):
             self._drain_reactor_results(max_results=remaining_budget)
         self._drain_reactor_backlog()
 
-    def wait_for_activity(self, timeout: float = 0.05) -> None:
-        """Wait for broker queue activity or local reactor activity."""
+    def wait_for_activity(self, timeout: float | None = None) -> None:
+        """Wait for activity, raising ``StopWatching`` if already stopped."""
 
-        if self._reactor_stop_event.is_set():
-            return
+        self._check_stop()
         if self._has_pending_reactor_results() or self._has_pending_messages():
             return
         if self._has_pending_reactor_backlog():
-            timeout = min(timeout, 0.05)
+            timeout = 0.05 if timeout is None else min(timeout, 0.05)
 
-        deadline = time.monotonic() + max(0.0, timeout)
+        deadline = None if timeout is None else _monotonic() + max(0.0, timeout)
         self._ensure_polling_strategy_started()
-        while not self._reactor_stop_event.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+        while True:
+            self._check_stop()
+            if self._has_pending_reactor_results() or self._has_pending_messages():
+                return
+            remaining = None if deadline is None else deadline - _monotonic()
+            if remaining is not None and remaining <= 0:
                 return
 
-            wait_timeout = min(remaining, 0.05)
-            if self._reactor_activity_event.wait(timeout=min(wait_timeout, 0.01)):
-                return
-
-            if self._reactor_activity_event.is_set():
-                return
-
-            self._strategy.wait_for_activity()
-            if self._has_pending_messages():
+            self._strategy.wait_for_activity(remaining)
+            self._check_stop()
+            if self._has_pending_reactor_results() or self._has_pending_messages():
                 return
 
     def run_until_stopped(
         self,
         *,
-        poll_interval: float = 0.05,
+        poll_interval: float | None = None,
         max_iterations: int | None = None,
     ) -> None:
         """Repeatedly call ``process_once`` until the reactor stops."""
@@ -331,6 +324,7 @@ class BaseReactor(MultiQueueWatcher):
                 return
             self._ensure_polling_strategy_started()
             while not self._reactor_stop_event.is_set():
+                self._check_stop()
                 self._process_with_retry(self.process_once, "reactor turn")
                 iterations += 1
                 if max_iterations is not None and iterations >= max_iterations:
@@ -360,12 +354,10 @@ class BaseReactor(MultiQueueWatcher):
                 self._stop_requested = True
                 self._reactor_stop_event.set()
                 self.notify_reactor_activity()
-                self._strategy.notify_activity()
                 self._request_reactor_workers_stop()
             else:
                 self._reactor_stop_event.set()
                 self.notify_reactor_activity()
-                self._strategy.notify_activity()
 
         deadline = time.monotonic() + timeout
         drive_thread = self._drive_thread
@@ -830,7 +822,7 @@ class Reactor(BaseReactor):
                 self._work_queue.task_done()
 
     def _has_pending_reactor_results(self) -> bool:
-        return self._reactor_activity_event.is_set() or not self._worker_results.empty()
+        return not self._worker_results.empty()
 
     def _drain_reactor_results(self, *, max_results: int = 100) -> int:
         handled = 0
@@ -838,10 +830,6 @@ class Reactor(BaseReactor):
             try:
                 result = self._worker_results.get_nowait()
             except thread_queue.Empty:
-                # Advisory wake flag; the Queue is the source of truth.
-                self._clear_reactor_activity()
-                if not self._worker_results.empty():
-                    self.notify_reactor_activity()
                 return handled
 
             self._handle_worker_result(result)
