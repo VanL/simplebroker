@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.4.1] - 2026-09-24
+
 ### Fixed
 
 - The `examples/multi_queue_watcher.py` example now closes every queue lease it
