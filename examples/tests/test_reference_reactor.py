@@ -457,6 +457,37 @@ def test_input_activity_wakes_background_reactor(tmp_path: Path) -> None:
         _stop_reactor(reactor, thread)
 
 
+def test_retired_drive_thread_recycles_cache_while_peer_stays_open(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "reactor.db"
+    with Queue("reactor.peer", db_path=str(db_path), persistent=True) as peer:
+        peer.write("seed")
+        # Private observation only: closing the last lease would hide this leak.
+        assert peer.conn is not None
+        session = peer.conn._shared_session
+        assert session is not None
+        assert len(session._cores) == 1
+
+        for generation in range(3):
+            reactor = _make_reactor(db_path, worker_count=1)
+            inbox = reactor._managed_queue(INBOX_A)
+            assert inbox.conn is not None
+            assert inbox.conn._shared_session is session
+            thread = reactor.start()
+            try:
+                _send_control(db_path, "STOP", f"retire-{generation}")
+                thread.join(timeout=5.0)
+                assert not thread.is_alive()
+                # The retired drive thread must not leave its core behind.
+                assert len(session._cores) == 1
+            finally:
+                _stop_reactor(reactor, thread)
+            peer.write(str(generation))
+
+        assert list(peer.read(all_messages=True)) == ["seed", "0", "1", "2"]
+
+
 def test_reactor_turns_have_single_thread_owner(tmp_path: Path) -> None:
     db_path = tmp_path / "reactor.db"
     _write_json(Queue(INBOX_A, db_path=str(db_path)), {"id": 1})

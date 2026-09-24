@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -10,12 +11,12 @@ import pytest
 from examples.multi_queue_watcher import MultiQueueWatcher
 from simplebroker import BrokerTarget, Queue
 from simplebroker.ext import StopWatching
+from tests.helper_scripts import drive_until
 
 
 def _close_managed_queues(watcher: MultiQueueWatcher) -> None:
+    # stop() releases every managed queue lease; see the regression test below.
     watcher.stop()
-    for queue_info in watcher._queues.values():
-        queue_info["queue"].close()
 
 
 @pytest.mark.parametrize("target_kind", ["path", "broker-target"])
@@ -238,3 +239,153 @@ def test_missing_error_handler_uses_default_after_an_override(tmp_path: Path) ->
         _close_managed_queues(watcher)
         first.close()
         second.close()
+
+
+def _lease_released(queue: Queue) -> bool:
+    # Private observation: a released persistent lease is the leak boundary.
+    assert queue.conn is not None
+    return bool(queue.conn._shared_released)
+
+
+@pytest.mark.parametrize("driven", [False, True])
+def test_stop_releases_every_managed_queue_lease(tmp_path: Path, driven: bool) -> None:
+    db_path = tmp_path / "stop-releases.db"
+    watcher = MultiQueueWatcher(
+        ["first", "second"], default_handler=lambda *_: None, db=db_path
+    )
+    watcher.add_queue("dynamic")
+    queues = [watcher.get_queue(name) for name in ("first", "second", "dynamic")]
+    for queue in queues:
+        assert queue is not None
+        queue.write("warm")
+
+    if driven:
+        thread = watcher.start()
+        drive_until(
+            lambda: all(queue.stats().pending == 0 for queue in queues if queue),
+            message="watcher did not drain the warm rows",
+        )
+    watcher.stop()
+    if driven:
+        thread.join(timeout=5.0)
+        assert not thread.is_alive()
+
+    assert [_lease_released(queue) for queue in queues if queue] == [True] * 3
+
+
+def test_remove_queue_releases_lease_except_data_version_queue(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "remove-releases.db"
+    watcher = MultiQueueWatcher(
+        ["first", "second"], default_handler=lambda *_: None, db=db_path
+    )
+    first = watcher.get_queue("first")
+    second = watcher.get_queue("second")
+    assert first is not None
+    assert second is not None
+    try:
+        first.write("warm")
+        second.write("warm")
+
+        watcher.remove_queue("second")
+        assert _lease_released(second)
+
+        # The first queue still backs BaseWatcher's data-version checks.
+        watcher.remove_queue("first")
+        assert not _lease_released(first)
+        assert first.has_pending()
+    finally:
+        watcher.stop()
+    assert _lease_released(first)
+
+
+def test_work_on_inactive_queue_does_not_wait_for_check_interval(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "inactive-discovery.db"
+    warm_handled = threading.Event()
+    late_handled = threading.Event()
+
+    def handler(message: str, _timestamp: int) -> None:
+        (late_handled if message == "late" else warm_handled).set()
+
+    watcher = MultiQueueWatcher(
+        ["busy", "idle"],
+        default_handler=handler,
+        db=db_path,
+        # Periodic discovery never fires again after the first drain.
+        check_interval=1_000_000,
+    )
+    thread = watcher.start()
+    try:
+        with Queue("busy", db_path=str(db_path)) as busy:
+            busy.write("warm")
+        # The first drain ran periodic discovery; later drains never will.
+        assert warm_handled.wait(timeout=5.0)
+
+        with Queue("idle", db_path=str(db_path)) as idle:
+            idle.write("late")
+
+        assert late_handled.wait(timeout=5.0), (
+            "pre-checked work on an inactive queue waited for check_interval"
+        )
+    finally:
+        watcher.stop()
+        thread.join(timeout=5.0)
+
+
+def test_start_after_removing_every_queue_waits_idle(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    db_path = tmp_path / "all-removed.db"
+    watcher = MultiQueueWatcher(
+        ["first", "second"], default_handler=lambda *_: None, db=db_path
+    )
+    watcher.remove_queue("first")
+    watcher.remove_queue("second")
+    with caplog.at_level(logging.DEBUG, logger="simplebroker.watcher"):
+        thread = watcher.start()
+        try:
+            assert watcher._running_event.wait(timeout=5.0)
+            # A failing waiter build surfaces as a retry on the first pass.
+            thread.join(timeout=0.3)
+            assert thread.is_alive()
+        finally:
+            watcher.stop()
+            thread.join(timeout=5.0)
+    assert not thread.is_alive()
+    assert "Watcher error" not in caplog.text
+
+
+def test_handler_removing_queues_mid_round_does_not_break_the_round(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "remove-mid-round.db"
+    handled: list[str] = []
+
+    def remove_all(message: str, _timestamp: int) -> None:
+        handled.append(message)
+        for name in watcher.list_queues():
+            watcher.remove_queue(name)
+
+    watcher = MultiQueueWatcher(
+        ["first", "second", "third"],
+        default_handler=remove_all,
+        db=db_path,
+        check_interval=1,
+    )
+    try:
+        for name in ("first", "second", "third"):
+            queue = watcher.get_queue(name)
+            assert queue is not None
+            queue.write(name)
+
+        watcher._drain_queue()
+
+        # The round ends after the first handler removes every queue.
+        assert handled == ["first"]
+        assert watcher.get_active_queues() == []
+    finally:
+        watcher.stop()

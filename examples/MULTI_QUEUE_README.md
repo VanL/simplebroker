@@ -41,12 +41,20 @@ MultiQueueWatcher extends `BaseWatcher` to provide:
 2. **Round-Robin Processing**: Active queues are processed in round-robin order, preventing queue starvation.
 
 3. **Activity detection**: Uses the selected backend's activity/version
-   mechanism. SQLite uses `PRAGMA data_version`; other backends own their
-   corresponding waiter or polling behavior.
+   mechanism. SQLite uses `PRAGMA data_version`, which covers the whole
+   database. Backends with native notifications (Postgres, Redis) get one
+   waiter covering every managed queue, rebuilt when queues are added or
+   removed.
 
 4. **Single dispatch thread**: Application handlers run serially in this
    watcher. Other processes and handles can still race for broker rows, and the
-   backend still uses its normal locking and retry rules.
+   backend still uses its normal locking and retry rules. Call `add_queue()` and
+   `remove_queue()` before `start()` or from a handler; the example has no
+   cross-thread topology lock.
+
+5. **Owned leases**: The watcher opens every managed `Queue`, so `stop()` closes
+   them all and `remove_queue()` closes the removed one. The first queue also
+   drives data-version checks, so its lease stays open until `stop()`.
 
 ### Reactor Reference
 
@@ -299,7 +307,9 @@ def error_handler(exc: Exception, message: str, timestamp: int) -> bool | None:
 ### Scalability Profile
 
 The watcher stores one Queue entry per configured name and checks active queues
-every turn plus inactive queues at `check_interval`. Memory and scan work grow
+every turn plus inactive queues at `check_interval`. When the pre-drain check
+found work but no active queue holds it, inactive queues are checked at once
+rather than waiting for the next `check_interval` tick. Memory and scan work grow
 with queue count. Measure with the intended backend and workload; at higher
 counts, consider separate watcher groups.
 
@@ -378,8 +388,12 @@ def _update_active_queues(self) -> None:
     # 1. Check currently active queues
     still_active = [q for q in self._active_queues if has_messages(q)]
     
-    # 2. Periodically check inactive queues
-    if self._check_counter % self._check_interval == 0:
+    # 2. Check inactive queues periodically, or now if the pre-drain check
+    #    found work that no active queue holds
+    precheck_found_inactive_work = (
+        self._pending_messages_precheck_confirmed and not still_active
+    )
+    if precheck_found_inactive_work or self._check_counter % self._check_interval == 0:
         for inactive_queue in inactive_queues:
             if has_messages(inactive_queue):
                 still_active.append(inactive_queue)

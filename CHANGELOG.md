@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The `examples/multi_queue_watcher.py` example now closes every queue lease it
+  opened when it stops, and closes a queue's lease when `remove_queue()` drops
+  it. Previously no managed lease was closed.
+- The example watcher no longer delays work that lands on an inactive queue.
+  When the pre-drain check found pending work that no active queue held, the
+  watcher idled until the next `check_interval` tick (about 0.5 s at the
+  default, several seconds at larger intervals).
+- On Postgres and Redis, the example watcher now wakes for writes to every
+  managed queue, including queues added after start. It previously listened
+  only to the first queue and found the others at the native idle-poll
+  fallback.
+- The reference reactor's drive thread now clears its per-thread connection
+  cache when it retires. Because the reactor replaces `run_forever()`, stop took
+  the idle-watcher path and left one cached connection behind per retired
+  reactor while another handle on the same broker stayed open.
+
 ## [8.4.0] - 2026-09-18
 
 ### Changed

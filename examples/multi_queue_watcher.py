@@ -8,6 +8,12 @@ thread and one shared broker target. Features:
 2. Round-robin processing between active queues
 3. Single-threaded design
 4. BaseWatcher inheritance for polling, error handling, lifecycle management
+5. One backend-native activity waiter covering every managed queue
+6. Stop closes every queue lease the watcher opened
+
+Call ``add_queue()`` and ``remove_queue()`` before ``start()`` or from a
+handler running on the watcher thread. The example has no cross-thread
+topology lock.
 
 Usage:
     python multi_queue_watcher.py
@@ -19,6 +25,7 @@ round-robin processing.
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import json
 import logging
@@ -29,7 +36,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from simplebroker import BrokerTarget, Queue, format_message_id
+from simplebroker import (
+    ActivityWaiter,
+    BrokerTarget,
+    Queue,
+    create_activity_waiter_for_queues,
+    format_message_id,
+)
 from simplebroker.ext import (
     BaseWatcher,
     PollingStrategy,
@@ -194,6 +207,7 @@ class MultiQueueWatcher(BaseWatcher):
             []
         )  # Empty cycle, will be replaced when queues become active
         self._check_counter = 0
+        self._unhanded_waiter: ActivityWaiter | None = None
 
         logger.info(
             f"MultiQueueWatcher initialized with {len(queues)} queues: {queues}"
@@ -239,7 +253,10 @@ class MultiQueueWatcher(BaseWatcher):
         1. Check currently active queues first
         2. Periodically check inactive queues based on check_interval
 
-        Balances responsiveness with efficiency.
+        Balances responsiveness with efficiency. When BaseWatcher's pre-check
+        already found pending work but no active queue holds it, the work is
+        on an inactive queue, so the cold path runs immediately instead of
+        idling until the next check_interval tick.
         """
         # Check currently active queues first (hot path)
         still_active = []
@@ -247,8 +264,15 @@ class MultiQueueWatcher(BaseWatcher):
             if self._queues[queue_name]["queue"].has_pending():
                 still_active.append(queue_name)
 
+        precheck_found_inactive_work = (
+            self._pending_messages_precheck_confirmed and not still_active
+        )
+
         # Periodically check inactive queues (cold path)
-        if self._check_counter % self._check_interval == 0:
+        if (
+            precheck_found_inactive_work
+            or self._check_counter % self._check_interval == 0
+        ):
             for queue_name, queue_info in self._queues.items():
                 if queue_name not in still_active and queue_info["queue"].has_pending():
                     still_active.append(queue_name)
@@ -283,8 +307,13 @@ class MultiQueueWatcher(BaseWatcher):
 
         # Process one message from each active queue (one round)
         for _ in range(len(self._active_queues)):
-            queue_name = next(self._queue_iterator)
-            queue_info = self._queues[queue_name]
+            # A handler may have removed queues, replacing the iterator.
+            queue_name = next(self._queue_iterator, None)
+            if queue_name is None:
+                break
+            queue_info = self._queues.get(queue_name)
+            if queue_info is None:
+                continue
 
             # Consume commits the claim before the application handler runs.
             result = queue_info["queue"].read_one(with_timestamps=True)
@@ -378,11 +407,22 @@ class MultiQueueWatcher(BaseWatcher):
             "handler": handler,
             "error_handler": error_handler,
         }
+        try:
+            self._refresh_activity_waiter()
+        except BaseException:
+            # Roll back so a retry is not rejected as a duplicate.
+            del self._queues[queue_name]
+            queue_obj.close()
+            raise
 
         logger.info(f"Added queue '{queue_name}' to MultiQueueWatcher")
 
     def remove_queue(self, queue_name: str) -> None:
         """Dynamically remove a queue from the watcher.
+
+        The removed queue's lease is closed. The first queue also drives
+        BaseWatcher's data-version checks, so its lease stays open until the
+        watcher stops.
 
         Args:
             queue_name: The name of the queue to remove
@@ -394,7 +434,7 @@ class MultiQueueWatcher(BaseWatcher):
             raise ValueError(f"Queue '{queue_name}' not found")
 
         # Remove from queues dictionary
-        del self._queues[queue_name]
+        queue_obj = self._queues.pop(queue_name)["queue"]
 
         # Remove from active queues if present and update iterator
         if queue_name in self._active_queues:
@@ -404,7 +444,82 @@ class MultiQueueWatcher(BaseWatcher):
             else:
                 self._queue_iterator = itertools.cycle([])  # Empty cycle
 
+        # Stop listening for the queue before releasing its lease.
+        try:
+            self._refresh_activity_waiter()
+        finally:
+            if queue_obj is not self._queue_obj:
+                queue_obj.close()
+
         logger.info(f"Removed queue '{queue_name}' from MultiQueueWatcher")
+
+    def _create_activity_waiter(self, queue: Queue) -> ActivityWaiter | None:
+        """Wake on writes to any managed queue, not only the first one.
+
+        BaseWatcher's default waiter listens to the single queue it was given.
+        Backends with native notifications (Postgres, Redis) would then only
+        wake for that queue and discover the others at the slow idle-poll
+        fallback. SQLite has no native waiter and keeps its database-wide
+        data-version polling.
+        """
+        queues = [queue_info["queue"] for queue_info in self._queues.values()]
+        if not queues:
+            # Every queue was removed; nothing to wake for beyond the base queue.
+            return super()._create_activity_waiter(queue)
+        waiter = create_activity_waiter_for_queues(queues, stop_event=self._stop_event)
+        # Only the caller or the strategy owns this waiter; see _start_strategy.
+        self._unhanded_waiter = waiter
+        return waiter
+
+    def _start_strategy(self) -> None:
+        """Close the multi-queue waiter if startup fails before handing it off.
+
+        BaseWatcher relies on the Queue caching a waiter until the strategy
+        takes it, so the Queue can close it after a failed or stopped start.
+        No Queue caches the multi-queue waiter, so this watcher closes it.
+        """
+        self._unhanded_waiter = None
+        try:
+            super()._start_strategy()
+        except BaseException:
+            waiter = self._unhanded_waiter
+            if waiter is not None:
+                self._strategy.detach_activity_waiter(expected=waiter)
+                waiter.close()
+            raise
+        finally:
+            self._unhanded_waiter = None
+
+    def _refresh_activity_waiter(self) -> None:
+        """Rebuild a running native waiter so it covers the current queue set."""
+        if not self._strategy.uses_native_activity():
+            # Not started yet (start builds the waiter) or polling fallback.
+            return
+        waiter = self._create_activity_waiter(self._queue_obj)
+        self._unhanded_waiter = None
+        try:
+            displaced = self._strategy.replace_activity_waiter(waiter)
+        except BaseException:
+            if waiter is not None:
+                waiter.close()
+            raise
+        if displaced is not None:
+            displaced.close()
+
+    def _release_queue_resource(self) -> None:
+        """Close every queue lease this watcher opened.
+
+        BaseWatcher treats the Queue passed to its constructor as caller-owned
+        and only restores its stop event. This watcher created that Queue and
+        all the others, so its teardown closes them all.
+        """
+        # ExitStack runs every close even when an earlier one fails.
+        with contextlib.ExitStack() as closers:
+            closers.callback(self._queue_obj.close)
+            for queue_info in self._queues.values():
+                if queue_info["queue"] is not self._queue_obj:
+                    closers.callback(queue_info["queue"].close)
+            super()._release_queue_resource()
 
     def list_queues(self) -> list[str]:
         """Get a list of all configured queue names.

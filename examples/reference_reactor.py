@@ -256,6 +256,20 @@ class BaseReactor(MultiQueueWatcher):
 
         del deadline
 
+    def _cleanup_stop_resources(self) -> None:
+        """Recycle the drive thread's connection cache when it stops itself.
+
+        ``run_forever()`` is replaced here, so BaseWatcher never records a run
+        thread and ``stop()`` takes its idle path, which skips the run-thread
+        cache recycle. A drive thread that retires while another handle on the
+        same broker stays open would then leave its per-thread connection
+        behind. Stopping on the drive thread uses the run-path cleanup instead.
+        """
+        if self._drive_thread is threading.current_thread():
+            self._cleanup_run_resources()
+        else:
+            super()._cleanup_stop_resources()
+
     def _close_reactor_resources(self) -> None:
         """Close reactor-owned queue handles after the drive thread exits."""
 
