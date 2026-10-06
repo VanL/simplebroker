@@ -270,14 +270,17 @@ def _wait_for_stable_sources(
 
 
 def _normalize_stored_paths(data_file: Path) -> None:
-    """Store repository-relative paths with POSIX separators on every OS."""
+    """Unify stored paths in the native form expected by CoverageData."""
 
     source = CoverageData(basename=str(data_file))
     try:
         source.read()
-        if all("\\" not in path for path in source.measured_files()):
+        non_native_separator = "\\" if os.sep == "/" else "/"
+        if all(non_native_separator not in path for path in source.measured_files()):
             return
 
+        # Coverage normalizes incoming shards, but not pre-existing base data.
+        # Re-merging also unifies legacy base paths with native shard paths.
         with tempfile.TemporaryDirectory(
             prefix="coverage-normalize-",
             dir=data_file.parent,
@@ -285,7 +288,12 @@ def _normalize_stored_paths(data_file: Path) -> None:
             normalized_file = Path(temp_dir) / data_file.name
             normalized = CoverageData(basename=str(normalized_file))
             try:
-                normalized.update(source, map_path=lambda path: path.replace("\\", "/"))
+                normalized.update(
+                    source,
+                    map_path=lambda path: path.replace("\\", os.sep).replace(
+                        "/", os.sep
+                    ),
+                )
                 normalized.write()
             finally:
                 normalized.close(force=True)

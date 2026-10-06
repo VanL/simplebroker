@@ -789,6 +789,9 @@ def build_cli_env(env: dict[str, str] | None = None) -> dict[str, str]:
     full_env = os.environ.copy()
     if env:
         full_env.update(env)
+    if full_env.get("COVERAGE_PROCESS_START"):
+        # Some harness tests enable child coverage without a covered parent.
+        full_env["SIMPLEBROKER_COVERAGE_ROOT"] = str(PROJECT_ROOT)
     full_env["PYTHONIOENCODING"] = "utf-8"
     full_env["PYTHONUNBUFFERED"] = "1"
     project_paths = [str(PROJECT_ROOT)]

@@ -810,7 +810,7 @@ def _cli_coverage_real_child_publishes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del monkeypatch
+    monkeypatch.delenv("SIMPLEBROKER_COVERAGE_ROOT", raising=False)
     data_file = tmp_path / ".coverage"
     workdir = tmp_path / "project"
     workdir.mkdir()
@@ -836,6 +836,7 @@ def _cli_coverage_real_child_publishes(
         data.read()
         assert any(
             path.replace("\\", "/").endswith("simplebroker/commands.py")
+            and data.lines(path)
             for path in data.measured_files()
         )
     finally:
@@ -1117,28 +1118,44 @@ def test_combine_coverage_maps_ci_checkout_roots_to_repo_relative_paths(
     combined = CoverageData(basename=str(data_file))
     combined.read()
     assert set(combined.measured_files()) == {
-        relative.as_posix() for relative, _ in measured.values()
+        str(relative) for relative, _ in measured.values()
     }
     for relative, line in measured.values():
-        assert combined.lines(relative.as_posix()) == [line]
+        assert combined.lines(str(relative)) == [line]
 
 
-def test_combine_coverage_normalizes_stored_separators_to_posix(
+@pytest.mark.parametrize(
+    ("base_path", "shard_path"),
+    [
+        (r"simplebroker\mixed_sample.py", "simplebroker/mixed_sample.py"),
+        ("simplebroker/mixed_sample.py", r"simplebroker\mixed_sample.py"),
+    ],
+    ids=("backslash-base", "slash-base"),
+)
+def test_combine_coverage_unifies_mixed_separators_without_losing_arcs(
     tmp_path: Path,
+    base_path: str,
+    shard_path: str,
 ) -> None:
     data_file = tmp_path / ".coverage"
     shard_file = tmp_path / ".coverage.mixed"
+    base = CoverageData(basename=str(data_file))
+    base.add_arcs({base_path: {(3, 4)}})
+    base.write()
+    base.close(force=True)
     shard = CoverageData(basename=str(shard_file))
-    shard.add_arcs({r"simplebroker\mixed_sample.py": {(3, 4), (4, 5)}})
+    shard.add_arcs({shard_path: {(4, 5)}})
     shard.write()
+    shard.close(force=True)
 
     result = _run_combine_coverage(data_file)
 
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert set(combined.measured_files()) == {"simplebroker/mixed_sample.py"}
-    assert combined.arcs("simplebroker/mixed_sample.py") == [(3, 4), (4, 5)]
+    source = str(Path("simplebroker/mixed_sample.py"))
+    assert set(combined.measured_files()) == {source}
+    assert combined.arcs(source) == [(3, 4), (4, 5)]
 
 
 def test_combine_coverage_keeps_base_data_when_no_shards_exist(
@@ -1171,8 +1188,8 @@ def test_combine_coverage_appends_parallel_shards_to_base_data(
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(base_source.as_posix()) == [1]
-    assert combined.lines(worker_source.as_posix()) == [2]
+    assert combined.lines(str(base_source)) == [1]
+    assert combined.lines(str(worker_source)) == [2]
     assert not shard_file.exists()
 
 
@@ -1189,7 +1206,7 @@ def test_combine_coverage_creates_base_from_shard_only_data(
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(worker_source.as_posix()) == [2]
+    assert combined.lines(str(worker_source)) == [2]
     assert not shard_file.exists()
 
 
@@ -1208,8 +1225,8 @@ def test_combine_coverage_appends_deferred_subprocess_data(
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(base_source.as_posix()) == [1]
-    assert combined.lines(child_source.as_posix()) == [2]
+    assert combined.lines(str(base_source)) == [1]
+    assert combined.lines(str(child_source)) == [2]
     assert not subprocess_file.exists()
 
 
@@ -1257,8 +1274,8 @@ def test_combine_coverage_repairs_missing_schema_version(
     assert "Repaired schema version markers in 1 coverage data file(s)" in result.stdout
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(base_source.as_posix()) == [1]
-    assert combined.lines(worker_source.as_posix()) == [2]
+    assert combined.lines(str(base_source)) == [1]
+    assert combined.lines(str(worker_source)) == [2]
     assert not shard_file.exists()
 
 
@@ -1290,8 +1307,8 @@ def test_combine_coverage_repairs_duplicate_installed_schema_versions(
     assert "Repaired schema version markers in 1 coverage data file(s)" in result.stdout
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(base_source.as_posix()) == [1]
-    assert combined.lines(worker_source.as_posix()) == [2]
+    assert combined.lines(str(base_source)) == [1]
+    assert combined.lines(str(worker_source)) == [2]
     assert not shard_file.exists()
 
 
@@ -1357,8 +1374,8 @@ def test_combine_coverage_repairs_schema_with_a_harmless_extra_table(
     combined = CoverageData(basename=str(data_file))
     try:
         combined.read()
-        assert combined.lines(base_source.as_posix()) == [1]
-        assert combined.lines(worker_source.as_posix()) == [2]
+        assert combined.lines(str(base_source)) == [1]
+        assert combined.lines(str(worker_source)) == [2]
     finally:
         combined.close(force=True)
     assert not shard_file.exists()
@@ -1401,8 +1418,8 @@ def test_combine_coverage_repairs_schema_with_reordered_columns(
     combined = CoverageData(basename=str(data_file))
     try:
         combined.read()
-        assert combined.lines(base_source.as_posix()) == [1]
-        assert combined.lines(worker_source.as_posix()) == [2]
+        assert combined.lines(str(base_source)) == [1]
+        assert combined.lines(str(worker_source)) == [2]
     finally:
         combined.close(force=True)
     assert not shard_file.exists()
@@ -1507,7 +1524,7 @@ def test_combine_coverage_excludes_interrupted_empty_shard(
     assert "Excluded 1 interrupted empty coverage data file(s)" in result.stdout
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(base_source.as_posix()) == [1]
+    assert combined.lines(str(base_source)) == [1]
     assert not shard_file.exists()
 
 
@@ -1574,8 +1591,8 @@ def test_combine_coverage_waits_for_transiently_incomplete_shard(
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(base_source.as_posix()) == [1]
-    assert combined.lines(worker_source.as_posix()) == [2]
+    assert combined.lines(str(base_source)) == [1]
+    assert combined.lines(str(worker_source)) == [2]
     assert not shard_file.exists()
 
 
@@ -1790,6 +1807,7 @@ def test_run_cli_anchors_relative_coverage_outside_child_cwd(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("SIMPLEBROKER_COVERAGE_ROOT", raising=False)
     coverage_root = tmp_path / "coverage-root"
     coverage_root.mkdir()
     child_cwd = tmp_path / "child-cwd"

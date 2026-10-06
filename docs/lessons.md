@@ -97,6 +97,12 @@ pass; bootstrap source `2f93ee5`)
 
 ## Ledger
 
+- 2026-10-06: Coverage's merge API normalizes incoming paths to the host's
+  native separators. Treat separators as local representation, not as a
+  cross-platform artifact promise. Keep root alias mapping and measurement
+  preservation checks; normalize legacy base data as well as incoming shards
+  so mixed separators cannot split one file's measurements between two keys.
+
 - 2026-10-06: Relative coverage source paths are resolved when each collector
   starts, not relative to the configuration file. A test's temporary working
   directory can therefore turn a source directory into an unmatched package
