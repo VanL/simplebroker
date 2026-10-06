@@ -105,18 +105,18 @@ source = { editable = "../../" }
 requires-dist = [
     { name = "aiosqlite", marker = "extra == 'dev'", specifier = ">=0.22.1" },
     { name = "aiosqlitepool", marker = "extra == 'dev'", specifier = ">=1.0.0" },
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.5.0" },
-    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.163.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.3.0" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3" },
-    { name = "psycopg-pool", marker = "extra == 'dev'", specifier = ">=3.1" },
+    { name = "build", marker = "extra == 'dev'", specifier = ">=1.6.1" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.168.5" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.3.6" },
+    { name = "psycopg-pool", marker = "extra == 'dev'", specifier = ">=3.3.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.3" },
-    { name = "redis", marker = "extra == 'dev'", specifier = ">=5" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.0" },
+    { name = "redis", marker = "extra == 'dev'", specifier = ">=8.1.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.10" },
     { name = "simplebroker-pg", marker = "extra == 'pg'", editable = "../simplebroker_pg" },
     { name = "simplebroker-redis", marker = "extra == 'redis'", editable = "." },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20260906" },
@@ -129,8 +129,8 @@ fuzz = [
     { name = "atheris", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=3.1.0" },
 ]
 release = [
-    { name = "build", specifier = "==1.6.0" },
-    { name = "hatchling", specifier = "==1.32.0" },
+    { name = "build", specifier = "==1.6.1" },
+    { name = "hatchling", specifier = "==1.32.4" },
 ]
 
 [[package]]
@@ -152,7 +152,7 @@ dev = [
 requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
-    { name = "redis", specifier = ">=5" },
+    { name = "redis", specifier = ">=8.1.0" },
     { name = "simplebroker", editable = "../../" },
 ]
 provides-extras = ["dev"]
