@@ -56,12 +56,13 @@ Implementation rationale and history:
 - `docs/implementation/07-complexity-and-state-machine-map.md`
   (`SM-PROCESS-SESSION`, `SM-POLLING`, watcher lifecycle rows)
 - `docs/implementation/10-ruff-suppression-registry.md`
-- `docs/plans/2026-09-15-session-lifecycle-integrity-remediation-plan.md`
-  (completed; this plan supersedes its last-user and retry decisions and
-  retains its nested-acquisition, `GeneratorExit`, claim-carrier, and watcher
-  finalizer decisions)
+- source-pinned superseded plan
+  `a6d20bc:docs/plans/2026-09-15-session-lifecycle-integrity-remediation-plan.md`;
+  this plan supersedes its last-user and retry decisions and retains its
+  nested-acquisition, `GeneratorExit`, claim-carrier, and watcher-finalizer
+  decisions
 - source-pinned `f4cc5d6:docs/plans/2026-09-15-close-thread-resource-release-plan.md`
-  (retired-pending; its worker-release goal is re-expressed as the explicit
+  (retired; its worker-release goal is re-expressed as the explicit
   session API)
 - source-pinned `197629e2:docs/plans/2026-05-04-process-local-broker-session-plan.md`
   ("Do not add a public `Broker` class in the first implementation. A public
