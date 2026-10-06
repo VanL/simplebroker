@@ -30,14 +30,9 @@ assignments use `draft` with a note rather than inventing `completed`.
 | Plan | Status |
 |------|--------|
 | 2026-10-06-postgres-capacity-amplification-plan.md | retired-pending — soft-retired 2026-10-06 after closure-record repair; source pin is local to retained `HEAD`; physical deletion waits for publication |
-| 2026-09-18-polling-strategy-native-deadline-and-local-wake-plan.md | retired-pending — soft-retired 2026-10-06; source pin is published; physical deletion requires a separate verification pass |
-| 2026-09-16-reviewer-hygiene-remediation-plan.md | retired-pending — soft-retired 2026-10-06; source pin is published; physical deletion requires a separate verification pass |
-| 2026-09-16-broker-session-test-hardening-plan.md | retired-pending — soft-retired 2026-10-06; source pin is published; physical deletion requires a separate verification pass |
-| 2026-09-16-deep-dive-review-remediation-plan.md | retired-pending — soft-retired 2026-10-06; source pin is published; physical deletion requires a separate verification pass |
 | 2026-09-15-broker-session-plan.md | retired-pending — soft-retired 2026-10-06; source pin is local to retained `HEAD`; physical deletion waits for publication |
 | 2026-09-15-session-lifecycle-integrity-remediation-plan.md | retired-pending — soft-retired 2026-10-06; source pin is local to retained `HEAD`; physical deletion waits for publication |
 | 2026-08-27-message-id-order-and-newest-selection-plan.md | completed - class 5+P; released core 8.0.0, PostgreSQL 4.0.0, and Redis 4.0.0 from exact tested SHA `194dea5bd4841f3c7be36be44f5657e9a20817e1`; re-contracts uniform retrieval as public-message-ID order, adds bounded Python `order="newest"` and CLI `--newest`, migrates fresh and v5 SQL targets to one supported surrogate-free v6 broker-owned layout while preserving caller sidecars, serializes PostgreSQL migration with an advisory lock and live version recheck, and records the owner-directed transfer of separate Weft/Taut adoption work |
-| 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | retired-pending — soft-retired 2026-10-06 under the recorded owner evidence waiver; source pin is published; physical deletion requires a separate verification pass |
 
 ## Retired Plans
 
