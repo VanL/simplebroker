@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Literal
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -290,8 +290,8 @@ def _fire_early_stdin_close() -> None:
         stdin="payload" * 100_000,
     ) as process:
         assert process.proc.wait(timeout=_LIVENESS) == 0
-        assert process.proc.stdin is not None
-        assert process.proc.stdin.closed
+    assert process.proc.stdin is not None
+    assert process.proc.stdin.closed
     assert process.proc.returncode == 0
 
 
@@ -380,6 +380,128 @@ def _fire_terminal_failure() -> None:
             pass
     finally:
         monkeypatch.undo()
+
+
+def test_output_snapshot_does_not_follow_new_arrivals() -> None:
+    """A noisy pipe must leave readiness callers a chance to check deadlines."""
+    import io
+    from queue import Queue
+
+    from tests.helper_scripts.managed_subprocess import OutputReader
+
+    class ArrivingQueue(Queue):
+        def get(self, *args, **kwargs):
+            item = super().get(*args, **kwargs)
+            if item < "9":
+                self.put(str(int(item) + 1))
+            return item
+
+    reader = OutputReader(io.StringIO())
+    reader.queue = ArrivingQueue()
+    reader.queue.put("0")
+    assert reader.get_output() == "0"
+    assert reader.get_output() == "01"
+
+
+def test_child_that_never_reads_stdin_can_still_be_observed_and_reaped() -> None:
+    with managed_subprocess(
+        _python("import time; print('ready', flush=True); time.sleep(60)"),
+        stdin="x" * 1_000_000,
+    ) as process:
+        assert process.wait_for_output("ready", timeout=_LIVENESS)
+    assert process.proc.poll() is not None
+    assert process.proc.stdin is not None
+    assert process.proc.stdin.closed
+
+
+def test_readiness_sleep_respects_remaining_deadline(monkeypatch) -> None:
+    import io
+
+    from tests.helper_scripts import managed_subprocess as helper
+
+    clock = [0.0]
+    sleeps = []
+
+    def sleep(duration):
+        sleeps.append(duration)
+        clock[0] += duration
+
+    monkeypatch.setattr(helper.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(helper.time, "sleep", sleep)
+    process = helper.ManagedProcess(cast(Any, _UnkillablePopen()), capture_output=False)
+    process._stdout_reader = helper.OutputReader(io.StringIO())
+    assert not process.wait_for_output("never", timeout=0.01)
+    assert sleeps and all(0 < duration <= 0.01 for duration in sleeps)
+    assert sum(sleeps) == pytest.approx(0.01)
+
+
+def _cleanup_partial_reader_probe(children, readers) -> None:
+    """Contain a control's leak without relying on the owner being verified."""
+    for child in children:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=_LIVENESS)
+        for stream in (child.stdin, child.stdout, child.stderr):
+            if stream is not None:
+                stream.close()
+    for reader in readers:
+        if reader.ident is not None:
+            reader.join(timeout=_LIVENESS)
+
+
+@pytest.mark.parametrize("failed_stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("failed_phase", ["construct", "start"])
+def test_partial_reader_startup_failure_reaps_child_and_closes_pipes(
+    monkeypatch, failed_stream, failed_phase
+) -> None:
+    """A failed reader must not orphan an already-spawned child."""
+    from tests.helper_scripts import managed_subprocess as helper
+
+    failure = RuntimeError(f"{failed_stream} reader could not start")
+    children = []
+    readers = []
+    popen = helper.subprocess.Popen
+    initialize = helper.OutputReader.__init__
+    start = helper.OutputReader.start
+
+    def spawn(*args, **kwargs):
+        child = popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    def initialize_reader(reader, stream, text_mode=True):
+        if failed_phase == "construct" and stream is getattr(
+            children[0], failed_stream
+        ):
+            raise failure
+        initialize(reader, stream, text_mode)
+        readers.append(reader)
+
+    def start_reader(reader):
+        if failed_phase == "start" and reader.stream is getattr(
+            children[0], failed_stream
+        ):
+            raise failure
+        start(reader)
+
+    monkeypatch.setattr(helper.subprocess, "Popen", spawn)
+    monkeypatch.setattr(helper.OutputReader, "__init__", initialize_reader)
+    monkeypatch.setattr(helper.OutputReader, "start", start_reader)
+    try:
+        with (
+            pytest.raises(RuntimeError) as caught,
+            managed_subprocess(_python("import time; time.sleep(60)")),
+        ):
+            pytest.fail("partial reader setup must not yield")
+        assert caught.value is failure
+        child = children[0]
+        assert child.poll() is not None
+        assert child.stdout is not None and child.stdout.closed
+        assert child.stderr is not None and child.stderr.closed
+        assert all(not reader.is_alive() for reader in readers)
+    finally:
+        # The sensitivity control lacks owner cleanup; the test owns its leak.
+        _cleanup_partial_reader_probe(children, readers)
 
 
 SUBPROCESS_EXECUTORS: dict[str, Callable[[], None]] = {

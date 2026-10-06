@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -674,7 +676,7 @@ def _fire_scheduling_transition(reactor: Reactor, mode: str) -> None:
         assert reactor._resources_closed
 
 
-def _fire_deferred_signal_transition(reactor: Reactor) -> None:
+def _fire_deferred_signal_transition_in_child(reactor: Reactor) -> None:
     wait_entered = threading.Event()
     send_complete = threading.Event()
     readiness: list[bool] = []
@@ -688,13 +690,20 @@ def _fire_deferred_signal_transition(reactor: Reactor) -> None:
 
     def send_signal() -> None:
         readiness.append(wait_entered.wait(timeout=2.0))
-        os.kill(os.getpid(), signal.SIGTERM)
-        send_complete.set()
+        if readiness[-1]:
+            os.kill(os.getpid(), signal.SIGTERM)
+            send_complete.set()
+        else:
+            reactor.request_stop()
 
     sender = threading.Thread(target=send_signal)
     sender.start()
-    reactor.run_forever()
-    sender.join(timeout=2.0)
+    try:
+        reactor.run_forever()
+    finally:
+        reactor.request_stop()
+        # A delayed SIGTERM may only reach this isolated child, never pytest.
+        sender.join(timeout=2.0)
     assert not sender.is_alive()
     assert send_complete.is_set()
     assert readiness == [True]
@@ -703,6 +712,31 @@ def _fire_deferred_signal_transition(reactor: Reactor) -> None:
     assert reactor._reactor_stop_event.is_set()
     assert reactor._resources_closed
     assert reactor._drive_owner_ident == threading.get_ident()
+
+
+def _fire_deferred_signal_transition(db_path: Path) -> None:
+    # Signal handlers are process-global. A failing startup must not leave a
+    # delayed sender able to terminate the test worker or its next test.
+    code = """
+import sys
+from pathlib import Path
+from examples.tests.test_reference_reactor_transitions import (
+    _make_reactor, _fire_deferred_signal_transition_in_child,
+)
+reactor = _make_reactor(Path(sys.argv[1]))
+try:
+    _fire_deferred_signal_transition_in_child(reactor)
+finally:
+    reactor.stop()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(db_path)],
+        capture_output=True,
+        text=True,
+        timeout=6.0,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @fires_transition_table("SM-REACTOR", REACTOR_TRANSITIONS)
@@ -714,6 +748,9 @@ def test_reference_reactor_fires_transition_table(
     """Fire scheduling and ownership transitions against a real reactor."""
 
     mode = transition_case.payload.mode
+    if mode == "deferred-signal-stop":
+        _fire_deferred_signal_transition(tmp_path / "reactor.db")
+        return
     work_release = threading.Event()
 
     def blocking_processor(_item: object) -> dict[str, bool]:
@@ -735,9 +772,7 @@ def test_reference_reactor_fires_transition_table(
         ),
     )
     try:
-        if mode == "deferred-signal-stop":
-            _fire_deferred_signal_transition(reactor)
-        elif mode == "backlog-retry-recovery":
+        if mode == "backlog-retry-recovery":
             _fire_backlog_retry_recovery(reactor, monkeypatch)
         elif mode.startswith("control-"):
             _fire_control_transition(

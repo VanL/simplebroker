@@ -5,15 +5,17 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import redis
 import simplebroker_redis.core as redis_core_module
+import simplebroker_redis.plugin as redis_plugin_module
 from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys, encode_id
-from simplebroker_redis.plugin import RedisMultiQueueActivityWaiter
+from simplebroker_redis.plugin import RedisActivityWaiter, RedisMultiQueueActivityWaiter
 from simplebroker_redis.validation import key_prefix
 
 from simplebroker import (
@@ -1114,7 +1116,7 @@ def test_polling_strategy_replaces_redis_waiter_for_dynamic_queue_set(
 
 
 def test_activity_waiter_stop_event_breaks_wait_promptly(
-    redis_url: str, redis_namespace: str
+    redis_url: str, redis_namespace: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugin = get_backend_plugin()
     stop_event = threading.Event()
@@ -1125,24 +1127,35 @@ def test_activity_waiter_stop_event_breaks_wait_promptly(
         stop_event=stop_event,
     )
     assert waiter is not None
+    entered_wait = threading.Event()
+    condition = cast(RedisActivityWaiter, waiter)._registration.condition
+    original_wait = condition.wait
+
+    def observed_wait(timeout: float | None = None) -> bool:
+        entered_wait.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(condition, "wait", observed_wait)
     results: list[bool] = []
     thread = threading.Thread(target=lambda: results.append(waiter.wait(5.0)))
     try:
         thread.start()
-        time.sleep(0.1)
+        assert entered_wait.wait(0.75)
         stop_event.set()
         thread.join(0.75)
 
         assert not thread.is_alive()
         assert results == [False]
     finally:
+        stop_event.set()
+        if thread.ident is not None:
+            thread.join(5.0)
         waiter.close()
-        thread.join(5.0)
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
 
 
 def test_multi_queue_activity_waiter_stop_event_breaks_wait_promptly(
-    redis_url: str, redis_namespace: str
+    redis_url: str, redis_namespace: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugin = get_backend_plugin()
     stop_event = threading.Event()
@@ -1153,17 +1166,32 @@ def test_multi_queue_activity_waiter_stop_event_breaks_wait_promptly(
         stop_event=stop_event,
     )
     assert waiter is not None
+    entered_wait = threading.Event()
+
+    def observed_sleep(delay: float) -> None:
+        entered_wait.set()
+        time.sleep(delay)
+
+    # Only the composite waiter uses this module's sleep. Keep real cadence and
+    # pubsub transport; witness the completed quiet scan, not thread startup.
+    monkeypatch.setattr(
+        redis_plugin_module,
+        "time",
+        SimpleNamespace(monotonic=time.monotonic, sleep=observed_sleep),
+    )
     results: list[bool] = []
     thread = threading.Thread(target=lambda: results.append(waiter.wait(5.0)))
     try:
         thread.start()
-        time.sleep(0.1)
+        assert entered_wait.wait(0.75)
         stop_event.set()
         thread.join(0.75)
 
         assert not thread.is_alive()
         assert results == [False]
     finally:
+        stop_event.set()
+        if thread.ident is not None:
+            thread.join(5.0)
         waiter.close()
-        thread.join(5.0)
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})

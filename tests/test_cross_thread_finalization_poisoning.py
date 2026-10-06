@@ -221,10 +221,13 @@ def _run_queue_close_mode_probe(db_path: str, mode: str) -> dict[str, Any]:
         result = cast(dict[str, Any], receive_connection.recv())
     finally:
         receive_connection.close()
-    process.join(scale_timeout_for_ci(2.0))
-    if process.is_alive():
-        process.terminate()
         process.join(scale_timeout_for_ci(2.0))
+        if process.is_alive():
+            process.terminate()
+            process.join(scale_timeout_for_ci(2.0))
+        if process.is_alive():
+            process.kill()
+            process.join(scale_timeout_for_ci(2.0))
     assert not process.is_alive()
     assert process.exitcode == 0
     return result

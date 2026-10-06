@@ -315,6 +315,15 @@ def _listener_unregisters_last_reference(monkeypatch: pytest.MonkeyPatch) -> Non
 def _listener_close_stops_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     with _started_listener(monkeypatch) as (listener, connection):
         queue_version, wildcard_version = listener.register_queue("jobs")
+        entered_wait = threading.Event()
+        condition = listener._conditions["jobs"]
+        original_wait = condition.wait
+
+        def observed_wait(timeout: float | None = None) -> bool:
+            entered_wait.set()
+            return original_wait(timeout)
+
+        monkeypatch.setattr(condition, "wait", observed_wait)
         result: list[tuple[bool, int, int]] = []
         thread = threading.Thread(
             target=lambda: result.append(
@@ -328,8 +337,13 @@ def _listener_close_stops_wait(monkeypatch: pytest.MonkeyPatch) -> None:
             )
         )
         thread.start()
-        listener.close()
-        thread.join(timeout=1.0)
+        try:
+            assert entered_wait.wait(1.0)
+            listener.close()
+            thread.join(timeout=1.0)
+        finally:
+            listener.close()
+            thread.join(timeout=1.0)
         assert not thread.is_alive()
         assert result == [(False, 0, 0)]
         assert connection.closed

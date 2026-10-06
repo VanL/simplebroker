@@ -771,15 +771,11 @@ def test_stop_during_waiter_handoff_leaves_queue_as_owner(broker_target) -> None
     waiter = _CountingWaiter(stop_event)
 
     class StopDuringHandoffWatcher(_WaiterWatcher):
-        def __init__(self, *args, **kwargs) -> None:
-            self._stop_check_count = 0
-            super().__init__(*args, **kwargs)
-
-        def _check_stop(self) -> None:
-            self._stop_check_count += 1
-            if self._stop_check_count == 4:
-                raise StopWatching
-            super()._check_stop()
+        def _create_activity_waiter(self, queue):
+            candidate = super()._create_activity_waiter(queue)
+            # Stop at the ownership boundary, not an ordinal stop check.
+            stop_event.set()
+            return candidate
 
     watcher = StopDuringHandoffWatcher(
         "handoff_stop",

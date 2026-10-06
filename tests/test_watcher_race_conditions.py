@@ -168,7 +168,7 @@ def _run_synchronized_pre_checks(
     num_watchers: int = 20,
     warm_thread_connections: bool = False,
 ) -> ConcurrentPreCheckResult:
-    """Run one simultaneous pre-check per watcher and return observed counters."""
+    """Run concurrent pre-check requests, not prove SQL execution overlap."""
     broker = make_broker(broker_target)
     watchers: list[ConcurrencyTestWatcher] = []
     start_barrier = threading.Barrier(num_watchers)
@@ -382,8 +382,10 @@ def test_concurrent_writers_readers(broker_target) -> None:
                 future = executor.submit(writer_task, i, messages_per_writer)
                 futures.append(future)
 
-            # Wait for all writers to complete
-            concurrent.futures.wait(futures)
+            # Preserve writer exceptions rather than diagnosing their missing
+            # messages later as a watcher timeout.
+            for future in futures:
+                future.result(timeout=scale_timeout_for_ci(15.0, ci_factor=2.0))
 
         # Wait for processing with timeout and checking
         expected_total = num_writers * messages_per_writer
@@ -614,9 +616,10 @@ def test_multiple_queues_concurrent_activity(broker_target) -> None:  # noqa: C9
                 f"Queue {queue} only processed {len(messages)} messages, expected {messages_per_queue}"
             )
 
-            # Verify correct messages for this queue
-            for msg in messages:
-                assert msg.startswith(f"{queue}_msg_")
+            assert sorted(messages) == sorted(
+                f"{queue}_msg_{i * 1000 + offset}"
+                for offset in range(messages_per_queue)
+            )
     finally:
         # Stop all watchers before closing broker
         for w in watchers:

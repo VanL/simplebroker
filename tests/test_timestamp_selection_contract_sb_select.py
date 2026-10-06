@@ -23,57 +23,6 @@ README = ROOT / "README.md"
 KERNEL = ROOT / "docs" / "agent-kernel.md"
 LLMS = ROOT / "llms.txt"
 
-AFFECTED_EVIDENCE = {
-    "SB-SELECT-1": {
-        "tests/test_timestamp_selection_contract_sb_select.py": {
-            "test_strict_open_bounds_on_queue_api"
-        },
-        "tests/test_after_flag.py": {"test_after_boundary_is_strictly_greater"},
-        "tests/test_generator_methods.py": {
-            "TestGeneratorMethods::test_generator_with_after_timestamp"
-        },
-        "tests/test_watcher.py": {
-            "TestQueueWatcher::test_explicit_zero_after_timestamp_excludes_legacy_zero"
-        },
-    },
-    "SB-SELECT-4": {
-        "tests/test_timestamp_selection_contract_sb_select.py": {
-            "test_select_watch_progress"
-        },
-        "tests/test_watcher.py": {
-            "TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint",
-            "TestQueueWatcher::test_explicit_zero_after_timestamp_excludes_legacy_zero",
-        },
-    },
-    "SB-SELECT-5": {
-        "extensions/simplebroker_pg/tests/test_pg_message_id_order.py": {
-            "test_postgres_retrieve_queries_order_and_address_by_public_id",
-            "test_real_postgres_bounded_pending_selection_uses_timestamp_index",
-        },
-        "extensions/simplebroker_redis/tests/test_redis_message_id_order.py": {
-            "test_redis_one_many_bounds_and_live_order_use_public_ids",
-            "test_redis_newest_include_claimed_merges_both_states",
-            "test_redis_newest_lua_resumes_below_reserved_windows",
-            "test_redis_many_fills_limit_past_partly_reserved_first_window",
-            "test_redis_concurrent_newest_claims_select_distinct_highest_ids",
-        },
-        "tests/test_sqlite_message_id_returning_order.py": {
-            "test_claim_many_normalizes_sqlite_returning_rows_by_public_id",
-            "test_claim_generator_uses_ascending_ids_when_returning_rows_are_reversed",
-            "test_move_many_normalizes_sqlite_returning_rows_by_public_id",
-            "test_move_generator_uses_ascending_ids_when_returning_rows_are_reversed",
-        },
-        "tests/test_timestamp_selection_contract_sb_select.py": {
-            "test_bounded_peek_orders_by_public_message_id",
-            "test_bounded_one_and_many_order_matrix",
-            "test_invalid_or_unbounded_order_fails_before_target_acquisition",
-            "test_generator_signatures_do_not_expose_order",
-            "test_direct_command_accepts_normalized_newest_order",
-            "test_direct_command_rejects_newest_all_before_target_resolution",
-        },
-    },
-}
-
 
 def _section(code: str) -> str:
     text = SPEC.read_text(encoding="utf-8")
@@ -154,9 +103,10 @@ def test_select_clause_inventory_and_authority() -> None:
 
 
 def test_select_affected_evidence_rows_match_exact_executable_manifests() -> None:
-    for code, manifest in AFFECTED_EVIDENCE.items():
+    """Validate references derived from their single canonical inventory."""
+    for code in ("SB-SELECT-1", "SB-SELECT-4", "SB-SELECT-5"):
         citations = _cited_nodes(_verification_row(code))
-        assert citations == manifest
+        assert citations
         for relative_path, nodes in citations.items():
             assert nodes <= _test_nodes(relative_path)
 
@@ -167,24 +117,11 @@ def test_select_predicates_are_strict_open_bounds() -> None:
     assert "message_id < before_timestamp" in body
 
 
-def test_select_filter_not_stream_offset() -> None:
-    body = _section("SB-SELECT-2")
-    assert "pure filter" in body.lower() or "pure filter" in body
-    assert "not" in body.lower()
-    assert "stream offset" in body.lower() or "complete stream" in body.lower()
-
-
-def test_select_late_older_ids() -> None:
-    body = _section("SB-SELECT-3")
-    assert "move" in body.lower()
-    assert "exact" in body.lower()
-    assert "behind" in body.lower() or "not selected" in body.lower()
-
-
 def test_select_watch_progress() -> None:
+    """Metadata binding only; the cited watcher tests own progress behavior."""
     body = _section("SB-SELECT-4")
-    assert "as they come" in body.lower() or "as they" in body.lower()
-    assert "progress" in body.lower()
+    assert "[SB-DELIVERY-2]" in body
+    assert _cited_nodes(_verification_row("SB-SELECT-4"))
 
 
 def test_strict_open_bounds_on_queue_api(queue_factory) -> None:

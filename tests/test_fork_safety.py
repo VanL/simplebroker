@@ -4,14 +4,43 @@ import multiprocessing
 import os
 import select
 import signal
+import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from simplebroker.db import BrokerDB
+
+
+def _wait_for_fork_child(pid: int, timeout: float = 5.0) -> int:
+    """Bound and reap a fork probe even when inherited state deadlocks."""
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+            if waited:
+                return status
+            time.sleep(0.01)
+        raise AssertionError(f"fork child {pid} did not exit before deadline")
+    finally:
+        # A reaped child no longer exists. Only terminate one still owned here.
+        try:
+            waited, _ = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            waited = pid
+        if not waited:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                # It exited between the nonblocking wait and kill. Still reap
+                # our child instead of replacing the original timeout error.
+                pass
+            finally:
+                os.waitpid(pid, 0)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
@@ -124,14 +153,13 @@ def test_fork_safety_protection(workdir: Path):
             os._exit(1)
         except RuntimeError as e:
             # Expected error
-            assert "forked process" in str(e)
-            os._exit(0)
+            os._exit(0 if "forked process" in str(e) else 3)
         except Exception:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             # Unexpected error
             os._exit(2)
     else:  # Parent process
         # Wait for child
-        _, status = os.waitpid(pid, 0)
+        status = _wait_for_fork_child(pid)
         assert os.WIFEXITED(status), f"child did not exit normally: {status}"
         exit_code = os.WEXITSTATUS(status)
         assert exit_code == 0  # Child exited successfully with expected error
@@ -174,7 +202,7 @@ def test_new_instance_after_fork_works(workdir: Path):
             os._exit(1)
     else:  # Parent process
         # Wait for child
-        _, status = os.waitpid(pid, 0)
+        status = _wait_for_fork_child(pid)
         assert os.WIFEXITED(status), f"child did not exit normally: {status}"
         exit_code = os.WEXITSTATUS(status)
         assert exit_code == 0
@@ -275,7 +303,7 @@ def test_forked_child_guarded_methods_raise(workdir: Path, method: str) -> None:
         except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             os._exit(2)  # wrong exception type
     else:
-        _, status = os.waitpid(pid, 0)
+        status = _wait_for_fork_child(pid)
         assert os.WIFEXITED(status), f"child did not exit normally: {status}"
         assert os.WEXITSTATUS(status) == 0
         core.close()
@@ -315,10 +343,13 @@ def test_forked_child_queue_generate_timestamp_raises(workdir: Path) -> None:
             os._exit(2)
     else:
         os.close(write_conn)
-        payload = os.read(read_conn, 64)
-        os.close(read_conn)
-        _, status = os.waitpid(pid, 0)
-        queue.close()
+        try:
+            # Reap first. The small fixed payload cannot fill this pipe.
+            status = _wait_for_fork_child(pid)
+            payload = os.read(read_conn, 64)
+        finally:
+            os.close(read_conn)
+            queue.close()
         assert os.WIFEXITED(status), f"child did not exit normally: {status}"
         assert os.WEXITSTATUS(status) == 0
         assert payload == b"runtime"
@@ -374,36 +405,68 @@ def test_fork_fallback_abandons_without_close(workdir: Path) -> None:
     present in _ABANDONED_FORK_CONNECTIONS exactly once and neither raises on
     total_changes (i.e., neither was closed).
     """
-    import threading as _threading
+    # Native thread deadlocks cannot be cancelled by Python. Own the complete
+    # two-thread/fork topology in a process group, including failed readiness.
+    code = """
+import sys
+from pathlib import Path
+from tests.test_fork_safety import _exercise_fork_fallback_abandons_without_close
+_exercise_fork_fallback_abandons_without_close(Path(sys.argv[1]))
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", code, str(workdir)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=12.0)
+        assert process.returncode == 0, stdout + stderr
+    finally:
+        # Kill the owned group, not only the direct child: a failed fork probe
+        # must not strand a grandchild holding inherited resources.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=2.0)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
 
+
+def _exercise_fork_fallback_abandons_without_close(workdir: Path) -> None:
     from simplebroker._runner import SQLiteRunner
 
-    db_path = workdir / "test.db"
-    runner = SQLiteRunner(str(db_path))
-    # Bind the current thread's connection.
-    runner.get_connection()
-
-    # Bind a SECOND connection from another thread -> two tracked connections.
-    def _bind_second() -> None:
+    runner = SQLiteRunner(str(workdir / "test.db"))
+    read_r = write_w = None
+    try:
         runner.get_connection()
 
-    t = _threading.Thread(target=_bind_second)
-    t.start()
-    t.join()
-    assert len(runner._all_connections) == 2
+        def bind_second() -> None:
+            runner.get_connection()
 
-    read_r, write_w = multiprocessing.Pipe(duplex=False)
+        thread = threading.Thread(target=bind_second)
+        thread.start()
+        thread.join(timeout=5.0)
+        assert not thread.is_alive(), "second runner connection did not complete"
+        assert len(runner._all_connections) == 2
 
-    pid = os.fork()
-    if pid == 0:  # child
-        try:
-            _abandon_fork_child(runner, write_w)
-        finally:
-            os._exit(0)
-    else:
+        read_r, write_w = multiprocessing.Pipe(duplex=False)
+        pid = os.fork()
+        if pid == 0:
+            try:
+                _abandon_fork_child(runner, write_w)
+            finally:
+                os._exit(0)
+        write_w.close()
+        # The fixed small result fits the pipe. Reap before receiving to
+        # prevent an inherited-lock regression from blocking recv forever.
+        status = _wait_for_fork_child(pid)
+        assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+        assert read_r.poll(0), "fork child produced no result"
         result = read_r.recv()
-        os.waitpid(pid, 0)
-        runner.close()
         assert "error" not in result, result
         assert result["inherited_count"] == 2, result
         assert result["all_present"] is True, result
@@ -411,6 +474,12 @@ def test_fork_fallback_abandons_without_close(workdir: Path) -> None:
         assert result["new_is_distinct"] is True, result
         assert result["not_closed"] is True, result
         assert result["new_works"] is True, result
+    finally:
+        if read_r is not None:
+            read_r.close()
+        if write_w is not None:
+            write_w.close()
+        runner.close()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")

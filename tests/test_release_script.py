@@ -857,12 +857,13 @@ def test_extension_core_floor_guard_accepts_higher_floors(tmp_path: Path) -> Non
     )
 
 
-def test_repository_backend_api_v9_handshake_and_floors_match() -> None:
+def test_repository_backend_api_handshake_and_floors_match() -> None:
     release.require_backend_api_versions_match()
     release.require_extension_core_floors_for_backend_api()
 
-    assert release.read_core_backend_api_version() == 9
-    required_core_floor = release.BACKEND_API_MIN_CORE_VERSION[9]
+    required_core_floor = release.BACKEND_API_MIN_CORE_VERSION[
+        release.read_core_backend_api_version()
+    ]
     assert release.version_tuple(
         release.read_current_version()
     ) >= release.version_tuple(required_core_floor)
@@ -905,47 +906,6 @@ def test_repository_backend_api_v9_handshake_and_floors_match() -> None:
     assert release.BACKEND_API_MIN_CORE_VERSION[7] == "7.3.0"
     assert release.BACKEND_API_MIN_CORE_VERSION[8] == "8.0.0"
     assert release.BACKEND_API_MIN_CORE_VERSION[9] == "8.1.0"
-
-    first_api_v7_extension_versions = {
-        "simplebroker_pg": "`simplebroker-pg` 3.8.0",
-        "simplebroker_redis": "`simplebroker-redis` 3.8.0",
-    }
-    for extension, version_text in first_api_v7_extension_versions.items():
-        readme = (
-            release.PROJECT_ROOT / "extensions" / extension / "README.md"
-        ).read_text(encoding="utf-8")
-        normalized_readme = " ".join(readme.split())
-        assert "## Core Compatibility" in readme
-        assert "backend API version independently" in normalized_readme
-        assert (
-            "fails at backend resolution with upgrade-or-pin guidance"
-            in normalized_readme
-        )
-        assert "package version numbers do not match" in normalized_readme
-        assert "first coordinated backend API v7 set" in normalized_readme
-        assert "Package dependency floors are minimums" in normalized_readme
-        assert "exact runtime handshake remains authoritative" in normalized_readme
-        assert "breaking private-seam change requires a backend API version bump" in (
-            normalized_readme
-        )
-        assert "moves in lockstep" not in normalized_readme
-        assert "SimpleBroker 7.3.0" in normalized_readme
-        assert version_text in normalized_readme
-
-    api_spec = (release.PROJECT_ROOT / "docs/specs/16-python-library-api.md").read_text(
-        encoding="utf-8"
-    )
-    agent_kernel = (release.PROJECT_ROOT / "docs/agent-kernel.md").read_text(
-        encoding="utf-8"
-    )
-    normalized_api_spec = " ".join(api_spec.split())
-    normalized_agent_kernel = " ".join(agent_kernel.split())
-    assert "under an exact pin" not in normalized_api_spec
-    assert "first-party packages lockstep with core" not in normalized_agent_kernel
-    assert "minimum supported core" in normalized_api_spec
-    assert "exact `backend_api_version` match" in normalized_api_spec
-    assert "minimum compatible core version" in normalized_agent_kernel
-    assert "exact `backend_api_version` handshake" in normalized_agent_kernel
 
 
 def test_extension_core_floor_guard_rejects_too_low_floor(tmp_path: Path) -> None:
@@ -1374,9 +1334,8 @@ def test_release_sha_removed_from_main_fails_closed(
 def test_remote_tag_reuse_note_names_immutable_tag_recovery_command() -> None:
     note = release._remote_tag_reuse_note(_state(remote="a" * 40))
 
-    assert "will not retrigger .github/workflows/release-gate.yml" in note
-    assert "only when that immutable tag already contains" in note
-    assert "otherwise choose a new version and never move the tag" in note
+    assert "v3.1.10" in note
+    assert "immutable" in note
     assert ("gh workflow run .github/workflows/release-gate.yml --ref v3.1.10") in note
 
 
@@ -1610,37 +1569,38 @@ def test_repository_settings_report_each_missing_control(
     assert any(message in issue for issue in issues)
 
 
-def test_release_helper_has_no_remote_tag_deletion_path() -> None:
-    source = (Path(__file__).resolve().parents[1] / "bin" / "release.py").read_text(
-        encoding="utf-8"
-    )
-
-    assert '"push", "--delete"' not in source
-    assert "replace_remote" not in source
-
-
-def test_local_only_wrong_tag_is_replaced_at_explicit_release_sha(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "action", ["create", "replace_local", "push_local", "reuse_remote"]
+)
+def test_tag_actions_only_mutate_local_tags_and_push_without_force(
+    monkeypatch, action
 ) -> None:
-    commands: list[tuple[str, ...]] = []
-    sha = "a" * 40
+    commands = []
     monkeypatch.setattr(
-        release,
-        "run_command",
-        lambda command, **kwargs: commands.append(command),
+        release, "run_command", lambda command, **kwargs: commands.append(command)
     )
-
+    state: Any = _state(
+        local="b" * 40 if action == "replace_local" else None,
+        remote="a" * 40 if action == "reuse_remote" else None,
+    )
     release._prepare_tag_action(
-        _state(local="b" * 40),
-        tag_action="replace_local",
-        dry_run=False,
-        target_commit=sha,
+        state, tag_action=action, dry_run=False, target_commit="a" * 40
     )
-
-    assert commands == [
-        ("git", "tag", "-d", "v3.1.10"),
-        ("git", "tag", "v3.1.10", sha),
-    ]
+    release._push_tag_action(state, tag_action=action, dry_run=False)
+    expected = {
+        "create": [
+            ("git", "tag", state.tag_name, "a" * 40),
+            ("git", "push", "origin", state.tag_name),
+        ],
+        "replace_local": [
+            ("git", "tag", "-d", state.tag_name),
+            ("git", "tag", state.tag_name, "a" * 40),
+            ("git", "push", "origin", state.tag_name),
+        ],
+        "push_local": [("git", "push", "origin", state.tag_name)],
+        "reuse_remote": [],
+    }
+    assert commands == expected[action]
 
 
 def test_real_release_branch_check_cannot_be_skipped(

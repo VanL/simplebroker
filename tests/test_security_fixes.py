@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from simplebroker import Queue, resolve_config, target_for_directory
+from simplebroker import Queue, commands, resolve_config, target_for_directory
+from simplebroker._exceptions import MessageError
 from simplebroker.cli import main
 
 from .conftest import run_cli
@@ -26,6 +27,31 @@ def test_stdin_size_limit_streaming(workdir: Path):
     # Should fail with size limit error
     assert code == 1
     assert "exceeds maximum size" in stderr.lower()
+
+
+def test_stdin_limit_stops_before_consuming_an_unbounded_tail(monkeypatch):
+    """Size arithmetic alone cannot prove bounded input consumption."""
+    import types
+
+    class BoundedSource:
+        consumed = 0
+
+        def read(self, size: int = -1) -> bytes:
+            assert size > 0, "stdin was drained by an unbounded read"
+            chunk = b"x" * min(size, 2)
+            self.consumed += len(chunk)
+            assert self.consumed <= 4, "stdin was consumed after exceeding the cap"
+            return chunk
+
+    source = BoundedSource()
+    monkeypatch.setattr(
+        commands,
+        "sys",
+        types.SimpleNamespace(stdin=types.SimpleNamespace(buffer=source)),
+    )
+    with pytest.raises(MessageError, match="exceeds maximum size"):
+        commands._read_from_stdin(3)
+    assert source.consumed == 4
 
 
 @pytest.mark.sqlite_only

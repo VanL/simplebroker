@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from simplebroker import Queue, target_for_directory
+
 from .conftest import run_cli
 
 
@@ -79,7 +81,9 @@ def test_version_flag_before_command(workdir: Path):
     code, stdout, _stderr = run_cli("--version", "write", "dummy", "msg", cwd=workdir)
     assert code == 0
     assert "simplebroker" in stdout
-    assert "write" not in stdout  # Should not execute write command
+    # write is silent, so its output cannot prove the action was not run.
+    with Queue("dummy", db_path=target_for_directory(workdir)) as queue:
+        assert queue.peek_one() is None
 
     code, stdout, _stderr = run_cli("--version", cwd=workdir)
     assert code == 0

@@ -168,22 +168,12 @@ def test_parallel_writes(workdir):
         from simplebroker import Queue
 
         try:
-            # Use the API directly to avoid subprocess issues with xdist
-            queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
-            queue.write(f"msg_{idx:03d}")
+            # The supported write owns contention retry. A raising first call
+            # must fail the test, even if another caller attempt would succeed.
+            with Queue("concurrent", db_path=str(workdir / ".broker.db")) as queue:
+                queue.write(f"msg_{idx:03d}")
             return 0, idx, ""
         except OperationalError as e:
-            if sys.platform == "win32":
-                # On Windows, retry once if we get a locking error
-                import time
-
-                time.sleep(0.1)
-                try:
-                    queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
-                    queue.write(f"msg_{idx:03d}")
-                    return 0, idx, ""
-                except OperationalError as e2:
-                    return 1, idx, str(e2)
             return 1, idx, str(e)
 
     # Write messages in parallel

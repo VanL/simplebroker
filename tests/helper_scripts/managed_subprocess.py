@@ -66,12 +66,13 @@ class OutputReader(threading.Thread):
         """Signal the reader to stop."""
         self._stop_event.set()
 
-    def get_output(self, timeout: float = 0.1) -> str | bytes:
-        """Get all accumulated output."""
-        # Drain any remaining items from queue
-        while True:
+    def get_output(self) -> str | bytes:
+        """Take a nonblocking snapshot, not an unbounded drain of a live pipe."""
+        # Bound the snapshot to what was queued at entry. A busy writer must
+        # not prevent the caller from checking its own deadline.
+        for _ in range(self.queue.qsize()):
             try:
-                line = self.queue.get(timeout=timeout)
+                line = self.queue.get_nowait()
                 self.lines.append(line)
             except Empty:
                 break
@@ -103,18 +104,25 @@ class ManagedProcess:
         self._close_lock = threading.Lock()
         self._closed = False
 
-        if capture_output and popen.stdout:
-            self._stdout_reader = OutputReader(popen.stdout, text)
-            self._stdout_reader.start()
-
-        if capture_output and popen.stderr:
-            self._stderr_reader = OutputReader(popen.stderr, text)
-            self._stderr_reader.start()
+        try:
+            if capture_output and popen.stdout:
+                self._stdout_reader = OutputReader(popen.stdout, text)
+            if capture_output and popen.stderr:
+                self._stderr_reader = OutputReader(popen.stderr, text)
+            for reader in (self._stdout_reader, self._stderr_reader):
+                if reader is not None:
+                    reader.start()
+        except BaseException:
+            # Ownership began at Popen, before either reader could start.
+            _close_owned_process(self, None, terminate_timeout=2.0, kill_timeout=1.0)
+            raise
 
     @property
     def stdout(self) -> str | bytes:
         """Get captured stdout."""
         if self._stdout_reader:
+            if self.proc.poll() is not None and self._stdout_reader.is_alive():
+                self._stdout_reader.join(timeout=0.5)
             return self._stdout_reader.get_output()
         return "" if self.text else b""
 
@@ -122,6 +130,8 @@ class ManagedProcess:
     def stderr(self) -> str | bytes:
         """Get captured stderr."""
         if self._stderr_reader:
+            if self.proc.poll() is not None and self._stderr_reader.is_alive():
+                self._stderr_reader.join(timeout=0.5)
             return self._stderr_reader.get_output()
         return "" if self.text else b""
 
@@ -129,21 +139,22 @@ class ManagedProcess:
         self, pattern: str, timeout: float = 5.0, stream: str = "stdout"
     ) -> bool:
         """Wait for pattern to appear in output stream."""
-        start_time = time.monotonic()
+        deadline = time.monotonic() + timeout
         reader = self._stdout_reader if stream == "stdout" else self._stderr_reader
 
         if not reader:
             return False
 
-        while time.monotonic() - start_time < timeout:
+        while True:
             output = reader.get_output()
             if isinstance(output, bytes):
                 output = output.decode(errors="replace")
             if pattern in output:
                 return True
-            time.sleep(0.1)
-
-        return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.1, remaining))
 
     def terminate(self) -> None:
         """Initiate graceful termination."""
@@ -271,16 +282,20 @@ class ManagedProcess:
 
     def cleanup_readers(self) -> None:
         """Stop and cleanup output readers."""
-        if self._stdout_reader:
-            self._stdout_reader.stop()
-            # On Windows, give reader threads time to exit cleanly
-            if sys.platform == "win32":
-                self._stdout_reader.join(timeout=0.5)
-        if self._stderr_reader:
-            self._stderr_reader.stop()
-            # On Windows, give reader threads time to exit cleanly
-            if sys.platform == "win32":
-                self._stderr_reader.join(timeout=0.5)
+        for reader, stream in (
+            (self._stdout_reader, self.proc.stdout),
+            (self._stderr_reader, self.proc.stderr),
+        ):
+            if reader is None:
+                # Reader construction itself can fail after Popen owns pipes.
+                if stream is not None:
+                    stream.close()
+                continue
+            reader.stop()
+            if reader.ident is None:
+                reader.stream.close()
+            else:
+                reader.join(timeout=0.5)
 
 
 def _send_stdin(
@@ -309,6 +324,26 @@ def _send_stdin(
             pass
 
 
+def _close_owned_process(
+    managed: ManagedProcess | None,
+    input_writer: threading.Thread | None,
+    *,
+    terminate_timeout: float,
+    kill_timeout: float,
+) -> None:
+    """Attempt both cleanup actions; Python retains any preceding failure context."""
+    try:
+        if managed is not None:
+            managed.close(
+                terminate_timeout=terminate_timeout, kill_timeout=kill_timeout
+            )
+    finally:
+        if input_writer is not None and input_writer.ident is not None:
+            input_writer.join(timeout=kill_timeout)
+            if input_writer.is_alive():
+                raise AssertionError("stdin writer survived child cleanup")
+
+
 @contextmanager
 def managed_subprocess(
     cmd: str | list[str],
@@ -318,7 +353,6 @@ def managed_subprocess(
     env: dict[str, str] | None = None,
     stdin: str | bytes | None = None,
     # Timeout configuration
-    timeout: float = 10.0,  # Total timeout for normal operation
     terminate_timeout: float = 2.0,  # Timeout for graceful termination
     kill_timeout: float = 1.0,  # Timeout for forceful kill
     # Output configuration
@@ -336,7 +370,6 @@ def managed_subprocess(
         cwd: Working directory for the subprocess
         env: Environment variables
         stdin: Input to send to the process
-        timeout: Total timeout for normal operation
         terminate_timeout: Timeout for graceful termination
         kill_timeout: Timeout for forceful kill
         capture_output: Whether to capture stdout/stderr
@@ -391,6 +424,7 @@ def managed_subprocess(
 
     proc: subprocess.Popen[Any] | None = None
     managed: ManagedProcess | None = None
+    input_writer: threading.Thread | None = None
 
     try:
         # Start process
@@ -403,33 +437,21 @@ def managed_subprocess(
 
         # Send stdin if provided
         if stdin is not None and proc.stdin:
-            _send_stdin(proc, stdin, text=text, encoding=encoding)
+            # A child which never reads stdin must not block entry to the
+            # context and prevent its caller from owning readiness/cleanup.
+            input_writer = threading.Thread(
+                target=_send_stdin,
+                args=(proc, stdin),
+                kwargs={"text": text, "encoding": encoding},
+                daemon=True,
+            )
+            input_writer.start()
 
         yield managed
-
     finally:
-        if managed is not None:
-            managed.close(
-                terminate_timeout=terminate_timeout,
-                kill_timeout=kill_timeout,
-            )
-
-
-# Convenience function for quick subprocess runs
-def run_subprocess(cmd: str | list[str], **kwargs: Any) -> tuple[int, str, str]:
-    """
-    Run a subprocess and return (returncode, stdout, stderr).
-
-    This is a simpler interface when you just need to run a command
-    and get its output without complex interaction.
-    """
-    with managed_subprocess(cmd, **kwargs) as proc:
-        # Wait for completion
-        proc.proc.wait()
-        stdout = proc.stdout
-        stderr = proc.stderr
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode(errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode(errors="replace")
-        return proc.proc.returncode, stdout, stderr
+        _close_owned_process(
+            managed,
+            input_writer,
+            terminate_timeout=terminate_timeout,
+            kill_timeout=kill_timeout,
+        )

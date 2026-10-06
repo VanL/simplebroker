@@ -17,6 +17,7 @@ from simplebroker._backends.sqlite.maintenance import vacuum_lock_path
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
+from .helper_scripts.timing import scale_timeout_for_ci
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -145,17 +146,29 @@ def test_concurrent_schema_migration(workdir: Path) -> None:
         results = manager.list()
         processes = []
 
-        for i in range(4):
-            p = multiprocessing.Process(
-                target=_schema_migration_worker,
-                args=(str(db_path), i, results),
-            )
-            processes.append(p)
-            p.start()
-
-        # Wait for all processes
-        for p in processes:
-            p.join()
+        deadline = time.monotonic() + scale_timeout_for_ci(60.0)
+        active = []
+        try:
+            for i in range(4):
+                p = multiprocessing.Process(
+                    target=_schema_migration_worker,
+                    args=(str(db_path), i, results),
+                )
+                processes.append(p)
+                p.start()
+            for p in processes:
+                p.join(timeout=max(0, deadline - time.monotonic()))
+            active = [p.pid for p in processes if p.is_alive()]
+        finally:
+            for p in processes:
+                if p.is_alive():
+                    p.kill()
+            for p in processes:
+                if p.pid is not None:
+                    p.join(timeout=scale_timeout_for_ci(2.0))
+        assert not active, f"migration processes exceeded deadline: {active}"
+        assert not any(p.is_alive() for p in processes)
+        assert [p.exitcode for p in processes] == [0] * 4
 
         # Convert to regular list
         results_list = list(results)

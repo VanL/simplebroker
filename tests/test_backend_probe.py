@@ -83,14 +83,31 @@ def test_backend_probe_serializes_same_core_calls(
     queue = Queue("tasks", db_path=str(tmp_path / "broker.db"), persistent=True)
     first_entered = threading.Event()
     release_first = threading.Event()
-    second_started = threading.Event()
-    second_entered = threading.Event()
+    second_waiting = threading.Event()
     call_lock = threading.Lock()
     call_count = 0
     results: list[list[tuple[int]]] = []
     try:
         with queue.get_connection() as connection:
             core = cast(Any, connection)
+            original_lock = core._lock
+
+            class WitnessLock:
+                """Witness an actual failed acquisition, then use the real lock."""
+
+                def __enter__(self):
+                    if not original_lock.acquire(blocking=False):
+                        second_waiting.set()
+                        original_lock.acquire()
+                    return self
+
+                def __exit__(self, *args):
+                    original_lock.release()
+
+                def __getattr__(self, name):
+                    return getattr(original_lock, name)
+
+            monkeypatch.setattr(core, "_lock", WitnessLock())
 
             def controlled_run(
                 sql: str,
@@ -107,26 +124,24 @@ def test_backend_probe_serializes_same_core_calls(
                 if call_number == 1:
                     first_entered.set()
                     assert release_first.wait(scale_timeout_for_ci(2.0))
-                else:
-                    second_entered.set()
                 return [(call_number,)]
 
             monkeypatch.setattr(core._runner, "run", controlled_run)
             probe = cast(_BackendProbe, connection)
 
-            def call_probe(*, mark_second_started: bool = False) -> list[tuple[int]]:
-                if mark_second_started:
-                    second_started.set()
+            def call_probe() -> list[tuple[int]]:
                 return probe._run_backend_probe("SELECT 42")
 
             with ThreadPoolExecutor(max_workers=2) as executor:
-                first = executor.submit(call_probe)
-                assert first_entered.wait(scale_timeout_for_ci(2.0))
-                second = executor.submit(call_probe, mark_second_started=True)
-                assert second_started.wait(scale_timeout_for_ci(2.0))
-                assert not second_entered.wait(scale_timeout_for_ci(0.1))
-                release_first.set()
-                results.extend([first.result(), second.result()])
+                try:
+                    first = executor.submit(call_probe)
+                    assert first_entered.wait(scale_timeout_for_ci(2.0))
+                    second = executor.submit(call_probe)
+                    assert second_waiting.wait(scale_timeout_for_ci(2.0))
+                    assert call_count == 1
+                finally:
+                    release_first.set()
+                results.extend([first.result(timeout=2.0), second.result(timeout=2.0)])
     finally:
         release_first.set()
         queue.close()

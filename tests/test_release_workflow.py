@@ -1,4 +1,6 @@
+import json
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -9,6 +11,7 @@ import pytest
 import yaml
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[1]
 UV_WORKFLOWS = (
@@ -92,9 +95,6 @@ def test_scorecard_normalizes_invalid_repository_level_sarif_locations() -> None
     action_text = (
         ROOT / ".github" / "actions" / "normalize-scorecard-sarif" / "action.yml"
     ).read_text(encoding="utf-8")
-    filter_text = (
-        ROOT / ".github" / "scripts" / "normalize_scorecard_sarif.jq"
-    ).read_text(encoding="utf-8")
 
     normalize_step = "- name: Normalize repository-level SARIF locations"
     upload_step = "- name: Upload to code scanning"
@@ -115,9 +115,47 @@ def test_scorecard_normalizes_invalid_repository_level_sarif_locations() -> None
     assert "name: scorecard-sarif" in upload_job
     assert "using: composite" in action_text
     assert "normalize_scorecard_sarif.jq" in action_text
-    assert '== "no file associated with this alert"' in filter_text
-    assert ".github/workflows/scorecard.yml" in filter_text
-    assert "Repository-level finding anchored" in filter_text
+
+
+def test_scorecard_filter_repairs_invalid_locations_and_preserves_valid_ones() -> None:
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to exercise the SARIF transformation")
+    valid = {
+        "message": {"text": "valid"},
+        "locations": [
+            {
+                "physicalLocation": {
+                    "artifactLocation": {"uri": "simplebroker/db.py"},
+                    "region": {"startLine": 1},
+                }
+            }
+        ],
+    }
+    invalid = {
+        "message": {"text": "repo finding"},
+        "locations": [
+            {
+                "physicalLocation": {
+                    "artifactLocation": {"uri": "no file associated with this alert"}
+                }
+            }
+        ],
+    }
+    document = {"runs": [{"results": [invalid, valid]}]}
+    result = subprocess.run(
+        [jq, "-f", str(ROOT / ".github/scripts/normalize_scorecard_sarif.jq")],
+        input=json.dumps(document),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=5,
+    )
+    repaired, preserved = json.loads(result.stdout)["runs"][0]["results"]
+    assert preserved == valid
+    location = repaired["locations"][0]["physicalLocation"]
+    assert location["artifactLocation"]["uri"] == ".github/workflows/scorecard.yml"
+    assert repaired["message"] == invalid["message"]
 
 
 def test_dependabot_groups_codeql_action_updates() -> None:
@@ -163,16 +201,37 @@ def test_fuzz_workflow_registers_every_harness() -> None:
 def test_fuzz_dependency_group_is_opt_in() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert pyproject["dependency-groups"]["fuzz"] == [
-        (
-            "atheris>=3.0.0,<3.1; python_version < '3.12' and "
-            "sys_platform == 'linux' and platform_machine == 'x86_64'"
-        ),
-        (
-            "atheris>=3.1.0; python_version >= '3.12' and "
-            "sys_platform == 'linux' and platform_machine == 'x86_64'"
-        ),
+    requirements = [
+        Requirement(entry) for entry in pyproject["dependency-groups"]["fuzz"]
     ]
+    assert {requirement.name for requirement in requirements} == {"atheris"}
+    for version in ("3.11", "3.12", "3.14"):
+        for platform, machine in (
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("darwin", "arm64"),
+            ("win32", "AMD64"),
+        ):
+            active = [
+                requirement
+                for requirement in requirements
+                if requirement.marker is None
+                or requirement.marker.evaluate(
+                    {
+                        "python_version": version,
+                        "sys_platform": platform,
+                        "platform_machine": machine,
+                    }
+                )
+            ]
+            assert len(active) == int(platform == "linux" and machine == "x86_64")
+            if active:
+                bounds = active[0].specifier
+                assert any(spec.operator in {">=", "==", "~="} for spec in bounds)
+                if version == "3.11":
+                    assert not bounds.contains("3.1.0"), (
+                        "Atheris 3.1 requires Python 3.12"
+                    )
     assert pyproject["tool"]["uv"]["default-groups"] == []
 
 
@@ -182,8 +241,8 @@ def test_development_tool_floors_are_current() -> None:
     The exact-floor mirror is gone (audit Task 6.4 — every dependabot
     bump edited two files for zero protection). What remains: the
     closed NAME inventory (supply-chain contract), every entry carries
-    a lower bound, and the version-specific floors the repository
-    actually relies on stay exact: pytest (minversion consistency,
+    a lower bound, and the minimum capabilities the repository
+    actually relies on remain supported: pytest (minversion consistency,
     derived), pytest-timeout (the --timeout-method=thread contract),
     and ruff (the 0.16 stable-rule expansion).
     """
@@ -216,9 +275,16 @@ def test_development_tool_floors_are_current() -> None:
             for specifier in requirement.specifier
         ), f"{name} must carry a lower bound"
 
-    # Version-specific behavior the repo relies on keeps exact floors.
-    assert str(requirements["pytest-timeout"].specifier) == ">=2.4.0"
-    assert str(requirements["ruff"].specifier) == ">=0.16.0"
+    # Raising a floor preserves these independently required capabilities.
+    for name, minimum in (("pytest-timeout", "2.4.0"), ("ruff", "0.16.0")):
+        floors = [
+            Version(spec.version)
+            for spec in requirements[name].specifier
+            if spec.operator in {">=", "==", "~="}
+        ]
+        assert max(floors) >= Version(minimum), (
+            f"{name} must retain required capabilities"
+        )
 
     # pytest floor and configured minversion stay consistent, derived
     # from the requirement rather than double-booked.
@@ -254,14 +320,25 @@ def test_development_tool_floors_are_current() -> None:
 
 
 def test_every_uv_workflow_uses_the_repository_pin() -> None:
+    required = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["uv"][
+        "required-version"
+    ]
+    pins = set()
     for workflow_path in UV_WORKFLOWS:
         workflow_text = _workflow_text(workflow_path)
-
-        assert workflow_text.count('UV_VERSION: "0.12.0"') == 1
-        assert re.search(r"(?m)^jobs:\n  [a-z]", workflow_text)
-        setup_count = workflow_text.count("uses: astral-sh/setup-uv@")
-        assert setup_count > 0
-        assert workflow_text.count("version: ${{ env.UV_VERSION }}") == setup_count
+        workflow = yaml.safe_load(workflow_text)
+        pin = workflow["env"]["UV_VERSION"]
+        assert Version(pin) in SpecifierSet(required)
+        pins.add(pin)
+        steps = [
+            step
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("astral-sh/setup-uv@")
+        ]
+        assert steps
+        assert all(step["with"]["version"] == "${{ env.UV_VERSION }}" for step in steps)
+    assert len(pins) == 1, "all managed workflows must use the same uv pin"
 
 
 def test_test_workflows_sync_once_and_only_run_the_frozen_environment() -> None:
@@ -733,15 +810,8 @@ def test_release_gate_pypi_job_keeps_tokenless_minimum_permissions() -> None:
 
     for workflow_path in RELEASE_WORKFLOWS:
         workflow_text = _workflow_text(workflow_path)
-        pypi_section = workflow_text.split("  publish-to-pypi:", 1)[1].split(
-            "  publish-github-release:", 1
-        )[0]
-
-        assert (
-            "permissions:\n      actions: read\n      id-token: write" in pypi_section
-        )
-        assert "contents: write" not in pypi_section
-        assert "actions: write" not in pypi_section
+        job = yaml.safe_load(workflow_text)["jobs"]["publish-to-pypi"]
+        assert job["permissions"] == {"actions": "read", "id-token": "write"}
         assert all(secret not in workflow_text for secret in forbidden_secrets)
 
 

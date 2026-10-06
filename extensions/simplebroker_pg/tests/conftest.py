@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -77,6 +79,41 @@ def raw_pg_conn(pg_dsn: str) -> Iterator[psycopg.Connection[Any]]:
     """Return an autocommit raw psycopg connection for schema setup helpers."""
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         yield conn
+
+
+@pytest.fixture
+def pg_wait_for_blocked(
+    pg_dsn: str,
+) -> Callable[[list[int], int, threading.Event, float], None]:
+    """Observe the actual contender PID blocked by this test's transaction."""
+
+    def wait(
+        contender_pids: list[int],
+        blocker_pid: int,
+        finished: threading.Event,
+        timeout: float,
+    ) -> None:
+        deadline = time.monotonic() + timeout
+        with psycopg.connect(
+            pg_dsn, autocommit=True, connect_timeout=int(timeout)
+        ) as observer:
+            while time.monotonic() < deadline:
+                if contender_pids:
+                    row = observer.execute(
+                        "SELECT pg_blocking_pids(%s)", (contender_pids[0],)
+                    ).fetchone()
+                    if row is not None and blocker_pid in row[0]:
+                        assert not finished.is_set()
+                        return
+                assert not finished.is_set(), (
+                    "contender finished without the required lock wait"
+                )
+                finished.wait(0.01)
+        raise AssertionError(
+            f"contender {contender_pids} was not blocked by PostgreSQL PID {blocker_pid}"
+        )
+
+    return wait
 
 
 @pytest.fixture

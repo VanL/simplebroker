@@ -373,6 +373,8 @@ def test_concurrent_read_by_timestamp(workdir: Path):
     for rc, out, _err in results:
         if rc == 0:
             assert out == "concurrent message"
+        else:
+            assert (rc, out, _err) == (2, "", "")
 
 
 def test_concurrent_delete_by_timestamp(workdir: Path):
@@ -394,6 +396,9 @@ def test_concurrent_delete_by_timestamp(workdir: Path):
     # Exactly one should succeed
     success_count = sum(1 for rc, out, err in results if rc == 0)
     assert success_count == 1
+
+    for rc, out, err in results:
+        assert (rc, out, err) in {(0, "", ""), (2, "", "")}
 
 
 def test_mixed_operations_no_interference(workdir: Path):

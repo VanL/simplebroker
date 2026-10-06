@@ -265,18 +265,14 @@ def test_live_peek_stream_deletion_visits_every_message(queue_factory) -> None:
 
 
 def test_live_peek_stream_rejects_naive_cursor_completeness() -> None:
-    """[SB-DELIVERY-4] exists and binds this test through its row.
-
-    Prose-fragment and plan-path/SHA pins removed (audit Task 6.1 —
-    they broke twice on pure doc reorganizations); the live-rescan
-    behavior itself is owned by
-    test_live_peek_stream_deletion_visits_every_message.
-    """
+    """Validate the live-rescan contract's metadata, not its prose wording."""
     section = _section("SB-DELIVERY-4")
     assert section.strip()
 
     row = _verification_row("SB-DELIVERY-4")
-    assert "test_live_peek_stream_rejects_naive_cursor_completeness" in row
+    paths = re.findall(r"`([^`]+\.py)(?:::|`)", row)
+    assert paths
+    assert all((ROOT / path).is_file() for path in paths)
 
 
 def test_closeable_peek_lifecycle_contract_is_bound_to_real_backends() -> None:

@@ -8,6 +8,7 @@ The delivery guarantee depends on the commit_interval parameter:
 
 # mypy: disable-error-code=no-untyped-def
 import multiprocessing
+import time
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from simplebroker import resolve_config
 from simplebroker.sbqueue import Queue
 
 from .helper_scripts.broker_factory import make_broker
+from .helper_scripts.timing import scale_timeout_for_ci
 
 
 @pytest.mark.shared
@@ -334,9 +336,9 @@ def test_direct_core_rejects_invalid_delivery_before_mutation(
 
 def _read_all_messages_worker(db_path: str, result_list):
     """Read all messages and append to shared list (module-level for pickling)."""
-    q = Queue("test_queue", db_path=str(db_path))
-    messages = list(q.read_generator(delivery_guarantee="at_least_once"))
-    result_list.extend(messages)
+    with Queue("test_queue", db_path=str(db_path)) as q:
+        messages = list(q.read_generator(delivery_guarantee="at_least_once"))
+        result_list.extend(messages)
 
 
 @pytest.mark.sqlite_only
@@ -359,11 +361,25 @@ def test_concurrent_readers_safety(workdir: Path):
             target=_read_all_messages_worker, args=(str(db_path), results2)
         )
 
-        p1.start()
-        p2.start()
-
-        p1.join()
-        p2.join()
+        processes = [p1, p2]
+        deadline = time.monotonic() + scale_timeout_for_ci(60.0)
+        active = []
+        try:
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=max(0, deadline - time.monotonic()))
+            active = [process.pid for process in processes if process.is_alive()]
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.kill()
+            for process in processes:
+                if process.pid is not None:
+                    process.join(timeout=scale_timeout_for_ci(2.0))
+        assert not active, f"reader processes exceeded deadline: {active}"
+        assert not any(process.is_alive() for process in processes)
+        assert [process.exitcode for process in processes] == [0, 0]
 
         all_messages = list(results1) + list(results2)
 

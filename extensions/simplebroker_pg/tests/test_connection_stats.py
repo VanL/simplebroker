@@ -22,7 +22,7 @@ from simplebroker_pg import (
 )
 
 from simplebroker import BrokerTarget, Queue
-from simplebroker._backend_plugins import BACKEND_API_VERSION, BrokerConnection
+from simplebroker._backend_plugins import BrokerConnection
 from simplebroker.ext import DatabaseError, OperationalError
 
 pytestmark = [pytest.mark.pg_only]
@@ -122,14 +122,13 @@ def test_connection_stats_public_annotation_resolves() -> None:
 
 
 def test_connection_stats_is_postgres_only_without_widening_core_protocol() -> None:
-    assert simplebroker_pg.__all__ == [
+    assert {
         "PostgresRunner",
         "get_backend_plugin",
         "get_connection_stats",
-    ]
+    } <= set(simplebroker_pg.__all__)
     assert not hasattr(Queue, "get_connection_stats")
     assert "_run_backend_probe" not in BrokerConnection.__dict__
-    assert BACKEND_API_VERSION == 9
 
 
 def test_connection_stats_accepts_conservative_overcount_and_returns_fresh_dict() -> (

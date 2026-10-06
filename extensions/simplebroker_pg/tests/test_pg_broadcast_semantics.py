@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import contextlib
 import threading
+from collections.abc import Callable
 
 import pytest
 from simplebroker_pg import PostgresRunner
 
 from simplebroker._backend_plugins import BackendPlugin
 from simplebroker.db import BrokerCore
+from simplebroker.ext import DatabaseError
 
 pytestmark = [pytest.mark.pg_only]
 
@@ -18,12 +20,15 @@ def test_prepare_broadcast_excludes_concurrent_new_queue(
     pg_dsn: str,
     pg_plugin: BackendPlugin,
     pg_schema: str,
+    pg_wait_for_blocked: Callable[[list[int], int, threading.Event, float], None],
 ) -> None:
     """A queue created during broadcast should not join the in-flight fan-out set."""
     runner_broadcast = PostgresRunner(pg_dsn, schema=pg_schema)
     runner_writer = PostgresRunner(pg_dsn, schema=pg_schema)
     broadcast_core = BrokerCore(runner_broadcast, backend_plugin=pg_plugin)
     writer_core = BrokerCore(runner_writer, backend_plugin=pg_plugin)
+    thread: threading.Thread | None = None
+    errors: list[DatabaseError] = []
 
     try:
         broadcast_core.write("alpha", "seed-alpha")
@@ -41,15 +46,26 @@ def test_prepare_broadcast_excludes_concurrent_new_queue(
         assert queues == ["alpha"]
 
         writer_done = threading.Event()
+        contender_pids: list[int] = []
 
         def create_new_queue() -> None:
-            writer_core.write("late", "seed-late")
-            writer_done.set()
+            try:
+                contender_pids.append(runner_writer._get_thread_conn().info.backend_pid)
+                writer_core.write("late", "seed-late")
+            except DatabaseError as exc:
+                errors.append(exc)
+            finally:
+                writer_done.set()
 
         thread = threading.Thread(target=create_new_queue, daemon=True)
         thread.start()
 
-        assert writer_done.wait(0.2) is False
+        pg_wait_for_blocked(
+            contender_pids,
+            runner_broadcast._get_thread_conn().info.backend_pid,
+            writer_done,
+            2.0,
+        )
 
         timestamp = broadcast_core.generate_timestamp()
         runner_broadcast.run(
@@ -59,6 +75,7 @@ def test_prepare_broadcast_excludes_concurrent_new_queue(
         runner_broadcast.commit()
 
         assert writer_done.wait(2.0) is True
+        assert errors == []
         thread.join(timeout=2.0)
 
         assert broadcast_core.peek_many("alpha", with_timestamps=False) == [
@@ -67,6 +84,10 @@ def test_prepare_broadcast_excludes_concurrent_new_queue(
         ]
         assert writer_core.peek_many("late", with_timestamps=False) == ["seed-late"]
     finally:
+        if runner_broadcast._in_transaction():
+            runner_broadcast.rollback()
+        if thread is not None and thread.ident is not None:
+            thread.join(timeout=2.0)
         broadcast_core.close()
         writer_core.close()
         pg_plugin.cleanup_target(
@@ -80,6 +101,7 @@ def test_exact_broadcast_does_not_resurrect_queue_deleted_before_selection(
     pg_dsn: str,
     pg_plugin: BackendPlugin,
     pg_schema: str,
+    pg_wait_for_blocked: Callable[[list[int], int, threading.Event, float], None],
 ) -> None:
     """Broadcast waits for an in-flight delete, then observes the committed absence."""
     pg_core.write("victim", "seed")
@@ -89,9 +111,12 @@ def test_exact_broadcast_does_not_resurrect_queue_deleted_before_selection(
     finished = threading.Event()
     results: list[int] = []
     errors: list[BaseException] = []
+    contender_pids: list[int] = []
+    thread: threading.Thread | None = None
 
     def run_broadcast() -> None:
         try:
+            contender_pids.append(broadcast_runner._get_thread_conn().info.backend_pid)
             results.append(
                 broadcast_core.broadcast(
                     "notice",
@@ -115,7 +140,12 @@ def test_exact_broadcast_does_not_resurrect_queue_deleted_before_selection(
 
         thread = threading.Thread(target=run_broadcast, daemon=True)
         thread.start()
-        assert finished.wait(0.2) is False
+        pg_wait_for_blocked(
+            contender_pids,
+            delete_runner._get_thread_conn().info.backend_pid,
+            finished,
+            3.0,
+        )
 
         delete_runner.commit()
         assert finished.wait(3.0) is True
@@ -125,9 +155,11 @@ def test_exact_broadcast_does_not_resurrect_queue_deleted_before_selection(
         assert results == [0]
         assert pg_core.peek_many("victim", limit=10, with_timestamps=False) == []
     finally:
-        if not finished.is_set():
+        if delete_runner._in_transaction():
             with contextlib.suppress(Exception):
                 delete_runner.rollback()
+        if thread is not None and thread.ident is not None:
+            thread.join(timeout=3.0)
         broadcast_core.close()
         delete_runner.shutdown()
 
@@ -137,6 +169,7 @@ def test_exact_broadcast_create_missing_resurrects_queue_deleted_before_atomic_p
     pg_dsn: str,
     pg_plugin: BackendPlugin,
     pg_schema: str,
+    pg_wait_for_blocked: Callable[[list[int], int, threading.Event, float], None],
 ) -> None:
     """Creation mode waits for an in-flight delete, then recreates the queue."""
     pg_core.write("victim", "seed")
@@ -146,9 +179,12 @@ def test_exact_broadcast_create_missing_resurrects_queue_deleted_before_atomic_p
     finished = threading.Event()
     results: list[int] = []
     errors: list[BaseException] = []
+    contender_pids: list[int] = []
+    thread: threading.Thread | None = None
 
     def run_broadcast() -> None:
         try:
+            contender_pids.append(broadcast_runner._get_thread_conn().info.backend_pid)
             results.append(
                 broadcast_core.broadcast(
                     "notice",
@@ -173,7 +209,12 @@ def test_exact_broadcast_create_missing_resurrects_queue_deleted_before_atomic_p
 
         thread = threading.Thread(target=run_broadcast, daemon=True)
         thread.start()
-        assert finished.wait(0.2) is False
+        pg_wait_for_blocked(
+            contender_pids,
+            delete_runner._get_thread_conn().info.backend_pid,
+            finished,
+            3.0,
+        )
 
         delete_runner.commit()
         assert finished.wait(3.0) is True
@@ -185,8 +226,10 @@ def test_exact_broadcast_create_missing_resurrects_queue_deleted_before_atomic_p
             "notice"
         ]
     finally:
-        if not finished.is_set():
+        if delete_runner._in_transaction():
             with contextlib.suppress(Exception):
                 delete_runner.rollback()
+        if thread is not None and thread.ident is not None:
+            thread.join(timeout=3.0)
         broadcast_core.close()
         delete_runner.shutdown()

@@ -2,10 +2,12 @@
 
 import concurrent.futures
 import gc
+import multiprocessing
 import sqlite3
 import tempfile
 import threading
 import time
+import traceback
 import warnings
 from pathlib import Path
 from typing import Any, cast
@@ -21,6 +23,47 @@ from simplebroker.db import BrokerConnection, DBConnection
 from tests.helper_scripts.timing import scale_timeout_for_ci
 
 _THREAD_FUTURE_TIMEOUT = scale_timeout_for_ci(10.0)
+
+
+def _thread_safety_child(mode: str, tmpdir: str, send: Any) -> None:
+    # A native dependency deadlock cannot be cancelled as a Python thread.
+    # Isolate only the failure boundary; retain all five real worker threads.
+    tempfile.tempdir = tmpdir
+    try:
+        probe = TestQueueConnectionManager()
+        getattr(probe, f"_exercise_thread_safety_{mode}_mode")()
+        send.send(None)
+    except BaseException:
+        send.send(traceback.format_exc())
+        raise
+    finally:
+        send.close()
+
+
+def _run_thread_safety_probe(mode: str) -> None:
+    context = multiprocessing.get_context("spawn")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        receive, send = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_thread_safety_child, args=(mode, tmpdir, send)
+        )
+        process.start()
+        send.close()
+        try:
+            assert receive.poll(_THREAD_FUTURE_TIMEOUT), "connection workers hung"
+            error = receive.recv()
+            assert error is None, error
+            process.join(timeout=_THREAD_FUTURE_TIMEOUT)
+            assert not process.is_alive()
+            assert process.exitcode == 0
+        finally:
+            receive.close()
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=1.0)
 
 
 def test_connection_retry_sleep_count(
@@ -138,6 +181,9 @@ class TestQueueConnectionManager:
                 assert observer.read_one(with_timestamps=False) == "before-close"
 
     def test_thread_safety_ephemeral_mode(self) -> None:
+        _run_thread_safety_probe("ephemeral")
+
+    def _exercise_thread_safety_ephemeral_mode(self) -> None:
         """Test that ephemeral mode is thread-safe (each thread gets its own connection)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -161,7 +207,8 @@ class TestQueueConnectionManager:
 
                     # Wait for all to complete
                     for t in threads:
-                        t.join()
+                        t.join(timeout=_THREAD_FUTURE_TIMEOUT)
+                        assert not t.is_alive(), "ephemeral connection worker hung"
                 finally:
                     # Ensure all threads are cleaned up
                     for t in threads:
@@ -175,6 +222,9 @@ class TestQueueConnectionManager:
                 )
 
     def test_thread_safety_persistent_mode(self) -> None:
+        _run_thread_safety_probe("persistent")
+
+    def _exercise_thread_safety_persistent_mode(self) -> None:
         """Test that persistent mode uses thread-local connections for safety."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -195,7 +245,7 @@ class TestQueueConnectionManager:
                     def get_connection() -> tuple[
                         tuple[BrokerConnection, BrokerConnection], tuple[int, int]
                     ]:
-                        barrier.wait()  # Wait for all threads to be ready
+                        barrier.wait(timeout=_THREAD_FUTURE_TIMEOUT)
                         with (
                             queue.get_connection() as conn1,
                             queue.get_connection() as conn2,

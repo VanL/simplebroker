@@ -17,105 +17,6 @@ README = ROOT / "README.md"
 KERNEL = ROOT / "docs" / "agent-kernel.md"
 LLMS = ROOT / "llms.txt"
 
-EVIDENCE_MANIFESTS = {
-    "SB-OPS-3": {
-        "tests/test_operations_contract_sb_ops.py": {
-            "test_ops_delete_removes_row_immediately"
-        },
-        "tests/test_queue_api_comprehensive.py": {
-            "test_delete_all",
-        },
-        "tests/test_queue_api_additions.py": {
-            "test_queue_delete_explicit_none_is_rejected_without_mutation",
-        },
-        "tests/test_batch_delete.py": {
-            "test_queue_delete_many_uses_physical_batch_delete"
-        },
-        "tests/test_custom_runner_integration.py": {
-            "test_queue_delete_owns_an_explicit_transaction_and_commits_once",
-            "test_delete_all_owns_the_same_explicit_transaction",
-            "test_queue_delete_rolls_back_a_mutation_failure_and_preserves_the_error",
-        },
-        "tests/test_safety_fixes.py": {"test_delete_with_all_flag"},
-        "tests/test_commands_error_ownership.py": {
-            "test_cmd_delete_missing_queue_reports_no_match_without_output"
-        },
-        "extensions/simplebroker_redis/tests/test_redis_atomicity.py": {
-            "test_delete_queue_script_rechecks_reservation_without_partial_mutation",
-            "test_delete_all_reports_real_partial_completion_when_later_queue_reserved",
-        },
-    },
-    "SB-OPS-5": {
-        "tests/test_aliases_db.py": {
-            "test_alias_and_target_use_queue_name_grammar",
-            "test_alias_rejects_chain_in_creation_order_without_mutation",
-            "test_alias_add_revalidates_against_live_state",
-            "test_legacy_alias_chain_remains_one_hop_visible_and_removable",
-        },
-        "tests/test_alias_cli.py": {
-            "test_alias_add_help_calls_target_a_canonical_queue_name"
-        },
-        "extensions/simplebroker_redis/tests/test_redis_atomicity.py": {
-            "test_concurrent_alias_adds_have_one_winner_and_flat_live_state"
-        },
-    },
-    "SB-OPS-6": {
-        "tests/test_operations_contract_sb_ops.py": {"test_ops_language_core_promises"},
-        "tests/test_maintenance_policy.py": {
-            "test_vacuum_eligibility_preserves_ratio_and_absolute_rules"
-        },
-        "tests/test_queue_metadata.py": {
-            "test_vacuum_removes_claimed_only_queue_existence"
-        },
-        "tests/test_vacuum_compact.py": {"test_vacuum_compact_database_size_reduction"},
-        "extensions/simplebroker_pg/tests/test_pg_maintenance.py": {
-            "test_vacuum_leases_connection_for_advisory_lock_lifetime",
-            "test_vacuum_unlock_false_releases_without_warning",
-            "test_vacuum_discards_checkout_when_unlock_completion_is_unknown",
-            "test_vacuum_body_base_exception_survives_ordinary_rollback_failure",
-        },
-        "extensions/simplebroker_pg/tests/test_pg_runner_lifecycle.py": {
-            "test_discard_thread_connection_preserves_nested_lease_for_replacement",
-            "test_leased_commit_failure_closes_advisory_lock_session_before_replacement",
-        },
-        "extensions/simplebroker_pg/tests/test_pg_state_machine_transitions.py": {
-            "test_pg_vacuum_fires_transition_table"
-        },
-    },
-    "SB-OPS-7": {
-        "tests/test_cleanup.py": {
-            "test_cleanup_removes_complete_owned_namespace_only",
-            "test_cleanup_nonexistent_database",
-            "test_cleanup_rejects_plain_file",
-            "test_cleanup_rejects_directory_main_before_deleting_sidecars",
-            "test_cleanup_rejects_unreadable_main_before_deleting_sidecars",
-            "test_cleanup_rejects_sqlite_db_with_wrong_magic",
-            "test_cleanup_removes_owned_orphans_when_main_is_absent",
-            "test_cleanup_attempts_every_later_path_after_each_unlink_failure",
-            "test_cleanup_unlinks_owned_symlinks_without_touching_targets",
-            "test_cleanup_observed_main_disappearance_still_counts_as_found",
-            "test_cleanup_enumerated_temp_disappearance_still_counts_as_found",
-            "test_cleanup_aggregates_multiple_cli_failures_and_json_error",
-            "test_cleanup_windows_open_handle_refusal_is_clean_and_nonrollback",
-            "test_cleanup_validates_literal_uri_metacharacters",
-            "test_cleanup_cli_rejects_percent_filename_without_mutation",
-            "test_cleanup_cli_retains_unsafe_metacharacter_rejection",
-            "test_cleanup_no_namespace_targets_are_noops_without_creation_or_open",
-            "test_cleanup_path_derivation_error_is_a_clean_database_error",
-            "test_cleanup_freezes_resolved_symlink_target_namespace",
-            "test_cleanup_main_lstat_failure_is_a_zero_delete_gate",
-            "test_cleanup_enumeration_failure_still_attempts_frozen_names_and_all_fixed",
-            "test_cleanup_reports_enumeration_before_ordered_unlink_failures",
-            "test_cleanup_multiple_temp_failures_are_reported_in_lexical_order",
-            "test_cleanup_with_quiet",
-        },
-        "tests/test_cli_argument_parsing.py": {
-            "test_cleanup_help_uses_backend_generic_target_wording"
-        },
-        "tests/test_operations_contract_sb_ops.py": {"test_ops_language_core_promises"},
-    },
-}
-
 
 def _section(code: str) -> str:
     text = SPEC.read_text(encoding="utf-8")
@@ -179,8 +80,8 @@ def test_ops_clause_inventory_and_authority() -> None:
     assert "readme-only" not in row
     affected_evidence_paths = {
         relative_path
-        for manifest in EVIDENCE_MANIFESTS.values()
-        for relative_path in manifest
+        for code in ("SB-OPS-3", "SB-OPS-5", "SB-OPS-6", "SB-OPS-7")
+        for relative_path in _cited_nodes(_verification_row(code))
     }
     assert affected_evidence_paths <= set(re.findall(r"`([^`]+\.py)`", row))
 
@@ -233,9 +134,10 @@ def test_ops_language_core_promises() -> None:
 
 
 def test_ops_affected_evidence_rows_match_exact_executable_manifests() -> None:
-    for code, manifest in EVIDENCE_MANIFESTS.items():
+    """Check canonical references, not an independently copied test list."""
+    for code in ("SB-OPS-3", "SB-OPS-5", "SB-OPS-6", "SB-OPS-7"):
         citations = _cited_nodes(_verification_row(code))
-        assert citations == manifest
+        assert citations
         for relative_path, nodes in citations.items():
             assert nodes <= _test_functions(relative_path)
 

@@ -904,18 +904,25 @@ class TestQueueWatcher(WatcherTestBase):
         run_completed = threading.Event()
         watcher_created = threading.Event()
         watcher_ref = None
+        errors = []
 
         def run_watcher():
             nonlocal watcher_ref
-            watcher = QueueWatcher(
-                "test_queue",
-                lambda m, t: None,
-                db=broker_target,
-            )
-            watcher_ref = watcher
-            watcher_created.set()  # Signal that watcher is created
-            watcher.run_forever()
-            run_completed.set()
+            try:
+                watcher = QueueWatcher(
+                    "test_queue",
+                    lambda m, t: None,
+                    db=broker_target,
+                )
+                watcher_ref = watcher
+                watcher_created.set()
+                watcher.run_forever()
+                run_completed.set()
+            except BaseException as exc:
+                errors.append(exc)
+                raise
+            finally:
+                watcher_created.set()
 
         thread = threading.Thread(target=run_watcher)
         thread.start()
@@ -923,6 +930,7 @@ class TestQueueWatcher(WatcherTestBase):
             # Wait for watcher to be created with timeout
             if not watcher_created.wait(timeout=2.0):
                 pytest.fail("Watcher was not created within timeout")
+            assert errors == []
 
             assert thread.is_alive()
             assert not run_completed.is_set()
@@ -931,8 +939,12 @@ class TestQueueWatcher(WatcherTestBase):
             assert watcher_ref is not None
             watcher_ref.stop()
         finally:
+            if watcher_ref is not None:
+                watcher_ref.stop(join=False)
             thread.join(timeout=2.0)
 
+        assert not thread.is_alive()
+        assert errors == []
         assert run_completed.is_set()
 
     def test_polling_lifecycle(self, broker_target):
@@ -1162,8 +1174,8 @@ class TestQueueWatcher(WatcherTestBase):
         assert messages[0][0] == "msg3"
         assert messages[0][1] > ts_msg2
 
-    def test_after_timestamp_database_filtering(self, broker, broker_target):
-        """Test that after_timestamp filters at database level, not in Python."""
+    def test_after_timestamp_filters_watcher_delivery(self, broker, broker_target):
+        """The lower bound filters real watcher delivery, with exact bodies."""
         # Add first batch of messages
         for i in range(50):
             broker.write("test_queue", f"msg{i:03d}")
@@ -1613,11 +1625,12 @@ assert explicit._jitter_factor == 0.375
             text=True,
             capture_output=True,
             check=False,
+            timeout=scale_timeout_for_ci(5.0),
         )
 
         assert result.returncode == 0, result.stderr
 
-    def test_all_defaults_derive_from_one_isolated_canonical_snapshot(self):
+    def test_defaults_derive_from_ambient_free_canonical_config(self):
         result = subprocess.run(
             [
                 sys.executable,
@@ -1653,8 +1666,9 @@ parameter_keys = {
     "burst_sleep": "BURST_SLEEP",
     "jitter_factor": "JITTER_FACTOR",
 }
-# One module-scope resolution, explicitly ambient-free.
-assert calls == [{"env": {}}]
+# Each default resolution is ambient-free. The number of resolutions is not
+# a public contract; the values and their types are.
+assert calls and all(call.get("env") == {} for call in calls)
 for parameter, key in parameter_keys.items():
     default = parameters[parameter].default
     assert default == injected[key]
@@ -1670,6 +1684,7 @@ assert strategy._jitter_factor == injected["JITTER_FACTOR"]
             text=True,
             capture_output=True,
             check=False,
+            timeout=scale_timeout_for_ci(5.0),
         )
 
         assert result.returncode == 0, result.stderr
@@ -2025,13 +2040,13 @@ assert strategy._jitter_factor == injected["JITTER_FACTOR"]
         assert "data_version change callback failed" not in caplog.text
 
     @pytest.mark.sqlite_only
-    def test_polling_with_data_version(self, tmp_path):
-        """Test that polling uses PRAGMA data_version for efficient change detection."""
+    def test_sqlite_watcher_delivers_external_write(self, tmp_path):
+        """Real SQLite watcher delivery; dedicated strategy tests prove version hints."""
         from simplebroker.db import BrokerDB
 
         temp_db = tmp_path / "test.db"
 
-        # This test verifies the polling strategy detects changes quickly
+        # This integration proof permits either native activity or polling.
         with BrokerDB(temp_db) as db:
             messages_received = []
 
@@ -2043,7 +2058,7 @@ assert strategy._jitter_factor == injected["JITTER_FACTOR"]
             # Start watcher
             thread = watcher.run_in_thread()
             try:
-                # Write message - should be detected via data_version change
+                # A real write must be delivered regardless of wake mechanism.
                 db.write("version_test", "test_message")
 
                 assert wait_for_condition(

@@ -7,7 +7,6 @@ import os
 import pickle
 import sqlite3
 import threading
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -19,6 +18,7 @@ from typing import Any, get_type_hints
 
 import pytest
 
+import simplebroker._phaselock as phaselock_module
 from simplebroker._backend_plugins import get_backend_plugin
 from simplebroker._constants import resolve_config
 from simplebroker._exceptions import (
@@ -46,6 +46,7 @@ from simplebroker.project import (
 )
 
 from .conftest import run_cli
+from .helper_scripts.timing import scale_timeout_for_ci
 
 
 def _toml_basic_string(value: str) -> str:
@@ -670,6 +671,29 @@ def test_project_backend_setup_uses_config_file_phase_lock(
     state_lock = threading.Lock()
     initialized = False
     initialize_calls = 0
+    initialize_entered = threading.Event()
+    release_initialize = threading.Event()
+    second_waiting = threading.Event()
+    original_process_lock_for = phaselock_module._process_lock_for
+
+    class WitnessLock:
+        def __init__(self, lock):
+            self.lock = lock
+
+        def acquire(self, *, blocking):
+            acquired = self.lock.acquire(blocking=blocking)
+            if not acquired:
+                second_waiting.set()
+            return acquired
+
+        def release(self):
+            self.lock.release()
+
+    monkeypatch.setattr(
+        phaselock_module,
+        "_process_lock_for",
+        lambda path: WitnessLock(original_process_lock_for(path)),
+    )
 
     class CoordinatedPlugin:
         def validate_target(self, *args, **kwargs) -> None:
@@ -683,7 +707,8 @@ def test_project_backend_setup_uses_config_file_phase_lock(
             nonlocal initialized, initialize_calls
             with state_lock:
                 initialize_calls += 1
-            time.sleep(0.05)
+            initialize_entered.set()
+            assert release_initialize.wait(scale_timeout_for_ci(2.0))
             with state_lock:
                 initialized = True
 
@@ -702,16 +727,30 @@ def test_project_backend_setup_uses_config_file_phase_lock(
     )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [
-            executor.submit(
-                _initialize_project_backend_target,
-                target,
-                config=resolve_config(override={}),
+        futures = []
+        try:
+            futures.append(
+                executor.submit(
+                    _initialize_project_backend_target,
+                    target,
+                    config=resolve_config(override={}),
+                )
             )
-            for _ in range(2)
-        ]
+            assert initialize_entered.wait(scale_timeout_for_ci(2.0))
+            futures.append(
+                executor.submit(
+                    _initialize_project_backend_target,
+                    target,
+                    config=resolve_config(override={}),
+                )
+            )
+            # Positive evidence from the real phase lock dependency, not a
+            # sleep that a descheduled second actor can false-pass.
+            assert second_waiting.wait(scale_timeout_for_ci(2.0))
+        finally:
+            release_initialize.set()
         for future in futures:
-            future.result()
+            future.result(timeout=scale_timeout_for_ci(2.0))
 
     assert initialize_calls == 1
     assert Path(f"{config_path}.lock").exists()

@@ -231,7 +231,6 @@ _Verification_:
 - `tests/test_cli_rearrange_args.py::test_preparse_grammar_matches_constructed_parser`
 - `tests/test_cli_contract_sb_cli.py::test_sb_cli_3_write_token_matrix`
 - `tests/test_cli_contract_sb_cli.py::test_sb_cli_3_registered_write_tokens_reject_before_mutation`
-- `tests/test_cli_write_output.py::test_registered_non_write_option_rejects_without_target_mutation`
 - `tests/test_cli_global_options.py::test_registered_broadcast_message_requires_explicit_escape`
 
 ## JSON and related output shapes [SB-CLI-4]
@@ -604,7 +603,7 @@ _Implementation mapping_:
 - `[SB-CLI-4]` JSON identity representation:
   `tests/test_json_message_id_contract.py`,
   `tests/test_cli_write_output.py::test_write_json_prints_timestamp_only`,
-  `tests/test_status_command.py::test_status_json_output`, and
+  `tests/test_status_command.py::TestStatusCommand::test_status_json_output`, and
   `tests/test_cli_watch.py::TestWatchCommand::test_watch_json_includes_timestamps`
 - `tests/test_timestamp_selection_contract_sb_select.py` — [SB-CLI-5] structural
   bind with `[SB-SELECT-*]`

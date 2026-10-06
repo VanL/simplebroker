@@ -1,8 +1,8 @@
 """Property-based tests for queue-name validation and end-to-end usability.
 
-The validator (db.py:_validate_queue_name_cached) accepts names matching
-QUEUE_NAME_PATTERN (^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$ via .match()) up to
-MAX_QUEUE_NAME_LENGTH chars. Two contracts:
+The documented ASCII grammar accepts letters, digits or underscore first,
+then those characters plus period and hyphen, up to 512 characters.
+Two contracts:
 
 1. Everything the grammar accepts actually WORKS, end to end, on every
    backend (a name that validates but breaks storage would be a
@@ -16,15 +16,14 @@ where backend escaping differences would surface.
 from __future__ import annotations
 
 import itertools
+import string
 from typing import Literal
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from simplebroker._constants import MAX_QUEUE_NAME_LENGTH
 from simplebroker._exceptions import QueueNameError
-from simplebroker.db import QUEUE_NAME_PATTERN
 
 pytestmark = pytest.mark.shared
 
@@ -33,12 +32,16 @@ pytestmark = pytest.mark.shared
 # must use a queue name nobody else wrote to. See Part I section 4 caveat.
 _uniq = itertools.count()
 
-# st.from_regex deliberately exploits '$'-before-newline and can generate
-# trailing-"\n" strings; the validator uses fullmatch (finding F4, resolved)
-# and rejects those, so the strategy filters them out of the VALID set.
 # Length cap leaves room for the "_<n>" suffix.
-VALID_NAMES = st.from_regex(QUEUE_NAME_PATTERN).filter(
-    lambda s: len(s) <= MAX_QUEUE_NAME_LENGTH - 24 and not s.endswith("\n")
+# [SB-DELIVERY-8] is the independent oracle. Do not derive the accept set
+# from the validator, or a changed validator silently changes our cases too.
+_NAME_START = string.ascii_letters + string.digits + "_"
+_NAME_TAIL = _NAME_START + ".-"
+_NAME_LIMIT = 512
+VALID_NAMES = st.builds(
+    lambda first, tail: first + tail,
+    st.sampled_from(_NAME_START),
+    st.text(alphabet=_NAME_TAIL, max_size=_NAME_LIMIT - 25),
 )
 
 # exclude_categories=("Cs",): lone surrogates cannot be UTF-8 encoded, and
@@ -55,11 +58,12 @@ BODIES = st.text(
 
 
 def _validator_accepts(s: str) -> bool:
-    """Mirror db._validate_queue_name_cached's accept logic exactly."""
+    """The documented ASCII grammar, independent of the production regex."""
     return (
         bool(s)
-        and len(s) <= MAX_QUEUE_NAME_LENGTH
-        and bool(QUEUE_NAME_PATTERN.fullmatch(s))
+        and len(s) <= _NAME_LIMIT
+        and s[0] in _NAME_START
+        and all(character in _NAME_TAIL for character in s)
     )
 
 

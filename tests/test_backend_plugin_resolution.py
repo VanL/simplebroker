@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import threading
 from pathlib import Path
@@ -572,5 +573,23 @@ def test_first_party_extension_plugins_declare_literal_backend_api_version(
 ) -> None:
     plugin_source = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
 
-    assert f"backend_api_version = {BACKEND_API_VERSION}" in plugin_source
-    assert "backend_api_version = BACKEND_API_VERSION" not in plugin_source
+    declarations = []
+    for node in ast.walk(ast.parse(plugin_source)):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id == "backend_api_version"
+            for target in targets
+        ):
+            declarations.append(node.value)
+    assert len(declarations) == 1
+    value = declarations[0]
+    # A literal remains meaningful in an independently installed extension;
+    # aliasing the host core version would disguise incompatibility.
+    assert isinstance(value, ast.Constant)
+    assert type(value.value) is int
+    assert value.value == BACKEND_API_VERSION

@@ -616,39 +616,33 @@ class TestWatcherEdgeCases(WatcherTestBase):
         assert entered_run_loop.is_set()
         assert signal.getsignal(signal.SIGINT) is handler_before
 
-    def test_absolute_timeout_exceeded(self, broker_target) -> None:
+    def test_absolute_timeout_exceeded(self, broker_target, monkeypatch) -> None:
         """Test that watcher fails after MAX_TOTAL_RETRY_TIME."""
         with self.create_test_watcher(
             broker_target,
             "queue",
             lambda m, t: None,
         ) as watcher:
-            # Mock time.monotonic() to simulate time passing faster
-            original_time = time.monotonic
-            start_real_time = original_time()
-
-            def mock_time():
-                # Make time appear to pass 100x faster
-                elapsed = original_time() - start_real_time
-                return start_real_time + (elapsed * 100)
+            clock = 0.0
 
             # Mock drain_queue to always fail
             def failing_drain() -> NoReturn:
-                # Use real sleep to let the retry loop run
-                time.sleep(0.01)
+                nonlocal clock
+                clock = watcher_module.MAX_TOTAL_RETRY_TIME + 1.0
                 msg = "Persistent failure"
                 raise WatcherTestError(msg)
 
             watcher._drain_queue = failing_drain  # type: ignore[method-assign]  # intentional private retry seam
 
-            # Patch time.monotonic to make timeout trigger quickly
-            with patch("simplebroker.watcher._monotonic", mock_time):
-                # Should raise TimeoutError after simulated 300s (3s real time)
+            monkeypatch.setattr(
+                watcher_module, "interruptible_sleep", lambda *_args: True
+            )
+            with patch("simplebroker.watcher._monotonic", lambda: clock):
                 with pytest.raises(TimeoutError) as exc_info:
                     watcher.run_forever()
 
                 assert "retry timeout exceeded" in str(exc_info.value)
-                assert "300s" in str(exc_info.value)  # Default timeout
+                assert f"{watcher_module.MAX_TOTAL_RETRY_TIME}s" in str(exc_info.value)
 
     def test_interruptible_sleep_responsiveness(self, broker, broker_target) -> None:
         """Test that watcher responds quickly to stop signals."""

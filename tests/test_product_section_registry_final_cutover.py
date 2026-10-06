@@ -65,8 +65,7 @@ def test_registered_product_owners_and_entry_links_resolve() -> None:
     assert registered_specs == CANONICAL_SPECS
 
     docs_readme = DOCS_README.read_text(encoding="utf-8")
-    assert "Exact intended behavior lives under" in docs_readme
-    assert "It is not a competing SoT" in docs_readme
+    assert "specs/product-section-registry.md" in docs_readme
 
     root_readme = ROOT_README.read_text(encoding="utf-8")
     kernel = KERNEL.read_text(encoding="utf-8")

@@ -151,13 +151,14 @@ def test_migrate_schema_applies_all_postgres_migrations_in_one_transaction() -> 
     assert versions == list(range(2, PostgresBackendPlugin.schema_version + 1))
 
 
-def test_migrate_schema_from_previous_version_rebuilds_v6_layout() -> None:
-    runner = RecordingRunner(live_version=PostgresBackendPlugin.schema_version - 1)
+def test_migrate_schema_from_historical_v5_rebuilds_public_id_layout() -> None:
+    # v5 is a persisted historical input, not whichever version precedes current.
+    runner = RecordingRunner(live_version=5)
     versions: list[int] = []
 
     migrate_schema(
         runner,
-        current_version=PostgresBackendPlugin.schema_version - 1,
+        current_version=5,
         write_schema_version=versions.append,
     )
 
@@ -166,7 +167,7 @@ def test_migrate_schema_from_previous_version_rebuilds_v6_layout() -> None:
     assert "DROP COLUMN order_id RESTRICT" in joined
     assert CREATE_QUEUE_TS_INDEX in runner.statements
     assert CREATE_PENDING_QUEUE_TS_INDEX in runner.statements
-    assert versions == [PostgresBackendPlugin.schema_version]
+    assert versions == list(range(6, PostgresBackendPlugin.schema_version + 1))
 
 
 def test_current_schema_shape_mismatch_repairs_indexes_then_rolls_back() -> None:
@@ -333,7 +334,10 @@ def test_inspect_schema_keeps_an_older_owned_shape_out_of_partial_state(
     monkeypatch.setattr(
         pg_validation, "inspect_schema", lambda *args, **kwargs: inspection
     )
-    with pytest.raises(DatabaseError, match="older than current version 6"):
+    with pytest.raises(
+        DatabaseError,
+        match=f"older than current version {PostgresBackendPlugin.schema_version}",
+    ):
         validate_target("postgresql://example/test")
     validate_target(
         "postgresql://example/test",

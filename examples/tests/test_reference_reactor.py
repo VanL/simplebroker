@@ -433,7 +433,9 @@ def test_base_reactor_composes_one_deadline_across_quiet_strategy_passes(
     assert budgets == pytest.approx([0.9, 0.6])
 
 
-def test_input_activity_wakes_background_reactor(tmp_path: Path) -> None:
+def test_input_activity_wakes_background_reactor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db_path = tmp_path / "reactor.db"
     processed = threading.Event()
 
@@ -442,6 +444,14 @@ def test_input_activity_wakes_background_reactor(tmp_path: Path) -> None:
         return {"source_queue": item.source_queue, "timestamp": item.timestamp}
 
     reactor = _make_reactor(db_path, processor=processor, worker_count=1)
+    wait_entered = threading.Event()
+    wait = reactor._strategy.wait_for_activity
+
+    def observe_wait(timeout: float | None = None) -> None:
+        wait_entered.set()
+        return wait(timeout)
+
+    monkeypatch.setattr(reactor._strategy, "wait_for_activity", observe_wait)
     thread = threading.Thread(
         target=reactor.run_until_stopped,
         kwargs={"poll_interval": 5.0},
@@ -449,7 +459,7 @@ def test_input_activity_wakes_background_reactor(tmp_path: Path) -> None:
     )
     thread.start()
     try:
-        time.sleep(0.1)
+        assert wait_entered.wait(timeout=1.0)
         _write_json(Queue(INBOX_A, db_path=str(db_path)), {"id": 1})
         assert processed.wait(timeout=1.0)
         _wait_for_outputs(db_path, 1, timeout=1.0)
@@ -529,6 +539,7 @@ def test_reactor_rejects_dynamic_queue_mutators(tmp_path: Path) -> None:
 
 def test_stop_during_startup_waits_for_drive_thread_before_closing(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "reactor.db"
     reactor = _make_reactor(db_path)
@@ -544,15 +555,28 @@ def test_stop_during_startup_waits_for_drive_thread_before_closing(
     reactor._ensure_polling_strategy_started = delayed_strategy_start  # type: ignore[method-assign]
 
     thread = reactor.start()
-    assert strategy_entered.wait(timeout=2.0)
-    stopper = threading.Thread(target=reactor.stop)
-    stopper.start()
-    time.sleep(0.05)
-    assert stopper.is_alive()
+    join_entered = threading.Event()
+    join = thread.join
 
-    release_strategy.set()
-    stopper.join(timeout=2.0)
-    thread.join(timeout=2.0)
+    def observe_join(timeout: float | None = None) -> None:
+        join_entered.set()
+        return join(timeout)
+
+    monkeypatch.setattr(thread, "join", observe_join)
+    stopper = None
+    try:
+        assert strategy_entered.wait(timeout=2.0)
+        stopper = threading.Thread(target=reactor.stop)
+        stopper.start()
+        assert join_entered.wait(timeout=2.0)
+        assert not reactor._resources_closed
+    finally:
+        release_strategy.set()
+        if stopper is not None:
+            stopper.join(timeout=2.0)
+        thread.join(timeout=2.0)
+        reactor.stop()
+    assert stopper is not None
     assert not stopper.is_alive()
     assert not thread.is_alive()
     assert reactor._resources_closed
@@ -560,6 +584,7 @@ def test_stop_during_startup_waits_for_drive_thread_before_closing(
 
 def test_stop_waits_for_manual_drive_thread_before_closing_queues(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "reactor.db"
     _write_json(Queue(INBOX_A, db_path=str(db_path)), {"id": 1})
@@ -578,16 +603,28 @@ def test_stop_waits_for_manual_drive_thread_before_closing_queues(
 
     thread = threading.Thread(target=reactor.run_until_stopped, daemon=True)
     thread.start()
-    assert publish_entered.wait(timeout=2.0)
+    join_entered = threading.Event()
+    join = thread.join
 
-    stopper = threading.Thread(target=reactor.stop)
-    stopper.start()
-    time.sleep(0.05)
-    assert stopper.is_alive()
+    def observe_join(timeout: float | None = None) -> None:
+        join_entered.set()
+        return join(timeout)
 
-    release_publish.set()
-    stopper.join(timeout=2.0)
-    thread.join(timeout=2.0)
+    monkeypatch.setattr(thread, "join", observe_join)
+    stopper = None
+    try:
+        assert publish_entered.wait(timeout=2.0)
+        stopper = threading.Thread(target=reactor.stop)
+        stopper.start()
+        assert join_entered.wait(timeout=2.0)
+        assert not reactor._resources_closed
+    finally:
+        release_publish.set()
+        if stopper is not None:
+            stopper.join(timeout=2.0)
+        thread.join(timeout=2.0)
+        reactor.stop()
+    assert stopper is not None
     assert not stopper.is_alive()
     assert not thread.is_alive()
     assert len(_read_json_messages(OUTBOX, db_path)) == 1
@@ -1557,6 +1594,8 @@ def test_per_queue_single_inflight_preserves_source_order(tmp_path: Path) -> Non
     active_lock = threading.Lock()
     overlap_errors: list[str] = []
     cross_queue_overlap = threading.Event()
+    release_first_work = threading.Event()
+    first_seen_sources: set[str] = set()
 
     def processor(item: WorkItem) -> dict[str, Any]:
         with active_lock:
@@ -1565,8 +1604,11 @@ def test_per_queue_single_inflight_preserves_source_order(tmp_path: Path) -> Non
             active_sources.add(item.source_queue)
             if len(active_sources) > 1:
                 cross_queue_overlap.set()
+            first_for_source = item.source_queue not in first_seen_sources
+            first_seen_sources.add(item.source_queue)
         try:
-            time.sleep(0.02)
+            if first_for_source:
+                assert release_first_work.wait(timeout=2.0)
             return {"source_queue": item.source_queue, "timestamp": item.timestamp}
         finally:
             with active_lock:
@@ -1575,6 +1617,8 @@ def test_per_queue_single_inflight_preserves_source_order(tmp_path: Path) -> Non
     reactor = _make_reactor(db_path, processor=processor, worker_count=4)
     thread = reactor.start()
     try:
+        assert cross_queue_overlap.wait(timeout=2.0)
+        release_first_work.set()
         _wait_for_outputs(db_path, 4)
         assert overlap_errors == []
         assert cross_queue_overlap.is_set()
@@ -1589,4 +1633,5 @@ def test_per_queue_single_inflight_preserves_source_order(tmp_path: Path) -> Non
         ]
         assert inbox_a_timestamps == sorted(inbox_a_timestamps)
     finally:
+        release_first_work.set()
         _stop_reactor(reactor, thread)

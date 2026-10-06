@@ -227,8 +227,8 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
 
         # Wait for both to back off
         def both_backed_off():
-            active_delays = active_strategy.delay_history
-            idle_delays = idle_strategy.delay_history
+            active_delays = active_strategy.get_delay_history()
+            idle_delays = idle_strategy.get_delay_history()
             if len(active_delays) < 20 or len(idle_delays) < 20:
                 return False
             # Check recent delays are non-zero
@@ -249,11 +249,12 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
         )
 
         # Record delay counts before message
-        active_delays_before = len(active_strategy.delay_history)
-        idle_delays_before = len(idle_strategy.delay_history)
+        active_delays_before = len(active_strategy.get_delay_history())
+        idle_delays_before = len(idle_strategy.get_delay_history())
 
         # Write to active queue only
         broker.write("active_queue", "message")
+        idle_delays_after_write = len(idle_strategy.get_delay_history())
 
         # Wait for active watcher to process
         drive_until(
@@ -268,21 +269,41 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
             },
         )
 
-        # Give time for more polling cycles
-        time.sleep(0.2)
+        drive_until(
+            lambda: (
+                # A native wait loops internally without returning to the
+                # watcher. New recorded decisions witness those real waits
+                # too; the second decision follows a completed first wait.
+                len(idle_strategy.get_delay_history()) > idle_delays_after_write + 1
+                and sum(
+                    delay == 0
+                    for delay in active_strategy.get_delay_history()[
+                        active_delays_before:
+                    ]
+                )
+                >= 3
+            ),
+            timeout=1.0,
+            message="post-write idle decisions and active burst were not completed",
+            diagnostics=lambda: {
+                "idle_delays_after_write": idle_delays_after_write,
+                "idle_polling": _polling_diagnostics(idle_strategy),
+                "active_polling": _polling_diagnostics(active_strategy),
+            },
+        )
 
         # Active watcher should show burst mode (zero delays)
-        active_new_delays = active_strategy.delay_history[active_delays_before:]
+        active_new_delays = active_strategy.get_delay_history()[active_delays_before:]
         active_zero_count = sum(1 for d in active_new_delays if d == 0)
         assert active_zero_count >= 3, (
             f"Active watcher should reset to burst, got {active_zero_count} zero delays"
         )
 
         # Idle watcher should continue with non-zero delays
-        idle_new_delays = idle_strategy.delay_history[idle_delays_before:]
-        if len(idle_new_delays) > 0:
-            idle_zero_count = sum(1 for d in idle_new_delays if d == 0)
-            assert idle_zero_count == 0, "Idle watcher should not have zero delays"
+        idle_new_delays = idle_strategy.get_delay_history()[idle_delays_before:]
+        assert idle_new_delays
+        idle_zero_count = sum(1 for d in idle_new_delays if d == 0)
+        assert idle_zero_count == 0, "Idle watcher should not have zero delays"
 
     finally:
         if active_watcher is not None:

@@ -478,6 +478,33 @@ def _redis_url_for_benchmark(settings: BenchmarkSettings):
             _cleanup_container(container_name)
 
 
+@contextmanager
+def _owned_benchmark_project(backend: str, workload: str) -> Iterator[Path]:
+    """Retain project identity until remote cleanup has run, even on failure."""
+    with tempfile.TemporaryDirectory(
+        prefix=f"simplebroker-bench-{backend}-{workload}-"
+    ) as tempdir:
+        cwd = Path(tempdir)
+        failure: BaseException | None = None
+        try:
+            yield cwd
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            try:
+                if backend == POSTGRES_TEST_BACKEND:
+                    _cleanup_postgres_projects(cwd)
+                if backend == REDIS_TEST_BACKEND:
+                    _cleanup_redis_projects(cwd)
+            except Exception as cleanup_failure:
+                if failure is None:
+                    raise
+                failure.add_note(
+                    f"Benchmark project cleanup failed: {cleanup_failure!r}"
+                )
+
+
 def run_benchmarks(settings: BenchmarkSettings) -> list[BenchmarkResult]:
     """Run the configured benchmarks and return raw iteration results."""
     settings.validate()
@@ -499,15 +526,8 @@ def run_benchmarks(settings: BenchmarkSettings) -> list[BenchmarkResult]:
                     workload = WORKLOADS[workload_name]
                     total_runs = settings.warmups + settings.iterations
                     for run_index in range(total_runs):
-                        with tempfile.TemporaryDirectory(
-                            prefix=f"simplebroker-bench-{backend}-{workload.name}-"
-                        ) as tempdir:
-                            cwd = Path(tempdir)
+                        with _owned_benchmark_project(backend, workload.name) as cwd:
                             operations, elapsed = workload.runner(cwd, env, settings)
-                            if backend == POSTGRES_TEST_BACKEND:
-                                _cleanup_postgres_projects(cwd)
-                            if backend == REDIS_TEST_BACKEND:
-                                _cleanup_redis_projects(cwd)
 
                         if run_index < settings.warmups:
                             continue

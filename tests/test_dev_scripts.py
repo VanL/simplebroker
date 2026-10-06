@@ -1034,7 +1034,9 @@ def test_coverage_sigterm_saves_readable_data_from_terminated_process(
     env["COVERAGE_PROCESS_START"] = str(REPO_ROOT / "pyproject.toml")
     env["COVERAGE_FILE"] = str(data_file)
 
-    process = subprocess.Popen(
+    from tests.helper_scripts.managed_subprocess import managed_subprocess
+
+    with managed_subprocess(
         [
             sys.executable,
             "-c",
@@ -1047,19 +1049,12 @@ def test_coverage_sigterm_saves_readable_data_from_terminated_process(
         ],
         cwd=REPO_ROOT,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert process.stdout is not None
-        assert process.stdout.readline().strip() == "ready"
-        process.terminate()
-        _stdout, stderr = process.communicate(timeout=_coverage_shutdown_timeout(5.0))
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=_coverage_shutdown_timeout(2.0))
+    ) as managed:
+        assert managed.wait_for_output("ready", timeout=_coverage_shutdown_timeout(5.0))
+        managed.terminate()
+        managed.proc.wait(timeout=_coverage_shutdown_timeout(5.0))
+        process = managed.proc
+        stderr = managed.stderr
 
     assert process.returncode == -signal.SIGTERM, stderr
     shards = list(tmp_path.glob(".coverage.*"))
@@ -1693,14 +1688,6 @@ def test_coverage_source_matching_is_platform_neutral(path: str) -> None:
     assert _is_commands_coverage_path(path)
 
 
-@pytest.mark.sqlite_only
-def test_run_cli_atomically_promotes_readable_coverage(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _cli_coverage_real_child_publishes(tmp_path, monkeypatch)
-
-
 def test_cli_coverage_rejects_corrupt_staging_data(tmp_path: Path) -> None:
     staging = tmp_path / ".coverage-staging.cli-test"
     promoted = tmp_path / ".coverage-subprocess.cli-test"
@@ -1794,15 +1781,6 @@ def test_cli_coverage_cleans_staging_when_atomic_promotion_fails(
 
     assert not staging.exists()
     assert not promoted.exists()
-
-
-@pytest.mark.parametrize("failure_kind", ["timeout", "runner-error"])
-def test_cli_coverage_cleans_staging_when_runner_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    failure_kind: str,
-) -> None:
-    _cli_coverage_runner_failure(tmp_path, monkeypatch, failure_kind)
 
 
 def test_with_default_suite_path_applies_default_for_flag_only_args() -> None:

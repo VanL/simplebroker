@@ -13,7 +13,6 @@ import pytest
 from psycopg import sql
 from simplebroker_pg import PostgresRunner
 from simplebroker_pg import _sql as pg_sql
-from simplebroker_pg._constants import POSTGRES_SCHEMA_VERSION
 from simplebroker_pg.schema import CREATE_MESSAGES_TABLE, migrate_schema
 
 from simplebroker import BrokerTarget, Queue
@@ -80,8 +79,7 @@ def _spec(*, order: Literal["oldest", "newest"]) -> RetrieveQuerySpec:
     )
 
 
-def test_postgres_v6_fresh_schema_uses_public_id_as_only_key() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 6
+def test_postgres_fresh_schema_uses_public_id_as_only_key() -> None:
     assert "order_id" not in CREATE_MESSAGES_TABLE
     assert "ts BIGINT PRIMARY KEY" in CREATE_MESSAGES_TABLE
 

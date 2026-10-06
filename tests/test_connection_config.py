@@ -149,24 +149,31 @@ def test_generator_override_inherits_core_snapshot_without_ambient_reread(
 def test_generator_retains_explicit_config_on_first_iteration(tmp_path: Path) -> None:
     config = resolve_config(override={"BROKER_AUTO_VACUUM": 0})
     runner = SQLiteRunner(str(tmp_path / "generator-entry-snapshot.db"), config=config)
-    supplied = {"GENERATOR_BATCH_SIZE": 1}
     operation_config = resolve_config(
         config=config,
-        override={"BROKER_" + key: value for key, value in (supplied).items()},
+        override={"BROKER_GENERATOR_BATCH_SIZE": 1},
     )
     with BrokerCore(runner, config=config) as core:
         core.write("jobs", "one")
+        core.write("jobs", "two")
+        core.write("jobs", "three")
         messages: Any = core.claim_generator(
             "jobs",
             with_timestamps=False,
             delivery_guarantee="at_least_once",
             config=operation_config,
         )
-        supplied["GENERATOR_BATCH_SIZE"] = 2
         try:
             assert next(messages) == "one"
+            assert next(messages) == "two"
         finally:
             messages.close()
+        # At-least-once commits only completed batches. Closing midway through
+        # the second batch must retain its row, unlike the core's default batch.
+        assert core.peek_many("jobs", limit=10, with_timestamps=False) == [
+            "two",
+            "three",
+        ]
 
 
 def test_broker_core_merges_partial_config_with_defaults(tmp_path: Path) -> None:

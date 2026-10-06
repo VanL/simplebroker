@@ -84,7 +84,6 @@ def test_real_watcher_queue_isolation(broker_target) -> None:
 
     watchers = [QueueWatcher(queue, handler_for(queue.name)) for queue in queues]
     writer = make_broker(broker_target)
-
     try:
         for watcher in watchers:
             watcher.run_in_thread()
@@ -118,7 +117,9 @@ def test_real_watcher_queue_isolation(broker_target) -> None:
         writer.shutdown()
 
 
-def test_unrelated_write_does_not_drain_idle_watchers(broker_target) -> None:
+def test_unrelated_write_does_not_drain_idle_watchers(
+    broker_target, monkeypatch
+) -> None:
     """A database-level wake never enters delivery on unrelated queues."""
     queues = [
         RecordingQueue(f"queue_{index}", db_path=broker_target, persistent=True)
@@ -140,25 +141,39 @@ def test_unrelated_write_does_not_drain_idle_watchers(broker_target) -> None:
 
     watchers = [QueueWatcher(queue, handler_for(queue.name)) for queue in queues]
     writer = make_broker(broker_target)
+    completed_turns = dict.fromkeys((queue.name for queue in queues), 0)
+    turn_lock = threading.Lock()
+    for watcher, watched in zip(watchers, queues, strict=True):
+        wait = watcher._strategy.wait_for_activity
+
+        def observe_wait(timeout=None, *, queue_name=watched.name, delegate=wait):
+            # Re-entering the wait acknowledges the previous drain or
+            # pending-message decision, including its owner branch.
+            with turn_lock:
+                completed_turns[queue_name] += 1
+            return delegate(timeout)
+
+        monkeypatch.setattr(watcher._strategy, "wait_for_activity", observe_wait)
+
+    def snapshot_turns():
+        with turn_lock:
+            return dict(completed_turns)
 
     try:
         for watcher in watchers:
             watcher.run_in_thread()
         assert wait_for_condition(
-            lambda: all(queue.delivery_call_count() >= 1 for queue in queues),
+            lambda: all(snapshot_turns().values()),
             timeout=_watcher_timeout(broker_target),
             message="all watcher initial drains must finish before measurement",
         )
         baselines = {queue.name: queue.delivery_call_count() for queue in queues}
-        precheck_baselines = {
-            queue.name: queue.pending_check_count() for queue in queues
-        }
-
         writer.write("queue_0", "only target")
+        post_write_turns = snapshot_turns()
         assert delivered.wait(timeout=_watcher_timeout(broker_target))
         assert wait_for_condition(
             lambda: all(
-                queue.pending_check_count() > precheck_baselines[queue.name]
+                snapshot_turns()[queue.name] > post_write_turns[queue.name] + 1
                 for queue in queues[1:]
             ),
             timeout=_watcher_timeout(broker_target),

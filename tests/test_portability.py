@@ -71,6 +71,7 @@ print(f"{stat.S_IMODE(os.stat(sys.argv[1]).st_mode):04o} {body}")
         check=False,
         capture_output=True,
         text=True,
+        timeout=30,
     )
 
     assert completed.returncode == 0, completed.stderr

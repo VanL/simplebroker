@@ -148,8 +148,16 @@ class TestDefaultErrorHandler:
         for i, record in enumerate(caplog.records):
             assert f"Handler error: {exceptions[i]}" in record.getMessage()
 
-    def test_default_error_handler_has_no_broker_config_dependency(self, caplog):
+    def test_default_error_handler_has_no_broker_config_dependency(
+        self, caplog, monkeypatch
+    ):
         """Test that default_error_handler always logs without broker config."""
+
+        def reject_config(**kwargs):
+            raise AssertionError("default error logging must not resolve broker config")
+
+        monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "not-an-integer")
+        monkeypatch.setattr("simplebroker.watcher.resolve_config", reject_config)
         with caplog.at_level(logging.ERROR, logger="simplebroker.watcher"):
             exc = ValueError("Should still be logged")
             result = default_error_handler(exc, "test", 7777777777)

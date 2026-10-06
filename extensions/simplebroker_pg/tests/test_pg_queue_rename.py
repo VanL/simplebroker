@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
+from collections.abc import Callable
 from typing import Any, cast
 
 import psycopg
@@ -191,6 +192,7 @@ def test_postgres_rename_waits_for_write_like_table_lock(
     pg_dsn: str,
     pg_schema: str,
     pg_plugin: BackendPlugin,
+    pg_wait_for_blocked: Callable[[list[int], int, threading.Event, float], None],
 ) -> None:
     pg_core.write("old", "payload")
     rename_runner = PostgresRunner(pg_dsn, schema=pg_schema)
@@ -198,9 +200,12 @@ def test_postgres_rename_waits_for_write_like_table_lock(
     finished = threading.Event()
     results: list[object] = []
     errors: list[BaseException] = []
+    contender_pids: list[int] = []
+    thread: threading.Thread | None = None
 
     def run_rename() -> None:
         try:
+            contender_pids.append(rename_runner._get_thread_conn().info.backend_pid)
             results.append(rename_core.rename_queue("old", "new"))
         except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
@@ -215,7 +220,7 @@ def test_postgres_rename_waits_for_write_like_table_lock(
 
             thread = threading.Thread(target=run_rename, daemon=True)
             thread.start()
-            assert finished.wait(0.2) is False
+            pg_wait_for_blocked(contender_pids, conn.info.backend_pid, finished, 3.0)
             conn.commit()
 
             assert finished.wait(3.0) is True
@@ -226,6 +231,8 @@ def test_postgres_rename_waits_for_write_like_table_lock(
         assert pg_core.peek_many("old", limit=10, with_timestamps=False) == []
         assert pg_core.peek_many("new", limit=10, with_timestamps=False) == ["payload"]
     finally:
+        if thread is not None and thread.ident is not None:
+            thread.join(timeout=3.0)
         rename_core.close()
         rename_runner.shutdown()
 
@@ -337,8 +344,10 @@ def test_alias_mutation_finishes_before_rename_takes_metadata_lock(  # noqa: C90
             assert rename_core.resolve_alias("alias") is None
     finally:
         release_mutation.set()
-        mutation_thread.join(timeout=5.0)
-        rename_thread.join(timeout=5.0)
+        if mutation_thread.ident is not None:
+            mutation_thread.join(timeout=5.0)
+        if rename_thread.ident is not None:
+            rename_thread.join(timeout=5.0)
         mutation_core.close()
         rename_core.close()
         mutation_runner.shutdown()

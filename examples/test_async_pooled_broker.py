@@ -314,7 +314,7 @@ def test_generated_ids_follow_commit_order_under_forced_interleaving(
             ) -> Any:
                 if asyncio.current_task() is first_task:
                     first_write_reached_boundary.set()
-                    await release_first_write.wait()
+                    await asyncio.wait_for(release_first_write.wait(), timeout=5)
                 return await real_execute(operation, **kwargs)
 
             monkeypatch.setattr(broker, "_execute_with_retry", barrier_execute)
@@ -325,11 +325,22 @@ def test_generated_ids_follow_commit_order_under_forced_interleaving(
                 completion_order.append(label)
 
             first_task = asyncio.create_task(write("first-started"))
-            await first_write_reached_boundary.wait()
-            second_task = asyncio.create_task(write("second-started"))
-            await second_task
-            release_first_write.set()
-            await first_task
+            second_task = None
+            try:
+                await asyncio.wait_for(first_write_reached_boundary.wait(), timeout=5)
+                second_task = asyncio.create_task(write("second-started"))
+                await asyncio.wait_for(second_task, timeout=5)
+                release_first_write.set()
+                await asyncio.wait_for(first_task, timeout=5)
+            finally:
+                release_first_write.set()
+                tasks = [task for task in (first_task, second_task) if task is not None]
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True), timeout=5
+                )
 
         queue = Queue("jobs", db_path=str(db_path))
         try:
@@ -431,14 +442,25 @@ def test_cross_task_batch_close_clears_parent_and_inherited_child_state(
             release_child = asyncio.Event()
 
             async def inspect_after_close() -> list[tuple[str, int, int]]:
-                await release_child.wait()
+                await asyncio.wait_for(release_child.wait(), timeout=5)
                 return await broker.get_queue_stats()
 
             child = asyncio.create_task(inspect_after_close())
-            await asyncio.create_task(stream.aclose())
-            parent_stats = await broker.get_queue_stats()
-            release_child.set()
-            return parent_stats, await child
+            closer = asyncio.create_task(stream.aclose())
+            try:
+                await asyncio.wait_for(closer, timeout=5)
+                parent_stats = await broker.get_queue_stats()
+                release_child.set()
+                return parent_stats, await asyncio.wait_for(child, timeout=5)
+            finally:
+                release_child.set()
+                for task in (child, closer):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.wait_for(
+                    asyncio.gather(child, closer, return_exceptions=True), timeout=5
+                )
+                await asyncio.wait_for(stream.aclose(), timeout=5)
 
     parent_stats, child_stats = asyncio.run(exercise())
     for stats in (parent_stats, child_stats):
@@ -465,14 +487,23 @@ def test_task_created_before_batch_can_close_it_and_restore_messages(
             close_batch = asyncio.Event()
 
             async def close_later() -> None:
-                await close_batch.wait()
+                await asyncio.wait_for(close_batch.wait(), timeout=5)
                 await stream.aclose()
 
             closer = asyncio.create_task(close_later())
-            assert await anext(stream) == "one"
-            close_batch.set()
-            await closer
-            return await broker.get_queue_stats()
+            try:
+                assert await asyncio.wait_for(anext(stream), timeout=5) == "one"
+                close_batch.set()
+                await asyncio.wait_for(closer, timeout=5)
+                return await broker.get_queue_stats()
+            finally:
+                close_batch.set()
+                if not closer.done():
+                    closer.cancel()
+                await asyncio.wait_for(
+                    asyncio.gather(closer, return_exceptions=True), timeout=5
+                )
+                await asyncio.wait_for(stream.aclose(), timeout=5)
 
     stats = asyncio.run(exercise())
     assert {queue: (pending, total) for queue, pending, total in stats} == {
@@ -506,14 +537,22 @@ def test_cancelled_begin_releases_connection_and_allows_next_transaction(
 
         monkeypatch.setattr(aiosqlite.Connection, "execute", interrupt_begin)
         interrupted = asyncio.create_task(runner.begin_immediate())
-        await begin_started.wait()
-        interrupted.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await interrupted
+        try:
+            await asyncio.wait_for(begin_started.wait(), timeout=2)
+            interrupted.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(interrupted, timeout=2)
 
-        monkeypatch.setattr(aiosqlite.Connection, "execute", original_execute)
-        await asyncio.wait_for(runner.begin_immediate(), timeout=2)
-        await runner.rollback()
-        await runner.close()
+            monkeypatch.setattr(aiosqlite.Connection, "execute", original_execute)
+            await asyncio.wait_for(runner.begin_immediate(), timeout=2)
+            await runner.rollback()
+        finally:
+            if not interrupted.done():
+                interrupted.cancel()
+            await asyncio.wait_for(
+                asyncio.gather(interrupted, return_exceptions=True), timeout=2
+            )
+            monkeypatch.setattr(aiosqlite.Connection, "execute", original_execute)
+            await runner.close()
 
     asyncio.run(exercise())

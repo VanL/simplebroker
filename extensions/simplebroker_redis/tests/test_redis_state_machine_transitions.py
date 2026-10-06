@@ -262,6 +262,14 @@ def _redis_listener_unregisters_last(monkeypatch: pytest.MonkeyPatch) -> None:
 def _redis_listener_stop_wakes_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     with _started_listener(monkeypatch) as (listener, pubsub, client):
         registration = listener.register("jobs")
+        entered_wait = threading.Event()
+        original_wait = registration.condition.wait
+
+        def observed_wait(timeout: float | None = None) -> bool:
+            entered_wait.set()
+            return original_wait(timeout)
+
+        monkeypatch.setattr(registration.condition, "wait", observed_wait)
         result: list[bool] = []
         thread = threading.Thread(
             target=lambda: result.append(
@@ -273,8 +281,13 @@ def _redis_listener_stop_wakes_wait(monkeypatch: pytest.MonkeyPatch) -> None:
             )
         )
         thread.start()
-        listener.close()
-        thread.join(timeout=1.0)
+        try:
+            assert entered_wait.wait(1.0)
+            listener.close()
+            thread.join(timeout=1.0)
+        finally:
+            listener.close()
+            thread.join(timeout=1.0)
         assert not thread.is_alive()
         assert result == [False]
         assert not listener._thread.is_alive()

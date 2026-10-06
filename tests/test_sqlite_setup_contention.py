@@ -12,6 +12,7 @@ import textwrap
 import time
 import traceback
 from collections.abc import Iterator
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
 
@@ -66,6 +67,28 @@ def _communicate_success(proc: subprocess.Popen[str], *, timeout: float) -> str:
     return stdout
 
 
+def _reap_setup_child(proc: subprocess.Popen[str]) -> None:
+    with ExitStack() as streams:
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                streams.callback(stream.close)
+        if proc.poll() is None:
+            proc.kill()
+        proc.communicate(timeout=5.0)
+
+
+def _cleanup_setup_children(procs: list[subprocess.Popen[str]]) -> None:
+    primary_failure = sys.exc_info()[1]
+    try:
+        with ExitStack() as children:
+            for proc in procs:
+                children.callback(_reap_setup_child, proc)
+    except (OSError, subprocess.SubprocessError, ValueError) as cleanup_error:
+        if primary_failure is None:
+            raise
+        primary_failure.add_note(f"Setup child cleanup also failed: {cleanup_error}")
+
+
 def test_concurrent_first_writes_serialize_setup(tmp_path: Path) -> None:
     db_path = tmp_path / "broker.db"
     start_path = tmp_path / "start"
@@ -98,28 +121,32 @@ def test_concurrent_first_writes_serialize_setup(tmp_path: Path) -> None:
         """
     )
 
-    procs = [
-        subprocess.Popen(
-            [sys.executable, "-c", script, str(db_path), message, str(start_path)],
-            cwd=tmp_path,
-            env=_python_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-        )
-        for message in messages
-    ]
-
+    procs: list[subprocess.Popen[str]] = []
     try:
+        for message in messages:
+            procs.append(
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        script,
+                        str(db_path),
+                        message,
+                        str(start_path),
+                    ],
+                    cwd=tmp_path,
+                    env=_python_env(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                )
+            )
         start_path.touch()
         for proc in procs:
             _communicate_success(proc, timeout=scale_timeout_for_ci(20.0))
     finally:
-        for proc in procs:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait(timeout=5.0)
+        _cleanup_setup_children(procs)
 
     queue = Queue("setup_contention", persistent=True, db_path=str(db_path))
     try:
@@ -139,7 +166,7 @@ def test_first_write_retries_during_temporary_setup_lock(tmp_path: Path) -> None
     db_path = tmp_path / "broker.db"
     ready_path = tmp_path / "holder-ready"
     release_path = tmp_path / "holder-release"
-    writer_started_path = tmp_path / "writer-started"
+    writer_retry_path = tmp_path / "writer-retrying"
     holder_script = textwrap.dedent(
         """
         import sqlite3
@@ -169,10 +196,19 @@ def test_first_write_retries_during_temporary_setup_lock(tmp_path: Path) -> None
         from pathlib import Path
 
         from simplebroker import Queue
+        import simplebroker._retry_policy as retry_policy
 
         db_path = Path(sys.argv[1])
-        started_path = Path(sys.argv[2])
-        started_path.touch()
+        retry_path = Path(sys.argv[2])
+        sleep = retry_policy.interruptible_sleep
+
+        def observe_retry(delay, stop_event=None):
+            # Called by SB's retry owner only after a classified operation
+            # failure. Retain the real wait and do not retry at the caller.
+            retry_path.touch()
+            return sleep(delay, stop_event)
+
+        retry_policy.interruptible_sleep = observe_retry
 
         queue = Queue("setup_contention", persistent=True, db_path=str(db_path))
         try:
@@ -207,13 +243,17 @@ def test_first_write_retries_during_temporary_setup_lock(tmp_path: Path) -> None
             timeout=scale_timeout_for_ci(5.0),
             proc=holder,
         )
+        # Retry readiness is work, not mere process startup. Initial read-only
+        # validation can use SQLite's default five-second busy timeout. Share
+        # the existing writer completion budget instead of adding a new one.
+        writer_deadline = time.monotonic() + scale_timeout_for_ci(20.0)
         writer = subprocess.Popen(
             [
                 sys.executable,
                 "-c",
                 writer_script,
                 str(db_path),
-                str(writer_started_path),
+                str(writer_retry_path),
             ],
             cwd=tmp_path,
             env=_python_env(),
@@ -223,20 +263,16 @@ def test_first_write_retries_during_temporary_setup_lock(tmp_path: Path) -> None
             encoding="utf-8",
         )
         _wait_for_path(
-            writer_started_path,
-            timeout=scale_timeout_for_ci(5.0),
+            writer_retry_path,
+            timeout=max(0, writer_deadline - time.monotonic()),
             proc=writer,
         )
-        time.sleep(1.0)
         release_path.touch()
         _communicate_success(holder, timeout=scale_timeout_for_ci(10.0))
-        _communicate_success(writer, timeout=scale_timeout_for_ci(20.0))
+        _communicate_success(writer, timeout=max(0, writer_deadline - time.monotonic()))
     finally:
         release_path.touch()
-        for proc in (writer, holder):
-            if proc is not None and proc.poll() is None:
-                proc.kill()
-                proc.wait(timeout=5.0)
+        _cleanup_setup_children([proc for proc in (writer, holder) if proc is not None])
 
     queue = Queue("setup_contention", persistent=True, db_path=str(db_path))
     try:

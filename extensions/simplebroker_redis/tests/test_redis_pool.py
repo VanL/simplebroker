@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
+import select
 import signal
 import threading
 import time
 from pathlib import Path
-from types import FrameType
 from typing import Any, cast
 
 import pytest
@@ -20,6 +20,61 @@ from simplebroker import BrokerSession, BrokerTarget, resolve_config
 from simplebroker._exceptions import DatabaseError, OperationalError
 
 pytestmark = [pytest.mark.redis_only]
+
+
+def _read_child_result(child: int, read_fd: int, timeout: float) -> tuple[bytes, int]:
+    """Bound the whole result/reap phase, including a child stuck on a mutex."""
+    deadline = time.monotonic() + timeout
+    ready, _, _ = select.select([read_fd], [], [], timeout)
+    assert ready, f"child {child} did not report before the fork deadline"
+    result = os.read(read_fd, 4096)
+    while time.monotonic() < deadline:
+        reaped, status = os.waitpid(child, os.WNOHANG)
+        if reaped:
+            return result, status
+        time.sleep(0.01)
+    raise AssertionError(f"child {child} reported {result!r} but did not exit")
+
+
+def _cleanup_child(child: int | None, *descriptors: int) -> None:
+    """Reap an unfinished child and always release the parent's pipe ends."""
+    try:
+        if child is not None:
+            os.kill(child, signal.SIGKILL)
+            os.waitpid(child, 0)
+    finally:
+        for descriptor in descriptors:
+            if descriptor != -1:
+                os.close(descriptor)
+
+
+class _PauseOnEnter:
+    """Hold the real owned lock/condition at entry, without source-line tracing."""
+
+    def __init__(
+        self, lock: Any, paused: threading.Event, resume: threading.Event
+    ) -> None:
+        self.lock = lock
+        self.paused = paused
+        self.resume = resume
+        self.owner: threading.Thread | None = None
+
+    def __enter__(self) -> Any:
+        value = self.lock.__enter__()
+        try:
+            if threading.current_thread() is self.owner and not self.paused.is_set():
+                self.paused.set()
+                assert self.resume.wait(15)
+            return value
+        except BaseException:
+            self.lock.__exit__(None, None, None)
+            raise
+
+    def __exit__(self, *args: object) -> Any:
+        return self.lock.__exit__(*args)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.lock, name)
 
 
 def test_runner_uses_blocking_connection_pool(
@@ -177,57 +232,66 @@ def test_inherited_broker_session_rejects_while_queue_recovers(
     plugin = get_backend_plugin()
     session = BrokerSession.connect(target)
     queue = session.queue("parent")
-    queue.write("before")
     lock_held = threading.Event()
     release_lock = threading.Event()
 
     def hold_handle_lock() -> None:
         with session._lock:
             lock_held.set()
-            assert release_lock.wait(10.0)
+            release_lock.wait()
 
     holder = threading.Thread(target=hold_handle_lock)
-    holder.start()
-    assert lock_held.wait(10.0)
-    read_fd, write_fd = os.pipe()
-    child = os.fork()
-    if child == 0:
-        os.close(read_fd)
-        result = b"failed"
-        try:
-            for action in (
-                lambda: session.queue("child"),
-                session.recycle_thread,
-                session.__enter__,
-            ):
-                with pytest.raises(RuntimeError, match="Create a new session"):
-                    action()
-            with (
-                pytest.raises(RuntimeError, match="Create a new session"),
-                session.connection(),
-            ):
-                pass
-            session.close()
-            queue.write("from-child")
-            fresh = BrokerSession.connect(target)
-            fresh.queue("fresh").write("payload")
-            fresh.close()
-            result = b"passed"
-        finally:
-            os.write(write_fd, result)
-            os._exit(0)
-
-    os.close(write_fd)
+    read_fd = write_fd = -1
+    child: int | None = None
     try:
-        assert os.read(read_fd, 32) == b"passed"
-        _, wait_status = os.waitpid(child, 0)
+        queue.write("before")
+        holder.start()
+        assert lock_held.wait(10.0)
+        read_fd, write_fd = os.pipe()
+        child = os.fork()
+        if child == 0:
+            os.close(read_fd)
+            result = b"failed"
+            try:
+                for action in (
+                    lambda: session.queue("child"),
+                    session.recycle_thread,
+                    session.__enter__,
+                ):
+                    with pytest.raises(RuntimeError, match="Create a new session"):
+                        action()
+                with (
+                    pytest.raises(RuntimeError, match="Create a new session"),
+                    session.connection(),
+                ):
+                    pass
+                session.close()
+                queue.write("from-child")
+                with BrokerSession.connect(target) as fresh:
+                    fresh.queue("fresh").write("payload")
+                result = b"passed"
+            finally:
+                os.write(write_fd, result)
+                os._exit(0 if result == b"passed" else 1)
+
+        os.close(write_fd)
+        write_fd = -1
+        result, wait_status = _read_child_result(child, read_fd, 10.0)
+        child = None
+        assert result == b"passed"
         assert os.WIFEXITED(wait_status) and os.WEXITSTATUS(wait_status) == 0
     finally:
-        release_lock.set()
-        holder.join(timeout=10.0)
-        queue.close()
-        session.close()
-        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+        try:
+            _cleanup_child(child, read_fd, write_fd)
+        finally:
+            release_lock.set()
+            if holder.ident is not None:
+                holder.join(timeout=10.0)
+            queue.close()
+            session.close()
+            plugin.cleanup_target(
+                redis_url, backend_options={"namespace": redis_namespace}
+            )
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
@@ -539,14 +603,9 @@ def test_activity_waiter_does_not_consume_command_pool_slot(
 def test_public_persistent_queue_recovers_child_owned_session(
     redis_url: str, redis_namespace: str, tmp_path: Path, held: str
 ) -> None:
-    import inspect
-    import select
-    import sys
     from concurrent.futures import ThreadPoolExecutor
 
     from simplebroker import BrokerTarget, Queue
-    from simplebroker._broker_session import _ProcessBrokerSession
-    from simplebroker.db import DBConnection
 
     config_path = tmp_path / "project.toml"
     config_path.write_text("version = 1\n")
@@ -555,31 +614,6 @@ def test_public_persistent_queue_recovers_child_owned_session(
     )
     paused = threading.Event()
     resume = threading.Event()
-    method = (
-        DBConnection._ensure_project_target_initialized
-        if held == "project"
-        else _ProcessBrokerSession._begin_operation
-    )
-    source, first_line = inspect.getsourcelines(method)
-    fragment = (
-        "if self._project_setup_complete:"
-        if held == "project"
-        else "if self._closed or self._closing:"
-    )
-    line_number = first_line + next(
-        i for i, line in enumerate(source) if line.strip() == fragment
-    )
-
-    def trace(frame: FrameType, event: str, arg: object) -> Any:
-        if (
-            event == "line"
-            and frame.f_code is method.__code__
-            and frame.f_lineno == line_number
-        ):
-            paused.set()
-            assert resume.wait(15)
-        return trace
-
     try:
         with Queue("fork_jobs", db_path=target, persistent=True) as queue:
             if held != "project":
@@ -590,21 +624,27 @@ def test_public_persistent_queue_recovers_child_owned_session(
             inherited_key = queue.conn._shared_key
             assert inherited is not None
 
+            gate: _PauseOnEnter | None = None
+            if held == "project":
+                gate = _PauseOnEnter(queue.conn._project_setup_lock, paused, resume)
+                cast(Any, queue.conn)._project_setup_lock = gate
+            elif held == "admission":
+                gate = _PauseOnEnter(inherited._operation_condition, paused, resume)
+                cast(Any, inherited)._operation_condition = gate
+
             def parent_write() -> None:
-                try:
-                    if held != "none":
-                        sys.settrace(trace)
-                    else:
-                        paused.set()
-                    queue.write("parent")
-                finally:
-                    sys.settrace(None)
+                if gate is not None:
+                    gate.owner = threading.current_thread()
+                else:
+                    paused.set()
+                queue.write("parent")
 
             executor = ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(parent_write)
-            read_fd, write_fd = os.pipe()
+            read_fd = write_fd = -1
             child_pid = None
             try:
+                future = executor.submit(parent_write)
+                read_fd, write_fd = os.pipe()
                 assert paused.wait(5)
                 if held == "none":
                     future.result(timeout=5)
@@ -632,21 +672,16 @@ def test_public_persistent_queue_recovers_child_owned_session(
                         os._exit(status)
                 os.close(write_fd)
                 write_fd = -1
-                ready, _, _ = select.select([read_fd], [], [], 5)
-                assert ready, "Redis Queue waited on inherited manager/session state"
-                assert os.read(read_fd, 4096) == b"child session recovered"
-                _, status = os.waitpid(child_pid, 0)
+                result, status = _read_child_result(child_pid, read_fd, 5.0)
                 child_pid = None
+                assert result == b"child session recovered"
                 assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
             finally:
-                if child_pid is not None:
-                    os.kill(child_pid, signal.SIGKILL)
-                    os.waitpid(child_pid, 0)
-                os.close(read_fd)
-                if write_fd != -1:
-                    os.close(write_fd)
-                resume.set()
-                executor.shutdown(wait=True)
+                try:
+                    _cleanup_child(child_pid, read_fd, write_fd)
+                finally:
+                    resume.set()
+                    executor.shutdown(wait=True)
             future.result(timeout=5)
             queue.write("after")
             assert queue.read_many(3) == ["parent", "after"]

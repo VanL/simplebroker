@@ -27,10 +27,6 @@ from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueMoveWatcher
 
 from .conftest import build_cli_env, run_cli
-from .performance_calibration import (
-    get_calibration_ratio,
-    get_machine_performance_ratio,
-)
 
 # Mark all tests in this module to run serially
 pytestmark = pytest.mark.xdist_group(name="performance_serial")
@@ -66,11 +62,6 @@ MOVE_WATCHER_MESSAGE_COUNT = 100
 # Performance buffer percentage (33% as requested)
 PERF_BUFFER_PERCENT = 0.33
 
-# Machine performance ratio (calculated once per test session)
-# 1.0 = same as baseline machine, 0.5 = half as fast, 2.0 = twice as fast
-CURRENT_MACHINE_PERFORMANCE = None  # Lazy-loaded
-MACHINE_PERFORMANCE_RATIO = 1.0  # Default to baseline performance
-
 # Baseline performance times measured on Apple M2 Air
 # These are the actual measured times for each test scenario
 BASELINE_TIMES = {
@@ -92,12 +83,6 @@ BASELINE_TIMES = {
     "large_volume_write_1k": 1.0,  # Writing 1000 messages in bulk
     "write_1k_messages": 0.719,  # Writing 1000 messages
     "move_watcher_100": 2.0,  # Estimated for watcher operations
-}
-
-BASELINE_CALIBRATION_KEYS = {
-    "basic_write_50": "write_test",
-    "validation_cached": "validation_test",
-    "write_1k_messages": "write_test",
 }
 
 # Minimum performance thresholds (messages per second)
@@ -137,26 +122,11 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
     Returns:
         Timeout in seconds
     """
-    global CURRENT_MACHINE_PERFORMANCE
-
-    # Lazy-load machine performance ratio
-    calibration_key = BASELINE_CALIBRATION_KEYS.get(baseline_key)
-    if calibration_key is None and CURRENT_MACHINE_PERFORMANCE is None:
-        CURRENT_MACHINE_PERFORMANCE = get_machine_performance_ratio()
-
     base_time = BASELINE_TIMES[baseline_key]
-    performance_ratio = (
-        get_calibration_ratio(calibration_key)
-        if calibration_key is not None
-        else CURRENT_MACHINE_PERFORMANCE
-    )
-    assert performance_ratio is not None
-
-    # Adjust for slower machines, but do not tighten budgets on faster machines.
-    # The calibration workload is not identical to every benchmark here, and
-    # sub-100ms tests are too sensitive to scheduler noise for stricter budgets.
-    effective_performance = min(performance_ratio, 1.0)
-    timeout = base_time / effective_performance * (1 + PERF_BUFFER_PERCENT)
+    # A product slowdown must not scale its own acceptance budget. Product
+    # calibration remains available for liveness bounds in timing.py, not for
+    # these regression budgets. CLI startup tax is measured independently.
+    timeout = base_time * (1 + PERF_BUFFER_PERCENT)
 
     # Platform-specific adjustments
     if platform_specific and sys.platform == "win32":
@@ -532,6 +502,7 @@ def test_sequential_mixed_cli_throughput(workdir: Path) -> None:
 
     # Perform mixed operations sequentially.
     operations = []
+    written_messages = []
     start = time.monotonic()
 
     # Mix of different operations
@@ -539,20 +510,46 @@ def test_sequential_mixed_cli_throughput(workdir: Path) -> None:
         if i % 4 == 0:
             # Timestamp read
             operations.append(
-                run_cli("read", "test_queue", "-m", timestamps[i % 10], cwd=workdir)
+                run_cli(
+                    "--file",
+                    db_path.name,
+                    "read",
+                    "test_queue",
+                    "-m",
+                    timestamps[i % 10],
+                    cwd=workdir,
+                )
             )
         elif i % 4 == 1:
             # Normal read
-            operations.append(run_cli("read", "test_queue", cwd=workdir))
+            operations.append(
+                run_cli("--file", db_path.name, "read", "test_queue", cwd=workdir)
+            )
         elif i % 4 == 2:
             # Write
+            written_messages.append(f"new_message_{i}")
             operations.append(
-                run_cli("write", "test_queue", f"new_message_{i}", cwd=workdir)
+                run_cli(
+                    "--file",
+                    db_path.name,
+                    "write",
+                    "test_queue",
+                    f"new_message_{i}",
+                    cwd=workdir,
+                )
             )
         else:
             # Peek with timestamp
             operations.append(
-                run_cli("peek", "test_queue", "-m", timestamps[i % 10], cwd=workdir)
+                run_cli(
+                    "--file",
+                    db_path.name,
+                    "peek",
+                    "test_queue",
+                    "-m",
+                    timestamps[i % 10],
+                    cwd=workdir,
+                )
             )
 
     elapsed = time.monotonic() - start
@@ -567,20 +564,14 @@ def test_sequential_mixed_cli_throughput(workdir: Path) -> None:
     )
 
     # Verify operations succeeded (allowing EXIT_QUEUE_EMPTY for reads)
-    success_count = 0
-    empty_count = 0
-    for rc, _out, err in operations:
-        if rc == 0:
-            success_count += 1
-        elif rc == 2:  # EXIT_QUEUE_EMPTY - expected for some reads
-            empty_count += 1
-        else:
-            raise AssertionError(f"Unexpected error (rc={rc}): {err}")
-
-    # At least some operations should succeed
-    assert success_count > 0, "No operations succeeded"
-    # Writes (5 total) should always succeed
-    assert success_count >= 5, f"Too few successful operations: {success_count}"
+    for index, (rc, out, err) in enumerate(operations):
+        assert rc == 0 if index % 4 == 2 else rc in {0, 2}, (index, rc, err)
+        assert not err, (index, err)
+        if rc == 2:
+            assert not out
+    with Queue("test_queue", db_path=str(db_path)) as queue:
+        remaining = queue.peek_many()
+    assert set(written_messages).issubset(remaining), "benchmark writes must persist"
 
 
 # ============================================================================
@@ -617,7 +608,7 @@ def test_move_performance_with_large_batches(workdir: Path) -> None:
 
     assert moved_count == message_count
 
-    # Performance assertion through the calibrated never-tighten path
+    # Performance assertion through the independent historical budget.
     # (audit Task 7.8 — ad-hoc absolute budgets bypassed get_timeout).
     timeout = get_timeout("move_large_batch_1k")
     assert move_time < timeout, f"Moving {message_count} messages took {move_time:.2f}s"
@@ -672,7 +663,7 @@ def test_performance_improvement_with_claims(workdir: Path) -> None:
         ).fetchone()[0]
     assert claimed_count == message_count
 
-    # Calibrated budget (audit Task 7.8).
+    # Independent historical budget.
     timeout = get_timeout("claimed_read_1k")
     assert read_time < timeout, (
         f"Reading {message_count} messages took {read_time:.2f}s"
@@ -751,7 +742,7 @@ def test_vacuum_batch_size_limits(workdir: Path) -> None:
         cursor.execute("SELECT COUNT(*) FROM messages")
         assert cursor.fetchone()[0] == 0
 
-    # Calibrated budget (audit Task 7.8).
+    # Independent historical budget.
     assert vacuum_time < get_timeout("vacuum_batch_limit"), (
         f"Vacuum of {message_count} messages took {vacuum_time:.2f}s"
     )
@@ -772,7 +763,7 @@ def test_write_performance_not_regressed(workdir: Path) -> None:
 
     write_time = time.monotonic() - start_time
 
-    # Calibrated budget (audit Task 7.8).
+    # Independent historical budget.
     timeout = get_timeout("large_volume_write_1k")
     assert write_time < timeout, (
         f"Writing {message_count} messages took {write_time:.2f}s"

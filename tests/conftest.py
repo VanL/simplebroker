@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -45,6 +46,8 @@ from .helper_scripts.timing import scale_timeout_for_ci
 
 # Import watcher patching
 from .helper_scripts.watcher_patch import patch_watchers
+
+logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
 # Hypothesis configuration (used by tests/test_property_*.py)
@@ -512,20 +515,36 @@ def _reset_pg_tables(runner: Any, plugin: Any) -> None:
     from simplebroker._constants import SIMPLEBROKER_MAGIC
     from simplebroker._exceptions import OperationalError
 
-    try:
-        runner.run("TRUNCATE messages RESTART IDENTITY CASCADE")
-        runner.run("TRUNCATE aliases")
-        runner.run("DELETE FROM meta")
-    except OperationalError:
-        # Tables were dropped (e.g. by --cleanup).  Re-create everything.
-        _ensure_pg_schema_initialized(runner, plugin)
-        return
+    def reset() -> None:
+        runner.begin_immediate()
+        try:
+            runner.run("TRUNCATE messages RESTART IDENTITY CASCADE")
+            runner.run("TRUNCATE aliases")
+            runner.run("DELETE FROM meta")
+            runner.run(
+                "INSERT INTO meta (singleton, magic, schema_version, last_ts, alias_version) "
+                "VALUES (TRUE, ?, ?, 0, 0)",
+                (SIMPLEBROKER_MAGIC, pg_constants.POSTGRES_SCHEMA_VERSION),
+            )
+            runner.commit()
+        except BaseException as failure:
+            try:
+                runner.rollback()
+            except BaseException as cleanup_failure:
+                logger.exception("PG fixture reset rollback failed")
+                failure.add_note(f"PG fixture rollback failed: {cleanup_failure!r}")
+            raise
 
-    runner.run(
-        "INSERT INTO meta (singleton, magic, schema_version, last_ts, alias_version) "
-        "VALUES (TRUE, ?, ?, 0, 0)",
-        (SIMPLEBROKER_MAGIC, pg_constants.POSTGRES_SCHEMA_VERSION),
-    )
+    try:
+        reset()
+    except OperationalError as failure:
+        # Only missing schema/relation is recoverable here. Contention and
+        # connection failures must fail setup, not leave a partially reset DB.
+        cause = failure.__cause__
+        if getattr(cause, "sqlstate", None) not in {"3F000", "42P01"}:
+            raise
+        _ensure_pg_schema_initialized(runner, plugin)
+        reset()
 
 
 # --------------------------------------------------------------------------- #

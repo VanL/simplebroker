@@ -7,7 +7,10 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
+from queue import Empty
+from queue import Queue as ThreadQueue
 
 import pytest
 
@@ -15,6 +18,81 @@ from simplebroker import Queue
 from simplebroker.project import target_for_directory
 
 from .conftest import run_cli
+
+
+def _reap_broker(process: subprocess.Popen[str]) -> None:
+    """Terminate before closing pipes, so a blocked reader can reach EOF."""
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+
+
+@pytest.fixture(autouse=True)
+def _own_broker_children(monkeypatch):
+    """Readiness assertions are inside the lifetime of every spawned broker."""
+    processes = []
+    spawn = _spawn_broker
+
+    def owned_spawn(*args, **kwargs):
+        process = spawn(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(sys.modules[__name__], "_spawn_broker", owned_spawn)
+    try:
+        yield
+    finally:
+        for process in processes:
+            _reap_broker(process)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+
+
+def _read_first_line(process: subprocess.Popen[str]) -> str:
+    """Read exactly one line without handing stdout ownership to a drainer."""
+    stdout = process.stdout
+    assert stdout is not None
+    results: ThreadQueue[str | OSError | ValueError] = ThreadQueue()
+
+    def read_line():
+        try:
+            results.put(stdout.readline())
+        except (OSError, ValueError) as error:
+            results.put(error)
+
+    reader = threading.Thread(target=read_line)
+    reader.start()
+    received = False
+    try:
+        try:
+            result = results.get(timeout=10)
+            received = True
+        except Empty:
+            raise AssertionError(
+                "broker emitted no first line before deadline"
+            ) from None
+        if isinstance(result, (OSError, ValueError)):
+            raise result
+        return result
+    finally:
+        failure = sys.exception()
+        try:
+            if not received:
+                _reap_broker(process)
+            reader.join(timeout=2)
+            if reader.is_alive():
+                _reap_broker(process)
+                reader.join(timeout=2)
+            assert not reader.is_alive(), "stdout readiness reader did not stop"
+        except (OSError, subprocess.TimeoutExpired, AssertionError) as cleanup_failure:
+            if failure is None:
+                raise
+            failure.add_note(f"Readiness cleanup also failed: {cleanup_failure}")
 
 
 def _spawn_broker(
@@ -239,7 +317,7 @@ def test_watch_stops_claiming_after_stdout_consumer_exits(workdir: Path) -> None
     assert run_cli("write", "jobs", "m1", cwd=workdir)[0] == 0
     process = _spawn_broker(workdir, "--quiet", "watch", "jobs")
     assert process.stdout is not None
-    assert process.stdout.readline().strip() == "m1"
+    assert _read_first_line(process).strip() == "m1"
     process.stdout.close()
 
     for message in ("m2", "m3", "m4", "m5"):
@@ -268,7 +346,7 @@ def test_peek_all_pipe_closure_is_clean_and_preserves_queue(workdir: Path) -> No
     _seed_large_queue(workdir)
     process = _spawn_broker(workdir, "peek", "bulk", "--all")
     assert process.stdout is not None
-    assert process.stdout.readline().startswith("0000:")
+    assert _read_first_line(process).startswith("0000:")
 
     returncode, stderr = _close_consumer_and_wait(process)
 
@@ -284,7 +362,7 @@ def test_read_all_pipe_closure_is_clean_and_leaves_unread_messages(
     _seed_large_queue(workdir)
     process = _spawn_broker(workdir, "read", "bulk", "--all")
     assert process.stdout is not None
-    assert process.stdout.readline().startswith("0000:")
+    assert _read_first_line(process).startswith("0000:")
 
     returncode, stderr = _close_consumer_and_wait(process)
 
@@ -301,7 +379,7 @@ def test_read_all_pipe_closure_rolls_back_active_at_least_once_batch(
     _seed_large_queue(workdir)
     process = _spawn_broker(workdir, "read", "bulk", "--all")
     assert process.stdout is not None
-    assert process.stdout.readline().startswith("0000:")
+    assert _read_first_line(process).startswith("0000:")
 
     returncode, stderr = _close_consumer_and_wait(process)
 
@@ -428,7 +506,7 @@ def test_dump_pipe_closure_is_clean(workdir: Path) -> None:
     _seed_large_queue(workdir)
     process = _spawn_broker(workdir, "dump")
     assert process.stdout is not None
-    assert '"type":"header"' in process.stdout.readline().replace(" ", "")
+    assert '"type":"header"' in _read_first_line(process).replace(" ", "")
 
     returncode, stderr = _close_consumer_and_wait(process)
 
@@ -441,7 +519,7 @@ def test_watch_sigterm_is_a_clean_shutdown(workdir: Path) -> None:
     assert run_cli("write", "jobs", "ready", cwd=workdir)[0] == 0
     process = _spawn_broker(workdir, "--quiet", "watch", "jobs", "--peek")
     assert process.stdout is not None
-    assert process.stdout.readline().strip() == "ready"
+    assert _read_first_line(process).strip() == "ready"
 
     process.send_signal(signal.SIGTERM)
     try:

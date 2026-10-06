@@ -279,15 +279,15 @@ class TestLoadConfig:
             )
 
     def test_configuration_guide_explains_vacuum_threshold_semantics(self) -> None:
-        guide = " ".join(
-            (Path(__file__).parent.parent / "docs" / "guides" / "configuration.md")
-            .read_text(encoding="utf-8")
-            .split()
-        )
+        guide = (
+            Path(__file__).parent.parent / "docs" / "guides" / "configuration.md"
+        ).read_text(encoding="utf-8")
+        # Unrelated sections can contain these words and numbers too.
+        vacuum = guide.split("**Vacuum Settings:**", 1)[1].split("**", 1)[0]
 
         required_phrases = ("VACUUM_THRESHOLD", "percentage", "0", "100")
         for phrase in required_phrases:
-            assert phrase in guide
+            assert phrase in vacuum
 
     def test_watcher_settings(self) -> None:
         """Test watcher-related environment variables."""

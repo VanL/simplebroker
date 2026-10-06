@@ -357,7 +357,7 @@ def test_polling_strategy_postgres_notification_precedes_deadline(
         assert not strategy.consume_local_activity_hint()
         assert writer.peek() == "ready"
     finally:
-        if thread is not None:
+        if thread is not None and thread.ident is not None:
             thread.join(timeout=2.0)
         strategy.close()
         queue_wait.close()
@@ -545,6 +545,7 @@ def test_multi_queue_activity_waiter_close_is_idempotent_and_unregisters_state(
 
 def test_multi_queue_activity_waiter_listener_close_wakes_waiters(
     pg_runner: PostgresRunner,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Listener teardown should not leave a multi-queue waiter blocked."""
     queue_a = Queue("alpha", runner=pg_runner, persistent=True)
@@ -553,6 +554,7 @@ def test_multi_queue_activity_waiter_listener_close_wakes_waiters(
     result: list[bool] = []
     error: list[BaseException] = []
     pg_waiter: PostgresMultiQueueActivityWaiter | None = None
+    thread: threading.Thread | None = None
 
     try:
         waiter = create_activity_waiter_for_queues(
@@ -561,6 +563,15 @@ def test_multi_queue_activity_waiter_listener_close_wakes_waiters(
         )
         assert waiter is not None
         pg_waiter = cast(PostgresMultiQueueActivityWaiter, waiter)
+        entered_wait = threading.Event()
+        condition = pg_waiter._listener._fan_in_entries[pg_waiter._fan_in_id].condition
+        original_wait = condition.wait
+
+        def observed_wait(timeout: float | None = None) -> bool:
+            entered_wait.set()
+            return original_wait(timeout)
+
+        monkeypatch.setattr(condition, "wait", observed_wait)
 
         def wait_in_thread() -> None:
             try:
@@ -570,7 +581,7 @@ def test_multi_queue_activity_waiter_listener_close_wakes_waiters(
 
         thread = threading.Thread(target=wait_in_thread, daemon=True)
         thread.start()
-        time.sleep(0.1)
+        assert entered_wait.wait(1.0), "fan-in waiter did not enter its condition wait"
 
         pg_waiter._listener.close()
         thread.join(timeout=1.0)
@@ -579,6 +590,10 @@ def test_multi_queue_activity_waiter_listener_close_wakes_waiters(
         assert error == []
         assert result == [False]
     finally:
+        if pg_waiter is not None:
+            pg_waiter._listener.close()
+        if thread is not None:
+            thread.join(timeout=1.0)
         if pg_waiter is not None:
             pg_waiter.close()
         queue_a.close()

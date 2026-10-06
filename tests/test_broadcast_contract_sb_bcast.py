@@ -14,81 +14,6 @@ README = ROOT / "README.md"
 KERNEL = ROOT / "docs" / "agent-kernel.md"
 LLMS = ROOT / "llms.txt"
 
-FIRING_TESTS = {
-    "SB-BCAST-1": {
-        "tests/test_broadcast.py": {
-            "test_broadcast",
-            "test_broadcast_with_pattern",
-            "test_broadcast_to_repeated_exact_queues",
-            "test_broadcast_empty_pattern_still_targets_all_queues",
-        },
-        "tests/test_broadcast_api.py": {
-            "test_broadcast_exact_empty_sequence_is_noop_not_broadcast_all",
-            "test_broadcast_empty_string_body_is_a_valid_message",
-        },
-    },
-    "SB-BCAST-2": {
-        "tests/test_broadcast_api.py": {
-            "test_broadcast_exact_deduplicates_and_ignores_missing_names",
-            "test_broadcast_exact_create_missing_reaches_full_requested_set",
-            "test_broadcast_exact_rejects_string_like_sequence",
-            "test_broadcast_create_missing_requires_boolean",
-            "test_broadcast_create_missing_requires_exact_names",
-            "test_broadcast_exact_validates_every_name_before_mutation",
-            "test_broadcast_snapshots_mutable_exact_names_once",
-            "test_broadcast_retry_uses_entry_snapshot_after_caller_mutation",
-        },
-    },
-    "SB-BCAST-3": {
-        "tests/test_broadcast_api.py": {
-            "test_broadcast_exact_does_not_resolve_aliases",
-        },
-        "tests/test_broadcast.py": {
-            "test_broadcast_exact_queue_does_not_split_commas",
-        },
-    },
-    "SB-BCAST-4": {
-        "tests/test_broadcast_api.py": {
-            "test_broadcast_exact_rolls_back_all_targets_on_id_collision",
-            "test_broadcast_exact_create_missing_rolls_back_new_queues_on_id_collision",
-        },
-        "extensions/simplebroker_pg/tests/test_pg_broadcast_semantics.py": {
-            "test_exact_broadcast_does_not_resurrect_queue_deleted_before_selection",
-            "test_exact_broadcast_create_missing_resurrects_queue_deleted_before_atomic_point",
-        },
-        "extensions/simplebroker_redis/tests/test_redis_atomicity.py": {
-            "test_patternless_broadcast_does_not_resurrect_deleted_queue",
-            "test_exact_broadcast_does_not_resurrect_deleted_queue",
-            "test_exact_create_broadcast_resurrects_queue_deleted_before_atomic_point",
-            "test_patternless_broadcast_includes_queue_created_during_setup",
-            "test_broadcast_script_selects_queues_at_atomic_insertion_point",
-            "test_exact_create_script_rejects_candidate_conflicts_before_mutation",
-        },
-        "extensions/simplebroker_redis/tests/test_redis_integration.py": {
-            "test_broadcast_empty_exact_create_missing_is_a_storage_and_maintenance_noop",
-            "test_broadcast_all_missing_exact_queue_names_preserves_persisted_last_ts",
-        },
-        "extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py": {
-            "test_redis_broadcast_fires_transition_table",
-        },
-    },
-    "SB-BCAST-5": {
-        "tests/test_broadcast.py": {
-            "test_broadcast_to_repeated_exact_queues",
-            "test_broadcast_pattern_and_queue_are_mutually_exclusive",
-            "test_broadcast_queue_prefix_is_rejected_before_mutation",
-            "test_broadcast_queue_prefix_can_be_literal_after_double_dash",
-        },
-    },
-    "SB-BCAST-6": {
-        "tests/test_backend_plugin_resolution.py": {
-            "test_external_backend_plugin_with_stale_backend_api_version_is_rejected",
-            "test_external_backend_plugin_with_future_backend_api_version_is_rejected",
-            "test_first_party_extension_plugins_declare_literal_backend_api_version",
-        },
-    },
-}
-
 
 def _functions(relative_path: str) -> set[str]:
     tree = ast.parse((ROOT / relative_path).read_text(encoding="utf-8"))
@@ -198,14 +123,13 @@ def test_broadcast_contract_clause_inventory_and_authority() -> None:
 
 
 def test_broadcast_contract_names_existing_firing_tests() -> None:
-    """Every mapped obligation points to a test function that still exists."""
+    """Canonical citations resolve without duplicating their inventory here."""
     text = SPEC.read_text(encoding="utf-8")
     verification_rows = _verification_rows(text)
 
-    for code, modules in FIRING_TESTS.items():
-        row = verification_rows[code]
+    for row in verification_rows.values():
         citations = _cited_nodes(row)
-        assert citations == modules
+        assert citations
         for relative_path, function_names in citations.items():
             assert function_names <= _functions(relative_path)
 

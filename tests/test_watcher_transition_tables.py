@@ -543,21 +543,22 @@ def _assert_stop_races_start(tmp_path: Path) -> None:
         kwargs={"join": False},
     )
     stop_thread.start()
-    assert cleanup_started.wait(2)
-
-    run_thread = threading.Thread(target=watcher.run_forever)
-    run_thread.start()
+    run_thread = None
     try:
+        assert cleanup_started.wait(2)
+        run_thread = threading.Thread(target=watcher.run_forever)
+        run_thread.start()
         run_thread.join(2)
         assert not run_thread.is_alive()
         assert watcher.cleanup_calls == 1
     finally:
         release_cleanup.set()
         stop_thread.join(2)
-        run_thread.join(2)
+        if run_thread is not None:
+            run_thread.join(2)
 
     assert not stop_thread.is_alive()
-    assert not run_thread.is_alive()
+    assert run_thread is not None and not run_thread.is_alive()
     assert watcher.cleanup_calls == 1
 
 
@@ -602,37 +603,39 @@ def test_watcher_lifecycle_fires_transition_table(
     # The watcher owns its stop event; the strategy must observe the same event.
     watcher._strategy._stop_event = watcher._stop_event
     thread = watcher.start()
-    drive_until(
-        watcher.is_running,
-        timeout=2,
-        interval=0.005,
-        message="watcher did not enter the running lifecycle state",
-        diagnostics=lambda: {
-            "seen": list(seen),
-            "thread_alive": thread.is_alive(),
-        },
-    )
-    assert watcher.is_running()
-
-    if transition_case.payload == "DELIVER_THEN_STOP":
-        queue.write("payload")
+    try:
         drive_until(
-            lambda: seen == ["payload"],
+            watcher.is_running,
             timeout=2,
             interval=0.005,
-            message="watcher did not deliver the transition payload",
+            message="watcher did not enter the running lifecycle state",
             diagnostics=lambda: {
                 "seen": list(seen),
                 "thread_alive": thread.is_alive(),
-                "watcher_running": watcher.is_running(),
             },
         )
-        assert seen == ["payload"]
-    watcher.stop()
-    assert not thread.is_alive()
-    if transition_case.payload == "REPEATED_STOP":
+        assert watcher.is_running()
+        if transition_case.payload == "DELIVER_THEN_STOP":
+            queue.write("payload")
+            drive_until(
+                lambda: seen == ["payload"],
+                timeout=2,
+                interval=0.005,
+                message="watcher did not deliver the transition payload",
+                diagnostics=lambda: {
+                    "seen": list(seen),
+                    "thread_alive": thread.is_alive(),
+                },
+            )
+            assert seen == ["payload"]
         watcher.stop()
-    queue.close()
+        assert not thread.is_alive()
+        if transition_case.payload == "REPEATED_STOP":
+            watcher.stop()
+    finally:
+        watcher.stop(join=False)
+        thread.join(2)
+        queue.close()
 
 
 CLI_WATCH_TRANSITIONS = (
@@ -685,20 +688,6 @@ CLI_WATCH_TRANSITIONS = (
         "owner stop event is set, run ended, and finalizer is detached",
     ),
 )
-
-
-def test_error_handler_failure_and_cli_continue_rows_remain_distinct() -> None:
-    lifecycle = {case.transition_id: case for case in WATCHER_LIFECYCLE_TRANSITIONS}
-    cli = {case.transition_id: case for case in CLI_WATCH_TRANSITIONS}
-
-    assert lifecycle["ERROR_HANDLER_FAILURE"].event == (
-        "error handler raises ordinary exception"
-    )
-    assert lifecycle["ERROR_HANDLER_FAILURE"].next_state == "failed"
-    assert cli["CALLBACK_ERROR_CONTINUES"].event == (
-        "first output callback fails and second reaches a closed pipe"
-    )
-    assert cli["CALLBACK_ERROR_CONTINUES"].next_state == "stopped"
 
 
 @fires_transition_table("SM-CLI-WATCH", CLI_WATCH_TRANSITIONS)

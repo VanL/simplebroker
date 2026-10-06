@@ -22,7 +22,6 @@ import os
 import sqlite3
 import tempfile
 import threading
-import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -53,6 +52,24 @@ from sqlite_connect import (
 # ==============================================================================
 # TEST FIXTURES AND UTILITIES
 # ==============================================================================
+
+
+@pytest.fixture(autouse=True)
+def close_owned_managers(monkeypatch):
+    """Register cleanup at construction, including failed setup/assertions."""
+    managers = []
+    initialize = SQLiteConnectionManager.__init__
+
+    def tracked_initialize(manager, *args, **kwargs):
+        initialize(manager, *args, **kwargs)
+        managers.append(manager)
+
+    monkeypatch.setattr(SQLiteConnectionManager, "__init__", tracked_initialize)
+    try:
+        yield
+    finally:
+        for manager in reversed(managers):
+            manager.close()
 
 
 @pytest.fixture
@@ -324,34 +341,48 @@ class TestConfiguration:
 class TestUtilityFunctions:
     """Test utility functions."""
 
-    def test_interruptible_sleep_normal(self):
-        """Test normal sleep completion."""
-        start_time = time.perf_counter()
-        result = interruptible_sleep(0.1)
-        elapsed = time.perf_counter() - start_time
+    def test_interruptible_sleep_normal(self, monkeypatch):
+        """The full requested duration elapses, independent of scheduler speed."""
+        clock = [0.0]
+        sleeps = []
 
-        assert result is True
-        assert 0.08 <= elapsed <= 0.15  # Allow some variance
+        class ClockEvent:
+            def wait(self, timeout):
+                sleeps.append(timeout)
+                clock[0] += timeout
+                return False
 
-    def test_interruptible_sleep_interrupted(self):
+        monkeypatch.setattr(sqlite_connect.time, "perf_counter", lambda: clock[0])
+        assert interruptible_sleep(0.25, ClockEvent()) is True
+        assert sum(sleeps) == pytest.approx(0.25)
+
+    def test_interruptible_sleep_interrupted(self, monkeypatch):
         """Test sleep interruption with stop event."""
         stop_event = threading.Event()
 
-        def interrupt_after_delay():
-            time.sleep(0.05)
-            stop_event.set()
+        waiting = threading.Event()
+        real_wait = stop_event.wait
 
-        thread = threading.Thread(target=interrupt_after_delay)
+        def observed_wait(timeout):
+            waiting.set()
+            return real_wait(timeout)
+
+        monkeypatch.setattr(stop_event, "wait", observed_wait)
+
+        def interrupt_when_waiting():
+            if waiting.wait(2):
+                stop_event.set()
+
+        thread = threading.Thread(target=interrupt_when_waiting)
         thread.start()
 
-        start_time = time.perf_counter()
-        result = interruptible_sleep(0.2, stop_event)
-        elapsed = time.perf_counter() - start_time
-
-        thread.join()
-
-        assert result is False
-        assert elapsed < 0.1  # Should be interrupted early
+        try:
+            assert interruptible_sleep(5, stop_event) is False
+            assert waiting.is_set()
+        finally:
+            stop_event.set()
+            thread.join(timeout=2)
+        assert not thread.is_alive()
 
     def test_interruptible_sleep_zero_duration(self):
         """Test sleep with zero duration."""
@@ -409,22 +440,14 @@ class TestUtilityFunctions:
         """Test retry interrupted by stop event."""
         stop_event = threading.Event()
 
-        def interrupt_after_delay():
-            time.sleep(0.02)
-            stop_event.set()
-
         def always_fails():
+            stop_event.set()
             raise sqlite3.OperationalError("database is locked")
-
-        thread = threading.Thread(target=interrupt_after_delay)
-        thread.start()
 
         with pytest.raises(StopException):
             execute_with_retry(
                 always_fails, max_retries=10, retry_delay=0.01, stop_event=stop_event
             )
-
-        thread.join()
 
 
 # ==============================================================================
@@ -484,12 +507,14 @@ class TestSQLiteConnectionManager:
 
         thread = threading.Thread(target=get_connection_in_thread)
         thread.start()
-        thread.join()
-
-        assert other_conn is not None
-        assert other_conn is not conn1
-
-        manager.close()
+        try:
+            thread.join(timeout=2)
+            assert not thread.is_alive()
+            assert other_conn is not None
+            assert other_conn is not conn1
+        finally:
+            thread.join(timeout=2)
+            manager.close()
 
     def test_setup_phases(self, temp_db_path):
         """Test setup phases execution."""
@@ -531,8 +556,8 @@ class TestSQLiteConnectionManager:
             conn = manager.get_connection()
             assert isinstance(conn, sqlite3.Connection)
 
-        # Manager should be closed after context exit
-        # (connections should be cleaned up)
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            conn.execute("SELECT 1")
 
     def test_fork_safety_simulation(self, temp_db_path):
         """Test fork safety by simulating PID change."""
@@ -549,9 +574,10 @@ class TestSQLiteConnectionManager:
         # This should detect fork and create new connection
         conn2 = manager.get_connection()
         assert isinstance(conn2, sqlite3.Connection)
-
-        # Should have cleared phases for new process
-        # Note: In real fork, phases would need to be re-run
+        assert conn2 is not conn1
+        assert manager._pid == os.getpid()
+        assert not manager._completed_phases
+        assert conn2.execute("SELECT 1").fetchone() == (1,)
 
         manager.close()
 
@@ -600,6 +626,8 @@ class TestSQLiteConnectionManager:
         manager.close()
 
         # Check that connections were closed
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            conn.execute("SELECT 1")
         assert len(manager._all_connections) == 0
 
         # Marker files should be cleaned up
@@ -815,37 +843,4 @@ if __name__ == "__main__":
     """Run tests directly if executed as script."""
     import sys
 
-    # Try to use pytest if available
-    try:
-        import pytest
-
-        sys.exit(pytest.main([__file__, "-v"]))
-    except ImportError:
-        # Fallback to unittest
-        import unittest
-
-        # Create test suite
-        loader = unittest.TestLoader()
-        suite = unittest.TestSuite()
-
-        # Add test classes
-        test_classes = [
-            TestPathValidation,
-            TestDatabaseValidation,
-            TestConfiguration,
-            TestUtilityFunctions,
-            TestSQLiteConnectionManager,
-            TestConvenienceFunctions,
-            TestIntegration,
-            TestErrorHandling,
-        ]
-
-        for test_class in test_classes:
-            tests = loader.loadTestsFromTestCase(test_class)
-            suite.addTests(tests)
-
-        # Run tests
-        runner = unittest.TextTestRunner(verbosity=2)
-        result = runner.run(suite)
-
-        sys.exit(0 if result.wasSuccessful() else 1)
+    sys.exit(pytest.main([__file__, "-v"]))

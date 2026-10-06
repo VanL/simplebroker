@@ -38,6 +38,7 @@ def _wait_for_move_output(
             capture_output=True,
             text=True,
             check=False,
+            timeout=max(0.01, deadline - time.monotonic()),
         )
         last_peek_stdout = peek.stdout
         last_peek_stderr = peek.stderr
@@ -82,6 +83,7 @@ def test_move_after_mutual_exclusion(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
+        timeout=5,
     )
 
     # Should fail with error
@@ -107,6 +109,7 @@ def test_move_without_after_works(tmp_path: Path) -> None:
             "test message",
         ],
         check=True,
+        timeout=5,
     )
 
     # Start move in background (without --quiet so we can see output)
@@ -122,7 +125,6 @@ def test_move_without_after_works(tmp_path: Path) -> None:
             "--move",
             "destination",
         ],
-        timeout=scale_timeout_for_ci(1.0),
     ) as proc:
         # Wait until the watcher reports the processed message
         _wait_for_move_output(
@@ -148,6 +150,7 @@ def test_move_without_after_works(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
+        timeout=5,
     )
     assert result.returncode == 0
     assert "test message" in result.stdout

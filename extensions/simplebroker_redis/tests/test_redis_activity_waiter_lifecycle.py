@@ -163,32 +163,47 @@ def test_activity_waiter_fires_transition_table(
     if scenario in {"success", "repeat"}:
         waiter.close()
         after_first = list(events)
-        if scenario == "success":
-            assert after_first == [
-                "unregister:first:alpha",
-                "release:first",
-                "unregister:second:beta",
-                "release:second",
-            ]
+        assert after_first == [
+            "unregister:first:alpha",
+            "release:first",
+            "unregister:second:beta",
+            "release:second",
+        ]
     elif scenario == "ordinary_failure":
-        with pytest.raises(RuntimeError, match="first child unregister failed"):
+        with pytest.raises(
+            RuntimeError, match="first child unregister failed"
+        ) as raised:
             waiter.close()
+        assert raised.value is first_error
         after_first = list(events)
-        assert after_first[-2:] == ["unregister:second:beta", "release:second"]
+        assert after_first == [
+            "unregister:first:alpha",
+            "release:first",
+            "unregister:second:beta",
+            "release:second",
+        ]
     elif scenario == "nested_failures":
         with pytest.raises(
             RuntimeError, match="first child unregister failed"
         ) as raised:
             waiter.close()
+        assert raised.value is first_error
         after_first = list(events)
+        assert after_first == [
+            "unregister:first:alpha",
+            "release:first",
+            "unregister:second:beta",
+            "release:second",
+        ]
         assert raised.value.__notes__ == [
             "cleanup failure: ValueError: second child unregister failed",
             "cleanup failure: LookupError: second child release failed",
         ]
     else:
         assert scenario == "interrupt"
-        with pytest.raises(KeyboardInterrupt):
+        with pytest.raises(KeyboardInterrupt) as interrupted:
             waiter.close()
+        assert interrupted.value is first_error
         after_first = list(events)
         assert after_first == ["unregister:first:alpha"]
 

@@ -482,3 +482,18 @@ Dated moment-tier entries (foldable after age floor and distillation).
   SSL or hostname formatting; installed libpq may differ from recalled forms.
   Evidence: PostgreSQL capacity-wait plan, live role-limit/SSL/hostname probes
   and conservative classifier regressions.
+
+- 2026-10-06: Apply the test-audit authoring gate to new harness tests too. A
+  failure-containment repair does not justify inventing universal interrupt
+  precedence or a cleanup framework. Prefer immediate resource ownership and
+  standard `try/finally` / `ExitStack`; add separate proof only for a concrete
+  gap such as an orphaned child, incomplete reset or leaked external state.
+- 2026-10-06: A native waiter can loop inside one method call. Outer call counts
+  cannot prove completed idle decisions after activity. Witness the actual
+  schedule/decision boundary and challenge negative assertions with useful
+  activity deliberately routed to the wrong queue.
+- 2026-10-06: Concurrent verification lanes must share one pre-synced combined
+  dependency environment and avoid nested extra-specific `uv run` syncs. Direct
+  `.venv/bin/python` also needs the project's bin directory first in PATH when
+  tests launch tools by name; otherwise a global mypy can report a missing
+  adapter that is installed in the project interpreter.

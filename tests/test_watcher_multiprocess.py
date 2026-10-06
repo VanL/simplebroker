@@ -31,6 +31,7 @@ class ProcessRecordingQueue(Queue):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.delivery_calls = 0
+        self.completed_turns = 0
         self._delivery_lock = threading.Lock()
 
     def read_many(self, *args: Any, **kwargs: Any) -> Any:
@@ -41,6 +42,14 @@ class ProcessRecordingQueue(Queue):
     def delivery_call_count(self) -> int:
         with self._delivery_lock:
             return self.delivery_calls
+
+    def observe_turn(self) -> None:
+        with self._delivery_lock:
+            self.completed_turns += 1
+
+    def turn_count(self) -> int:
+        with self._delivery_lock:
+            return self.completed_turns
 
 
 def _queue_state_for_diagnostics(db_path: str, queue_name: str) -> str:
@@ -121,6 +130,10 @@ def watcher_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exceptio
 ) -> None:
     """Worker process that runs a QueueWatcher."""
     del enable_pre_check
+    watcher = None
+    watched_queue = None
+    thread = None
+    patch = pytest.MonkeyPatch()
     try:
         # Track messages processed
         processed = []
@@ -135,12 +148,19 @@ def watcher_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exceptio
             persistent=True,
         )
         watcher = QueueWatcher(watched_queue, handler)
+        wait = watcher._strategy.wait_for_activity
+
+        def observe_wait(timeout=None):
+            watched_queue.observe_turn()
+            return wait(timeout)
+
+        patch.setattr(watcher._strategy, "wait_for_activity", observe_wait)
 
         # Run until stop signal
         thread = watcher.run_in_thread()
 
         ready_deadline = _deadline_after(10.0)
-        while watched_queue.delivery_call_count() < 1:
+        while watched_queue.turn_count() < 1:
             if not thread.is_alive():
                 raise RuntimeError("Watcher thread exited before initial drain")
             if time.monotonic() >= ready_deadline:
@@ -150,11 +170,22 @@ def watcher_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exceptio
         # Signal ready after the watcher has completed startup drain.
         result_queue.put(("ready", process_id, None))
 
+        observe_baseline = None
         while True:
+            if (
+                observe_baseline is not None
+                and watched_queue.turn_count() > observe_baseline + 1
+            ):
+                result_queue.put(("observed", process_id, None))
+                observe_baseline = None
             try:
                 command = control_queue.get(timeout=scale_timeout_for_ci(0.1))
                 if command == "stop":
                     break
+                if command == "observe":
+                    # Parent sends this after the committed write. Two wait
+                    # entries guarantee a whole post-command decision ran.
+                    observe_baseline = watched_queue.turn_count()
             except queue.Empty:
                 if not thread.is_alive():
                     raise RuntimeError(
@@ -183,6 +214,14 @@ def watcher_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exceptio
 
     except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
         result_queue.put(("error", process_id, str(e)))
+    finally:
+        if watcher is not None:
+            watcher.stop(join=False)
+        if thread is not None:
+            thread.join(timeout=scale_timeout_for_ci(2.0))
+        if watched_queue is not None:
+            watched_queue.close()
+        patch.undo()
 
 
 def contention_watcher_process(
@@ -569,10 +608,15 @@ def test_multiprocess_unrelated_write_does_not_drain_idle_watchers() -> None:  #
 
             with BrokerDB(db_path) as broker:
                 broker.write("queue_0", "target-only")
+            for control_queue in control_queues:
+                control_queue.put("observe")
 
             delivered: list[tuple[int, str]] = []
+            observed: set[int] = set()
             deadline = _deadline_after(10.0)
-            while not delivered and time.monotonic() < deadline:
+            while (
+                not delivered or len(observed) < process_count
+            ) and time.monotonic() < deadline:
                 try:
                     kind, process_id, data = _get_before_deadline(
                         result_queue, deadline=deadline
@@ -581,11 +625,14 @@ def test_multiprocess_unrelated_write_does_not_drain_idle_watchers() -> None:  #
                     continue
                 if kind == "message":
                     delivered.append((process_id, data))
+                elif kind == "observed":
+                    observed.add(process_id)
                 elif kind == "error":
                     errors.append((process_id, data))
                     break
             assert errors == []
             assert delivered == [(0, "target-only")]
+            assert observed == set(range(process_count))
 
             for control_queue in control_queues:
                 control_queue.put("stop")

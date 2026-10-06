@@ -12,6 +12,7 @@ import json
 import sqlite3
 import sys
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -142,24 +143,26 @@ def _assert_sqlite_integrity(db_path: Path | None) -> None:
     assert result == ("ok",)
 
 
+def _reap_probe_process(process: object) -> None:
+    if not _wait_for_exit(process):
+        pid = getattr(process, "pid", None)
+        if isinstance(pid, int) and pid > 0:
+            kill_process_tree(pid)
+        assert _wait_for_exit(process), f"consumer process {pid!r} leaked"
+
+
 def test_weft_stop_pattern_does_not_corrupt_sqlite_broker(tmp_path: Path) -> None:
     root = tmp_path / "runtime-root"
     root.mkdir(parents=True)
     context = build_context(spec_context=root)
-    inboxes: list[object] = []
-
-    bootstrap_queue = context.queue("weft.test.bootstrap", persistent=False)
-    try:
-        bootstrap_queue.generate_timestamp()
-    finally:
-        bootstrap_queue.close()
-
-    try:
+    with ExitStack() as cleanup:
+        with context.queue("weft.test.bootstrap", persistent=False) as bootstrap_queue:
+            bootstrap_queue.generate_timestamp()
         for _ in range(5):
             tid = str(time.time_ns())
             spec = _build_sleep_spec(tid, root)
             inbox = context.queue(spec.io.inputs["inbox"], persistent=True)
-            inboxes.append(inbox)
+            cleanup.callback(inbox.close)
 
             _assert_sqlite_integrity(context.database_path)
             inbox.write(json.dumps({}))
@@ -171,6 +174,9 @@ def test_weft_stop_pattern_does_not_corrupt_sqlite_broker(tmp_path: Path) -> Non
                 spec,
                 config=context.config,
             )
+            # Reap each consumer before closing its inbox. ExitStack attempts
+            # every registered callback, even when another callback raises.
+            cleanup.callback(_reap_probe_process, process)
             _wait_for_status(root, tid, "running")
 
             assert task_cmd.stop_tasks([tid], context_path=root) == 1
@@ -182,8 +188,3 @@ def test_weft_stop_pattern_does_not_corrupt_sqlite_broker(tmp_path: Path) -> Non
                 raise AssertionError(f"consumer process {pid!r} stayed alive")
 
             _assert_sqlite_integrity(context.database_path)
-    finally:
-        for inbox in inboxes:
-            close = getattr(inbox, "close", None)
-            if callable(close):
-                close()

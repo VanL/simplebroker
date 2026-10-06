@@ -187,6 +187,12 @@ def test_streaming_direct_commands_clean_stop_on_closed_stdout(
 
 
 def test_commands_module_has_no_unowned_stdout_prints() -> None:
+    """Guard direct print calls, not every possible stdout sink.
+
+    The runtime cases above own write/flush failures and delivery state.
+    This cheaper architecture guard only prevents literal print calls from
+    bypassing that owner; aliases and arbitrary stream writes are out of scope.
+    """
     source = Path(commands.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
     bare_prints = []

@@ -17,6 +17,52 @@ from tests.backend_benchmark import (
 from tests.helper_scripts.timing import scale_timeout_for_ci
 
 
+@pytest.mark.parametrize("backend", ["postgres", "redis"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_external_benchmark_failure_cleans_owned_project_before_metadata_disappears(
+    monkeypatch, backend, cleanup_fails
+):
+    """External services outlive tempdirs, so workload failure must still clean."""
+    failure = RuntimeError("workload failed")
+    paths = []
+    cleaned = []
+
+    def workload(cwd, env, settings):
+        paths.append(cwd)
+        (cwd / "owned-target").write_text("project identity")
+        raise failure
+
+    def cleanup(cwd):
+        assert (cwd / "owned-target").read_text() == "project identity"
+        cleaned.append(cwd)
+        if cleanup_fails:
+            raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(backend_benchmark, "_ensure_postgres_support", lambda: None)
+    monkeypatch.setattr(backend_benchmark, "_ensure_redis_support", lambda: None)
+    monkeypatch.setattr(backend_benchmark, "_verify_postgres_test_dsn", lambda *_: None)
+    monkeypatch.setattr(backend_benchmark, "_cleanup_postgres_projects", cleanup)
+    monkeypatch.setattr(backend_benchmark, "_cleanup_redis_projects", cleanup)
+    monkeypatch.setitem(
+        backend_benchmark.WORKLOADS, "fail", WorkloadSpec("fail", "Failure", workload)
+    )
+    settings = BenchmarkSettings(
+        backends=(backend,),
+        workloads=("fail",),
+        iterations=1,
+        warmups=0,
+        pg_dsn="postgresql://example/test" if backend == "postgres" else None,
+        redis_url="redis://localhost:6379/15" if backend == "redis" else None,
+    )
+    with pytest.raises(RuntimeError) as caught:
+        run_benchmarks(settings)
+    assert caught.value is failure
+    assert cleaned == paths
+    assert not paths[0].exists()
+    if cleanup_fails:
+        assert "cleanup failed" in " ".join(failure.__notes__)
+
+
 def _smoke_command_timeout() -> float:
     """Keep the benchmark smoke's tight timeout, but give Windows CI headroom."""
 

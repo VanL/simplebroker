@@ -12,8 +12,9 @@ such as a bit flip, human changes to the db, or a bug not caught by our
 hybrid timestamp tests.
 """
 
-import threading
+import multiprocessing
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -22,6 +23,8 @@ from simplebroker._backend_plugins import BACKEND_API_VERSION
 from simplebroker._exceptions import OperationalError, TimestampError
 from simplebroker._timestamp import TimestampGenerator
 from simplebroker.db import BrokerDB
+
+from .helper_scripts import scale_timeout_for_ci
 
 
 def _requires_sql_runner(broker) -> None:
@@ -214,40 +217,51 @@ def test_metrics_can_be_reset(broker):
     assert broker.get_conflict_metrics()["ts_resync_count"] == 0
 
 
-@pytest.mark.sqlite_only
-def test_concurrent_writes_simple(workdir):
-    """Simple test of concurrent writes without complex multiprocessing."""
-    warnings.filterwarnings(
-        "ignore", message="Timestamp conflict persisted", category=RuntimeWarning
-    )
-
-    db_path = workdir / "test.db"
-
-    setup_db = BrokerDB(str(db_path))
-    setup_db.close()
+def _concurrent_thread_writes(db_path: str) -> None:
+    """Keep the same three-thread contention inside a killable owner."""
 
     def write_messages(thread_id):
-        db = BrokerDB(str(db_path))
+        db = BrokerDB(db_path)
         try:
             for i in range(5):
                 db.write(f"queue_{thread_id}", f"Message {i}")
         finally:
             db.close()
 
-    threads = []
-    for i in range(3):
-        t = threading.Thread(target=write_messages, args=(i,))
-        threads.append(t)
-        t.start()
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(write_messages, i) for i in range(3)]
+        for future in futures:
+            future.result()
 
-    for t in threads:
-        t.join()
+
+@pytest.mark.sqlite_only
+def test_concurrent_writes_simple(workdir):
+    """Three threads still contend; a stuck writer cannot retain pytest."""
+    db_path = workdir / "test.db"
+    setup_db = BrokerDB(str(db_path))
+    setup_db.close()
+
+    process = multiprocessing.get_context("spawn").Process(
+        target=_concurrent_thread_writes, args=(str(db_path),)
+    )
+    try:
+        process.start()
+        process.join(timeout=scale_timeout_for_ci(60))
+        assert not process.is_alive(), "concurrent writers did not finish"
+        assert process.exitcode == 0, "a concurrent writer failed"
+    finally:
+        if process.pid is not None:
+            if process.is_alive():
+                process.kill()
+            process.join(timeout=scale_timeout_for_ci(2))
+            if not process.is_alive():
+                process.close()
 
     db = BrokerDB(str(db_path))
     try:
         for i in range(3):
             messages = list(db.peek_generator(f"queue_{i}", with_timestamps=False))
-            assert len(messages) == 5
+            assert messages == [f"Message {j}" for j in range(5)]
     finally:
         db.close()
 

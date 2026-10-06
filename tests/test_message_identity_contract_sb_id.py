@@ -23,146 +23,6 @@ THEORY = ROOT / "docs" / "program-theory.md"
 
 pytestmark = [pytest.mark.shared]
 
-FIRING_TESTS = {
-    "SB-ID-1": {
-        "extensions/simplebroker_pg/tests/test_pg_message_id_order.py": {
-            "test_postgres_v6_fresh_schema_uses_public_id_as_only_key",
-            "test_real_postgres_v5_migration_preserves_rows_and_sidecars",
-        },
-        "tests/test_sqlite_message_id_returning_order.py": {
-            "test_claim_many_normalizes_sqlite_returning_rows_by_public_id",
-            "test_claim_generator_uses_ascending_ids_when_returning_rows_are_reversed",
-            "test_move_many_normalizes_sqlite_returning_rows_by_public_id",
-            "test_move_generator_uses_ascending_ids_when_returning_rows_are_reversed",
-        },
-        "tests/test_core_persistence_transition_tables.py": {
-            "test_timestamp_generator_fires_transition_table",
-        },
-        "tests/test_timestamp_edge_cases.py": {
-            "test_timestamp_magnitude_preservation",
-            "test_clock_regression_keeps_generator_monotonic",
-            "test_shared_timestamp_generator_serializes_threads",
-        },
-        "tests/test_timestamp_helpers.py": {
-            "test_db_generate_timestamp_monotonic",
-        },
-        "tests/test_write_returns_id.py": {
-            "test_broker_write_ids_strictly_increase",
-        },
-        "tests/test_insert_messages.py": {
-            "test_fresh_generated_message_id_is_positive_and_after_zero_visible",
-        },
-        "tests/test_message_id_validation.py": {
-            "test_format_message_id_preserves_unsafe_json_integer_exactly",
-            "test_format_message_id_returns_canonical_ascii_string",
-            "test_format_message_id_reuses_exact_id_validation",
-            "test_normalize_message_id_accepts_ints_and_exact_19_digit_strings",
-            "test_normalize_message_id_rejects_out_of_range_ints",
-        },
-        "tests/test_json_message_id_contract.py": {
-            "test_public_json_identity_producers_preserve_message_ids",
-            "test_shared_message_line_formats_id_without_rewriting_body",
-            "test_write_and_status_format_only_their_json_boundary",
-            "test_dump_formats_header_and_message_identity_fields",
-            "test_watcher_helper_formats_message_identity",
-            "test_adjacent_unsafe_ids_remain_distinct_after_json_parse",
-        },
-    },
-    "SB-ID-2": {
-        "tests/test_core_persistence_transition_tables.py": {
-            "test_timestamp_generator_fires_transition_table",
-        },
-        "tests/test_timestamp_helpers.py": {
-            "test_db_generate_timestamp_monotonic",
-            "test_queue_generate_timestamp_monotonic",
-        },
-        "tests/test_write_returns_id.py": {
-            "test_broker_write_returns_committed_id",
-            "test_queue_write_returns_committed_id",
-            "test_retry_path_returns_surviving_row_id",
-            "test_retry_exhaustion_raises_without_returning",
-            "test_concurrent_writers_get_their_own_ids",
-            "test_write_return_id_remains_row_identity_after_global_last_ts_advances",
-        },
-        "tests/test_write_visibility.py": {
-            "test_write_allocates_timestamp_inside_the_insert_transaction",
-        },
-        "extensions/simplebroker_redis/tests/test_redis_atomicity.py": {
-            "test_write_script_rejects_stale_candidate_without_any_mutation",
-            "test_ordinary_write_retries_stale_local_candidate_above_reader_checkpoint",
-            "test_resync_cannot_overwrite_concurrent_high_water_backward",
-            "test_same_target_cores_serialize_candidate_reservation",
-            "test_steady_state_ordinary_write_uses_one_data_eval",
-            "test_single_core_concurrent_writes_preserve_cross_writer_retry_budget",
-        },
-        "extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py": {
-            "test_redis_write_fires_transition_table",
-        },
-    },
-    "SB-ID-3": {
-        "tests/test_core_persistence_transition_tables.py": {
-            "test_timestamp_generator_fires_transition_table",
-        },
-        "tests/test_queue_api_comprehensive.py": {
-            "test_last_ts_updates_after_generate_and_write",
-            "test_refresh_last_ts_detects_external_writes",
-        },
-        "tests/test_insert_messages.py": {
-            "test_broker_insert_messages_loads_single_fresh_record_and_advances_last_ts",
-            "test_broker_insert_messages_accepts_current_generated_id",
-        },
-        "tests/test_latest_pending_timestamp.py": {
-            "test_latest_pending_timestamp_ignores_generated_timestamp_without_row",
-        },
-        "tests/test_write_returns_id.py": {
-            "test_write_return_id_remains_row_identity_after_global_last_ts_advances",
-        },
-        "extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py": {
-            "test_resync_cannot_overwrite_concurrent_high_water_backward",
-        },
-        "tests/test_json_message_id_contract.py": {
-            "test_write_and_status_format_only_their_json_boundary",
-            "test_dump_formats_header_and_message_identity_fields",
-        },
-    },
-    "SB-ID-4": {
-        "tests/test_message_id_validation.py": {
-            "test_normalize_message_id_accepts_ints_and_exact_19_digit_strings",
-            "test_normalize_message_id_rejects_malformed_strings",
-            "test_normalize_message_id_rejects_out_of_range_ints",
-            "test_normalize_message_id_rejects_non_id_types",
-        },
-        "tests/test_insert_messages.py": {
-            "test_broker_insert_messages_loads_many_records_and_preserves_ids",
-            "test_broker_insert_messages_rejects_mixed_form_duplicate_ids_before_writes",
-            "test_broker_insert_messages_rolls_back_on_existing_duplicate",
-            "test_broker_insert_messages_accepts_exact_string_message_id",
-            "test_exact_insert_preflights_mixed_valid_invalid_batch_without_mutation",
-            "test_broker_insert_messages_empty_input_is_noop",
-            "test_broker_insert_messages_does_not_move_high_water_backward",
-            "test_broker_insert_messages_rejects_unadvanceable_high_water",
-            "test_far_future_exact_insert_can_stall_later_writes_until_clock_catches_up",
-            "test_broker_insert_messages_rejects_reserved_zero_before_mutation",
-            "test_broker_insert_messages_rejects_reserved_zero_in_mixed_batch",
-            "test_queue_insert_messages_rejects_reserved_zero",
-            "test_native_legacy_zero_remains_exactly_addressable_movable_and_deletable",
-        },
-        "tests/test_dump_load.py": {
-            "test_load_rejects_reserved_zero_with_line_context_before_batch_flush",
-        },
-    },
-    "SB-ID-5": {
-        "tests/test_move_by_id.py": {
-            "test_move_by_id_preserves_timestamp",
-            "test_move_many_preserves_original_message_ids",
-            "test_move_generator_preserves_original_message_ids_in_each_delivery_mode",
-        },
-        "tests/test_cli_move.py": {
-            "test_move_preserves_timestamps",
-        },
-    },
-}
-
 
 def _functions(relative_path: str) -> set[str]:
     tree = ast.parse((ROOT / relative_path).read_text(encoding="utf-8"))
@@ -298,13 +158,26 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
 
 
 def test_message_identity_contract_names_existing_firing_tests() -> None:
-    """Every mapped obligation points to a test function that still exists."""
+    """Resolve full and inherited short citations in the canonical rows."""
     verification_rows = _verification_rows(SPEC.read_text(encoding="utf-8"))
 
-    for code, modules in FIRING_TESTS.items():
-        row = verification_rows[code]
-        for relative_path, function_names in modules.items():
-            assert relative_path in row
-            for function_name in function_names:
-                assert function_name in row
-            assert function_names <= _functions(relative_path)
+    for row in verification_rows.values():
+        relative_path = None
+        referenced = False
+        for citation in re.findall(r"`([^`]+)`", row):
+            if ".py" in citation:
+                relative_path, separator, node = citation.partition("::")
+                assert (ROOT / relative_path).is_file(), citation
+                if not separator:
+                    continue
+            elif citation.startswith("test_"):
+                assert relative_path is not None, citation
+                node = citation
+            else:
+                continue
+            # Historical short references inherit only the module, not a
+            # class. _functions intentionally accepts both class methods and
+            # module functions, matching that documented citation grammar.
+            assert node.rsplit("::", 1)[-1] in _functions(relative_path), citation
+            referenced = True
+        assert referenced

@@ -1924,19 +1924,30 @@ def test_failure_release_argument_is_reentrant_without_tls_marker(
     outer = ValueError("outer")
     inner = RuntimeError("inner")
     observed: list[BaseException | None] = []
+    connection.get_connection()
+    session = connection._shared_session
+    assert session is not None
+    release = session.release_current_thread_connection
 
     def reentrant_release(*, active_failure: BaseException | None = None) -> None:
         observed.append(active_failure)
         if len(observed) == 1:
+            connection.get_connection()
             connection.release_connection_after_use(active_failure=inner)
+        release(active_failure=active_failure)
 
-    connection.release_connection_after_use = reentrant_release  # type: ignore[method-assign]
+    session.release_current_thread_connection = reentrant_release  # type: ignore[method-assign]
     try:
         connection.release_connection_after_use(active_failure=outer)
+        assert connection._shared_operation_stack_depth() == 0
+        assert session._active_operations == 0
+        with connection._operation_connection() as core:
+            assert core.write("jobs", "still usable") > 0
     finally:
+        session.release_current_thread_connection = release  # type: ignore[method-assign]
         connection.close()
 
-    assert observed == [outer, inner]
+    assert observed == [outer, inner, None]
     assert not hasattr(connection._thread_local, "release_active_failure")
 
 

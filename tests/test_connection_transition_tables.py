@@ -365,17 +365,26 @@ class _FailingSessionFactory:
 def _assert_worker_user_transition(
     path: str,
     session: _ProcessBrokerSession,
+    *,
+    two_users: bool,
 ) -> None:
     def operation() -> None:
         first = DBConnection(path, share_in_process=True)
-        second = DBConnection(path, share_in_process=True)
-        core = first.get_core()
-        assert second.get_core() is core
-        first.close()
-        assert core in session._cores
-        assert second.get_core() is core
-        second.close()
-        assert core in session._cores
+        second = DBConnection(path, share_in_process=True) if two_users else None
+        try:
+            core = first.get_core()
+            if second is not None:
+                assert second.get_core() is core
+            first.close()
+            assert core in session._cores
+            if second is not None:
+                assert second.get_core() is core
+                second.close()
+                assert core in session._cores
+        finally:
+            first.close()
+            if second is not None:
+                second.close()
 
     error, _ = _foreign_call(operation)
     assert error is None
@@ -408,7 +417,11 @@ def test_process_session_fires_transition_table(
         assert session is not None
 
         try:
-            _assert_worker_user_transition(path, session)
+            _assert_worker_user_transition(
+                path,
+                session,
+                two_users=transition_case.payload == "WORKER_RETAIN_NON_LAST_USER",
+            )
         finally:
             anchor.close()
         return

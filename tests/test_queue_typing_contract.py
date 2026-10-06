@@ -192,6 +192,7 @@ def test_delete_none_fixture_is_rejected_by_mypy() -> None:
         text=True,
         capture_output=True,
         check=False,
+        timeout=30,
     )
 
     assert result.returncode == 1, result.stderr or result.stdout
@@ -219,9 +220,24 @@ def test_generator_order_fixture_is_rejected_by_mypy() -> None:
         text=True,
         capture_output=True,
         check=False,
+        timeout=30,
     )
 
     assert result.returncode == 1, result.stderr or result.stdout
     assert result.stderr == ""
-    assert result.stdout.count("error:") >= 3
-    assert result.stdout.count('Unexpected keyword argument "order"') == 3
+    # Tie rejection to each intended consumer call, not mypy's English prose.
+    import ast
+    import re
+
+    call_lines = {
+        node.lineno
+        for node in ast.walk(ast.parse(fixture.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+        and any(keyword.arg == "order" for keyword in node.keywords)
+    }
+    errors = re.findall(
+        r"queue_generator_order\.py:(\d+): error: .*\[([^\]]+)\]", result.stdout
+    )
+    assert {int(line) for line, _code in errors} == call_lines
+    assert len(call_lines) == 3
+    assert all(code in {"call-arg", "call-overload"} for _line, code in errors)

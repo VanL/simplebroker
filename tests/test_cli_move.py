@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import subprocess
 import threading
 import time
 from collections import Counter
@@ -13,6 +14,7 @@ from simplebroker import Queue, commands, target_for_directory
 
 from .conftest import run_cli
 from .helper_scripts.timestamp_validation import validate_timestamp
+from .helper_scripts.timing import scale_timeout_for_ci
 
 
 def _seed(workdir: Path, queue: str, *messages: str) -> None:
@@ -307,37 +309,28 @@ class TestTimestampFormats:
 
     def test_after_unix_timestamp_formats(self, workdir):
         """Test Unix timestamp formats with explicit suffixes."""
-        # Write messages
-        for i in range(5):
-            _seed(workdir, "ts_queue", f"msg{i}")
-
-        # Get a middle timestamp
-        rc, out, _ = run_cli("peek", "ts_queue", "--all", "--json", cwd=workdir)
-        messages = [json.loads(line) for line in out.strip().split("\n")]
-        middle_ts = int(messages[2]["timestamp"])
-
-        # Convert native timestamp to different formats
-        # Timestamps are now: microseconds << 12
-        us_after_epoch = middle_ts >> 12
-        unix_seconds = us_after_epoch // 1_000_000
-        unix_millis = us_after_epoch // 1_000
-        unix_nanos = us_after_epoch * 1_000
-
-        # Test with explicit suffixes
-        test_cases = [
-            (f"{unix_seconds}s", "Unix seconds"),
-            (f"{unix_millis}ms", "Unix milliseconds"),
-            (f"{unix_nanos}ns", "Unix nanoseconds"),
+        # Independent epoch-ns vectors put rows on both sides of each grain.
+        # Native IDs replace low bits with a counter; they are not us << 12.
+        rows = [
+            ("before-second", 1_705_328_999_999_995_904),
+            ("at-second", 1_705_329_000_000_000_000),
+            ("after-second", 1_705_329_000_000_004_096),
+            ("at-millisecond", 1_705_329_000_499_998_720),
+            ("after-millisecond", 1_705_329_000_500_002_816),
         ]
-
-        for ts_str, desc in test_cases:
+        with Queue("ts_queue", db_path=target_for_directory(workdir)) as queue:
+            queue.insert_messages(rows)
+        test_cases = [
+            ("1705329000s", [body for body, _ in rows[2:]]),
+            ("1705329000500ms", ["after-millisecond"]),
+            ("1705329000500000000ns", ["after-millisecond"]),
+        ]
+        for ts_str, expected in test_cases:
             rc, out, err = run_cli(
                 "peek", "ts_queue", "--all", "--after", ts_str, cwd=workdir
             )
-            assert rc == 0, f"Failed for {desc}: {err}"
-            messages = out.strip().split("\n")
-            # Should get messages after the middle one
-            assert len(messages) >= 2, f"Expected messages for {desc}, got: {out}"
+            assert rc == 0, err
+            assert out.splitlines() == expected, ts_str
 
     def test_after_iso_date_formats(self, workdir):
         """Test ISO 8601 date and datetime formats."""
@@ -376,46 +369,28 @@ class TestTimestampFormats:
 
     def test_after_mixed_timestamp_formats(self, workdir):
         """Test that different timestamp formats work correctly."""
-        # Write messages
-        for i in range(10):
-            _seed(workdir, "mixed_queue", f"msg{i}")
-
-        # Get message 5 timestamp
-        rc, out, _ = run_cli("peek", "mixed_queue", "--all", "--json", cwd=workdir)
-        messages = [json.loads(line) for line in out.strip().split("\n")]
-        native_ts = int(messages[5]["timestamp"])
-
-        # Convert to different formats
-        us_after_epoch = native_ts >> 12
-        unix_seconds = us_after_epoch // 1_000_000
-        dt = datetime.datetime.fromtimestamp(unix_seconds, datetime.UTC)
-
-        # Test each format
-        formats = [
-            (str(native_ts), "native", 4),  # Should get exactly msg6-msg9
-            (dt.isoformat(), "iso", None),  # May get more due to second precision
-            (str(unix_seconds), "unix", None),  # May get more due to second precision
+        # Fixed native IDs include a logical counter after the physical grain.
+        rows = [
+            (f"msg{i}", ((1_705_329_000 + i) * 1_000_000_000 & ~4095) + 3)
+            for i in range(10)
         ]
-
-        for fmt, name, expected_count in formats:
+        with Queue("mixed_queue", db_path=target_for_directory(workdir)) as queue:
+            queue.insert_messages(rows)
+        formats = [
+            (str(rows[5][1]), "native", [f"msg{i}" for i in range(6, 10)]),
+            ("2024-01-15T14:30:05Z", "iso", [f"msg{i}" for i in range(5, 10)]),
+            ("1705329005", "unix", [f"msg{i}" for i in range(5, 10)]),
+        ]
+        for fmt, name, expected in formats:
             # Create unique destination for each test
             dest = f"dest_{name}"
-            rc, out, _ = run_cli(
+            rc, out, err = run_cli(
                 "move", "mixed_queue", dest, "--all", "--after", fmt, cwd=workdir
             )
-            assert rc == 0
-
-            messages = out.strip().split("\n")
-            if expected_count:
-                assert len(messages) == expected_count, (
-                    f"{name} format returned {len(messages)} messages"
-                )
-            else:
-                # For less precise formats, just verify we got some messages
-                assert len(messages) >= 1, f"{name} format returned no messages"
-
-            # Move messages back for next test
-            run_cli("move", dest, "mixed_queue", "--all", cwd=workdir)
+            assert rc == 0, err
+            assert out.splitlines() == expected, name
+            rc, _, err = run_cli("move", dest, "mixed_queue", "--all", cwd=workdir)
+            assert rc == 0, err
 
 
 class TestErrorCases:
@@ -503,8 +478,9 @@ class TestErrorCases:
         _seed(workdir, "source", "old1")
         _seed(workdir, "source", "old2")
         # Use a future timestamp
-        future_ts = int(time.time() * 1_000_000) << 12
-        future_ts += 1000000000  # Add some buffer
+        last_timestamp = _peek_json(workdir, "source")[-1]["timestamp"]
+        assert isinstance(last_timestamp, str)
+        future_ts = int(last_timestamp) + 4096
 
         # Move with --after future timestamp (without --all)
         rc, out, _ = run_cli(
@@ -825,29 +801,57 @@ class TestConcurrentOperations:
         num_workers = 5
         barrier = threading.Barrier(num_workers)
         results: list[list[str]] = [[] for _ in range(num_workers)]
+        stop = threading.Event()
+        errors: list[str] = []
+        deadline = time.monotonic() + scale_timeout_for_ci(60.0)
 
         def move_worker(worker_id: int):
             """Worker that moves messages one by one."""
-            barrier.wait()  # Synchronize start
             moved = []
-            while True:
-                rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
-                if rc == 2:  # Queue empty
-                    break
-                if rc == 0:
+            try:
+                barrier.wait(timeout=max(0.01, deadline - time.monotonic()))
+                while not stop.is_set():
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0, "concurrent move deadline exceeded"
+                    rc, out, err = run_cli(
+                        "move",
+                        "source",
+                        f"dest{worker_id}",
+                        cwd=workdir,
+                        timeout=remaining,
+                    )
+                    if rc == 2:
+                        assert (out, err) == ("", "")
+                        break
+                    assert rc == 0, f"move failed: rc={rc}, stderr={err!r}"
                     moved.append(out)
-            results[worker_id] = moved
+            except (
+                AssertionError,
+                OSError,
+                subprocess.TimeoutExpired,
+                threading.BrokenBarrierError,
+            ) as error:
+                errors.append(f"worker {worker_id}: {type(error).__name__}: {error}")
+                stop.set()
+            finally:
+                results[worker_id] = moved
 
         # Run concurrent workers
         threads = []
-        for i in range(num_workers):
-            t = threading.Thread(target=move_worker, args=(i,))
-            threads.append(t)
-            t.start()
-
-        # Wait for all workers
-        for t in threads:
-            t.join()
+        try:
+            for i in range(num_workers):
+                t = threading.Thread(target=move_worker, args=(i,))
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join(timeout=max(0, deadline - time.monotonic()))
+        finally:
+            stop.set()
+            barrier.abort()
+            for t in threads:
+                t.join(timeout=scale_timeout_for_ci(2.0))
+        assert not errors, errors
+        assert not any(t.is_alive() for t in threads), "move worker cleanup failed"
 
         # Collect all moved messages
         all_moved = []

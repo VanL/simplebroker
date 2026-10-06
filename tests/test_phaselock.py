@@ -24,7 +24,6 @@ from simplebroker._phaselock import (
     PhaseLockTimeout,
     PhaseLockUnavailable,
     PhaseRunResult,
-    __version__,
 )
 from tests.helper_scripts.timing import scale_timeout_for_ci
 
@@ -96,10 +95,6 @@ def _run_phaselock_under_umask(
         capture_output=True,
         text=True,
     )
-
-
-def test_version_is_1_0() -> None:
-    assert __version__ == "1.0"
 
 
 def test_xattr_env_mode_parses_enabled_disabled_and_unknown_values(
@@ -709,22 +704,31 @@ def _assert_lock_available_to_another_thread(lock_path: Path) -> None:
 
 @pytest.mark.parametrize("during_file_contention", [False, True])
 def test_acquisition_callback_failure_releases_process_lock(
-    tmp_path: Path, during_file_contention: bool
+    tmp_path: Path, during_file_contention: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = tmp_path / "broker.db"
     target.touch()
     lock_path = Path(f"{target}.lock")
     lock = AdvisoryFileLock(lock_path, timeout=1.0, retry_delay=0.01)
     failure = RuntimeError("validation unavailable")
-    callback_calls = 0
+    file_attempt_failed = False
+    try_lock = phaselock_module._AdvisoryLock._try_lock
+
+    def observe_try_lock(self: Any, lock_file: BinaryIO) -> None:
+        nonlocal file_attempt_failed
+        try:
+            try_lock(self, lock_file)
+        except OSError:
+            file_attempt_failed = True
+            raise
+
+    monkeypatch.setattr(phaselock_module._AdvisoryLock, "_try_lock", observe_try_lock)
 
     def should_stop() -> bool:
-        nonlocal callback_calls
-        callback_calls += 1
-        # Calls before process acquisition and immediately after it precede
-        # the contention callback. The latter runs after the failed flock.
-        fail_on = 3 if during_file_contention else 2
-        if callback_calls == fail_on:
+        boundary_reached = (
+            file_attempt_failed if during_file_contention else lock._process_locked
+        )
+        if boundary_reached:
             raise failure
         return False
 
@@ -1892,14 +1896,14 @@ def test_advisory_lock_stops_after_lock_attempt_failure(
         timeout=1.0,
         retry_delay=0.0,
     )
-    stop_calls = 0
+    lock_attempt_failed = False
 
     def stop_waiting() -> bool:
-        nonlocal stop_calls
-        stop_calls += 1
-        return stop_calls >= 3
+        return lock_attempt_failed
 
     def fail_try_lock(self: object, lock_file: object) -> None:
+        nonlocal lock_attempt_failed
+        lock_attempt_failed = True
         raise BlockingIOError(errno.EAGAIN, "busy")
 
     monkeypatch.setattr(phaselock_module._AdvisoryLock, "_try_lock", fail_try_lock)

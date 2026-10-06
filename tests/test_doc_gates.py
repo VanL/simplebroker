@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -7,6 +9,33 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_product_spec_fully_qualified_test_citations_resolve() -> None:
+    """Traceability references must resolve without duplicating each spec's list."""
+    citation = re.compile(
+        r"(?<![\w/.-])((?:tests|extensions|examples)/[\w/.-]+\.py)"
+        r"((?:::[A-Za-z_]\w*)+)"
+    )
+    checked = 0
+    for spec in sorted((REPO_ROOT / "docs/specs").glob("*.md")):
+        for match in citation.finditer(spec.read_text(encoding="utf-8")):
+            module = REPO_ROOT / match.group(1)
+            assert module.is_file(), (spec.name, match.group(0))
+            body = ast.parse(module.read_text(encoding="utf-8")).body
+            for name in match.group(2).split("::")[1:]:
+                declarations = [
+                    node
+                    for node in body
+                    if isinstance(
+                        node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                    )
+                    and node.name == name
+                ]
+                assert len(declarations) == 1, (spec.name, match.group(0), name)
+                body = declarations[0].body
+            checked += 1
+    assert checked, "expected firing test references in product specs"
 
 
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
