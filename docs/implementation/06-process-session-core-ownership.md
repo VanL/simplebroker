@@ -605,7 +605,8 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
-- completed: [PostgreSQL capacity amplification repair](../plans/2026-10-06-postgres-capacity-amplification-plan.md)
+- retired: 2026-10-06-postgres-capacity-amplification-plan — source `dad806b`;
+  see the ledger in `docs/plans/README.md`
 - retired: 2026-08-25-verified-review-findings-remediation-plan — source
   `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns caller-owned
   borrowed-runner shutdown masking.

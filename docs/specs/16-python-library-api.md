@@ -1339,7 +1339,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- completed: [PostgreSQL capacity amplification repair](../plans/2026-10-06-postgres-capacity-amplification-plan.md)
+- retired: 2026-10-06-postgres-capacity-amplification-plan — source `dad806b`;
+  see the ledger in `docs/plans/README.md`.
 - retired: 2026-09-18-polling-strategy-native-deadline-and-local-wake-plan —
   source `bdbacf3`; see the ledger in `docs/plans/README.md`. It adds the native
   wait deadline and makes local notification a coalescing cross-context latch

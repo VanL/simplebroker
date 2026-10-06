@@ -29,7 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-10-06-postgres-capacity-amplification-plan.md | completed — class 5; removed project-validation amplification, added the bounded configurable PostgreSQL capacity-wait policy, preserved lock cleanup and cause chains, and passed full core/backend/static and independent-review gates |
+| 2026-10-06-postgres-capacity-amplification-plan.md | retired-pending — soft-retired 2026-10-06 after closure-record repair; source pin is local to retained `HEAD`; physical deletion waits for publication |
 | 2026-09-18-polling-strategy-native-deadline-and-local-wake-plan.md | retired-pending — soft-retired 2026-10-06; source pin is published; physical deletion requires a separate verification pass |
 | 2026-09-16-reviewer-hygiene-remediation-plan.md | retired-pending — soft-retired 2026-10-06; source pin is published; physical deletion requires a separate verification pass |
 | 2026-09-16-broker-session-test-hardening-plan.md | retired-pending — soft-retired 2026-10-06; source pin is published; physical deletion requires a separate verification pass |
@@ -48,6 +48,7 @@ an otherwise routine coalescing run.
 
 | Plan | Soft-retired | Outcome | Absorbed into | Source SHA |
 |------|--------------|---------|---------------|------------|
+| 2026-10-06-postgres-capacity-amplification-plan.md | 2026-10-06 | Removed project-validation amplification and added one bounded configurable PostgreSQL capacity-wait policy while preserving phase-lock cleanup, cause chains, and conservative libpq classification. | `[SB-API-2/9/11]`; configuration guide; implementation doc 06; CHANGELOG and firing tests; 2026-10-06 libpq-classification lesson; deferred checkout/listener/fairness variants and incident-duration claims remain explicit non-guarantees or plan-local | `dad806b` (local-only until published) |
 | 2026-09-18-polling-strategy-native-deadline-and-local-wake-plan.md | 2026-10-06 | Added a native wait deadline, reduced local notification to a coalescing cross-context latch, and made the reference reactor use the retained polling strategy as its sole wake arbiter. | `[SB-API-6]`; Python guide; implementation doc 07 `SM-POLLING`; reference-reactor and real PostgreSQL/Redis tests; rejected uniform-fallback timeout and native-interrupt variants judged plan-local | `bdbacf3` |
 | 2026-09-16-reviewer-hygiene-remediation-plan.md | 2026-10-06 | Removed dead and duplicated code, repaired Redis cleanup failure handling, and replaced calendar-based suppression review with event-based reconsideration. | `[DOM-10.1.1]`; Ruff suppression registry; implementation docs 06/07; code and focused/full-suite tests; remaining cleanup and refactor choices judged plan-local | `c1abedf` |
 | 2026-09-16-broker-session-test-hardening-plan.md | 2026-10-06 | Hardened BrokerSession and process-session concurrency probes and added lifecycle and live-backend parity evidence without changing runtime behavior. | `[SB-API-1/3/11]` verification maps; testing-patterns runbook; broker/process-session tests; private-contract strengthening variant judged plan-local | `b8809e5` |
