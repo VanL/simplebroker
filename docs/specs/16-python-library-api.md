@@ -1340,17 +1340,20 @@ _Implementation mapping_:
 ## Related Plans
 
 - completed: [PostgreSQL capacity amplification repair](../plans/2026-10-06-postgres-capacity-amplification-plan.md)
-- completed: [2026-09-18-polling-strategy-native-deadline-and-local-wake-plan](../plans/2026-09-18-polling-strategy-native-deadline-and-local-wake-plan.md)
-  — adds the native wait deadline and makes local notification a coalescing
-  cross-context latch consumed by the serialized wait owner.
+- retired: 2026-09-18-polling-strategy-native-deadline-and-local-wake-plan —
+  source `bdbacf3`; see the ledger in `docs/plans/README.md`. It adds the native
+  wait deadline and makes local notification a coalescing cross-context latch
+  consumed by the serialized wait owner.
 
-- active: [2026-09-16-deep-dive-review-remediation-plan](../plans/2026-09-16-deep-dive-review-remediation-plan.md)
-  — owns configuration ranges, process-session resources, watcher borrowing,
-  backend connection-opening language, and their implementation evidence.
+- retired: 2026-09-16-deep-dive-review-remediation-plan — source `e7036bb`;
+  see the ledger in `docs/plans/README.md`. It owns configuration ranges,
+  process-session resources, watcher borrowing, backend connection-opening
+  language, and their implementation evidence.
 
-- active: [2026-09-15-broker-session-plan](../plans/2026-09-15-broker-session-plan.md)
-  — names the process session publicly, restores lease-only persistent Queue
-  close, and makes caller-thread cache release explicit.
+- retired: 2026-09-15-broker-session-plan — source `01d8999`; see the ledger in
+  `docs/plans/README.md`. It names the process session publicly, restores
+  lease-only persistent Queue close, and makes caller-thread cache release
+  explicit.
 
 - retired: 2026-09-15-close-thread-resource-release-plan — source `f4cc5d6`;
   see the ledger in `docs/plans/README.md`. It is the implementation and

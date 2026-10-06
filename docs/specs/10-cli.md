@@ -430,9 +430,9 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- [Deep-dive review remediation](../plans/2026-09-16-deep-dive-review-remediation-plan.md),
-  unit 6: complete-filename guidance only; existing admission and phase-lock
-  behavior are unchanged.
+- retired: 2026-09-16-deep-dive-review-remediation-plan — source `e7036bb`;
+  see the ledger in `docs/plans/README.md`. Unit 6 changed complete-filename
+  guidance only; existing admission and phase-lock behavior are unchanged.
 
 - retired: 2026-09-14-host-path-name-boundary-plan — source `c844476`;
   see the ledger in `docs/plans/README.md`. It preserves host ancestors while

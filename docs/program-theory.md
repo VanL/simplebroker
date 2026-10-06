@@ -261,7 +261,8 @@ coherent ownership rule.
 Evidence:
 - contemporaneous: [THEORY-3] process-session concept and [THEORY-4] explicit
   safety and concrete-pressure principles
-- contemporaneous: [2026-09-15 BrokerSession plan](plans/2026-09-15-broker-session-plan.md)
+- contemporaneous: retired `2026-09-15-broker-session-plan.md` at `01d8999`;
+  see the ledger in `docs/plans/README.md`
 - contemporaneous: [`[SB-API-3]`](specs/16-python-library-api.md) process
   session handle contract and [process-session ownership](implementation/06-process-session-core-ownership.md)
 
