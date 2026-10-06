@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Raised dependency minimums to the versions currently used in development
+  and testing. The PostgreSQL extension now requires `psycopg` 3.3.6 and
+  `psycopg-pool` 3.3.3; the Redis extension requires `redis` 8.1.0. All three
+  packages require Hatchling 1.32.4 or newer (below 2) to build.
+
 ## [8.5.0] - 2026-10-06
 
 SimpleBroker 8.5.0, `simplebroker-pg` 4.5.0, and `simplebroker-redis` 4.5.0

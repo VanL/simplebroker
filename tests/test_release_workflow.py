@@ -501,18 +501,26 @@ def test_release_builds_use_the_exact_locked_frontend_without_a_cache() -> None:
 
 
 def test_build_frontend_is_bounded_and_locked() -> None:
+    """Release pins must fit project build ranges, without copying their floors."""
     projects = (
         ROOT / "pyproject.toml",
         ROOT / "extensions" / "simplebroker_pg" / "pyproject.toml",
         ROOT / "extensions" / "simplebroker_redis" / "pyproject.toml",
     )
+    build_ranges = []
     for path in projects:
         pyproject = tomllib.loads(path.read_text(encoding="utf-8"))
         build_requirements = pyproject["build-system"]["requires"]
         assert len(build_requirements) == 1
         hatchling = Requirement(build_requirements[0])
         assert hatchling.name == "hatchling"
-        assert hatchling.specifier == SpecifierSet(">=1.31,<2")
+        assert any(
+            spec.operator in {">=", ">", "==", "~="} for spec in hatchling.specifier
+        ), f"{path}: build dependency must have a lower bound"
+        assert any(
+            spec.operator in {"<", "<=", "==", "~="} for spec in hatchling.specifier
+        ), f"{path}: build dependency must have an upper bound"
+        build_ranges.append((path, hatchling.specifier))
 
     root_pyproject = tomllib.loads(projects[0].read_text(encoding="utf-8"))
     release_requirements = {
@@ -528,7 +536,10 @@ def test_build_frontend_is_bounded_and_locked() -> None:
     pinned_hatchling = list(release_requirements["hatchling"].specifier)
     assert len(pinned_hatchling) == 1
     assert pinned_hatchling[0].operator == "=="
-    assert pinned_hatchling[0].version in SpecifierSet(">=1.31,<2")
+    for path, build_range in build_ranges:
+        assert pinned_hatchling[0].version in build_range, (
+            f"{path}: release Hatchling pin must satisfy the build requirement"
+        )
 
 
 def test_packaging_workflow_has_no_redundant_pip_install() -> None:
