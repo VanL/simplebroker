@@ -28,8 +28,8 @@ explicit cleanup, close idempotency, backend ownership, and failure priority.
 - `docs/agent-context/runbooks/writing-plans.md` and
   `docs/agent-context/runbooks/hardening-plans.md`.
 - Soft-retired source record:
-  `docs/plans/2026-09-15-close-thread-resource-release-plan.md` at
-  `f4cc5d6`. It remains immutable; this successor owns corrections.
+  `f4cc5d6:docs/plans/2026-09-15-close-thread-resource-release-plan.md`.
+  It remains immutable; this successor owns corrections.
 
 ## Evaluated Findings
 
