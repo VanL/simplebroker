@@ -235,7 +235,7 @@ configuration-guide link remains valid. No published version edit.
    sleep. No independent retry loop in validation. Run targeted core/PG and
    static gates, then independent implementation review. Stop if non-PG
    scheduling changes or the proposed single budget is multiplied.
-3. [ ] Reconcile docs, run final core/PG/Redis and documentation gates from
+3. [x] Reconcile docs, run final core/PG/Redis and documentation gates from
    the final tree, record results and review dispositions, and close the
    index only at committed closeout under [DOM-10]. No commit or deployment
    is requested by this plan-revision turn. Prior test results are not
@@ -637,7 +637,7 @@ not approval; record bounded attempts before any fallback reviewer.
 
 | Spec reference | Planned behavior | Actual behavior | Rationale / spec proposal |
 | --- | --- | --- | --- |
-| None | No implementation deviations yet | Not implemented | Not applicable |
+| None | Implemented as planned | Matched the promoted `[SB-API-2/9/11]` delta | Not applicable |
 
 ## Review Log
 
@@ -1052,12 +1052,12 @@ Final amendment verification, 2026-10-06, after all review corrections:
 Final author inspection corrected guide wording: Config builder input uses
 the same namespaced key as the environment; the retained snapshot exposes the
 unprefixed name. This matches resolver code and firing source-precedence tests.
-No source/test edit occurred during final suites. Plan tasks1/2 are evidenced;
-task3 verification/docs/review portion is complete, but committed closeout is
-pending. HEAD remains5ad4099 (confirmed by git log). All changes, including
-original repair, remain uncommitted; no deployment/release/version change.
-The owner subsequently authorized committed closeout and coordinated release;
-the Status Index and related-plan backlinks now record completion.
+No source/test edit occurred during final suites. At that evidence capture,
+plan tasks1/2 and task3's verification/docs/review portion were complete while
+committed closeout was pending; HEAD was5ad4099 (confirmed by git log), and no
+deployment/release/version change had occurred. The owner subsequently
+authorized committed closeout and coordinated release at `441d194`; the Status
+Index and related-plan backlinks record completion.
 Residual limits are the accepted scheduling-not-call timeout, conservative
 unknown/localized startup handling, deferred checkout/LISTEN paths and lack
 of global admission/fairness or proven131-second-incident recovery. Zero is
