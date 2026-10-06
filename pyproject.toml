@@ -173,9 +173,9 @@ max-complexity = 10
 
 [tool.coverage.run]
 source = [
-    "simplebroker",
-    "extensions/simplebroker_pg/simplebroker_pg",
-    "extensions/simplebroker_redis/simplebroker_redis",
+    "${SIMPLEBROKER_COVERAGE_ROOT-.}/simplebroker",
+    "${SIMPLEBROKER_COVERAGE_ROOT-.}/extensions/simplebroker_pg/simplebroker_pg",
+    "${SIMPLEBROKER_COVERAGE_ROOT-.}/extensions/simplebroker_redis/simplebroker_redis",
 ]
 branch = true
 parallel = true

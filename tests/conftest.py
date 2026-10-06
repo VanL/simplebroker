@@ -91,6 +91,10 @@ def _defer_subprocess_coverage(config: pytest.Config) -> None:
     """
     if not os.environ.get("COVERAGE_PROCESS_START"):
         return
+    # workdir changes cwd before children start their collectors. Keep source
+    # directories rooted in this checkout instead of treating missing relative
+    # paths as package names (and raising warnings during forked-child save).
+    os.environ["SIMPLEBROKER_COVERAGE_ROOT"] = str(PROJECT_ROOT)
     if not config.pluginmanager.hasplugin("_cov"):
         return
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import os
 import runpy
 import signal
@@ -1601,15 +1602,22 @@ def test_xdist_worker_coverage_stays_in_pytest_cov_lifecycle(
     nested_test = tmp_path / "test_nested_coverage.py"
     nested_test.write_text(
         """
+import multiprocessing
 import os
 import subprocess
 import sys
 
 import pytest
+from simplebroker.db import BrokerDB
+
+
+def write_in_child(path):
+    with BrokerDB(path) as db:
+        db.write("coverage", "child-message")
 
 
 @pytest.mark.parametrize("index", range(2))
-def test_child_coverage(index):
+def test_child_coverage(index, tmp_path, monkeypatch):
     subprocess.run(
         [
             sys.executable,
@@ -1619,10 +1627,33 @@ def test_child_coverage(index):
         check=True,
         env=os.environ.copy(),
     )
+    with BrokerDB(str(tmp_path / "parent.db")) as db:
+        db.write("coverage", "parent-message")
+    if "fork" in multiprocessing.get_all_start_methods():
+        # A new collector must resolve source paths from the checkout, not
+        # from the temporary cwd inherited by this forked child.
+        monkeypatch.chdir(tmp_path)
+        path = str(tmp_path / "child.db")
+        child = multiprocessing.get_context("fork").Process(
+            target=write_in_child, args=(path,)
+        )
+        child.start()
+        try:
+            child.join(10)
+            assert child.exitcode == 0
+        finally:
+            if child.is_alive():
+                child.kill()
+            child.join(2)
+        assert not child.is_alive()
+        with BrokerDB(path) as db:
+            assert db.peek_many("coverage", limit=1, with_timestamps=False) == ["child-message"]
 """,
         encoding="utf-8",
     )
     env = os.environ.copy()
+    # Require the nested harness to establish its own checkout root.
+    env.pop("SIMPLEBROKER_COVERAGE_ROOT", None)
     env.update(
         {
             "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
@@ -1646,6 +1677,8 @@ def test_child_coverage(index):
             "pytest_cov.plugin",
             "-p",
             "tests.conftest",
+            "-c",
+            str(REPO_ROOT / "pyproject.toml"),
             "-n",
             "2",
             "--dist",
@@ -1666,15 +1699,33 @@ def test_child_coverage(index):
     assert result.returncode == 0, result.stdout + result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert any(_is_commands_coverage_path(path) for path in combined.measured_files())
+    assert any(
+        path.replace("\\", "/").endswith("simplebroker/db.py") and combined.lines(path)
+        for path in combined.measured_files()
+    )
     deferred_files = sorted(tmp_path.glob(".coverage-subprocess.*"))
-    assert len(deferred_files) == 2
+    has_fork = "fork" in multiprocessing.get_all_start_methods()
+    assert len(deferred_files) == (4 if has_fork else 2)
+    command_shards = 0
+    broker_shards = 0
     for deferred_file in deferred_files:
         deferred = CoverageData(basename=str(deferred_file))
         deferred.read()
-        assert any(
-            _is_commands_coverage_path(path) for path in deferred.measured_files()
+        commands_measured = any(
+            _is_commands_coverage_path(path) and deferred.lines(path)
+            for path in deferred.measured_files()
         )
+        broker_measured = any(
+            path.replace("\\", "/").endswith("simplebroker/db.py")
+            and deferred.lines(path)
+            for path in deferred.measured_files()
+        )
+        assert commands_measured or broker_measured
+        command_shards += commands_measured
+        broker_shards += broker_measured and not commands_measured
+    assert command_shards == 2
+    if has_fork:
+        assert broker_shards == 2
 
 
 @pytest.mark.parametrize(

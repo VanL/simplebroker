@@ -97,6 +97,14 @@ pass; bootstrap source `2f93ee5`)
 
 ## Ledger
 
+- 2026-10-06: Relative coverage source paths are resolved when each collector
+  starts, not relative to the configuration file. A test's temporary working
+  directory can therefore turn a source directory into an unmatched package
+  name in a forked child. Anchor child collectors to the checkout before
+  changing cwd; verify normal child exit and saved execution lines under
+  warnings-as-errors. Result-only assertions can miss a coverage-save failure
+  that happens after the broker operation succeeds.
+
 - 2026-09-16: Run normal and acceptance test commands at the repository
   harness's standard concurrency. Lower concurrency is permitted only to
   diagnose a specific failure. A lower-concurrency pass is supplementary
