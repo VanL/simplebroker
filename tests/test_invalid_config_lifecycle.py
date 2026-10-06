@@ -73,7 +73,7 @@ def test_load_config_reports_invalid_environment_field(
 
 
 def test_every_recognized_config_field_has_an_expected_form() -> None:
-    assert len(DEFAULT_CONFIG) == 32
+    assert len(DEFAULT_CONFIG) == 33
     assert all(field.description.strip() for field in DEFAULT_CONFIG.values())
 
 

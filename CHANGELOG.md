@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.5.0] - 2026-10-06
+
+SimpleBroker 8.5.0, `simplebroker-pg` 4.5.0, and `simplebroker-redis` 4.5.0
+are the coordinated release set. Both extensions require SimpleBroker 8.5.0
+or newer, and the core `pg` and `redis` extras require the matching 4.5.0
+extension or newer.
+
+### Changed
+
+- Managed PostgreSQL opening retries recognized connection-capacity refusals
+  within a configurable 30-second scheduling budget, with capped jittered
+  backoff and interruptible waits. `POSTGRES_CAPACITY_WAIT_SECONDS=0` restores
+  the three-attempt policy. The budget does not interrupt in-flight calls;
+  other backends, direct helpers, pool checkout and LISTEN recovery retain
+  their existing policies.
+
+### Fixed
+
+- PostgreSQL connection exhaustion during project-target validation no longer
+  triggers schema initialization or retries at the setup lock's polling rate.
+  Operational connection errors retain their driver cause and use the existing
+  managed connection retry policy.
+- Setup lock acquisition now releases its process lock and opened descriptor
+  when a validation callback or control exception interrupts acquisition.
+
 ## [8.4.1] - 2026-09-24
 
 ### Fixed

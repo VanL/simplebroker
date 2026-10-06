@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
 from enum import IntEnum
+from functools import partial
 from pathlib import Path
 from typing import Any, get_type_hints
 
@@ -20,7 +21,13 @@ import pytest
 
 from simplebroker._backend_plugins import get_backend_plugin
 from simplebroker._constants import resolve_config
-from simplebroker._exceptions import DatabaseError, UnknownBackendPluginError
+from simplebroker._exceptions import (
+    DatabaseError,
+    OperationalError,
+    StopException,
+    UnknownBackendPluginError,
+)
+from simplebroker._phaselock import Phase, PhaseLockService
 from simplebroker._project_config import (
     _same_filesystem,
     find_project_config,
@@ -708,6 +715,70 @@ def test_project_backend_setup_uses_config_file_phase_lock(
 
     assert initialize_calls == 1
     assert Path(f"{config_path}.lock").exists()
+
+
+@pytest.mark.parametrize("error_type", [OperationalError, StopException])
+@pytest.mark.parametrize(
+    ("initially_stale", "strict_marker_locking"),
+    [(False, False), (False, True), (True, False)],
+    ids=["marked", "strict-marked", "late-failure"],
+)
+def test_project_backend_validation_failure_does_not_initialize(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[OperationalError],
+    initially_stale: bool,
+    strict_marker_locking: bool,
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text("version = 1\n", encoding="utf-8")
+    # Use real status markers on every platform, independent of xattr support.
+    monkeypatch.setenv("PHASELOCK_ENABLE_XATTRS", "0")
+    # Exercise both platform policies. A late failure after the initial stale
+    # result requires the non-strict policy's pre-lock validation fast path.
+    monkeypatch.setattr(
+        "simplebroker.db.PhaseLockService",
+        partial(PhaseLockService, strict_marker_locking=strict_marker_locking),
+    )
+    service = PhaseLockService(config_path, namespace="user.simplebroker")
+    phase = "postgres-target-schema-v1"
+    service.run_phases((Phase(phase, lambda: None),))
+    marker_before = service.status_base_path.read_bytes()
+    failure = error_type("target inspection unavailable")
+    validation_calls = 0
+    initialized: list[str] = []
+
+    class UnavailablePlugin:
+        def validate_target(self, *args: Any, **kwargs: Any) -> None:
+            nonlocal validation_calls
+            validation_calls += 1
+            if initially_stale and validation_calls == 1:
+                raise DatabaseError("older schema needs migration")
+            raise failure
+
+        def initialize_target(self, *args: Any, **kwargs: Any) -> None:
+            initialized.append("initialized")
+
+    plugin = UnavailablePlugin()
+    monkeypatch.setattr(
+        "simplebroker._backend_plugins.get_backend_plugin", lambda _name: plugin
+    )
+    target = BrokerTarget(
+        backend_name="postgres",
+        target="backend://fixture",
+        backend_options={},
+        project_root=tmp_path,
+        config_path=config_path,
+        used_project_scope=True,
+    )
+
+    with pytest.raises(error_type) as raised:
+        _initialize_project_backend_target(target, config=resolve_config(override={}))
+
+    assert raised.value is failure
+    assert initialized == []
+    assert service.has_phase(phase)
+    assert service.status_base_path.read_bytes() == marker_before
 
 
 def test_nested_options_reach_plugin_and_normalize_losslessly(

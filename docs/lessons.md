@@ -474,3 +474,11 @@ Dated moment-tier entries (foldable after age floor and distillation).
   larger lifetime with an explicit session, and recycle a thread's cache from
   that thread. Evidence: BrokerSession plan, worker probes, and Weft teardown
   analysis.
+
+- 2026-10-06: PostgreSQL startup refusals can arrive as plain psycopg
+  OperationalError without SQLSTATE. A capacity policy must classify at the
+  connect boundary, preserve the driver cause, and fail closed on unknown or
+  mixed failures. Probe real driver/server text before trusting claims about
+  SSL or hostname formatting; installed libpq may differ from recalled forms.
+  Evidence: PostgreSQL capacity-wait plan, live role-limit/SSL/hostname probes
+  and conservative classifier regressions.

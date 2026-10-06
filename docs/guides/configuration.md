@@ -350,6 +350,26 @@ lets callers measure and opt into the tradeoff.
 
 ## Performance and tuning
 
+Managed PostgreSQL connection opening waits up to a 30-second retry-scheduling
+budget for recognized server, database or role connection-capacity refusals.
+Set `BROKER_POSTGRES_CAPACITY_WAIT_SECONDS` (or
+`WEFT_POSTGRES_CAPACITY_WAIT_SECONDS` with the Weft namespace), or supply
+the same namespaced key through the programmatic Config builder. Resolved
+snapshots expose it as `POSTGRES_CAPACITY_WAIT_SECONDS`.
+The value must be a non-negative integer or integer string that represents
+finite seconds. Zero restores the existing three-attempt policy. It follows
+standard namespace/source precedence and retained Config snapshots.
+
+This budget starts when managed opening begins. Capacity retries use capped,
+jittered backoff and interruptible waits. Other failures retain the ordinary
+three-total-attempt limit. The budget cannot interrupt an in-flight connect,
+pool wait or schema setup, so successful opening can finish after its deadline.
+Direct helpers, pool checkout, LISTEN recovery and other backends retain their
+existing policies. Unrecognized or localized capacity messages use ordinary
+retries. See [SB-API-11](../specs/16-python-library-api.md#ext-advanced-and-backend-facing-exports-sb-api-11)
+for the canonical boundary; this setting does not provision a pool or guarantee
+admission during sustained saturation.
+
 Current throughput figures come from [`bin/benchmark.py`](../../bin/benchmark.py),
 which measures writes, reads, peeks, and mixed use through the CLI, default API,
 and persistent optimized API on SQLite, Postgres, and Redis. The current M4

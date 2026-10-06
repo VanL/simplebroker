@@ -12,6 +12,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import TypeVar
 
+from . import _retry
 from ._constants import Config
 from ._exceptions import OperationalError, StopException
 from ._retry import (
@@ -215,24 +216,82 @@ def _execute_watcher_operational_retry(
         raise StopException("Retry interrupted by stop event") from None
 
 
+class _ConnectionCapacityBudget:
+    """One managed-open deadline, separate from statement retries [SB-API-11]."""
+
+    def __init__(self, seconds: float, max_attempts: int) -> None:
+        self.seconds = seconds
+        self.max_attempts = max_attempts
+        self.started = _retry._monotonic()
+        self.attempts = 0
+        self.capacity_seen = False
+        self.current_capacity = False
+        self.last_error: Exception | None = None
+
+    def remaining(self) -> float:
+        return self.seconds - (_retry._monotonic() - self.started)
+
+    def attempt(
+        self, operation: Callable[[], T], stop_event: threading.Event | None
+    ) -> T:
+        if stop_event is not None and stop_event.is_set():
+            raise RetryInterrupted
+        if self.capacity_seen and self.remaining() <= 0:
+            assert self.last_error is not None
+            raise self.last_error
+        self.attempts += 1
+        return operation()
+
+    def retry_on(self, exc: Exception) -> bool:
+        if isinstance(exc, (StopException, RetryInterrupted)):
+            return False
+        self.last_error = exc
+        self.current_capacity = (
+            isinstance(exc, OperationalError) and exc._connection_capacity
+        )
+        self.capacity_seen = self.capacity_seen or self.current_capacity
+        if self.capacity_seen and self.remaining() <= 0:
+            return False
+        return self.current_capacity or self.attempts < self.max_attempts
+
+    def wait(self, base_wait: float) -> float:
+        wait = (
+            bounded_jitter(base_wait, floor=1.0) if self.current_capacity else base_wait
+        )
+        if self.capacity_seen:
+            wait = min(wait, max(0.0, self.remaining()))
+        return wait
+
+
 def _execute_connection_retry(
     operation: Callable[[], T],
     *,
     max_retries: int = 3,
+    capacity_wait_seconds: float | None = None,
     stop_event: threading.Event | None = None,
     before_sleep: Callable[[RetryState, Exception, float], None] | None = None,
 ) -> T:
     def retry_on(exc: Exception) -> bool:
         return not isinstance(exc, StopException)
 
+    budget = (
+        _ConnectionCapacityBudget(capacity_wait_seconds, max_retries)
+        if capacity_wait_seconds is not None and capacity_wait_seconds > 0
+        else None
+    )
+
     try:
         return execute_retry(
-            operation,
-            retry_on=retry_on,
+            (lambda: budget.attempt(operation, stop_event)) if budget else operation,
+            retry_on=budget.retry_on if budget else retry_on,
             wait_gen=expo,
-            wait_gen_kwargs={"base": 2, "factor": 2.0, "max_value": None},
-            jitter=None,
-            stop=stop_after_attempt(max_retries),
+            wait_gen_kwargs={
+                "base": 2,
+                "factor": 2.0,
+                "max_value": 5.0 if budget else None,
+            },
+            jitter=budget.wait if budget else None,
+            stop=stop_never() if budget else stop_after_attempt(max_retries),
             sleep=interruptible_sleep,
             stop_event=stop_event,
             before_sleep=before_sleep,

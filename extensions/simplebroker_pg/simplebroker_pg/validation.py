@@ -11,7 +11,7 @@ from typing import Any
 import psycopg
 
 from simplebroker._constants import SIMPLEBROKER_MAGIC
-from simplebroker._exceptions import DatabaseError
+from simplebroker._exceptions import DatabaseError, OperationalError
 
 from ._constants import POSTGRES_SCHEMA_VERSION
 
@@ -71,10 +71,58 @@ def quote_ident(identifier: str) -> str:
     return f'"{identifier}"'
 
 
+# libpq startup errors often lose SQLSTATE. Accept only complete English
+# server FATAL messages at this connection boundary, never arbitrary text.
+_CAPACITY_FATAL_RE = re.compile(
+    r'(?:too many connections for (?:role|database) "[^"\r\n]+"'
+    r"|sorry, too many clients already"
+    r"|remaining connection slots are reserved for "
+    r"(?:non-replication superuser connections"
+    r"|roles with the SUPERUSER attribute"
+    r'|roles with privileges of the "pg_use_reserved_connections" role))'
+)
+_STARTUP_FATAL_RE = re.compile(
+    r"connection failed: connection to server "
+    r'(?:at "[^"\r\n]+"(?: \([^()\r\n]+\))?, port [0-9]+'
+    r'|on socket "[^"\r\n]+")'
+    r" failed: FATAL:  (?P<message>[^\r\n]+)"
+)
+_ADDRESS_FAILURE_RE = re.compile(
+    r"- host: (?:'[^'\r\n]*'|None), port: (?:'[^'\r\n]*'|None), "
+    r"hostaddr: (?:'[^'\r\n]*'|None): (?P<failure>[^\r\n]+)"
+)
+_ALL_ADDRESS_FAILURES = "\nMultiple connection attempts failed. All failures were:\n"
+
+
+def _is_connection_capacity_refusal(exc: psycopg.OperationalError) -> bool:
+    """Classify a server refusal without broadening other operational failures."""
+    if exc.sqlstate is not None:
+        return exc.sqlstate == "53300"
+    summary, separator, failures = str(exc).partition(_ALL_ADDRESS_FAILURES)
+    segments = [summary]
+    if separator:
+        if not failures:
+            return False
+        for line in failures.splitlines():
+            address_failure = _ADDRESS_FAILURE_RE.fullmatch(line)
+            if address_failure is None:
+                return False
+            segments.append(address_failure["failure"])
+    for segment in segments:
+        fatal = _STARTUP_FATAL_RE.fullmatch(segment)
+        if fatal is None or _CAPACITY_FATAL_RE.fullmatch(fatal["message"]) is None:
+            return False
+    return True
+
+
 def connect(dsn: str) -> psycopg.Connection:
     """Create an autocommit psycopg connection."""
     try:
         return psycopg.connect(dsn, autocommit=True)
+    except psycopg.OperationalError as exc:
+        failure = OperationalError(f"Could not connect to Postgres target: {exc}")
+        failure._connection_capacity = _is_connection_capacity_refusal(exc)
+        raise failure from exc
     except psycopg.Error as exc:
         raise DatabaseError(f"Could not connect to Postgres target: {exc}") from exc
 

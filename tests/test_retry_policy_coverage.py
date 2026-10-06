@@ -16,6 +16,7 @@ from simplebroker._exceptions import OperationalError, StopException
 from simplebroker._retry import DEFAULT_MIN_RETRY_SLEEP_S, interruptible_sleep
 from simplebroker._retry_policy import (
     SetupProgressBudget,
+    _execute_connection_retry,
     _execute_watcher_operational_retry,
     _execute_with_retry,
     _is_locked_operational_error,
@@ -803,3 +804,284 @@ class TestRetryableClassification:
 
         assert _execute_with_retry(flaky, retry_delay=0.001) == "done"
         assert len(attempts) == 3
+
+
+@pytest.fixture
+def connection_retry_clock(monkeypatch: pytest.MonkeyPatch):
+    """Control time and RNG without substituting the retry engine."""
+    clock = DeterministicClock(initial=0.0)
+    waits: list[float] = []
+
+    def sleep(wait: float, stop_event=None) -> bool:
+        waits.append(wait)
+        clock.advance(wait)
+        return True
+
+    monkeypatch.setattr("simplebroker._retry._monotonic", clock)
+    monkeypatch.setattr("simplebroker._retry._uniform", lambda floor, upper: upper)
+    monkeypatch.setattr(_retry_policy, "interruptible_sleep", sleep)
+    return clock, waits
+
+
+def capacity_refusal() -> OperationalError:
+    error = OperationalError("connection slots exhausted")
+    error._connection_capacity = True
+    return error
+
+
+def test_connection_capacity_retries_past_three_until_success(connection_retry_clock):
+    """A draining server can admit a caller after the ordinary attempt limit."""
+    clock, waits = connection_retry_clock
+    attempts = 0
+
+    def open_connection() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 4:
+            raise capacity_refusal()
+        return "connected"
+
+    assert (
+        _execute_connection_retry(open_connection, capacity_wait_seconds=30)
+        == "connected"
+    )
+    assert attempts == 5
+    assert clock.now < 30
+    assert waits == [2, 4, 5, 5]
+
+
+@pytest.mark.parametrize("budget", [1, 30])
+def test_connection_capacity_deadline_prevents_another_attempt(
+    connection_retry_clock, budget: int
+):
+    """Even a clipped final sleep must not start a post-deadline connect."""
+    clock, waits = connection_retry_clock
+    starts: list[float] = []
+    failure = capacity_refusal()
+
+    def open_connection() -> None:
+        starts.append(clock.now)
+        raise failure
+
+    with pytest.raises(OperationalError) as caught:
+        _execute_connection_retry(open_connection, capacity_wait_seconds=budget)
+
+    assert caught.value is failure
+    assert clock.now == budget
+    assert all(start < budget for start in starts)
+    assert waits[-1] == (1 if budget == 1 else 4)
+    if budget == 1:
+        assert len(starts) == 1
+    else:
+        assert len(starts) > 3
+
+
+def test_slow_first_capacity_refusal_does_not_sleep_after_deadline(
+    connection_retry_clock,
+):
+    clock, waits = connection_retry_clock
+    attempts = 0
+    failure = capacity_refusal()
+
+    def open_connection() -> None:
+        nonlocal attempts
+        attempts += 1
+        clock.advance(31)
+        raise failure
+
+    with pytest.raises(OperationalError) as caught:
+        _execute_connection_retry(open_connection, capacity_wait_seconds=30)
+    assert caught.value is failure
+    assert attempts == 1
+    assert waits == []
+
+
+@pytest.mark.parametrize("budget", [None, 0])
+def test_connection_capacity_disabled_preserves_three_attempts(
+    connection_retry_clock, budget
+):
+    _, waits = connection_retry_clock
+    attempts = 0
+    failure = capacity_refusal()
+
+    def open_connection() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise failure
+
+    with pytest.raises(OperationalError) as caught:
+        _execute_connection_retry(open_connection, capacity_wait_seconds=budget)
+    assert caught.value is failure
+    assert attempts == 3
+    assert waits == [2, 4]
+
+
+@pytest.mark.parametrize(
+    "message", ["password authentication failed", "network unavailable"]
+)
+def test_capacity_budget_does_not_extend_unclassified_failures(
+    connection_retry_clock, message
+):
+    _, waits = connection_retry_clock
+    attempts = 0
+    failure = OperationalError(message)
+
+    def open_connection() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise failure
+
+    with pytest.raises(OperationalError) as caught:
+        _execute_connection_retry(open_connection, capacity_wait_seconds=30)
+    assert caught.value is failure
+    assert attempts == 3
+    assert waits == [2, 4]
+
+
+@pytest.mark.parametrize("capacity_first", [False, True])
+def test_mixed_connection_failures_keep_total_attempt_count(
+    connection_retry_clock, capacity_first
+):
+    _, waits = connection_retry_clock
+    ordinary = OperationalError("network unavailable")
+    capacity = capacity_refusal()
+    failures = (
+        [capacity, capacity, ordinary]
+        if capacity_first
+        else [ordinary, capacity, ordinary]
+    )
+    attempts = 0
+
+    def open_connection() -> None:
+        nonlocal attempts
+        failure = failures[min(attempts, 2)]
+        attempts += 1
+        raise failure
+
+    with pytest.raises(OperationalError) as caught:
+        _execute_connection_retry(open_connection, capacity_wait_seconds=30)
+    assert caught.value is ordinary
+    assert attempts == 3
+    assert waits == [2, 4]
+
+
+def test_mixed_connection_failure_keeps_original_deadline(connection_retry_clock):
+    clock, waits = connection_retry_clock
+    ordinary = OperationalError("network unavailable")
+    attempts = 0
+
+    def open_connection() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            clock.advance(8)
+            raise capacity_refusal()
+        raise ordinary
+
+    with pytest.raises(OperationalError) as caught:
+        _execute_connection_retry(open_connection, capacity_wait_seconds=11)
+    assert caught.value is ordinary
+    assert attempts == 2
+    assert clock.now == 11
+    assert waits == [2, 1]
+
+
+def test_connection_success_in_flight_can_finish_after_capacity_deadline(
+    connection_retry_clock,
+):
+    clock, _ = connection_retry_clock
+    attempts = 0
+
+    def open_connection() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise capacity_refusal()
+        clock.advance(30)
+        return "connected"
+
+    assert (
+        _execute_connection_retry(open_connection, capacity_wait_seconds=3)
+        == "connected"
+    )
+    assert attempts == 2
+    assert clock.now > 3
+
+
+@pytest.mark.parametrize("choose_upper", [False, True])
+def test_connection_capacity_jitter_floor_and_cap(
+    connection_retry_clock, monkeypatch, choose_upper
+):
+    """Sample both RNG endpoints through real jitter and the real retry engine."""
+    _, waits = connection_retry_clock
+    ranges: list[tuple[float, float]] = []
+    attempts = 0
+
+    def uniform(floor: float, upper: float) -> float:
+        ranges.append((floor, upper))
+        return upper if choose_upper else floor
+
+    def open_connection() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 4:
+            raise capacity_refusal()
+        return "connected"
+
+    monkeypatch.setattr("simplebroker._retry._uniform", uniform)
+    assert (
+        _execute_connection_retry(open_connection, capacity_wait_seconds=30)
+        == "connected"
+    )
+    assert ranges == [(1, 2), (1, 4), (1, 5), (1, 5)]
+    assert waits == ([2, 4, 5, 5] if choose_upper else [1, 1, 1, 1])
+
+
+def test_connection_capacity_long_budget_keeps_backoff_finite(connection_retry_clock):
+    """More than 1024 retries must not overflow an uncapped exponential."""
+    _, waits = connection_retry_clock
+    attempts = 0
+
+    def open_connection() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 1100:
+            raise capacity_refusal()
+        return "connected"
+
+    assert (
+        _execute_connection_retry(open_connection, capacity_wait_seconds=10000)
+        == "connected"
+    )
+    assert attempts == 1100
+    assert max(waits) == 5
+
+
+@pytest.mark.parametrize("sleep_completed", [False, True])
+def test_connection_capacity_sleep_remains_interruptible(
+    connection_retry_clock, monkeypatch, sleep_completed: bool
+):
+    _, waits = connection_retry_clock
+    attempts = 0
+    stop_event = threading.Event()
+
+    def interrupted_sleep(wait: float, event) -> bool:
+        assert event is stop_event
+        waits.append(wait)
+        stop_event.set()
+        return sleep_completed
+
+    def open_connection() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts > 1:
+            return
+        raise capacity_refusal()
+
+    monkeypatch.setattr(_retry_policy, "interruptible_sleep", interrupted_sleep)
+    with pytest.raises(StopException, match="Connection interrupted"):
+        _execute_connection_retry(
+            open_connection, capacity_wait_seconds=30, stop_event=stop_event
+        )
+    assert attempts == 1
+    assert waits == [2]

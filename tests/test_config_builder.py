@@ -558,3 +558,67 @@ def test_custom_runtime_error_is_not_invalid_configuration() -> None:
             override={"BROKER_CUSTOM": 2},
         )
     assert caught.value is failure
+
+
+@pytest.mark.parametrize("source", ["toml", "env", "override"])
+@pytest.mark.parametrize("value,expected", [(0, 0), ("9", 9), (45, 45)])
+def test_postgres_capacity_wait_uses_declared_seconds(
+    source: str, value: Any, expected: int
+) -> None:
+    """The PG setting is validated through the ordinary namespaced resolver."""
+    kwargs: dict[str, Any] = {source: {"WEFT_POSTGRES_CAPACITY_WAIT_SECONDS": value}}
+    config = resolve_config("WEFT", **kwargs)
+    assert config["POSTGRES_CAPACITY_WAIT_SECONDS"] == expected
+    assert resolve_config()["POSTGRES_CAPACITY_WAIT_SECONDS"] == 30
+
+
+@pytest.mark.parametrize("source", ["toml", "env", "override"])
+@pytest.mark.parametrize(
+    "value",
+    [True, False, 1.0, -1, "-1", "1.5", "invalid", 10**400],
+    ids=[
+        "true",
+        "false",
+        "float",
+        "negative",
+        "negative-string",
+        "fraction",
+        "text",
+        "overflow",
+    ],
+)
+def test_postgres_capacity_wait_rejects_invalid_seconds(
+    source: str, value: Any
+) -> None:
+    kwargs: dict[str, Any] = {source: {"BROKER_POSTGRES_CAPACITY_WAIT_SECONDS": value}}
+    with pytest.raises(InvalidConfigError) as failure:
+        resolve_config(**kwargs)
+    assert failure.value.key == "BROKER_POSTGRES_CAPACITY_WAIT_SECONDS"
+
+
+def test_postgres_capacity_wait_precedence_and_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retry budget is a retained config value, never an ambient read."""
+    key = "WEFT_POSTGRES_CAPACITY_WAIT_SECONDS"
+    monkeypatch.setenv(key, "99")
+    config = resolve_config(
+        "WEFT",
+        toml={key: 10},
+        env={key: "20"},
+        override={key: 30},
+    )
+    assert config["POSTGRES_CAPACITY_WAIT_SECONDS"] == 30
+    assert (
+        resolve_config("WEFT", toml={key: 10}, env={key: "20"})[
+            "POSTGRES_CAPACITY_WAIT_SECONDS"
+        ]
+        == 20
+    )
+    assert (
+        resolve_config("WEFT", toml={key: 10})["POSTGRES_CAPACITY_WAIT_SECONDS"] == 10
+    )
+    derived = resolve_config(config=config, override={key: 0})
+    assert derived["POSTGRES_CAPACITY_WAIT_SECONDS"] == 0
+    assert config["POSTGRES_CAPACITY_WAIT_SECONDS"] == 30
+    assert resolve_config()["POSTGRES_CAPACITY_WAIT_SECONDS"] == 30

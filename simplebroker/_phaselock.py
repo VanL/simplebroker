@@ -328,49 +328,54 @@ class _AdvisoryLock:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         start = time.monotonic()
-        if not self._acquire_process_lock(
-            start,
-            should_stop_waiting=should_stop_waiting,
-            diagnostics=diagnostics,
-        ):
+        try:
+            process_locked = self._acquire_process_lock(
+                start,
+                should_stop_waiting=should_stop_waiting,
+                diagnostics=diagnostics,
+            )
+            while process_locked:
+                if should_stop_waiting is not None and should_stop_waiting():
+                    return False
+
+                try:
+                    lock_file = self.path.open("a+b")
+                except OSError as exc:
+                    if not self._wait_to_retry(
+                        start,
+                        last_error=exc,
+                        cause=exc,
+                        should_stop_waiting=should_stop_waiting,
+                        diagnostics=diagnostics,
+                    ):
+                        return False
+                    continue
+
+                # Own the descriptor before preparation can raise. Only a
+                # successful acquisition transfers it to the release caller.
+                self._file = lock_file
+                try:
+                    self._prepare_lock_file(lock_file)
+                    self._try_lock(lock_file)
+                except OSError as exc:
+                    lock_file.close()
+                    self._file = None
+                    if not self._wait_to_retry(
+                        start,
+                        last_error=exc,
+                        cause=None,
+                        should_stop_waiting=should_stop_waiting,
+                        diagnostics=diagnostics,
+                    ):
+                        return False
+                    continue
+
+                self._locked = True
+                return True
             return False
-
-        while True:
-            if should_stop_waiting is not None and should_stop_waiting():
-                self._release_process_lock()
-                return False
-
-            try:
-                lock_file = self.path.open("a+b")
-            except OSError as exc:
-                if not self._wait_to_retry(
-                    start,
-                    last_error=exc,
-                    cause=exc,
-                    should_stop_waiting=should_stop_waiting,
-                    diagnostics=diagnostics,
-                ):
-                    return False
-                continue
-
-            try:
-                self._prepare_lock_file(lock_file)
-                self._try_lock(lock_file)
-            except OSError as exc:
-                lock_file.close()
-                if not self._wait_to_retry(
-                    start,
-                    last_error=exc,
-                    cause=None,
-                    should_stop_waiting=should_stop_waiting,
-                    diagnostics=diagnostics,
-                ):
-                    return False
-                continue
-
-            self._file = lock_file
-            self._locked = True
-            return True
+        finally:
+            if not self._locked:
+                self.release()
 
     def _wait_to_retry(
         self,

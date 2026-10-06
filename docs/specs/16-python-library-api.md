@@ -254,6 +254,15 @@ Integer coercion precedes range validation for the core bounded settings.
 integer. `SYNC_MODE` is case-insensitive and accepts only `FULL`, `NORMAL`, or
 `OFF`; any other effective value is invalid rather than selecting a fallback.
 
+`POSTGRES_CAPACITY_WAIT_SECONDS` defaults to 30 non-negative integer
+seconds. It accepts an integer or integer string, rejects booleans,
+floats, negative and nonnumeric values or integers that cannot represent
+finite floating-point seconds, and follows the standard Config
+namespace and source precedence. Zero disables extended capacity waiting.
+It affects managed PostgreSQL connection opening only; other backends,
+direct inspection/initialization/cleanup, pool checkout and LISTEN recovery
+retain their existing policies. It is not a driver connect_timeout.
+
 `Config` exposes uppercase unprefixed keys only, with no namespaced or
 case-folded aliases. Top-level mutation is prevented.
 
@@ -919,6 +928,13 @@ raises a fresh `InvalidConfigError` for an invalid value; the resulting
   (`[SB-CLI-1]` applies to the CLI and [SB-API-10]).
 - Exception **message text** is not a frozen product contract; catch types, not
   substrings.
+- A psycopg operational failure while establishing a PostgreSQL connection
+  through the target inspection or cleanup helpers is represented by
+  `OperationalError`, with the driver error retained as its cause. It remains
+  catchable as `DatabaseError`. This type does not by itself promise that retry
+  will succeed. Managed connection opening retains its final-failure wrapper;
+  PostgreSQL capacity retry timing is specified in [SB-API-11]; direct inspection or cleanup propagates the error to
+  its caller. Initialization uses the same inspection helper.
 - Some runtime failures may still surface as plain `RuntimeError` (for example
   exhausted retries); `BrokerError` is the root of package-defined SimpleBroker
   exceptions, not an exhaustive catch for every failure.
@@ -927,6 +943,9 @@ _Implementation mapping_:
 - `simplebroker/_constants.py` (`BrokerError`, `InvalidConfigError`)
 - `simplebroker/_exceptions.py`
 - `simplebroker/ext.py`
+- `extensions/simplebroker_pg/simplebroker_pg/validation.py` (target connection
+  error classification), `simplebroker/db.py` (managed acquisition failure),
+  `simplebroker/_retry_policy.py` (single capacity budget)
 
 ## Command layer (second surface) [SB-API-10]
 
@@ -1075,6 +1094,39 @@ irrecoverably partial targets remain rejected. Absent targets and backend
 namespaces that are present but empty may be initialized; initialization never
 overwrites a foreign or partial target.
 
+PostgreSQL project setup treats an `OperationalError` from live target
+validation as a failure to inspect the target, not as evidence that
+initialization is needed. It propagates that failure without running
+initialization or changing setup completion markers. It must not turn that
+failure into repeated validation attempts at the setup-lock polling cadence.
+A caller's existing connection retry policy may retry acquisition. A completion
+marker remains a hint: successful live validation is still required before it
+can skip setup.
+
+Managed PostgreSQL connection opening retries positively classified server,
+database or role connection-capacity refusals within one retry-scheduling
+budget, controlled by `POSTGRES_CAPACITY_WAIT_SECONDS`. The budget starts
+when managed opening begins and is never refreshed. Capacity refusals may
+exceed the ordinary three-total-attempt limit, but a positive budget can
+also allow fewer attempts when it expires sooner. Zero restores the
+ordinary attempt-only policy. Other errors retain that
+limit, including after capacity retries. Capacity retry sleeps use capped
+exponential backoff with jitter and are clipped to remaining budget. No
+further attempt starts once capacity has been observed and the budget
+expires, including after a subsequent non-capacity failure.
+Cancellation interrupts retry sleeps and prevents further attempts.
+The budget does not interrupt an in-flight driver call, pool wait or schema
+setup, and successful in-flight opening may complete after its deadline.
+Exhaustion retains the managed opening RuntimeError and cause chain.
+Direct helpers do not acquire a separate retry budget. Classification
+prefers SQLSTATE 53300 and conservatively recognizes known English server
+FATAL capacity messages when startup errors lack SQLSTATE. Unrecognized,
+localized or ambiguous failures retain ordinary retries. An aggregated
+multi-address failure without SQLSTATE is capacity only when every address
+failure is a recognized capacity refusal. Any present SQLSTATE takes precedence
+over this text fallback. This does not
+guarantee admission, fairness or recovery during saturation.
+
 A SQLite `schema-vN` phase marker is a cache hint, not schema proof. The marker
 may skip idempotent migration and repair only when database-internal proof
 metadata names the current proof algorithm and records the current SQLite
@@ -1167,6 +1219,8 @@ _Implementation mapping_:
 - `simplebroker/ext.py` and its re-export sources
 - `simplebroker/db.py`, `simplebroker/_runner.py`, `simplebroker/_phaselock.py`
 - `simplebroker/_backend_plugins.py`, `simplebroker/_broker_session.py`
+- `simplebroker/_retry_policy.py`, `simplebroker/_constants.py`
+  (`POSTGRES_CAPACITY_WAIT_SECONDS`)
 - first-party `extensions/simplebroker_pg`, `extensions/simplebroker_redis`
 
 ## Cross-surface matrix [SB-API-12]
@@ -1277,14 +1331,15 @@ _Implementation mapping_:
 | [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_watcher_start_stop_cleanup_ownership_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_polling_strategy_defaults_match_canonical_config`; `tests/test_watcher_transition_tables.py::test_polling_fires_transition_table`, `::test_watcher_lifecycle_fires_transition_table`; `tests/test_watcher.py::TestPollingStrategy::test_native_deadline_rejects_non_builtin_numeric_grammar_before_mutation`, `::test_native_deadline_rejects_invalid_values_before_mutation`, `::test_native_deadline_rejects_absolute_overflow_before_wait`, `::test_zero_timeout_observes_native_waiter_without_advancing_cadence`, `::test_zero_timeout_does_not_shorten_polling_fallback`, `::test_native_deadline_uses_one_budget_and_preserves_shortened_pass_state`, `::test_downgraded_local_notification_has_exact_owner_state_vector`, `::test_notify_activity_only_arms_latch_across_supported_contexts`; `tests/test_watcher.py::TestQueueWatcher::test_signal_handler_requests_stop_without_async_unwind`; `tests/test_watcher_sigint_probe_transitions.py::test_watcher_sigint_probe_fires_transition_table`; `examples/tests/test_reference_reactor.py::test_worker_result_latch_wakes_long_strategy_wait_and_enters_burst`, `::test_base_reactor_composes_one_deadline_across_quiet_strategy_passes`; `examples/tests/test_reference_reactor_transitions.py::test_reference_reactor_fires_transition_table`; `extensions/simplebroker_pg/tests/test_pg_notify.py::test_polling_strategy_deadline_expires_quietly_on_postgres`, `::test_polling_strategy_zero_timeout_observes_postgres_notification`, `::test_polling_strategy_postgres_notification_precedes_deadline`; `extensions/simplebroker_redis/tests/test_redis_integration.py::test_polling_strategy_deadline_expires_quietly_on_redis`, `::test_polling_strategy_zero_timeout_observes_redis_notification`, `::test_polling_strategy_redis_notification_precedes_deadline`; `tests/test_watcher_cleanup.py::TestWatcherCleanup::test_collected_watcher_does_not_take_caller_thread_cleanup`, `::test_idle_stop_closes_only_an_internally_owned_queue_lease`, `::test_run_thread_recycles_cache_without_closing_supplied_queue`, `::test_constructor_failure_does_not_replace_supplied_queue_stop_event`, `::test_idle_stop_restores_supplied_queue_for_use`, `::test_run_cleanup_restores_supplied_queue_for_another_thread`, `::test_cleanup_restores_supplied_queue_prior_stop_event`, `::test_cleanup_failure_still_restores_supplied_queue`; `tests/test_watcher_error_handler_contract.py`, including `test_batch_iterator_close_failure_is_secondary_to_error_handler_failure`; `tests/test_watcher_stop_contract.py::test_stop_racing_start_has_one_cleanup_owner`, `test_join_timeout_does_not_transfer_cleanup_from_live_run`, `test_cleanup_failure_keeps_lifecycle_retryable`, `test_context_exit_suppresses_stop_failure_without_replacing_body_exception`, `test_context_exit_cleanup_failure_remains_retryable`, `test_context_exit_propagates_base_exception_from_stop`, `test_batch_iterators_close_once_on_exhaustion_after_handler_continuation`, `test_batch_iterator_close_failure_without_active_failure_surfaces`, `test_batch_iterator_close_failure_is_note_on_retryable_failure`, `test_batch_iterator_close_failure_during_clean_stop_is_terminal`, `test_batch_iterator_close_base_exception_keeps_cleanup_priority`; `tests/test_watcher.py::TestQueueWatcher::test_default_data_version_detects_replaced_sqlite_core`, `tests/test_watcher.py::TestQueueWatcher::test_default_data_version_stays_quiet_for_ephemeral_queue`, `tests/test_watcher.py::TestPollingStrategy::test_defaults_use_ambient_free_canonical_config_snapshot`, `tests/test_watcher.py::TestPollingStrategy::test_all_defaults_derive_from_one_isolated_canonical_snapshot`; `tests/test_connection_config.py::test_watcher_instance_config_maps_into_strategy_fields`, `tests/test_connection_config.py::test_polling_strategy_fields_determine_delay_schedule`, `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`, including `test_config_derived_namespace_wakes_public_waiter`; watcher suites |
 | [SB-API-7] | `tests/test_python_library_api_contract_sb_api.py::test_api_generators_watchers_sidecar_io_errors_language`; `tests/test_sqlite_schema.py::test_schema_v6_migrates_despite_unsupported_caller_objects`; `extensions/simplebroker_pg/tests/test_pg_message_id_order.py::test_real_postgres_removed_key_dependency_rolls_back_v5_migration`; sidecar suites under tests / examples |
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`, including `test_load_without_config_ignores_environment` |
-| [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_invalid_config_lifecycle.py::test_invalid_environment_does_not_break_package_import`, `tests/test_invalid_config_lifecycle.py::test_sensitive_config_failure_redacts_before_formatting`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers`; `tests/test_malformed_target_diagnostics.py`; `tests/test_config_builder.py::test_sensitive_validator_overflow_keeps_safe_metadata` |
+| [SB-API-9] | `extensions/simplebroker_pg/tests/test_pg_init_backend.py::test_connect_marks_only_confirmed_capacity_refusals`; `extensions/simplebroker_pg/tests/test_pg_init_backend.py::test_connect_preserves_driver_error_classification_and_cause`; `extensions/simplebroker_pg/tests/test_pg_ownership.py::test_role_capacity_refusal_preserves_project_marker_and_managed_retry_bound`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_invalid_config_lifecycle.py::test_invalid_environment_does_not_break_package_import`, `tests/test_invalid_config_lifecycle.py::test_sensitive_config_failure_redacts_before_formatting`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers`; `tests/test_malformed_target_diagnostics.py`; `tests/test_config_builder.py::test_sensitive_validator_overflow_keeps_safe_metadata` |
 | [SB-API-10] | `tests/test_timestamp_selection_contract_sb_select.py::test_direct_command_accepts_normalized_newest_order`, `::test_direct_command_rejects_newest_all_before_target_resolution`; `tests/test_commands_error_ownership.py` (direct invalid-input/operational exceptions, selector parity, delete no-mutation, queue/all delete result, and CLI-owned diagnostic boundary); `tests/test_commands_status.py`; `tests/test_commands_init.py`; `tests/test_cli_dump_load.py`; `tests/test_dump_load.py::test_quiet_cmd_load_does_not_hide_another_threads_clock_skew_warning`, `test_cmd_load_warning_policy_resets_after_success`, `test_cmd_load_warning_policy_resets_after_every_failure`, `test_load_warning_sink_restores_outer_nested_policy`; `tests/test_commands_stdout_delivery.py` (exact direct stdout inventory, write-versus-flush failures, mutation durability, and bare-stdout static gate); `tests/test_cli_main.py::test_keyboard_interrupt_handling`; `tests/test_cli_watch.py::TestWatchCommand::test_watch_sigint_remains_success`; `tests/test_cli_main.py::test_repeated_main_calls_rebuild_defaults_from_invocation_snapshot`; `tests/test_public_surface.py`; `tests/test_python_library_api_contract_sb_api.py::test_api_write_keep_newest_signatures_and_public_validator`; `tests/test_cli_write_output.py` keep-window validation and output cases; `tests/test_invalid_config_lifecycle.py::test_direct_command_early_validation_can_remain_config_independent`, `tests/test_invalid_config_lifecycle.py::test_direct_command_calls_ignore_environment` |
-| [SB-API-11] | `tests/test_python_library_api_contract_sb_api.py::test_api_owned_runner_lifecycle_and_backend_v9_contract`, `::test_api_write_keep_newest_signatures_and_public_validator`, `::test_api_load_future_skew_surface_is_root_importable_and_keyword_only`, `::test_api_v6_cutover_contract_names_the_legacy_pg_exception`; `tests/test_sqlite_admission.py` (early version admission, factual migration receipts, scalar proof fast path, stale/missing/fault/concurrent proof cases); `tests/test_sqlite_schema.py` (semantic uniqueness and keep cutoff query plan); `tests/test_phaselock.py`; `tests/test_process_broker_session.py` (continued cleanup and diagnostics); `tests/test_custom_runner_integration.py::test_sql_borrowed_runner_masks_destructive_verbs_across_teardown`; `tests/test_core_persistence_transition_tables.py::test_sqlite_runner_fires_transition_table` (`CLOSE_REOPEN`); `tests/test_runner_lifecycle.py`; `tests/test_backend_plugin_resolution.py` (including v9 exact-version handshake and duplicate ambiguity before load); `extensions/simplebroker_pg/tests/test_pg_schema_validation_paths.py`, `test_pg_plugin_contract_edges.py`, `test_pg_ownership.py`; `extensions/simplebroker_redis/tests/test_redis_validation.py`, `test_redis_plugin_validation_paths.py`, `test_redis_plugin_contract_edges.py`; `tests/test_release_script.py::test_repository_backend_api_v9_handshake_and_floors_match`; `tests/test_dump_load.py::test_load_header_floor_persists_when_local_cache_is_ahead`, `tests/test_dump_load.py::test_load_header_floor_observes_concurrent_durable_winner`, `tests/test_dump_load.py::test_load_header_floor_final_read_failure_is_outcome_ambiguous`; `tests/test_timestamp_advance.py`; `extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py::test_postgres_missing_last_ts_row_fails_loudly`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval`; `tests/test_timestamp_bound_grammar.py` (public validator grammar and exact ISO conversion); `tests/test_fork_safety.py` (inherited Queue cases); `tests/test_broker_session.py` and `extensions/simplebroker_redis/tests/test_redis_pool.py` (reject-all inherited `BrokerSession` cases and retained Queue recovery) |
+| [SB-API-11] | `tests/test_retry_policy_coverage.py` (capacity deadline, mixed failures, jitter and cancellation); `tests/test_db_connection_lifecycle.py` (PG-only policy and neutral diagnostics); `tests/test_project_config.py::test_project_backend_validation_failure_does_not_initialize`; `extensions/simplebroker_pg/tests/test_pg_ownership.py::test_role_capacity_refusal_preserves_project_marker_and_managed_retry_bound`, `::test_project_phase_marker_does_not_hide_older_postgres_schema`; `tests/test_python_library_api_contract_sb_api.py::test_api_owned_runner_lifecycle_and_backend_v9_contract`, `::test_api_write_keep_newest_signatures_and_public_validator`, `::test_api_load_future_skew_surface_is_root_importable_and_keyword_only`, `::test_api_v6_cutover_contract_names_the_legacy_pg_exception`; `tests/test_sqlite_admission.py` (early version admission, factual migration receipts, scalar proof fast path, stale/missing/fault/concurrent proof cases); `tests/test_sqlite_schema.py` (semantic uniqueness and keep cutoff query plan); `tests/test_phaselock.py`; `tests/test_process_broker_session.py` (continued cleanup and diagnostics); `tests/test_custom_runner_integration.py::test_sql_borrowed_runner_masks_destructive_verbs_across_teardown`; `tests/test_core_persistence_transition_tables.py::test_sqlite_runner_fires_transition_table` (`CLOSE_REOPEN`); `tests/test_runner_lifecycle.py`; `tests/test_backend_plugin_resolution.py` (including v9 exact-version handshake and duplicate ambiguity before load); `extensions/simplebroker_pg/tests/test_pg_schema_validation_paths.py`, `test_pg_plugin_contract_edges.py`, `test_pg_ownership.py`; `extensions/simplebroker_redis/tests/test_redis_validation.py`, `test_redis_plugin_validation_paths.py`, `test_redis_plugin_contract_edges.py`; `tests/test_release_script.py::test_repository_backend_api_v9_handshake_and_floors_match`; `tests/test_dump_load.py::test_load_header_floor_persists_when_local_cache_is_ahead`, `tests/test_dump_load.py::test_load_header_floor_observes_concurrent_durable_winner`, `tests/test_dump_load.py::test_load_header_floor_final_read_failure_is_outcome_ambiguous`; `tests/test_timestamp_advance.py`; `extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py::test_postgres_missing_last_ts_row_fails_loudly`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval`; `tests/test_timestamp_bound_grammar.py` (public validator grammar and exact ISO conversion); `tests/test_fork_safety.py` (inherited Queue cases); `tests/test_broker_session.py` and `extensions/simplebroker_redis/tests/test_redis_pool.py` (reject-all inherited `BrokerSession` cases and retained Queue recovery) |
 | [SB-API-12] | `tests/test_python_library_api_contract_sb_api.py` (matrix present); kernel CLI↔Python map |
 | [SB-API-13] | `tests/test_python_library_api_contract_sb_api.py::test_api_postgres_connection_inspection_contract`; `tests/test_backend_probe.py`; `extensions/simplebroker_pg/tests/test_connection_stats.py` (shape, ordinary role, cross-role/database, lifecycle, autovacuum, PG15, and PG18) |
 
 ## Related Plans
 
+- completed: [PostgreSQL capacity amplification repair](../plans/2026-10-06-postgres-capacity-amplification-plan.md)
 - completed: [2026-09-18-polling-strategy-native-deadline-and-local-wake-plan](../plans/2026-09-18-polling-strategy-native-deadline-and-local-wake-plan.md)
   — adds the native wait deadline and makes local notification a coalescing
   cross-context latch consumed by the serialized wait owner.

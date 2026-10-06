@@ -40,6 +40,8 @@ class OperationalError(DatabaseError, sqlite3.OperationalError):
     """
 
     retryable: bool | None = None
+    # Connection admission is distinct from statement lock/busy contention.
+    _connection_capacity: bool = False
 
 
 class StopException(OperationalError):

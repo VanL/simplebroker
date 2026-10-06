@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from simplebroker import Queue, resolve_config
+from simplebroker._constants import Config
 from simplebroker._exceptions import OperationalError, StopException
 from simplebroker._runner import SQLiteRunner
 from simplebroker.db import BrokerCore, DBConnection
@@ -201,3 +202,154 @@ def test_queue_gc_finalizer_logs_cleanup_failure(
     assert queue_ref() is None
     assert "Error during Queue finalizer cleanup" in caplog.text
     assert "semantic cleanup failure" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "scenario", ["terminal-first", "mixed-attempt-limit", "mixed-deadline"]
+)
+def test_capacity_failure_diagnostics_follow_invocation_not_last_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    scenario: str,
+) -> None:
+    """Real managed retries keep extended logs accurate even with mixed errors."""
+    config = resolve_config(override={"BROKER_LOGGING_ENABLED": True})
+    connection = DBConnection(str(tmp_path / "broker.db"), config=config)
+    monkeypatch.setattr(connection, "_backend_plugin", SimpleNamespace(name="postgres"))
+    now = 0.0
+    attempts = 0
+    failure = OperationalError("capacity exhausted")
+    failure._connection_capacity = True
+    ordinary = OperationalError("authentication failed")
+
+    def sleep(wait: float, stop_event=None) -> bool:
+        nonlocal now
+        now += wait
+        return True
+
+    def open_connection():
+        nonlocal attempts, now
+        attempts += 1
+        if scenario == "terminal-first":
+            now = 31
+            raise failure
+        if attempts == 1:
+            if scenario == "mixed-deadline":
+                now = 27
+            raise failure
+        if scenario == "mixed-attempt-limit" and attempts == 2:
+            raise failure
+        raise ordinary
+
+    monkeypatch.setattr("simplebroker._retry._monotonic", lambda: now)
+    monkeypatch.setattr("simplebroker._retry._uniform", lambda floor, upper: upper)
+    monkeypatch.setattr("simplebroker._retry_policy.interruptible_sleep", sleep)
+    with (
+        connection,
+        caplog.at_level("DEBUG", logger="simplebroker.db"),
+        pytest.raises(
+            RuntimeError, match="Failed to get database connection"
+        ) as caught,
+    ):
+        connection._open_connection_with_retry(open_connection, config=config)
+
+    assert (
+        attempts
+        == {"terminal-first": 1, "mixed-attempt-limit": 3, "mixed-deadline": 2}[
+            scenario
+        ]
+    )
+    assert caught.value.__cause__ is (
+        failure if scenario == "terminal-first" else ordinary
+    )
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "simplebroker.db"
+    ]
+    assert any(
+        message.startswith("Failed to get database connection") for message in messages
+    )
+    assert all(
+        "/3" not in message and "after 3 retries" not in message for message in messages
+    )
+    assert all(
+        "deadline" not in message.lower() and "attempt limit" not in message.lower()
+        for message in messages
+    )
+    if scenario != "terminal-first":
+        assert any("Retrying in" in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    ("plugin_name", "budget", "expected_attempts"),
+    [
+        ("postgres", 30, 5),
+        ("postgres", 0, 3),
+        ("sqlite", 30, 3),
+        ("redis", 30, 3),
+        ("third-party", 30, 3),
+        ("postgres", None, 5),
+    ],
+)
+def test_managed_capacity_wait_is_enabled_only_for_resolved_postgres_plugin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plugin_name: str,
+    budget: int | None,
+    expected_attempts: int,
+) -> None:
+    """Backend identity gates the real policy; custom Config omission uses 30."""
+    config = resolve_config()
+    values = dict(config)
+    if budget is None:
+        values.pop("POSTGRES_CAPACITY_WAIT_SECONDS", None)
+        config = Config(
+            values,
+            defaults={
+                key: field
+                for key, field in config._defaults.items()
+                if key != "POSTGRES_CAPACITY_WAIT_SECONDS"
+            },
+        )
+    else:
+        values["POSTGRES_CAPACITY_WAIT_SECONDS"] = budget
+        config = Config(values)
+    connection = DBConnection(str(tmp_path / "broker.db"), config=config)
+    monkeypatch.setattr(
+        connection, "_backend_plugin", SimpleNamespace(name=plugin_name)
+    )
+    now = 0.0
+    attempts = 0
+    failure = OperationalError("capacity exhausted")
+    failure._connection_capacity = True
+    resource = CloseResource()
+
+    def sleep(wait: float, stop_event=None) -> bool:
+        nonlocal now
+        now += wait
+        return True
+
+    def open_connection():
+        nonlocal attempts
+        attempts += 1
+        if attempts < 5:
+            raise failure
+        return resource
+
+    monkeypatch.setattr("simplebroker._retry._monotonic", lambda: now)
+    monkeypatch.setattr("simplebroker._retry._uniform", lambda floor, upper: upper)
+    monkeypatch.setattr("simplebroker._retry_policy.interruptible_sleep", sleep)
+    with connection:
+        if expected_attempts == 5:
+            assert (
+                connection._open_connection_with_retry(open_connection, config=config)
+                is resource
+            )
+        else:
+            with pytest.raises(RuntimeError) as caught:
+                connection._open_connection_with_retry(open_connection, config=config)
+            assert caught.value.__cause__ is failure
+    assert attempts == expected_attempts
+    assert now < 30

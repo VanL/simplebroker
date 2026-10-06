@@ -8,9 +8,10 @@ import textwrap
 import threading
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 
 import pytest
 
@@ -692,6 +693,87 @@ def _subprocess_holding_phase_lock(target: Path) -> Iterator[subprocess.Popen[st
             raise AssertionError(
                 f"lock holder failed with {proc.returncode}\nstdout={stdout}\nstderr={stderr}"
             )
+
+
+def _assert_lock_available_to_another_thread(lock_path: Path) -> None:
+    def acquire_and_release() -> None:
+        with AdvisoryFileLock(
+            lock_path, timeout=scale_timeout_for_ci(0.2), retry_delay=0.01
+        ):
+            pass
+
+    # Same-thread acquisition would hide a leaked process-local RLock.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(acquire_and_release).result(timeout=scale_timeout_for_ci(5.0))
+
+
+@pytest.mark.parametrize("during_file_contention", [False, True])
+def test_acquisition_callback_failure_releases_process_lock(
+    tmp_path: Path, during_file_contention: bool
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    lock_path = Path(f"{target}.lock")
+    lock = AdvisoryFileLock(lock_path, timeout=1.0, retry_delay=0.01)
+    failure = RuntimeError("validation unavailable")
+    callback_calls = 0
+
+    def should_stop() -> bool:
+        nonlocal callback_calls
+        callback_calls += 1
+        # Calls before process acquisition and immediately after it precede
+        # the contention callback. The latter runs after the failed flock.
+        fail_on = 3 if during_file_contention else 2
+        if callback_calls == fail_on:
+            raise failure
+        return False
+
+    try:
+        if during_file_contention:
+            with (
+                _subprocess_holding_phase_lock(target),
+                pytest.raises(RuntimeError) as raised,
+            ):
+                lock.acquire(should_stop_waiting=should_stop)
+        else:
+            with pytest.raises(RuntimeError) as raised:
+                lock.acquire(should_stop_waiting=should_stop)
+        assert raised.value is failure
+        _assert_lock_available_to_another_thread(lock_path)
+    finally:
+        lock.release()
+
+
+def test_control_exception_during_file_preparation_closes_file_and_releases_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class AbortAcquisition(BaseException):
+        pass
+
+    failure = AbortAcquisition()
+    opened: list[BinaryIO] = []
+    lock_path = tmp_path / "broker.db.lock"
+    lock = AdvisoryFileLock(lock_path, timeout=1.0, retry_delay=0.01)
+
+    def abort_preparation(self: Any, lock_file: BinaryIO) -> None:
+        opened.append(lock_file)
+        raise failure
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                phaselock_module._AdvisoryLock, "_prepare_lock_file", abort_preparation
+            )
+            with pytest.raises(AbortAcquisition) as raised:
+                lock.acquire()
+        assert raised.value is failure
+        assert len(opened) == 1
+        assert opened[0].closed
+        _assert_lock_available_to_another_thread(lock_path)
+    finally:
+        for lock_file in opened:
+            lock_file.close()
+        lock.release()
 
 
 def test_real_xattr_runtime_marks_and_skips_completed_phases(tmp_path: Path) -> None:

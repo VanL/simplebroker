@@ -247,6 +247,46 @@ distinguishes `verify_initialized=True` (current version and shape) from the
 must still let an older owned schema reach migration. A restored older schema
 cannot borrow the config file's newer marker.
 
+PostgreSQL target-inspection connection failures retain their driver cause and
+use `OperationalError` when psycopg reports an operational failure. Project
+completion validation propagates that type rather than treating it as stale
+schema evidence. The distinction is important under role or server connection
+exhaustion: initialization cannot repair capacity, and the setup lock's 50 ms
+completion polling must not become a connection retry loop. Schema admission
+still uses plain `DatabaseError` and takes the existing initialization or
+migration path. The contract and firing evidence are [SB-API-9/11] in
+`docs/specs/16-python-library-api.md`.
+
+Acquisition owns an opened lock descriptor before preparation and releases all
+pending acquisition resources on an unsuccessful exit, including a validation
+callback or control exception. The caller assumes release ownership only after
+successful acquisition. This preserves cross-thread progress when a callback
+raises after the process-local lock was taken but before `run_phases()` can
+enter its own release guard.
+
+The managed connection opener remains the sole retry owner. PostgreSQL startup
+capacity refusals use a private marker distinct from the statement lock/busy
+`retryable` hint. SQLSTATE 53300 wins; absent SQLSTATE, only known English
+server FATAL messages qualify, and every failure in a multi-address report
+must qualify. This covers libpq role-limit errors that omit SQLSTATE without
+replaying authentication, network or unknown failures as capacity refusals.
+
+`POSTGRES_CAPACITY_WAIT_SECONDS` defaults to 30. One invocation owns its
+start time, total attempt count and last failure through the existing retry
+engine. Capacity failures may exceed three attempts; later ordinary failures
+still stop at three total attempts. Once capacity occurs, the original deadline
+also bounds later retries. Capacity backoff uses jitter and a five-second cap;
+ordinary waits remain two/four seconds. Sleeps are interruptible and clipped
+to remaining time, with a pre-attempt expiry check. Extended diagnostics use
+neutral wording rather than infer the stop reason from the final error.
+
+Zero restores the attempt-only policy. A positive budget can expire before
+three attempts; it cannot interrupt synchronous driver calls, pool waits or
+schema setup. Successful in-flight opening may finish late. Final managed
+failure retains its `RuntimeError` and cause chain. Other backends, direct
+inspection/initialization/cleanup, pool checkout and LISTEN recovery keep their
+existing policies. Waiting does not create headroom or ensure fairness.
+
 The service keeps `PhaseLockService`'s platform policy. POSIX may accept a
 validated marker without taking the advisory lock, preserving the normal CLI
 startup fast path. Windows acquires and releases the lock before trusting the
@@ -565,6 +605,7 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
+- completed: [PostgreSQL capacity amplification repair](../plans/2026-10-06-postgres-capacity-amplification-plan.md)
 - retired: 2026-08-25-verified-review-findings-remediation-plan — source
   `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns caller-owned
   borrowed-runner shutdown masking.

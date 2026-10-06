@@ -11,7 +11,7 @@ from simplebroker_pg.plugin import PostgresBackendPlugin, verify_env
 from simplebroker_pg.validation import connect
 
 from simplebroker import resolve_config
-from simplebroker._exceptions import DatabaseError
+from simplebroker._exceptions import DatabaseError, OperationalError
 from simplebroker.ext import BACKEND_API_VERSION
 
 pytestmark = [pytest.mark.pg_only]
@@ -281,16 +281,233 @@ def test_init_backend_toml_target_uses_default_schema_when_toml_schema_missing()
     assert result["backend_options"]["schema"] == "simplebroker_pg_v1"
 
 
-def test_connect_wraps_auth_errors_as_connection_errors(
+@pytest.mark.parametrize(
+    ("driver_error", "expected_type", "capacity"),
+    [
+        (
+            psycopg.errors.TooManyConnections("too many connections for role"),
+            OperationalError,
+            True,
+        ),
+        (psycopg.OperationalError("connection refused"), OperationalError, False),
+        (
+            psycopg.errors.InvalidPassword("password authentication failed"),
+            OperationalError,
+            False,
+        ),
+        (psycopg.Error("invalid connection request"), DatabaseError, False),
+    ],
+    ids=["capacity", "unstructured-operational", "authentication", "non-operational"],
+)
+def test_connect_preserves_driver_error_classification_and_cause(
     monkeypatch: pytest.MonkeyPatch,
+    driver_error: psycopg.Error,
+    expected_type: type[DatabaseError],
+    capacity: bool,
 ) -> None:
-    def raise_auth_error(*args: object, **kwargs: object) -> Never:
-        raise psycopg.OperationalError("password authentication failed")
+    """Acquisition failures must stay distinct from invalid schema evidence."""
 
-    monkeypatch.setattr("simplebroker_pg.validation.psycopg.connect", raise_auth_error)
+    def fail_connect(*args: object, **kwargs: object) -> Never:
+        raise driver_error
+
+    monkeypatch.setattr("simplebroker_pg.validation.psycopg.connect", fail_connect)
 
     with pytest.raises(
         DatabaseError,
-        match="Could not connect to Postgres target: password authentication failed",
-    ):
+        match="Could not connect to Postgres target:",
+    ) as exc_info:
         connect("postgresql://postgres@localhost/simplebroker")
+
+    assert type(exc_info.value) is expected_type
+    assert exc_info.value.__cause__ is driver_error
+    assert str(driver_error) in str(exc_info.value)
+    if isinstance(exc_info.value, OperationalError):
+        # Authentication is operational too, but is not guaranteed transient.
+        assert exc_info.value.retryable is not True
+        assert exc_info.value._connection_capacity is capacity
+
+
+_CAPACITY_PREFIX = (
+    'connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  '
+)
+_ROLE_CAPACITY = 'too many connections for role "worker"'
+_NETWORK_FAILURE = (
+    'connection failed: connection to server at "::1", port 5432 failed: '
+    "Connection refused"
+)
+_ALL_FAILURES = "\nMultiple connection attempts failed. All failures were:\n"
+
+
+@pytest.mark.parametrize(
+    ("driver_error", "capacity"),
+    [
+        (psycopg.OperationalError(_CAPACITY_PREFIX + _ROLE_CAPACITY), True),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX + 'too many connections for database "broker"'
+            ),
+            True,
+        ),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX + "sorry, too many clients already"
+            ),
+            True,
+        ),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX
+                + "remaining connection slots are reserved for non-replication superuser connections"
+            ),
+            True,
+        ),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX
+                + "remaining connection slots are reserved for roles with the SUPERUSER attribute"
+            ),
+            True,
+        ),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX
+                + 'remaining connection slots are reserved for roles with privileges of the "pg_use_reserved_connections" role'
+            ),
+            True,
+        ),
+        (
+            psycopg.OperationalError(
+                'connection failed: connection to server on socket "/tmp/.s.PGSQL.5432" failed: FATAL:  '
+                + _ROLE_CAPACITY
+            ),
+            True,
+        ),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX
+                + _ROLE_CAPACITY
+                + _ALL_FAILURES
+                + "- host: 'localhost', port: '5432', hostaddr: '::1': "
+                + _CAPACITY_PREFIX
+                + _ROLE_CAPACITY
+                + "\n"
+                + "- host: 'localhost', port: '5432', hostaddr: '127.0.0.1': "
+                + _CAPACITY_PREFIX
+                + _ROLE_CAPACITY
+            ),
+            True,
+        ),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX
+                + _ROLE_CAPACITY
+                + _ALL_FAILURES
+                + "- host: 'localhost', port: '5432', hostaddr: '::1': "
+                + _NETWORK_FAILURE
+                + "\n"
+                + "- host: 'localhost', port: '5432', hostaddr: '127.0.0.1': "
+                + _CAPACITY_PREFIX
+                + _ROLE_CAPACITY
+            ),
+            False,
+        ),
+        (
+            psycopg.errors.TooManyConnections(_NETWORK_FAILURE + _ALL_FAILURES),
+            True,
+        ),
+        (
+            psycopg.errors.InvalidPassword(_CAPACITY_PREFIX + _ROLE_CAPACITY),
+            False,
+        ),
+        (
+            psycopg.OperationalError(
+                'connection failed: connection to server at "localhost" (::1), port 5432 failed: FATAL:  '
+                + _ROLE_CAPACITY
+            ),
+            True,
+        ),
+        (
+            psycopg.OperationalError(
+                'connection failed: connection to server at "localhost" (127.0.0.1), port 5432 failed: FATAL:  '
+                + _ROLE_CAPACITY
+                + _ALL_FAILURES
+                + "- host: 'localhost', port: '5432', hostaddr: '::1': "
+                + 'connection failed: connection to server at "localhost" (::1), port 5432 failed: FATAL:  '
+                + _ROLE_CAPACITY
+                + "\n"
+                + "- host: 'localhost', port: '5432', hostaddr: '127.0.0.1': "
+                + 'connection failed: connection to server at "localhost" (127.0.0.1), port 5432 failed: FATAL:  '
+                + _ROLE_CAPACITY
+            ),
+            True,
+        ),
+        (
+            psycopg.OperationalError(
+                'connection failed: connection to server at "localhost" (::1), port 5432 failed: FATAL:  '
+                + _ROLE_CAPACITY
+                + _ALL_FAILURES
+                + "- host: 'localhost', port: '5432', hostaddr: '::1': "
+                + _NETWORK_FAILURE
+            ),
+            False,
+        ),
+        (psycopg.OperationalError("too many connections for role"), False),
+        (psycopg.OperationalError(_NETWORK_FAILURE), False),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX + 'password authentication failed for user "worker"'
+            ),
+            False,
+        ),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX
+                + 'database "sorry, too many clients already" does not exist'
+            ),
+            False,
+        ),
+        (
+            psycopg.OperationalError(
+                'connection failed: connection to server at "sorry, too many clients already", '
+                "port 5432 failed: FATAL:  permission denied"
+            ),
+            False,
+        ),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX + "unrecognized capacity refusal"
+            ),
+            False,
+        ),
+        (psycopg.OperationalError(_CAPACITY_PREFIX + "zu viele Verbindungen"), False),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX
+                + "remaining connection slots are reserved for unknown users"
+            ),
+            False,
+        ),
+        (
+            psycopg.OperationalError(
+                _CAPACITY_PREFIX + _ROLE_CAPACITY + "\nunknown failure"
+            ),
+            False,
+        ),
+    ],
+)
+def test_connect_marks_only_confirmed_capacity_refusals(
+    monkeypatch: pytest.MonkeyPatch,
+    driver_error: psycopg.OperationalError,
+    capacity: bool,
+) -> None:
+    """Capacity patience must not extend authentication or ambiguous startup failures."""
+
+    def fail_connect(*args: object, **kwargs: object) -> Never:
+        raise driver_error
+
+    monkeypatch.setattr("simplebroker_pg.validation.psycopg.connect", fail_connect)
+    with pytest.raises(OperationalError) as failure:
+        connect("postgresql://postgres@localhost/simplebroker")
+    assert failure.value._connection_capacity is capacity
+    assert failure.value.__cause__ is driver_error
+    assert failure.value.retryable is not True

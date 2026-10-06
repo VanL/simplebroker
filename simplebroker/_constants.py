@@ -68,7 +68,7 @@ class InvalidConfigError(BrokerError, ValueError):
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "8.4.1"
+__version__: Final[str] = "8.5.0"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
@@ -517,6 +517,15 @@ def _load_max_future_skew(value: Any) -> int:
     return result
 
 
+def _postgres_capacity_wait(value: Any) -> int:
+    """Require integer seconds usable by the acquisition clock [SB-API-2]."""
+    result = _load_max_future_skew(value)
+    # Integer conversion to float raises OverflowError beyond finite seconds;
+    # the config resolver turns it into the standard InvalidConfigError.
+    float(result)
+    return result
+
+
 def _non_negative_int(value: Any) -> int:
     """Preserve integer coercion while rejecting negative values."""
     result = int(value)
@@ -649,6 +658,11 @@ DEFAULT_CONFIG: Final[Mapping[str, ConfigField]] = MappingProxyType(
             DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS,
             "a non-negative integer number of seconds",
             _load_max_future_skew,
+        ),
+        "POSTGRES_CAPACITY_WAIT_SECONDS": ConfigField(
+            30,
+            "a non-negative integer number of finite seconds",
+            _postgres_capacity_wait,
         ),
         "AUTO_VACUUM": ConfigField(DEFAULT_AUTO_VACUUM, "an integer flag", int),
         "AUTO_VACUUM_INTERVAL": ConfigField(

@@ -163,6 +163,9 @@ def _initialize_project_backend_target(
                 verify_initialized=True,
                 config=config,
             )
+        except OperationalError:
+            # Failed inspection is not evidence that schema setup is needed.
+            raise
         except DatabaseError:
             return False
         return True
@@ -839,29 +842,56 @@ class DBConnection:
     ) -> BrokerConnection:
         """Open a connection under the manager's retry and diagnostic policy."""
         max_retries = 3
+        capacity_wait = (
+            config.get("POSTGRES_CAPACITY_WAIT_SECONDS", 30)
+            if self._backend_plugin.name == "postgres"
+            else 0
+        )
+        capacity_seen = False
 
         def log_retry(state: Any, exc: Exception, wait: float) -> None:
+            nonlocal capacity_seen
+            capacity_seen = capacity_seen or (
+                capacity_wait > 0
+                and isinstance(exc, OperationalError)
+                and exc._connection_capacity
+            )
             if config["LOGGING_ENABLED"]:
+                context = (
+                    f"{state.tries}; PostgreSQL capacity waiting"
+                    if capacity_seen
+                    else f"{state.tries}/{max_retries}"
+                )
                 logger.debug(
                     f"Database connection error "
-                    f"(retry {state.tries}/{max_retries}): {exc}. "
+                    f"(retry {context}): {exc}. "
                     f"Retrying in {wait} seconds..."
                 )
 
         try:
             return _execute_connection_retry(
                 open_connection,
+                capacity_wait_seconds=capacity_wait,
                 stop_event=self._stop_event,
                 before_sleep=log_retry,
             )
         except StopException:
             raise
         except Exception as exc:
+            capacity_seen = capacity_seen or (
+                capacity_wait > 0
+                and isinstance(exc, OperationalError)
+                and exc._connection_capacity
+            )
             if config["LOGGING_ENABLED"]:
+                context = (
+                    "during PostgreSQL capacity waiting"
+                    if capacity_seen
+                    else f"after {max_retries} retries"
+                )
                 logger.log(
                     logging.ERROR,
-                    "Failed to get database connection after "
-                    f"{max_retries} retries: {exc}",
+                    f"Failed to get database connection {context}: {exc}",
                     exc_info=True,
                 )
             raise RuntimeError(f"Failed to get database connection: {exc}") from exc

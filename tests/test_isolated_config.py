@@ -38,7 +38,7 @@ def _isolated(**overrides: object) -> Config:
 def test_isolated_complete_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
     _invalid_ambient(monkeypatch)
     config = _isolated(BUSY_TIMEOUT="41")
-    assert len(config) == 32
+    assert len(config) == 33
     assert config["BUSY_TIMEOUT"] == 41
     assert config["CACHE_MB"] == 10
     with pytest.raises(TypeError):
@@ -48,7 +48,7 @@ def test_isolated_complete_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_unknown_namespaced_value_preserved() -> None:
     config = resolve_config(env={"BROKER_CUSTOM": "kept"})
     assert config["CUSTOM"] == "kept"
-    assert len(config) == 33
+    assert len(config) == 34
 
 
 def test_resolved_marker_survives_queue_project_broker_and_runner_layers(
