@@ -7,12 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.5.1] - 2026-10-07
+
+SimpleBroker 8.5.1, `simplebroker-pg` 4.5.1, and `simplebroker-redis` 4.5.1
+are the coordinated release set. Both extensions require SimpleBroker 8.5.1
+or newer, and the core `pg` and `redis` extras require the matching 4.5.1
+extension or newer. Broker runtime behavior is unchanged in this release.
+
 ### Changed
 
 - Raised dependency minimums to the versions currently used in development
   and testing. The PostgreSQL extension now requires `psycopg` 3.3.6 and
   `psycopg-pool` 3.3.3; the Redis extension requires `redis` 8.1.0. All three
   packages require Hatchling 1.32.4 or newer (below 2) to build.
+
+### Development
+
+- Simplified and corrected test assertions and process coordination while
+  retaining coverage of queue semantics and resource ownership. Dependency
+  updates no longer require editing a duplicate release-tool version literal.
+- Fixed coverage source resolution in forked test children and coverage
+  merging on Windows, preserving measurements across host path separators.
 
 ## [8.5.0] - 2026-10-06
 
