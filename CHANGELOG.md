@@ -28,6 +28,8 @@ extension or newer. Broker runtime behavior is unchanged in this release.
   updates no longer require editing a duplicate release-tool version literal.
 - Fixed coverage source resolution in forked test children and coverage
   merging on Windows, preserving measurements across host path separators.
+- Moved cold SQLite bootstrap out of the worker cache-retention test's
+  deadline without changing its ownership assertions or time allowance.
 
 ## [8.5.0] - 2026-10-06
 

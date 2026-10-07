@@ -417,6 +417,9 @@ def test_process_session_fires_transition_table(
         assert session is not None
 
         try:
+            # Cold SQLite bootstrap is setup, not the worker cache-retention
+            # contract. The worker still creates its own thread-local core.
+            anchor.get_core()
             _assert_worker_user_transition(
                 path,
                 session,
