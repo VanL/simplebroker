@@ -29,7 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-10-13-python-315-support-plan.md | active — class 4; implementation authorized; reviewed interpreter, fork-test and CI/artifact support plan |
+| 2026-10-13-python-315-support-plan.md | completed — class 4; Python 3.15 fork harness, cross-platform/native CI and artifact qualification verified; independent reviews passed |
 | 2026-10-13-postgres-connection-attribution-plan.md | completed - class 5; connection attribution and coherent usage implemented; real PostgreSQL 15/18 proof, review and final gates recorded; owner authorized closure and commit |
 | 2026-10-06-test-audit-remediation-plan.md | completed — class 4; repaired and independently reviewed; core/examples/native PG/Redis/benchmarks green; uncommitted, Windows CI and separate standalone-example fork defect remain explicit |
 | 2026-10-06-whole-test-surface-audit-plan.md | completed — class 3; report-only 275-file audit, owner tracing and independent review; subsequent repairs recorded in test-audit-remediation-plan; audit documents uncommitted |

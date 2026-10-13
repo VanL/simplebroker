@@ -13,11 +13,11 @@ Support standard CPython 3.15 through the existing queue implementation. Repair 
 
 ## Outcome checklist
 
-- [ ] Intentional fork tests pass on 3.15 without a command-line or global warning exemption, skipped fork cases, retries or weakened assertions.
-- [ ] Core tests run on 3.15 on Linux, macOS and Windows; both native backend workflows include Linux 3.15.
-- [ ] Examples, nested coverage, SQLite finalization and clean artifact installs have persistent 3.15 gates.
-- [ ] Support metadata and changelog match verified scope; no Python floor, backend protocol, schema or dependency-floor change is bundled.
-- [ ] Exact candidate-SHA CI, downstream compatibility review, independent slice/final review and documentation reconciliation are recorded before implementation closure.
+- [x] Intentional fork tests pass on 3.15 without a command-line or global warning exemption, skipped fork cases, retries or weakened assertions.
+- [x] Core tests run on 3.15 on Linux, macOS and Windows; both native backend workflows include Linux 3.15.
+- [x] Examples, nested coverage, SQLite finalization and clean artifact installs have persistent 3.15 gates.
+- [x] Support metadata and changelog match verified scope; no Python floor, backend protocol, schema or dependency-floor change is bundled.
+- [x] Exact candidate-SHA CI, downstream compatibility review, independent slice/final review and documentation reconciliation are recorded before implementation closure.
 
 ## Source Documents
 
@@ -106,7 +106,7 @@ Success after landing is green 3.15 cells in Test, Test Postgres Extension and T
    - Verify the focused selection, nested coverage and full ordinary suite without diagnostic `-W` exemptions on 3.15, plus the affected selection on 3.11 and 3.14. Resource/GC errors must disappear under normal warning policy; investigate any survivor instead of suppressing it.
    - Done signal: independent slice review with all findings dispositioned and strict-warning proof. Stop for any required runtime change or loss of a coverage/resource assertion.
 
-3. [ ] Add persistent CI and packaging coverage.
+3. [x] Add persistent CI and packaging coverage.
    - Files: the three `test*.yml` workflows and `tests/test_release_workflow.py`. Append `"3.15"` to the core OS matrix and both extension matrices. Keep existing macOS exclusions; the new version runs on all three core OSes.
    - Preserve the interpreter-path sync and existing `Verify matrix Python` refusal script unchanged. Add a separate print-only diagnostic step for `sys.version`, `sqlite3.sqlite_version` and `sysconfig.get_config_var('Py_GIL_DISABLED')`. This avoids the existing inline-script extractor's quote boundary and preserves optimized-Python refusal checks; do not enable free-threading or prereleases.
    - Extend the existing Ubuntu SQLite and native PG/Redis cross-thread finalization conditions from 3.13 alone to 3.13 plus 3.15. Interpreter-dependent finalizer/GC behavior justifies the second version; this adds execution coverage under the existing verification procedure, not a new normative process policy. Keep Windows 3.14 coverage collection as-is; Windows 3.15 takes the normal tests and fallback paths, not a missing coverage lane.
@@ -115,7 +115,7 @@ Success after landing is green 3.15 cells in Test, Test Postgres Extension and T
    - Keep timeout/restart limits, failure behavior and pinned action SHAs. Do not change release or fuzz interpreter pins. Do not add tests that merely freeze the new YAML spelling.
    - Done signal: workflow inspection and existing workflow/release regressions pass; exact-SHA CI executes every new cell and its intended gates. Stop for missing wheels, dependency conflicts, backend failures, resource leaks or platform-specific CLI/encoding failures; do not quietly make a new lane optional.
 
-4. [ ] Align metadata, documentation and downstream evidence.
+4. [x] Align metadata, documentation and downstream evidence.
    - Files: `pyproject.toml` root classifier only, `CHANGELOG.md` Unreleased support/development note, this plan/index and nonnormative API-spec backlink. Existing README prerequisites remain correct; workflows own the tested matrix, without a second hand-maintained matrix in `CONTRIBUTING.md`.
    - No version bump or manifest/lock refresh is expected. Do not advertise tested support before slice 3 evidence exists. No extension classifiers are required because those manifests currently have no classifier catalog.
    - Inspect Weft's actual SimpleBroker call sites and compatibility expectations read-only, starting with its `pyproject.toml` and its own agent guidance. Record whether this support addition affects any assumption; no downstream edits, dependency bump or Weft 3.15 support claim. If no runtime/API change exists, document that additive compatibility needs no Weft migration. Any discovered upstream/downstream contract change forces replanning.
@@ -197,6 +197,8 @@ Reviewer observations retained as scope boundaries: packaging smoke intentionall
 | --- | --- | --- | --- | --- |
 
 ## Execution Log
+
+- 2026-10-13 exact-candidate CI qualification: commit `5d93af7e16f9730be53bd157f8a1c1194625d0ba` passed all 37 GitHub checks with no pending or failed checks. [Core/platform/examples/artifact workflow](https://github.com/VanL/simplebroker/actions/runs/38448162791), [PostgreSQL workflow](https://github.com/VanL/simplebroker/actions/runs/38448162746), [Redis workflow](https://github.com/VanL/simplebroker/actions/runs/38448162958) and [CodeQL](https://github.com/VanL/simplebroker/actions/runs/38448162733) completed successfully. Standard CPython 3.15.0 diagnostics reported SQLite 3.45.1 on Ubuntu and 3.53.4 on macOS/Windows; all reported `Py_GIL_DISABLED=0`. This closes the cross-platform, native finalization and installed-artifact gates. All outcome and implementation tasks are complete. The user authorized merging into main after checks pass; this documentation-only closeout will receive its own exact-head CI before merge. No publication or release tag is included. Guidance evaluation found no further skill/runbook correction needed.
 
 - 2026-10-13 native-count reconciliation: the Valkey 7.2 shared suite passed 1,759 tests / 20 platform or backend-inapplicable skips in 70.23 seconds; its native suite passed 379 / 1 opt-in skip in 3.83 seconds. Both wrapper and enabled finalization invocations exited 0. Packaging's observed tool completion likewise returned exit 0, not only a log success message. The exact-SHA GitHub packaging matrix remains the integration gate.
 - 2026-10-13 integrated local gates: examples passed 143 cases; forced phase-lock fallback passed 119 cases / 5 platform skips; the enabled SQLite finalization probe passed; the renamed CI/release/uv-policy selection passed 172 cases. Ruff lint, changed-file formatting, suppression-index, DOM-15 fixtures, plan-context, document-path and whitespace gates passed. Mypy passed the 68 core/backend/tool source files and all 218 non-fixture core-test source files. The first local type-command used a shell without `mapfile`; it was corrected to a Python-built argument list with the same excluded-fixture inventory, then exited 0. Clean packaging smoke on 3.15 built all packages, installed extension wheels together, and separately installed/exercised the root wheel and sdist outside the checkout; it exited 0 with all artifact smoke success signals. No runtime source, dependency floor, lockfile, schema or version number changed.
