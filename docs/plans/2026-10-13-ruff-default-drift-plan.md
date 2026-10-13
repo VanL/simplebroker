@@ -88,7 +88,7 @@ the passing rerun does not establish that every timing fluctuation is eliminated
 
 All exact-SHA CI passed before tag creation:
 
-- [Test 38458241452](https://github.com/VanL/simplebroker/actions/runs/38458241452): all 21 jobs successful, including Python 3.15 on Linux, macOS and Windows.
+- [Test 38458241452](https://github.com/VanL/simplebroker/actions/runs/38458241452): all 22 final jobs successful, including Python 3.15 on Linux, macOS and Windows and the final coverage aggregation job.
 - [PostgreSQL 38458241729](https://github.com/VanL/simplebroker/actions/runs/38458241729) and [Redis 38458241711](https://github.com/VanL/simplebroker/actions/runs/38458241711): successful, including native Linux Python 3.15.
 - [CodeQL 38458240988](https://github.com/VanL/simplebroker/actions/runs/38458240988) and [Scorecard 38458241224](https://github.com/VanL/simplebroker/actions/runs/38458241224): successful.
 
