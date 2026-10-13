@@ -125,7 +125,7 @@ provides-extras = ["dev", "pg", "redis"]
 
 [package.metadata.requires-dev]
 fuzz = [
-    { name = "atheris", marker = "python_full_version < '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=3.0.0,<3.1" },
+    { name = "atheris", marker = "python_full_version < '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=3.0.0" },
     { name = "atheris", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=3.1.0" },
 ]
 release = [

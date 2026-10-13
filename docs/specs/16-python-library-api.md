@@ -1379,6 +1379,8 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 
 ## Related Plans
 
+- [Python 3.15 support](../plans/2026-10-13-python-315-support-plan.md): preserves the existing API and lifecycle contracts while extending interpreter validation; no normative API change.
+
 - [PostgreSQL connection attribution and usage snapshot](../plans/2026-10-13-postgres-connection-attribution-plan.md): implements the additive [SB-API-14] and [SB-API-15] contracts; [SB-API-13] is preserved.
 
 - retired: 2026-10-06-postgres-capacity-amplification-plan — source `dad806b`;

@@ -511,3 +511,13 @@ Dated moment-tier entries (foldable after age floor and distillation).
   `.venv/bin/python` also needs the project's bin directory first in PATH when
   tests launch tools by name; otherwise a global mypy can report a missing
   adapter that is installed in the project interpreter.
+
+- 2026-10-13: Python 3.15 propagates warnings-as-errors from threaded
+  `os.fork()` after the OS child already exists; earlier versions cleared the
+  warning exception. Deliberate inherited-state proofs need a concrete
+  refactor attempt and independent suppression choice, not a global warning
+  exemption. A `multiprocessing` fork child never unwinds its parent's
+  `catch_warnings` context; restore the child's copied policy at target entry.
+  Keep the actual fork parent, collector/shard assertions and bounded reaping
+  intact. Evidence: Python 3.15 support plan, rejected helper prototype,
+  three-interpreter strict-warning runs and isolated sensitivity controls.

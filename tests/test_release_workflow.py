@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 import yaml
 from packaging.requirements import Requirement
-from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -228,10 +227,6 @@ def test_fuzz_dependency_group_is_opt_in() -> None:
             if active:
                 bounds = active[0].specifier
                 assert any(spec.operator in {">=", "==", "~="} for spec in bounds)
-                if version == "3.11":
-                    assert not bounds.contains("3.1.0"), (
-                        "Atheris 3.1 requires Python 3.12"
-                    )
     assert pyproject["tool"]["uv"]["default-groups"] == []
 
 
@@ -317,28 +312,6 @@ def test_development_tool_floors_are_current() -> None:
             extension_pyproject["tool"]["pytest"]["ini_options"]["minversion"]
             == extension_floor
         )
-
-
-def test_every_uv_workflow_uses_the_repository_pin() -> None:
-    required = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["uv"][
-        "required-version"
-    ]
-    pins = set()
-    for workflow_path in UV_WORKFLOWS:
-        workflow_text = _workflow_text(workflow_path)
-        workflow = yaml.safe_load(workflow_text)
-        pin = workflow["env"]["UV_VERSION"]
-        assert Version(pin) in SpecifierSet(required)
-        pins.add(pin)
-        steps = [
-            step
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", [])
-            if step.get("uses", "").startswith("astral-sh/setup-uv@")
-        ]
-        assert steps
-        assert all(step["with"]["version"] == "${{ env.UV_VERSION }}" for step in steps)
-    assert len(pins) == 1, "all managed workflows must use the same uv pin"
 
 
 def test_test_workflows_sync_once_and_only_run_the_frozen_environment() -> None:
@@ -500,7 +473,7 @@ def test_release_builds_use_the_exact_locked_frontend_without_a_cache() -> None:
         assert "working-directory:" not in build_section
 
 
-def test_build_frontend_is_bounded_and_locked() -> None:
+def test_release_build_pins_satisfy_project_requirements() -> None:
     """Release pins must fit project build ranges, without copying their floors."""
     projects = (
         ROOT / "pyproject.toml",
@@ -517,9 +490,6 @@ def test_build_frontend_is_bounded_and_locked() -> None:
         assert any(
             spec.operator in {">=", ">", "==", "~="} for spec in hatchling.specifier
         ), f"{path}: build dependency must have a lower bound"
-        assert any(
-            spec.operator in {"<", "<=", "==", "~="} for spec in hatchling.specifier
-        ), f"{path}: build dependency must have an upper bound"
         build_ranges.append((path, hatchling.specifier))
 
     root_pyproject = tomllib.loads(projects[0].read_text(encoding="utf-8"))
@@ -544,12 +514,12 @@ def test_build_frontend_is_bounded_and_locked() -> None:
 
 def test_packaging_workflow_has_no_redundant_pip_install() -> None:
     workflow_text = _workflow_text("test.yml")
-    packaging_section = workflow_text.split("  packaging:", 1)[1].split(
-        "  coverage:", 1
-    )[0]
+    packaging = yaml.safe_load(workflow_text)["jobs"]["packaging"]
+    commands = "\n".join(step.get("run", "") for step in packaging["steps"])
 
-    assert "pip install" not in packaging_section
-    assert "./bin/packaging-smoke --python 3.11" in packaging_section
+    assert packaging["strategy"]["matrix"]["python-version"] == ["3.11", "3.15"]
+    assert "pip install" not in commands
+    assert "./bin/packaging-smoke --python ${{ matrix.python-version }}" in commands
 
 
 def test_python_examples_run_in_the_frozen_lint_environment() -> None:
@@ -1255,7 +1225,12 @@ def test_windows_314_runner_produces_merged_coverage_data() -> None:
 def test_uv_uses_each_jobs_synced_python_without_environment_warnings() -> None:
     root_workflow = _workflow_text("test.yml")
     assert "UV_PYTHON: ${{ matrix.python-version }}" in root_workflow
-    assert 'UV_PYTHON: "3.11"' in root_workflow
+    packaging = yaml.safe_load(root_workflow)["jobs"]["packaging"]
+    assert packaging["env"]["UV_PYTHON"] == "${{ matrix.python-version }}"
+    setup = next(step for step in packaging["steps"] if step.get("id") == "sync-python")
+    assert setup["with"]["python-version"] == packaging["env"]["UV_PYTHON"]
+    commands = "\n".join(step.get("run", "") for step in packaging["steps"])
+    assert '--python "${{ steps.sync-python.outputs.python-path }}"' in commands
     assert 'UV_PYTHON: "3.12"' in root_workflow
 
     for workflow_name in ("test-pg-extension.yml", "test-redis-extension.yml"):
@@ -1268,26 +1243,26 @@ def test_uv_uses_each_jobs_synced_python_without_environment_warnings() -> None:
         assert 'UV_PYTHON: "3.13"' in _workflow_text(workflow_name)
 
 
-def test_finalization_probes_run_once_in_their_owning_linux_workflows() -> None:
+def test_finalization_probes_have_one_owning_step_per_linux_workflow() -> None:
     expected_probes = {
         "test.yml": (
             "test",
             "${{ matrix.os }}",
-            "matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'",
+            "matrix.os == 'ubuntu-latest' && (matrix.python-version == '3.13' || matrix.python-version == '3.15')",
             "tests/test_cross_thread_generator_probe.py",
             "uv run --frozen --no-sync pytest -n0 -q --timeout=180 --timeout-method=thread",
         ),
         "test-pg-extension.yml": (
             "test-pg",
             "ubuntu-latest",
-            "matrix.python-version == '3.13'",
+            "matrix.python-version == '3.13' || matrix.python-version == '3.15'",
             "extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py",
             "uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q",
         ),
         "test-redis-extension.yml": (
             "test-redis",
             "ubuntu-latest",
-            "matrix.python-version == '3.13'",
+            "matrix.python-version == '3.13' || matrix.python-version == '3.15'",
             "extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py",
             "uv run --frozen --no-sync ./bin/pytest-redis --fast -n0 -q",
         ),

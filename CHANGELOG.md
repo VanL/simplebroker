@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added support for standard CPython 3.15 while retaining the Python 3.11
+  minimum. SQLite transaction behavior and the public API are unchanged.
+
+### Development
+
+- Added Python 3.15 coverage for the core on Linux, macOS and Windows,
+  first-party PostgreSQL and Redis backends, examples, finalization probes,
+  and clean wheel/sdist installs. The repaired fork tests now allow only the
+  specific threaded-fork warning at the fork boundary and restore strict
+  warnings before child broker work.
+
 ## [8.6.0] - 2026-10-13
 
 SimpleBroker 8.6.0, `simplebroker-pg` 4.6.0, and `simplebroker-redis` 4.6.0

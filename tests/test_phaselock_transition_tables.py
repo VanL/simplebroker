@@ -10,6 +10,7 @@ import select
 import signal
 import threading
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Self, cast
 
@@ -407,7 +408,17 @@ def _assert_darwin_fork_probe() -> None:
     parent_lock = phaselock._DARWIN_XATTR_PROVIDER_LOCK
     parent_lock.acquire()
     read_fd, write_fd = os.pipe()
-    pid = os.fork()
+    # The inherited discovery lock is the behavior this fork must exercise.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                r"^This process \(pid=\d+\) is multi-threaded, "
+                r"use of fork\(\) may lead to deadlocks in the child\.$"
+            ),
+            category=DeprecationWarning,
+        )
+        pid = os.fork()
     if pid == 0:
         try:
             os.close(read_fd)

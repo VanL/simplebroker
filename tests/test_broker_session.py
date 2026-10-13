@@ -10,6 +10,7 @@ import signal
 import sqlite3
 import sys
 import threading
+import warnings
 import weakref
 from pathlib import Path
 from typing import Any, Self, cast
@@ -1135,7 +1136,17 @@ def test_inherited_handle_rejects_use_and_close_is_silent(tmp_path: Path) -> Non
         assert lock_held.is_set()
 
         read_fd, write_fd = os.pipe()
-        child = os.fork()
+        # This proof deliberately inherits a lock held by another thread.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=(
+                    r"^This process \(pid=\d+\) is multi-threaded, "
+                    r"use of fork\(\) may lead to deadlocks in the child\.$"
+                ),
+                category=DeprecationWarning,
+            )
+            child = os.fork()
         if child == 0:
             os.close(read_fd)
             child_status = b"failed"

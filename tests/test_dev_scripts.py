@@ -1618,11 +1618,12 @@ def test_xdist_worker_coverage_stays_in_pytest_cov_lifecycle(
     data_file = tmp_path / ".coverage"
     nested_test = tmp_path / "test_nested_coverage.py"
     nested_test.write_text(
-        """
+        r"""
 import multiprocessing
 import os
 import subprocess
 import sys
+import warnings
 
 import pytest
 from simplebroker.db import BrokerDB
@@ -1631,6 +1632,13 @@ from simplebroker.db import BrokerDB
 def write_in_child(path):
     with BrokerDB(path) as db:
         db.write("coverage", "child-message")
+
+
+def write_in_child_with_strict_warnings(path, fork_warnings):
+    # Process.start() never unwinds the parent's context in its fork child.
+    # Restore the child's copied policy after bootstrap, before broker work.
+    fork_warnings.__exit__(None, None, None)
+    write_in_child(path)
 
 
 @pytest.mark.parametrize("index", range(2))
@@ -1651,10 +1659,21 @@ def test_child_coverage(index, tmp_path, monkeypatch):
         # from the temporary cwd inherited by this forked child.
         monkeypatch.chdir(tmp_path)
         path = str(tmp_path / "child.db")
+        fork_warnings = warnings.catch_warnings()
         child = multiprocessing.get_context("fork").Process(
-            target=write_in_child, args=(path,)
+            target=write_in_child_with_strict_warnings, args=(path, fork_warnings)
         )
-        child.start()
+        # Keep the xdist worker as fork parent and all existing shard checks.
+        with fork_warnings:
+            warnings.filterwarnings(
+                "ignore",
+                message=(
+                    r"^This process \(pid=\d+\) is multi-threaded, "
+                    r"use of fork\(\) may lead to deadlocks in the child\.$"
+                ),
+                category=DeprecationWarning,
+            )
+            child.start()
         try:
             child.join(10)
             assert child.exitcode == 0
