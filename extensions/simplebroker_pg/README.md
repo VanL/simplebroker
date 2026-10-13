@@ -12,6 +12,10 @@ backend plugin hook.
 - PostgreSQL
 - A dedicated schema for SimpleBroker tables
 
+Standard, GIL-enabled CPython 3.15 is supported, with native PostgreSQL CI
+coverage on Linux. This qualification does not cover free-threaded Python
+3.15t or JIT-specific behavior.
+
 `public` is intentionally rejected.
 
 Exact-target broadcast requires backend API v5: SimpleBroker 5.6.1 or newer

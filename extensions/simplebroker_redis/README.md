@@ -10,6 +10,10 @@ Valkey 7.x and Redis 7.x and the test suite runs against Valkey.
 - Python 3.11+
 - Valkey 7.x or Redis 7.x
 
+Standard, GIL-enabled CPython 3.15 is supported, with native Valkey CI coverage
+on Linux. This qualification does not cover free-threaded Python 3.15t or
+JIT-specific behavior.
+
 Durability depends on the server configuration. A Valkey or Redis deployment
 without AOF/RDB persistence can lose messages on restart. Use SQLite or
 Postgres when you need storage durability from the broker stack by default.

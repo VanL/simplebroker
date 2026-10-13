@@ -11,6 +11,15 @@ This contract began as recovery of existing public promises. Owner-approved
 revisions may add surfaces explicitly. It is not a complete third-party
 backend SDK.
 
+Compatibility note (non-normative): Python 3.11 remains the minimum supported
+version. Standard, GIL-enabled CPython 3.15 is supported by core and the
+first-party PostgreSQL and Redis extensions. Core qualification covers Linux,
+macOS, and Windows; native extension qualification covers Linux. Free-threaded
+Python 3.15t and JIT-specific behavior are outside this qualification. The
+[Python 3.15 support plan](../plans/2026-10-13-python-315-support-plan.md)
+records the evidence; interpreter support changes none of the API or lifecycle
+contracts below.
+
 ## Public surfaces [SB-API-1]
 
 Supported import surfaces:

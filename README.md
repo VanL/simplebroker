@@ -163,6 +163,10 @@ The CLI is available as both `broker` and `simplebroker`.
 - Python 3.11+
 - SQLite 3.35+ (released March 2021) - required for `RETURNING` support
 
+Standard, GIL-enabled CPython 3.15 is supported on Linux, macOS, and Windows.
+This qualification does not cover free-threaded Python 3.15t or JIT-specific
+behavior.
+
 
 ## Quick Start
 

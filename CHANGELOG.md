@@ -7,10 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.7.0] - 2026-10-13
+
+SimpleBroker 8.7.0, `simplebroker-pg` 4.7.0, and `simplebroker-redis` 4.7.0
+are the coordinated release set. Both extensions require SimpleBroker 8.7.0
+or newer, and the core `pg` and `redis` extras require the matching 4.7.0
+extension or newer.
+
 ### Added
 
 - Added support for standard CPython 3.15 while retaining the Python 3.11
-  minimum. SQLite transaction behavior and the public API are unchanged.
+  minimum across the core and both first-party extensions. SQLite transaction
+  behavior and the public API are unchanged. Free-threaded Python 3.15 and
+  JIT-specific operation are not qualified by this release.
+
+### Changed
+
+- Removed speculative upper bounds on uv and Hatchling, and a redundant
+  Atheris bound. Builds and dependency resolution can use newer compatible
+  tools without a manifest edit; release build inputs remain exactly locked.
 
 ### Development
 
@@ -19,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and clean wheel/sdist installs. The repaired fork tests now allow only the
   specific threaded-fork warning at the fork boundary and restore strict
   warnings before child broker work.
+- CI now installs the latest uv and checks all three lockfiles directly,
+  without a separate version-policy gate. Ordinary tool updates no longer
+  require maintaining a duplicated uv pin or its update helper.
 
 ## [8.6.0] - 2026-10-13
 
