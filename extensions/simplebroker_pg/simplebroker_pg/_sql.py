@@ -438,3 +438,11 @@ def build_retrieve_query(
         )
 
     raise ValueError(f"Unsupported retrieve operation: {operation}")
+
+
+# [SB-API-15]: this one population supplies both total and owner credits.
+POSTGRES_CONNECTION_USAGE_SQL = """
+SELECT application_name, backend_type
+FROM pg_catalog.pg_stat_activity
+WHERE datid IS NOT NULL
+"""

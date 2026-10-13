@@ -13,6 +13,7 @@ import psycopg
 from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError, OperationalError
 
+from ._connection_owner import _owner
 from ._constants import POSTGRES_SCHEMA_VERSION
 
 SCHEMA_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -118,7 +119,7 @@ def _is_connection_capacity_refusal(exc: psycopg.OperationalError) -> bool:
 def connect(dsn: str) -> psycopg.Connection:
     """Create an autocommit psycopg connection."""
     try:
-        return psycopg.connect(dsn, autocommit=True)
+        return psycopg.connect(dsn, autocommit=True, **_owner.capture())
     except psycopg.OperationalError as exc:
         failure = OperationalError(f"Could not connect to Postgres target: {exc}")
         failure._connection_capacity = _is_connection_capacity_refusal(exc)

@@ -173,6 +173,50 @@ operation. Malformed result data raises `ValueError`;
 database and permission failures retain SimpleBroker's database exception
 types.
 
+## Connection Owners and Usage
+
+Bind an opaque accounting label in each dedicated process before creating
+any PostgreSQL resources. Multiple processes may share a label.
+
+```python
+from simplebroker_pg import bind_connection_owner, get_connection_usage
+
+bind_connection_owner("worker-group-A")  # Before pools, listeners, or inspection.
+# Create a PostgreSQL Queue using the target examples above.
+usage = get_connection_usage(queue)
+print(usage["total"], usage["by_owner"].get("worker-group-A", 0))
+```
+
+`ConnectionUsage` is an exported TypedDict with `total: int` and
+`by_owner: dict[str, int]`; returned dictionaries are fresh. One materialized
+activity query supplies both counts through the Queue's existing probe.
+Total includes all database-attached backends on the server, including idle
+clients, the observer, unrelated clients and workers. Only visible client
+backends with a valid owner marker receive owner credit. Other roles' backend
+types may be hidden from ordinary observers. No privileges are granted; an
+omitted owner proves neither absence nor death.
+
+Labels match `[!-~]{1,54}`: non-space printable ASCII, case-sensitive,
+without secrets. The extension sets `application_name` to `sb-owner:` plus
+the label, overriding DSN/ambient names. Same-label binding is idempotent;
+conflicting or late binding raises `RuntimeError`. Failed resource creation
+also seals binding. Closure does not unbind, and fork/spawn children bind
+explicitly. Even a usage read can start resources, so bind before reading.
+
+Pooled connections (including later growth), shared notification listeners
+and direct first-party connections are covered without changing pool or
+session identity. Caller-built `PostgresRunner` is covered; caller-built
+driver connections and third-party runners are not. Arbitrary caller SQL can
+change the observed application name. Markers are cooperative, not authority.
+Inside a caller-owned transaction, PostgreSQL's activity-cache semantics
+apply; the helper does not commit, roll back, refresh the cache or open a
+separate monitoring connection. Multiplexing proxies may not preserve this
+accounting model. Usage is observation, not a permit. Budgets, reservations
+and launch decisions stay in the application.
+
+See the [Python guide](../../docs/guides/python.md#postgresql-connection-owners-and-coherent-usage)
+and [SB-API-14/15](../../docs/specs/16-python-library-api.md).
+
 ## Multi-Queue Activity Waiters
 
 Postgres supports `simplebroker.create_activity_waiter_for_queues(...)` with

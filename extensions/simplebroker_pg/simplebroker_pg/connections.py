@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypedDict, cast
 
 from simplebroker import Queue
 
-from ._sql import POSTGRES_CONNECTION_STATS_SQL
+from ._connection_owner import LABEL_PATTERN, OWNER_PREFIX
+from ._sql import POSTGRES_CONNECTION_STATS_SQL, POSTGRES_CONNECTION_USAGE_SQL
 
 _FIELD_NAMES = frozenset(
     {
@@ -111,3 +112,38 @@ def get_connection_stats(queue: Queue) -> dict[str, int]:
         probe = cast(_BackendProbe, connection)
         rows = probe._run_backend_probe(POSTGRES_CONNECTION_STATS_SQL)
     return _parse_connection_stats(rows)
+
+
+class ConnectionUsage(TypedDict):
+    """One observed activity population, per [SB-API-15]."""
+
+    total: int
+    by_owner: dict[str, int]
+
+
+def get_connection_usage(queue: Queue) -> ConnectionUsage:
+    """Return total backend pressure and visible client credits by owner.
+
+    One materialized activity query supplies both counts through existing Queue
+    resources. Hidden backend types receive no owner credit. Missing owners do
+    not prove absence or death, and observations grant no admission permits.
+    Caller transactions retain PostgreSQL's activity-cache semantics.
+    See [SB-API-15] in docs/specs/16-python-library-api.md.
+    """
+    if queue.backend_name != "postgres":
+        raise ValueError("get_connection_usage() requires a PostgreSQL Queue")
+    with queue.get_connection() as connection:
+        rows = cast(_BackendProbe, connection)._run_backend_probe(
+            POSTGRES_CONNECTION_USAGE_SQL
+        )
+    by_owner: dict[str, int] = {}
+    for application_name, backend_type in rows:
+        if (
+            backend_type == "client backend"
+            and isinstance(application_name, str)
+            and application_name.startswith(OWNER_PREFIX)
+        ):
+            label = application_name[len(OWNER_PREFIX) :]
+            if LABEL_PATTERN.fullmatch(label) is not None:
+                by_owner[label] = by_owner.get(label, 0) + 1
+    return {"total": len(rows), "by_owner": by_owner}

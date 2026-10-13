@@ -74,7 +74,7 @@ jobs:
         PYTEST_ADDOPTS: ""
       run: |
         test "${SIMPLEBROKER_RUN_AUTOVACUUM_PROBE}" = "1"
-        uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q extensions/simplebroker_pg/tests/test_connection_stats.py
+        uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q extensions/simplebroker_pg/tests/test_connection_stats.py extensions/simplebroker_pg/tests/test_connection_usage.py
 
   test-pg15-connection-stats:
     runs-on: ubuntu-latest
@@ -110,7 +110,7 @@ jobs:
       env:
         PYTEST_ADDOPTS: ""
       run: |
-        uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q extensions/simplebroker_pg/tests/test_connection_stats.py
+        uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q extensions/simplebroker_pg/tests/test_connection_stats.py extensions/simplebroker_pg/tests/test_connection_usage.py
 
   lint:
     runs-on: ubuntu-latest

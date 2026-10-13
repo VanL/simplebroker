@@ -49,7 +49,7 @@ def _section(code: str) -> str:
 def test_api_clause_inventory_and_authority() -> None:
     text = SPEC.read_text(encoding="utf-8")
     codes = re.findall(r"^## .+ \[SB-API-(\d+)\]$", text, re.MULTILINE)
-    assert codes == [str(i) for i in range(1, 14)]
+    assert codes == [str(i) for i in range(1, 16)]
     for number in codes:
         assert f"| [SB-API-{number}] |" in text
 
@@ -355,7 +355,9 @@ def test_api_postgres_connection_inspection_contract() -> None:
 
     registry = REGISTRY.read_text(encoding="utf-8")
     row = next(line for line in registry.splitlines() if "Python library" in line)
-    assert "[SB-API-13]" in row
+    assert "[SB-API-15]" in row
+    assert "extensions/simplebroker_pg/tests/test_connection_owner.py" in row
+    assert "extensions/simplebroker_pg/tests/test_connection_usage.py" in row
     assert "extensions/simplebroker_pg/tests/test_connection_stats.py" in row
 
 

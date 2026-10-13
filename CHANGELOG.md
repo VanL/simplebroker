@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- PostgreSQL-only `bind_connection_owner(label)` attributes first-party pools,
+  listeners and direct connections without changing resource sharing.
+  `get_connection_usage(queue)` returns total pressure and visible client
+  counts by owner from one materialized activity population. Admission policy
+  remains with callers; the existing connection-statistics helper is unchanged.
+
+
 ## [8.5.1] - 2026-10-07
 
 SimpleBroker 8.5.1, `simplebroker-pg` 4.5.1, and `simplebroker-redis` 4.5.1

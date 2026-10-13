@@ -57,6 +57,7 @@ INVENTORY_STATE_MACHINE_IDS = (
     "SM-ACTIVITY-WAITER",
     "SM-WATCHER-LIFECYCLE",
     "SM-CLI-WATCH",
+    "SM-PG-CONNECTION-OWNER",
     "SM-PG-LISTENER",
     "SM-PG-VACUUM",
     "SM-REDIS-BROADCAST",
@@ -188,6 +189,15 @@ STATE_MACHINE_MANIFEST = (
         test_module="tests.test_core_persistence_transition_tables",
         table_name="SQLITE_RUNNER_TRANSITIONS",
         firing_test_name="test_sqlite_runner_fires_transition_table",
+    ),
+    StateMachineEntry(
+        machine_id="SM-PG-CONNECTION-OWNER",
+        owner_module="simplebroker_pg._connection_owner",
+        owner_name="_ConnectionOwner",
+        test_module="extensions.simplebroker_pg.tests.test_connection_owner",
+        table_name="OWNER_TRANSITIONS",
+        firing_test_name="test_connection_owner_transition_table",
+        component=ManifestComponent.POSTGRES,
     ),
     StateMachineEntry(
         machine_id="SM-PG-LISTENER",

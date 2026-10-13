@@ -631,3 +631,36 @@ subprocess tests for both module import orders plus registry atexit shutdown.
   the ledger in `docs/plans/README.md`
 - retired: 2026-07-29-process-session-core-factory-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`
+
+## PostgreSQL connection attribution
+
+[SB-API-14] in `docs/specs/16-python-library-api.md` owns the public contract.
+The private `extensions/simplebroker_pg/simplebroker_pg/_connection_owner.py`
+owner serializes binding with creation-option capture. Capture seals the
+process even when creation later fails; cleanup does not reopen binding.
+A child-after-fork hook eagerly resets the production owner while still
+single-threaded, avoiding races between two first child calls. Both bind and
+capture retain the shared lazy PID guard before acquiring an inherited lock.
+This fallback also applies to independently constructed private owners. A
+fork child must bind explicitly and cannot wait on a vanished parent thread.
+
+Pool kwargs are captured before background workers run. Listener kwargs are
+captured before its thread starts. Direct `validation.connect()` uses the
+same capture path, covering inspection, initialization and cleanup. Pool
+fork rebuilding captures anew. The lock never spans driver I/O.
+
+The marker is connection metadata, not broker identity. DSN, Config, backend
+options, session keys and listener keys remain unchanged. Putting labels in
+those keys would multiply resources; storing PID registrations in `meta`
+would create a stale-state cleanup lifecycle. PostgreSQL's own activity rows
+already own connection lifetime. No task, budget or liveness model belongs
+in this extension. The implementation plan is
+`docs/plans/2026-10-13-postgres-connection-attribution-plan.md`.
+
+[SB-API-15] uses the existing materializing SQL probe. One raw activity row
+list supplies total pressure via length and owner credits via grouping.
+Rows with hidden backend types and database-attached workers remain pressure
+without credit. This makes consistency structural without a SQL JSON envelope,
+parser framework, second query or sample cache. Existing transaction activity
+caching is preserved because the helper does not settle or refresh caller
+transactions. Visibility privileges remain deployment-owned.

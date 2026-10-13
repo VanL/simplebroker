@@ -30,6 +30,7 @@ Quick pointers to the key guidance documents in this repository.
 | `simplebroker/db.py` | Concrete process-session core factory, runner publication and checkout rollback, database operations, and the private first-party SQL probe |
 | `simplebroker/_retry_policy.py` | Retry and setup policy; pairs with `_retry.py`, which owns the retry mechanism |
 | `simplebroker/_paths.py` | Filesystem path validation and project-database discovery |
+| `extensions/simplebroker_pg/simplebroker_pg/_connection_owner.py` | Process-wide binding and synchronized creation metadata, outside session identity |
 | `extensions/` | Optional extensions; PostgreSQL-only operational inspection lives in `extensions/simplebroker_pg/simplebroker_pg/connections.py` |
 | `examples/` | Runnable usage examples (async wrappers, multi-queue) — examples are claims; keep them working |
 | `tests/` | Pytest suite (~148 files), `uv run pytest` |

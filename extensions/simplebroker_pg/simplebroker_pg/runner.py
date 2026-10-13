@@ -18,6 +18,7 @@ from simplebroker._backend_plugins import BackendPlugin
 from simplebroker._exceptions import DataError, IntegrityError, OperationalError
 from simplebroker._runner import SetupPhase
 
+from ._connection_owner import _owner
 from ._failure_order import capture_ordinary_pg_cleanup
 from ._identifiers import activity_channel_name
 from .validation import quote_ident
@@ -241,6 +242,7 @@ class _SharedActivityListener:
         startup_timeout: float = 5.0,
     ) -> None:
         self._dsn = dsn
+        self._connection_kwargs = _owner.capture()
         self._channel = activity_channel_name(schema)
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
@@ -270,7 +272,9 @@ class _SharedActivityListener:
 
     def _run(self) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-019] exception
         try:
-            conn = psycopg.connect(self._dsn, autocommit=True)
+            conn = psycopg.connect(
+                self._dsn, autocommit=True, **self._connection_kwargs
+            )
             self._conn = conn
             with conn.cursor() as cur:
                 cur.execute(f"LISTEN {quote_ident(self._channel)}")
@@ -700,10 +704,13 @@ class PostgresRunner:
             with conn.cursor() as cur:
                 cur.execute(f"SET search_path TO {quote_ident(self._schema)}, public")
 
+        # [SB-API-14]: creation metadata never enters target/session identity.
+        connection_kwargs = _owner.capture()
         pool_dsn = conninfo.make_conninfo(self._dsn)
 
         pool = ConnectionPool(
             pool_dsn,
+            kwargs=connection_kwargs,
             min_size=self._pool_min_size,
             max_size=self._pool_max_size,
             configure=configure,

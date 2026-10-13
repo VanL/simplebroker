@@ -19,6 +19,7 @@ from simplebroker_pg import (
     PostgresRunner,
     get_backend_plugin,
     get_connection_stats,
+    get_connection_usage,
 )
 
 from simplebroker import BrokerTarget, Queue
@@ -126,6 +127,9 @@ def test_connection_stats_is_postgres_only_without_widening_core_protocol() -> N
         "PostgresRunner",
         "get_backend_plugin",
         "get_connection_stats",
+        "bind_connection_owner",
+        "get_connection_usage",
+        "ConnectionUsage",
     } <= set(simplebroker_pg.__all__)
     assert not hasattr(Queue, "get_connection_stats")
     assert "_run_backend_probe" not in BrokerConnection.__dict__
@@ -468,6 +472,7 @@ def test_connection_stats_ordinary_role_counts_other_roles_and_databases(
             assert privilege_row == (False, False, False)
 
             before = get_connection_stats(queue)["numbackends"]
+            usage_before = get_connection_usage(queue)["total"]
             with (
                 psycopg.connect(
                     unrelated_same_database_dsn,
@@ -497,6 +502,21 @@ def test_connection_stats_ordinary_role_counts_other_roles_and_databases(
                 assert direct_row is not None
                 assert after == cast(int, direct_row[0])
                 assert after == before + 2
+                usage = get_connection_usage(queue)
+                attached = observer_conn.execute(
+                    "SELECT count(*) FROM pg_catalog.pg_stat_activity "
+                    "WHERE datid IS NOT NULL"
+                ).fetchone()
+                assert attached is not None
+                assert usage["total"] == attached[0] == usage_before + 2
+                # Auxiliary rows with no database never enter this population.
+                all_rows = observer_conn.execute(
+                    "SELECT count(*), count(*) FILTER (WHERE datid IS NULL) "
+                    "FROM pg_catalog.pg_stat_activity"
+                ).fetchone()
+                assert all_rows is not None
+                assert all_rows[1] > 0
+                assert usage["total"] == all_rows[0] - all_rows[1]
 
             raw_pg_conn.execute(
                 "REVOKE SELECT ON pg_catalog.pg_stat_database FROM PUBLIC"
@@ -648,6 +668,9 @@ def test_connection_stats_includes_autovacuum_worker_overcount(
         client_backends = cast(int, classification_row[0])
         assert classification_row[1] == 1
         assert stats["numbackends"] > client_backends
+        usage = get_connection_usage(queue)
+        assert usage["total"] > client_backends
+        assert usage["by_owner"] == {}
     finally:
         if queue is not None:
             queue.close()

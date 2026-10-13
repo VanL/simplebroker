@@ -7,7 +7,7 @@ reactor pattern, embedding, the command layer, and extension hooks.
 
 Normative public surfaces (package root, `simplebroker.ext`, command layer):
 [`docs/specs/16-python-library-api.md`](../specs/16-python-library-api.md)
-(`[SB-API-1]`–`[SB-API-13]`). Delivery rules:
+(`[SB-API-1]`–`[SB-API-15]`). Delivery rules:
 [`docs/specs/11-delivery.md`](../specs/11-delivery.md)
 (`[SB-DELIVERY-1]`–`[SB-DELIVERY-8]`).
 
@@ -888,6 +888,57 @@ sidecar and creates no table, function, role, grant, or schema object.
 This is an observation, not a reservation. Other clients can connect after the
 statement. Admission control must retain a safety margin and tolerate both
 early rejection from worker overcount and concurrent overshoot.
+
+## PostgreSQL connection owners and coherent usage
+
+Normative behavior: [SB-API-14] and [SB-API-15] in the
+[Python library contract](../specs/16-python-library-api.md).
+These APIs belong to the separately installed `simplebroker-pg` package.
+
+```python
+from simplebroker import BrokerSession, BrokerTarget
+from simplebroker_pg import bind_connection_owner, get_connection_usage
+
+# Run in each dedicated process before any PostgreSQL resources start.
+bind_connection_owner("worker-group-A")
+target = BrokerTarget("postgres", dsn, {"schema": "simplebroker_app"})
+with BrokerSession.connect(target) as session:
+    queue = session.queue("jobs")
+    usage = get_connection_usage(queue)
+    actual = usage["total"]
+    group_actual = usage["by_owner"].get("worker-group-A", 0)
+```
+
+A label is 1-54 non-space printable ASCII characters, case-sensitive and
+opaque to SimpleBroker. Use no secrets. Several processes can share it.
+The same binding is idempotent; a different or late binding needs a new
+process. Closing resources does not unbind. Reading usage can start lazy
+resources and seal an unbound process, so bind before reading. Spawned and
+forked children bind explicitly; a fork child does not inherit its parent's
+label for new connections.
+
+The extension stamps `application_name` with `sb-owner:` plus the label,
+overriding DSN or ambient application names. It covers first-party pools,
+later pool growth, listeners and direct connections, including caller-built
+`PostgresRunner` instances. It does not change pool/session/listener identity,
+relabel caller-built driver connections, or repair later caller SQL changes.
+
+One materialized `pg_stat_activity` population supplies both `total` and
+`by_owner`. Total includes all database-attached rows across databases and
+roles, including idle connections, the observer and workers. Only visible
+client backends with valid markers earn owner credit. Ordinary roles may
+lack backend-type visibility for other roles; existing monitoring privileges
+can provide that visibility, but this helper grants none. Missing owners
+mean zero observed credit, not proof of no connections or process death.
+Labels are cooperative metadata, not authenticated identities.
+
+Each call uses normal Queue resources without a monitoring pool. Inside a
+caller-owned transaction, PostgreSQL may reuse its earlier activity snapshot;
+the helper neither settles the transaction nor clears that cache. Direct or
+session-pooling connections fit this accounting model; transaction or
+statement multiplexing proxies may not. This observation grants no permit
+and cannot prevent overshoot. Budgets, reservations and admission decisions
+remain application concerns. The older `get_connection_stats()` is unchanged.
 
 ## Sidecar tables
 

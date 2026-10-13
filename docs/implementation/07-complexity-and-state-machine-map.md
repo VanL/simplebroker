@@ -337,7 +337,8 @@ All 30 reviewed seed entries are confirmed machines. `SM-REDIS-WRITE` was
 added by the reserved-zero and Redis write-atomicity plan after the seed
 inventory, bringing that inventory to 31. `SM-ACTIVITY-WAITER` was added by
 the terminal activity-waiter lifecycle plan, bringing the current inventory
-to 32. None is merged or
+to 32. `SM-PG-CONNECTION-OWNER` adds process attribution binding, bringing
+the current inventory to 33. None is merged or
 reclassified as a non-machine. The detailed inventory preserves the baseline
 classification evidence and original table candidates for audit history; its
 candidate column is not the current ownership source. The executable ownership
@@ -353,6 +354,7 @@ table and manifest below are authoritative for the completed implementation.
 | `SM-SETUP-BUDGET` | `tests/test_retry_policy_coverage.py` |
 | `SM-POLLING`, `SM-WATCHER-LIFECYCLE`, `SM-CLI-WATCH` | `tests/test_watcher_transition_tables.py` |
 | `SM-ACTIVITY-WAITER` | `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py` |
+| `SM-PG-CONNECTION-OWNER` | `extensions/simplebroker_pg/tests/test_connection_owner.py` |
 | `SM-PG-LISTENER`, `SM-PG-VACUUM` | `extensions/simplebroker_pg/tests/test_pg_state_machine_transitions.py` |
 | `SM-REDIS-BROADCAST`, `SM-REDIS-WRITE`, `SM-REDIS-ACTIVITY-LISTENER`, `SM-REDIS-RUNNER` | `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py` |
 | `SM-COVERAGE-SETTLEMENT`, `SM-CLI-COVERAGE` | `tests/test_dev_scripts.py` |
@@ -366,8 +368,8 @@ table and manifest below are authoritative for the completed implementation.
 | `SM-SIGINT-PROBE` | `tests/test_watcher_sigint_probe_transitions.py` |
 
 `tests/state_machine_manifest.py` marks coverage `COMPLETE`.
-`tests/test_state_machine_policy.py` requires exact equality among these 32
-inventory IDs, the 32 manifest entries, and the implementation-map inventory.
+`tests/test_state_machine_policy.py` requires exact equality among these 33
+inventory IDs, the 33 manifest entries, and the implementation-map inventory.
 The example and reusable-protocol slice contains 74 firing rows; this includes
 15 `SM-REACTOR` rows and 7 `SM-REACTOR-OUTPUT` rows. Failure rows inject below
 the real persistent-state owner so the owner's rollback and replay behavior
@@ -389,6 +391,7 @@ that seven-module slice, so adding rows to those tables does not change 74.
 | `SM-ACTIVITY-WAITER` (confirmed) | First-party concrete waiter `_closed` state; manifest representative `simplebroker_redis.plugin.RedisMultiQueueActivityWaiter` | Redis real-waiter lifecycle transition table | PostgreSQL and Redis real-waiter lifecycle suites; PostgreSQL notify and Redis integration replacement tests | Resource-local open/closed state governs whether cleanup may run. The first close transitions to terminal before cleanup; ordinary failures preserve all independently safe cleanup attempts and ordered failure evidence, while interruptions stop the current attempt. Every later close is a no-op. |
 | `SM-WATCHER-LIFECYCLE` (confirmed) | `simplebroker/watcher.py::BaseWatcher` | `WATCHER_LIFECYCLE_TRANSITIONS` in `tests/test_watcher_transition_tables.py` | transition-table, stop, error, and concurrency suites; exact run-thread cache and owned/supplied Queue lease cases in `tests/test_watcher_cleanup.py` | Thread state, Queue lease ownership, waiter attachment, retry state, terminal exception propagation, stop state, the active consume iterator, and the lock-protected cleanup owner govern legal start, run, stop, join, and cleanup calls. Consume mode checks stop before every explicit `next()` and closes its iterator exactly once on the advancing thread. Ordinary close failures are terminal with no active failure, remain note evidence during retryable or error-handler failures, and cannot be swallowed by clean-stop handling; a close `BaseException` retains lifecycle priority. Run or stop-before-run claims cleanup before blocking work; join timeout does not transfer ownership, and runtime cleanup failure reopens an explicit retry path. Run exit releases the run thread's cache regardless of Queue ownership and closes an internally constructed Queue's lease; idle stop closes the strategy and an internally constructed Queue's lease without releasing the stop caller's cache. A caller-supplied Queue's lease remains caller-owned. The weak-reference finalizer is inert during ordinary collection; at interpreter exit it routes a still-live watcher through normal stop ownership and never calls thread-local Queue cleanup directly. Generic `TERMINAL_ERROR` remains retry exhaustion. `ERROR_HANDLER_FAILURE` bypasses retry, cleans runtime resources, and propagates the original error-handler exception once with the handler exception as cause. The state uses the established `_run_thread` cleanup-owner slot plus construction-time Queue ownership. |
 | `SM-CLI-WATCH` (confirmed) | `simplebroker/commands.py::cmd_watch` callback and output lifecycle | `tests/test_cli_watch.py` | `tests/test_cli_watch.py`; watcher subprocess and command-helper suites | Callback results, one-time warning, output health, interrupt state, and watcher cleanup persist across callbacks and shutdown. `CALLBACK_ERROR_CONTINUES` remains the distinct path where the error handler elects to continue; it is not terminal `ERROR_HANDLER_FAILURE`. |
+| `SM-PG-CONNECTION-OWNER` (confirmed) | `extensions/simplebroker_pg/simplebroker_pg/_connection_owner.py::_ConnectionOwner` | `OWNER_TRANSITIONS` | `extensions/simplebroker_pg/tests/test_connection_owner.py`; real growth/listener usage tests | PID, immutable binding, creation sealing and mutex govern later calls. Eager child reset precedes child threads; bind and capture share a PID guard before locking. |
 | `SM-PG-LISTENER` (confirmed) | `extensions/simplebroker_pg/simplebroker_pg/runner.py::_SharedActivityListener` | PostgreSQL notify/lifecycle table | PostgreSQL notify and runner-lifecycle suites | Readiness, registrations, listener-thread failure, notification routing, and closed state persist across callbacks and threads. |
 | `SM-PG-VACUUM` (confirmed) | `extensions/simplebroker_pg/simplebroker_pg/plugin.py::vacuum` plus maintenance lease | PostgreSQL maintenance table | PostgreSQL maintenance, runner-lifecycle, and state-machine suites, including real-session contender and replacement probes when PostgreSQL is available | Durable lease depth, attached checkout identity, advisory-lock outcome, transaction result, discard outcome, and release outcome govern later delete, compact, unlock, physical-session replacement, and logical lease release actions. Every open batch is settled even for a body `BaseException`; ordinary rollback failure is retained as a note. An uncertain advisory-lock acquisition or unlock detaches and closes the checkout while preserving positive lease depth; a completed try-lock or unlock `false` is definite and reusable. Explicit failure resolution keeps body, rollback, unlock, discard, and release evidence ordered without erasing `BaseException`. |
 | `SM-REDIS-BROADCAST` (confirmed) | Redis `core.py::broadcast` plus Lua script and Redis allocation state | Redis broadcast table beside atomicity tests | Redis atomicity, broadcast, and integration suites | Atomic target selection, persisted high-water state, capacity, Lua status, and retry count govern the next Python and server action. |
@@ -456,3 +459,15 @@ findings must update source, registry, and policy evidence atomically.
   ledger in `docs/plans/README.md`
 - retired: 2026-07-29-complexity-and-state-machine-hardening-plan — source
   `5023710`; see the ledger in `docs/plans/README.md`
+
+## PostgreSQL process owner binding
+
+`SM-PG-CONNECTION-OWNER` is owned by `_ConnectionOwner` in
+`extensions/simplebroker_pg/simplebroker_pg/_connection_owner.py`, under
+[SB-API-14]. Its firing table is `OWNER_TRANSITIONS` in
+`extensions/simplebroker_pg/tests/test_connection_owner.py`, registered in
+`tests/state_machine_manifest.py`. It covers binding/idempotence/conflict,
+startup sealing including failure and closure, both thread orders and
+simultaneous contention, and PID reset with an inherited real runner while
+a foreign parent thread holds the owner lock. No enum or generic framework
+is needed; a label, started flag, PID and lock carry the actual state.
