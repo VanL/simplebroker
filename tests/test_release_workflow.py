@@ -544,12 +544,12 @@ def test_build_frontend_is_bounded_and_locked() -> None:
 
 def test_packaging_workflow_has_no_redundant_pip_install() -> None:
     workflow_text = _workflow_text("test.yml")
-    packaging_section = workflow_text.split("  packaging:", 1)[1].split(
-        "  coverage:", 1
-    )[0]
+    packaging = yaml.safe_load(workflow_text)["jobs"]["packaging"]
+    commands = "\n".join(step.get("run", "") for step in packaging["steps"])
 
-    assert "pip install" not in packaging_section
-    assert "./bin/packaging-smoke --python 3.11" in packaging_section
+    assert packaging["strategy"]["matrix"]["python-version"] == ["3.11", "3.15"]
+    assert "pip install" not in commands
+    assert "./bin/packaging-smoke --python ${{ matrix.python-version }}" in commands
 
 
 def test_python_examples_run_in_the_frozen_lint_environment() -> None:
@@ -1255,7 +1255,12 @@ def test_windows_314_runner_produces_merged_coverage_data() -> None:
 def test_uv_uses_each_jobs_synced_python_without_environment_warnings() -> None:
     root_workflow = _workflow_text("test.yml")
     assert "UV_PYTHON: ${{ matrix.python-version }}" in root_workflow
-    assert 'UV_PYTHON: "3.11"' in root_workflow
+    packaging = yaml.safe_load(root_workflow)["jobs"]["packaging"]
+    assert packaging["env"]["UV_PYTHON"] == "${{ matrix.python-version }}"
+    setup = next(step for step in packaging["steps"] if step.get("id") == "sync-python")
+    assert setup["with"]["python-version"] == packaging["env"]["UV_PYTHON"]
+    commands = "\n".join(step.get("run", "") for step in packaging["steps"])
+    assert '--python "${{ steps.sync-python.outputs.python-path }}"' in commands
     assert 'UV_PYTHON: "3.12"' in root_workflow
 
     for workflow_name in ("test-pg-extension.yml", "test-redis-extension.yml"):
@@ -1268,26 +1273,26 @@ def test_uv_uses_each_jobs_synced_python_without_environment_warnings() -> None:
         assert 'UV_PYTHON: "3.13"' in _workflow_text(workflow_name)
 
 
-def test_finalization_probes_run_once_in_their_owning_linux_workflows() -> None:
+def test_finalization_probes_have_one_owning_step_per_linux_workflow() -> None:
     expected_probes = {
         "test.yml": (
             "test",
             "${{ matrix.os }}",
-            "matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'",
+            "matrix.os == 'ubuntu-latest' && (matrix.python-version == '3.13' || matrix.python-version == '3.15')",
             "tests/test_cross_thread_generator_probe.py",
             "uv run --frozen --no-sync pytest -n0 -q --timeout=180 --timeout-method=thread",
         ),
         "test-pg-extension.yml": (
             "test-pg",
             "ubuntu-latest",
-            "matrix.python-version == '3.13'",
+            "matrix.python-version == '3.13' || matrix.python-version == '3.15'",
             "extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py",
             "uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q",
         ),
         "test-redis-extension.yml": (
             "test-redis",
             "ubuntu-latest",
-            "matrix.python-version == '3.13'",
+            "matrix.python-version == '3.13' || matrix.python-version == '3.15'",
             "extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py",
             "uv run --frozen --no-sync ./bin/pytest-redis --fast -n0 -q",
         ),
