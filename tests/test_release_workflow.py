@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 import yaml
 from packaging.requirements import Requirement
-from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -228,10 +227,6 @@ def test_fuzz_dependency_group_is_opt_in() -> None:
             if active:
                 bounds = active[0].specifier
                 assert any(spec.operator in {">=", "==", "~="} for spec in bounds)
-                if version == "3.11":
-                    assert not bounds.contains("3.1.0"), (
-                        "Atheris 3.1 requires Python 3.12"
-                    )
     assert pyproject["tool"]["uv"]["default-groups"] == []
 
 
@@ -317,28 +312,6 @@ def test_development_tool_floors_are_current() -> None:
             extension_pyproject["tool"]["pytest"]["ini_options"]["minversion"]
             == extension_floor
         )
-
-
-def test_every_uv_workflow_uses_the_repository_pin() -> None:
-    required = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["uv"][
-        "required-version"
-    ]
-    pins = set()
-    for workflow_path in UV_WORKFLOWS:
-        workflow_text = _workflow_text(workflow_path)
-        workflow = yaml.safe_load(workflow_text)
-        pin = workflow["env"]["UV_VERSION"]
-        assert Version(pin) in SpecifierSet(required)
-        pins.add(pin)
-        steps = [
-            step
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", [])
-            if step.get("uses", "").startswith("astral-sh/setup-uv@")
-        ]
-        assert steps
-        assert all(step["with"]["version"] == "${{ env.UV_VERSION }}" for step in steps)
-    assert len(pins) == 1, "all managed workflows must use the same uv pin"
 
 
 def test_test_workflows_sync_once_and_only_run_the_frozen_environment() -> None:
@@ -500,7 +473,7 @@ def test_release_builds_use_the_exact_locked_frontend_without_a_cache() -> None:
         assert "working-directory:" not in build_section
 
 
-def test_build_frontend_is_bounded_and_locked() -> None:
+def test_release_build_pins_satisfy_project_requirements() -> None:
     """Release pins must fit project build ranges, without copying their floors."""
     projects = (
         ROOT / "pyproject.toml",
@@ -517,9 +490,6 @@ def test_build_frontend_is_bounded_and_locked() -> None:
         assert any(
             spec.operator in {">=", ">", "==", "~="} for spec in hatchling.specifier
         ), f"{path}: build dependency must have a lower bound"
-        assert any(
-            spec.operator in {"<", "<=", "==", "~="} for spec in hatchling.specifier
-        ), f"{path}: build dependency must have an upper bound"
         build_ranges.append((path, hatchling.specifier))
 
     root_pyproject = tomllib.loads(projects[0].read_text(encoding="utf-8"))

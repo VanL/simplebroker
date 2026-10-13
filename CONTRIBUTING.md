@@ -47,19 +47,22 @@ repository's existing `E`, `W`, `F`, `I`, `B`, `C4`, and `UP` families. Lint
 discovery covers all tracked Python files and Python-shebang tools. Formatting
 keeps the explicit path boundary shown above and does not format Markdown.
 
-CI uses one pinned uv release while local development accepts the compatible
-uv 0.12 line. Update both policies and all three lockfiles with one command:
+CI installs the latest uv release. Local development requires uv 0.12.0 or
+newer, without an upper bound. Dependency ranges use floors; add an upper bound
+only for a known, unresolved incompatibility and document the reason.
+
+After changing dependencies, refresh the affected lockfiles and review their
+diffs before running the normal tests:
 
 ```bash
-python bin/bump_uv.py \
-  --ci-version 0.12.0 \
-  --required-version '>=0.12.0,<0.13'
-python bin/bump_uv.py --check
+uv lock
+uv lock --directory extensions/simplebroker_pg
+uv lock --directory extensions/simplebroker_redis
 ```
 
-Run the update with system Python. This still works when a newly installed uv
-falls outside the old repository range. Review the workflow and lockfile diffs
-before running the normal tests.
+CI checks each lockfile directly with `uv lock --check`; it does not enforce
+tool version policy. Lockfiles and the exact release build-tool pins still
+select reproducible dependency inputs. Those are not compatibility ceilings.
 
 Property-based tests (`tests/test_property_*.py`, powered by Hypothesis)
 check parser totality/round-trips and run a stateful model of queue

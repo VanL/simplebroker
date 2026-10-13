@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  UV_VERSION: "0.12.0"
+  UV_VERSION: "latest"
   PACKAGE_NAME: simplebroker
   PACKAGE_DIR: .
 
