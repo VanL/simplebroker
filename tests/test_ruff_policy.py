@@ -15,7 +15,6 @@ from bin.ruff_suppression_index import repository_path, run
 
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
-RULE_FIXTURE = ROOT / "tests" / "fixtures" / "ruff-enabled-rules.txt"
 SUPPRESSION_REGISTRY = (
     ROOT / "docs" / "implementation" / "10-ruff-suppression-registry.md"
 )
@@ -45,8 +44,8 @@ def _ruff_config() -> tuple[dict[str, object], dict[str, object]]:
     return ruff, ruff["lint"]
 
 
-def _enabled_rules() -> set[str]:
-    result = _ruff("check", "--show-settings", "simplebroker/__init__.py")
+def _enabled_rules(*args: str) -> set[str]:
+    result = _ruff("check", "--show-settings", *args, "simplebroker/__init__.py")
     assert result.returncode == 0, result.stderr
 
     match = re.search(
@@ -55,7 +54,9 @@ def _enabled_rules() -> set[str]:
         re.DOTALL,
     )
     assert match is not None, result.stdout
-    return set(re.findall(r"\(([A-Z]+\d+)\)", match.group("rules")))
+    codes = set(re.findall(r"\(([A-Z]+\d+)\)", match.group("rules")))
+    assert codes, f"No enabled rule codes parsed from Ruff settings:\n{result.stdout}"
+    return codes
 
 
 def _tracked_python_files() -> set[Path]:
@@ -115,9 +116,12 @@ def test_ruff_extends_defaults_without_losing_legacy_families() -> None:
         assert not path_pattern.startswith("simplebroker"), path_pattern
 
 
-def test_effective_ruff_rules_match_reviewed_inventory() -> None:
-    expected = set(RULE_FIXTURE.read_text(encoding="utf-8").splitlines())
-    assert expected
+def test_effective_ruff_rules_extend_current_defaults() -> None:
+    # Independent CLI selections protect effective config discovery too:
+    # a shadowing ruff.toml must not silently replace pyproject's defaults.
+    defaults = _enabled_rules("--isolated")
+    explicit = _enabled_rules("--isolated", "--select", ",".join(REVIEWED_FAMILIES))
+    expected = (defaults | explicit) - set(GLOBAL_IGNORES)
     assert _enabled_rules() == expected
 
 
@@ -179,7 +183,7 @@ def test_configured_complexity_boundary_fires_at_eleven() -> None:
     assert "`complexity_11` is too complex (11 > 10)" in diagnostic["message"]
 
 
-def test_real_ruff_fires_default_and_retained_legacy_rules() -> None:
+def test_real_ruff_preserves_default_diagnostics_and_legacy_rules() -> None:
     probe = """\
 def probe() -> None:
     try:
@@ -187,6 +191,20 @@ def probe() -> None:
     except Exception:
         raise RuntimeError("probe")
 """
+    default_result = _ruff(
+        "check",
+        "--isolated",
+        "--stdin-filename",
+        "probe.py",
+        "--output-format",
+        "json",
+        "-",
+        input_text=probe,
+    )
+    assert default_result.returncode in (0, 1), default_result.stderr
+    default_codes = {
+        diagnostic["code"] for diagnostic in json.loads(default_result.stdout)
+    } - set(GLOBAL_IGNORES)
     result = _ruff(
         "check",
         "--config",
@@ -200,7 +218,8 @@ def probe() -> None:
     )
     assert result.returncode == 1, result.stderr
     codes = {diagnostic["code"] for diagnostic in json.loads(result.stdout)}
-    assert {"BLE001", "B904"} <= codes
+    assert default_codes <= codes
+    assert "B904" in codes  # Explicitly selected B family, not an upstream default.
 
 
 @pytest.mark.xdist_group(name="mypy_subprocesses")

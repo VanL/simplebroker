@@ -37,6 +37,9 @@ extension or newer.
 - CI now installs the latest uv and checks all three lockfiles directly,
   without a separate version-policy gate. Ordinary tool updates no longer
   require maintaining a duplicated uv pin or its update helper.
+- Lint-policy tests now follow the running Ruff's actual defaults instead of
+  freezing an upstream rule list. Real lint findings, explicit repository
+  selections, file discovery and suppression checks remain enforced.
 
 ## [8.6.0] - 2026-10-13
 

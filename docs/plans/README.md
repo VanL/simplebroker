@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-10-13-ruff-default-drift-plan.md | active — class 3+P; repair upstream-default snapshot drift without bypassing lint or release gates |
 | 2026-10-13-python-315-support-plan.md | completed — class 4; Python 3.15 fork harness, cross-platform/native CI and artifact qualification verified; independent reviews passed |
 | 2026-10-13-postgres-connection-attribution-plan.md | completed - class 5; connection attribution and coherent usage implemented; real PostgreSQL 15/18 proof, review and final gates recorded; owner authorized closure and commit |
 | 2026-10-06-test-audit-remediation-plan.md | completed — class 4; repaired and independently reviewed; core/examples/native PG/Redis/benchmarks green; uncommitted, Windows CI and separate standalone-example fork defect remain explicit |

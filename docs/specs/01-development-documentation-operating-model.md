@@ -265,19 +265,22 @@ complete.
 
 ### Repository Static-Analysis Gate [DOM-10.1]
 
-SimpleBroker's Python lint gate uses the stable default rule set of the Ruff
-version locked in `uv.lock`, extended with the repository's existing `E`, `W`,
-`F`, `I`, `B`, `C4`, and `UP` rule families. The configuration must extend
-Ruff's defaults rather than replace them.
+SimpleBroker's Python lint gate extends Ruff's stable defaults with the
+repository's explicit `E`, `W`, `F`, `I`, `B`, `C901`, `C4`, `UP`, and
+`PLR2004` selections. The configuration must extend Ruff's defaults rather
+than replace them. CI uses the version resolved in `uv.lock`; local tool
+updates within the declared dependency range may use newer defaults without
+maintaining a copied upstream rule list.
 
 Owner: `pyproject.toml` owns rule selection; the root CI lint job enforces it.
 Boundary: every tracked first-party `.py`/`.pyi` file and Python-shebang script
 in the repository. Verification: `tests/test_ruff_policy.py` invokes the real
-locked Ruff binary, compares effective discovery and rule selection with
-reviewed inventories, and proves that a stable-default rule outside the legacy
-families and a retained legacy-family rule both fire. Required action: a Ruff
-version refresh reviews and intentionally updates the enabled-rule inventory
-before regenerating the lock.
+Ruff binary, compares effective discovery with tracked files and effective
+rule selection with that binary's isolated defaults plus the reviewed explicit
+rule families, compares real diagnostics with the binary's isolated default
+diagnostics, and proves a retained legacy-family rule fires. Required action:
+review and fix real diagnostics when refreshing Ruff; do not freeze tool
+versions or copy the complete upstream default inventory into a fixture.
 
 Requirements:
 
@@ -869,6 +872,8 @@ Local adoption record (soft-retired; not a live path claim):
 - retired: 2026-07-27-agent-docs-coalescing-and-status-hygiene-plan — source 197629e2; see docs/plans/README.md
 
 Local plans:
+
+- [Ruff default drift during release](../plans/2026-10-13-ruff-default-drift-plan.md)
 
 - retired: 2026-09-07-critical-review-remediation-plan — source `dbace84`;
   see the ledger in `docs/plans/README.md`.
