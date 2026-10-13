@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Added
 
 - Added support for standard CPython 3.15 while retaining the Python 3.11
   minimum. SQLite transaction behavior and the public API are unchanged.
@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added Python 3.15 coverage for the core on Linux, macOS and Windows,
   first-party PostgreSQL and Redis backends, examples, finalization probes,
-  and clean wheel/sdist installs. Deliberate fork tests now allow only the
+  and clean wheel/sdist installs. The repaired fork tests now allow only the
   specific threaded-fork warning at the fork boundary and restore strict
   warnings before child broker work.
 
