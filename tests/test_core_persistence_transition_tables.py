@@ -9,6 +9,7 @@ import signal
 import sqlite3
 import threading
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
@@ -755,7 +756,17 @@ def _assert_timestamp_fork_reset(core: BrokerDB, first: int) -> None:
     if not hasattr(os, "fork"):
         pytest.skip("real fork transition is unavailable on this platform")
     read_fd, write_fd = os.pipe()
-    pid = os.fork()
+    # xdist's receiver thread is present during this inherited-state proof.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                r"^This process \(pid=\d+\) is multi-threaded, "
+                r"use of fork\(\) may lead to deadlocks in the child\.$"
+            ),
+            category=DeprecationWarning,
+        )
+        pid = os.fork()
     if pid == 0:
         try:
             os.close(read_fd)
@@ -1089,7 +1100,17 @@ def _assert_runner_fork_reset(runner: SQLiteRunner) -> None:
     if not hasattr(os, "fork"):
         pytest.skip("real fork transition is unavailable on this platform")
     read_fd, write_fd = os.pipe()
-    pid = os.fork()
+    # Keep real fork inheritance without relaxing warnings in the probe body.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                r"^This process \(pid=\d+\) is multi-threaded, "
+                r"use of fork\(\) may lead to deadlocks in the child\.$"
+            ),
+            category=DeprecationWarning,
+        )
+        pid = os.fork()
     if pid == 0:
         try:
             os.close(read_fd)
