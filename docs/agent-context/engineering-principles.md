@@ -76,17 +76,28 @@ demands them.
 For non-trivial plans and implementations, run an independent review pass with
 the governing specs, plan, implementation note, and touched files in view.
 
-Prefer a different agent family or model from the original author when
-available. The review is not complete until the authoring agent has considered
-each point and either updated the work or documented why the existing path
-remains correct.
+Use a different agent family from the original author (`[DOM-11]`); native
+same-family subagents are a Tier-2 fallback only after bounded, logged Tier-1
+attempts fail. Same-family reviewers share the author's framing bias: they
+catch local syntactic drift (shifted line numbers, renamed paths) while
+accepting a confident causal story at face value. Cross-family review is
+required because an independent model family is far more likely to challenge
+whether the claimed hazard is reachable and whether the proposed proof can
+actually fail. The review is not complete until the authoring agent has
+considered each point and either updated the work or documented why the
+existing path remains correct.
 
-Review findings are claims, not facts: reproduce a finding before acting on
-it, and reproduce your own "done/passing" assertions before making them. The
-same discipline applies to status documents — a ledger that says "ship-ready"
-is a claim about the past; the evidence is a rerun in the present. Verifier
-error is real and its cost compounds, because a wrong finding acted on is a
-defect introduced with confidence.
+Review findings and plan premises are empirical claims, not facts:
+
+- **Verify the causal premise in code** before planning or acting on a finding
+  (trace whether the lock is actually taken, whether admission already rejects
+  the caller, or whether a wrapper already delegates).
+- **Verify that the proposed proof is falsifiable** (would fail before the
+  change and does not silently skip when invoked via the plan's command).
+- **Query empirical identifiers rather than synthesizing them** (verify commit
+  SHAs with `git cat-file -e`, exact target strings from the file, and status
+  claims by rerunning in the present). Verifier and planner errors compound
+  when fluent prose disguises an untested premise.
 
 ## 9. Plan the Boundaries Before the Tasks
 

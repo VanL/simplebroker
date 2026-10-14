@@ -482,11 +482,43 @@ before coding.
 
 ### 8. Independent Review Loop
 
-Every non-trivial plan should say how independent review will happen.
+Every non-trivial plan must specify how independent review will happen per
+`docs/agent-context/runbooks/review-loops-and-agent-bootstrap.md` §2–§5,
+`docs/implementation/03-agent-inventory.md`, and `skills/call-agent/SKILL.md`.
 
-At minimum, include:
+**Tier-1 cross-family requirement:** The reviewer must be a **different agent
+family** than the authoring agent, selected from the verified rows in
+`docs/implementation/03-agent-inventory.md` and invoked read-only via
+`skills/call-agent/SKILL.md`. Native harness subagents (`invoke_subagent` /
+`Agent` tool) inherit the authoring model family and are **Tier-2 fallback
+only** — they do not satisfy Tier 1 and may only be used after two bounded
+Tier-1 attempts fail and are recorded with command, timeout, and outcome.
 
-- which other agent or agent family should review the plan
+To make reviewer selection explicit and machine-checkable, `## Independent
+Review Loop` must include these structured lines (fenced examples do not count):
+
+```text
+- Author family: <author model family>
+- Reviewer family: <different family from docs/implementation/03-agent-inventory.md>
+- Review invocation: `skills/call-agent/SKILL.md` (<command and timeout bound>)
+```
+
+When falling back to Tier 2 after two failed Tier-1 attempts, also include:
+
+```text
+- Tier-1 attempts: <attempt 1 command, timeout, outcome>; <attempt 2 command, timeout, outcome>
+```
+
+**Gate (in-flight plans).** Whenever an in-flight plan (`draft`, `active`, or
+`status-review`) includes `## Independent Review Loop`, `bin/check-plan-context`
+verifies that `Author family:`, `Reviewer family:`, and `Review invocation:` are
+present and non-empty, and rejects a `Reviewer family` that matches `Author
+family` or uses a generic same-family token (`inherit`, `same`, `self`,
+`subagent`, `research`) unless a non-empty `Tier-1 attempts:` line is also
+declared.
+
+In addition to the structured lines above, include:
+
 - which files and docs the reviewer should read — including
   **`## Proposed Spec Delta`** when the plan changes intended behavior
 - the review prompt or review stance

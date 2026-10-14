@@ -50,6 +50,23 @@ INDEX_CLASS_RE = re.compile(r"\bclass\s+([0-5])(\+P)?\b", re.IGNORECASE)
 HEADER_CLASS_RE = re.compile(
     r"^Class:\s*(?:class\s+)?([0-5])(\+P)?\b", re.IGNORECASE | re.MULTILINE
 )
+AUTHOR_FAMILY_RE = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+)?Author family:[ \t]+(\S[^\r\n]*)$",
+    re.MULTILINE,
+)
+REVIEWER_FAMILY_RE = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+)?Reviewer family:[ \t]+(\S[^\r\n]*)$",
+    re.MULTILINE,
+)
+REVIEW_INVOCATION_RE = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+)?Review invocation:[ \t]+(\S[^\r\n]*)$",
+    re.MULTILINE,
+)
+TIER1_ATTEMPTS_RE = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+)?Tier-1 attempts:[ \t]+(\S[^\r\n]*)$",
+    re.MULTILINE,
+)
+SAME_FAMILY_TOKENS = frozenset({"inherit", "same", "self", "subagent", "research"})
 
 
 class InvocationError(Exception):
@@ -109,11 +126,11 @@ def primary_status(status_cell: str) -> str:
     return words[0].lower().strip("*_,;`")
 
 
-def extract_source_documents(text: str) -> str | None:
-    """Extract the first unfenced ``## Source Documents*`` section."""
+def extract_section(text: str, heading_prefix: str) -> str | None:
+    """Extract the first unfenced section whose H2 starts with ``heading_prefix``."""
     lines = strip_fenced_blocks(text).splitlines()
     start = next(
-        (i for i, line in enumerate(lines) if line.startswith("## Source Documents")),
+        (i for i, line in enumerate(lines) if line.startswith(heading_prefix)),
         None,
     )
     if start is None:
@@ -123,6 +140,48 @@ def extract_source_documents(text: str) -> str | None:
         len(lines),
     )
     return "\n".join(lines[start + 1 : end])
+
+
+def extract_source_documents(text: str) -> str | None:
+    """Extract the first unfenced ``## Source Documents*`` section."""
+    return extract_section(text, "## Source Documents")
+
+
+def _family_token(raw: str) -> str:
+    """Extract the normalized leading family token from a declaration value."""
+    words = raw.strip().split()
+    if not words:
+        return ""
+    return words[0].lower().strip("*_,;`()[]")
+
+
+def check_review_loop_section(plan_name: str, plan_text: str) -> list[str]:
+    """Validate cross-family review declarations when ## Independent Review Loop exists."""
+    section = extract_section(plan_text, "## Independent Review Loop")
+    if section is None:
+        return []
+    author_match = AUTHOR_FAMILY_RE.search(section)
+    reviewer_match = REVIEWER_FAMILY_RE.search(section)
+    invocation_match = REVIEW_INVOCATION_RE.search(section)
+    if not (author_match and reviewer_match and invocation_match):
+        return [
+            (
+                f"{plan_name}: Independent Review Loop requires non-empty "
+                "'Author family:', 'Reviewer family:', and 'Review invocation:' lines"
+            )
+        ]
+    author_family = _family_token(author_match.group(1))
+    reviewer_family = _family_token(reviewer_match.group(1))
+    if (
+        reviewer_family == author_family or reviewer_family in SAME_FAMILY_TOKENS
+    ) and not TIER1_ATTEMPTS_RE.search(section):
+        return [
+            (
+                f"{plan_name}: Reviewer family {reviewer_family!r} is not a distinct "
+                "cross-family reviewer and no 'Tier-1 attempts:' fallback is declared"
+            )
+        ]
+    return []
 
 
 def effective_class(index_status: str, plan_text: str) -> int | None:
@@ -153,6 +212,33 @@ def has_resolving_path(section: str, root: Path) -> bool:
             continue
         return True
     return False
+
+
+def check_plan_text(
+    plan_name: str, status_cell: str, plan_text: str, root: Path
+) -> list[str]:
+    """Validate one in-flight plan's Source Documents and Independent Review Loop."""
+    section = extract_source_documents(plan_text)
+    if section is None:
+        return [f"{plan_name}: missing ## Source Documents* section"]
+
+    problems: list[str] = []
+    if not has_resolving_path(section, root) and not SOURCE_WAIVER_RE.search(section):
+        problems.append(
+            f"{plan_name}: Source Documents has no resolving backticked repo "
+            "path and no exact 'Source spec: None — <reason>' waiver"
+        )
+
+    if effective_class(status_cell, plan_text) == 5 and not (
+        THEORY_RECORD_RE.search(section) or THEORY_WAIVER_RE.search(section)
+    ):
+        problems.append(
+            f"{plan_name}: effective class 5 requires a concrete bracketed "
+            "THEORY/REV/ALT record or exact 'Theory: N/A — <reason>' waiver"
+        )
+
+    problems.extend(check_review_loop_section(plan_name, plan_text))
+    return problems
 
 
 def check_tree(root: Path) -> tuple[list[str], int]:
@@ -187,26 +273,7 @@ def check_tree(root: Path) -> tuple[list[str], int]:
             )
             continue
 
-        section = extract_source_documents(plan_text)
-        if section is None:
-            problems.append(f"{plan_name}: missing ## Source Documents* section")
-            continue
-
-        if not has_resolving_path(section, root) and not SOURCE_WAIVER_RE.search(
-            section
-        ):
-            problems.append(
-                f"{plan_name}: Source Documents has no resolving backticked repo "
-                "path and no exact 'Source spec: None — <reason>' waiver"
-            )
-
-        if effective_class(status_cell, plan_text) == 5 and not (
-            THEORY_RECORD_RE.search(section) or THEORY_WAIVER_RE.search(section)
-        ):
-            problems.append(
-                f"{plan_name}: effective class 5 requires a concrete bracketed "
-                "THEORY/REV/ALT record or exact 'Theory: N/A — <reason>' waiver"
-            )
+        problems.extend(check_plan_text(plan_name, status_cell, plan_text, root))
     return problems, checked
 
 
@@ -276,6 +343,12 @@ Class: 5
 ## Source Documents
 
 {path_source}
+
+## Independent Review Loop
+
+- Author family: Gemini
+- Reviewer family: Claude
+- Review invocation: `skills/call-agent/SKILL.md` (`claude -p ...`, 540s bound)
 """,
         "code-source.md": """# Code source
 Class: 3
@@ -338,6 +411,13 @@ Class: 5
 
 {path_source}
 - `docs/program-theory.md` [THEORY-0]
+
+## Independent Review Loop
+
+- Author family: Gemini
+- Reviewer family: Gemini (Tier-2 fallback)
+- Review invocation: `invoke_subagent` (`research`)
+- Tier-1 attempts: `claude -p ...` (540s, timed out); `codex exec ...` (540s, auth error)
 """,
         "indented-fallback.md": f"""# Indented fallback
     ```markdown
@@ -579,6 +659,30 @@ def mutation_probe_failures(root: Path) -> list[str]:
             " [THEORY-INDENT]",
             "",
             "requires a concrete bracketed THEORY/REV/ALT",
+        ),
+        "missing review-loop fields": (
+            "active.md",
+            "- Reviewer family: Claude\n",
+            "",
+            "Independent Review Loop requires non-empty",
+        ),
+        "same-family reviewer without tier-1 attempts": (
+            "active.md",
+            "- Reviewer family: Claude",
+            "- Reviewer family: Gemini",
+            "is not a distinct cross-family reviewer",
+        ),
+        "generic subagent reviewer without tier-1 attempts": (
+            "active.md",
+            "- Reviewer family: Claude",
+            "- Reviewer family: subagent",
+            "is not a distinct cross-family reviewer",
+        ),
+        "missing tier-1 attempts on fallback": (
+            "fallback.md",
+            "- Tier-1 attempts: `claude -p ...` (540s, timed out); `codex exec ...` (540s, auth error)\n",
+            "",
+            "is not a distinct cross-family reviewer",
         ),
     }
     for name, (plan_name, old, new, expected) in mutations.items():

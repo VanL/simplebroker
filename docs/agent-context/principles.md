@@ -59,8 +59,8 @@ Common agent-confusing failure modes:
 - Run dependent state-changing commands sequentially when order matters.
 - For risky changes, proof includes rollout or rollback assumptions and
   intended post-deploy observation, not just local test results.
-- Prefer an independent review pass for non-trivial plans and completed work
-  (see [DOM-5] and [DOM-11] in
+- Run an independent cross-family review pass for non-trivial plans and
+  completed work (see [DOM-5] and [DOM-11] in
   `docs/specs/01-development-documentation-operating-model.md`).
 
 ## Document Traceability

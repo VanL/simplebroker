@@ -38,6 +38,15 @@ literate master source. Theory, contracts, implementation rationale, code, and
 tests remain separate because they own different questions; traceability and
 executable gates keep them from becoming independent stories.
 
+The friction is the point. A change or review finding that looks locally optimal
+in a single file—splitting a large cohesive module, adding a partial index,
+closing inherited handles after `os.fork()`, or simplifying a wait loop—regularly
+contradicts an earlier empirical failure, a cross-process ownership boundary, or
+the program's conceptual unity. This account, together with `[ALT-*]`
+negative-knowledge records, git-archived plans, and executable state-machine
+gates, exists to make locally plausible regressions hard to rationalize without
+first confronting the evidence that produced the current shape.
+
 | Surface | Question it answers |
 |---------|---------------------|
 | Program theory | What problem and model make the program coherent; why do the concepts and boundaries exist? |

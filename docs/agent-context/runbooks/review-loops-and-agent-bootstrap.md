@@ -93,6 +93,14 @@ agent-authored plans reproduce every hardening artifact while naming
 nonexistent surfaces with identical confidence. (Promoted by hub owner
 direction 2026-08-07 from this repository's 2026-08-06 lessons.)
 
+**Premise- and falsifiability-check second.** After checking that named
+files and symbols exist, verify that cited Git SHAs resolve
+(`git cat-file -e`), that the claimed bug or hazard is actually
+reachable through the live call and lock graph, and that each proposed
+test would fail before the change and cannot pass by silent skip or
+green-on-arrival setup. Same-family reviewers routinely pass existence
+checks while inheriting a false causal premise.
+
 ## 4. Recommended Plan Review Prompt
 
 Use this or a close variant:
