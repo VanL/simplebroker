@@ -39,9 +39,6 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-10-06-test-audit-lifecycle.md | completed — audit appendix; lifecycle, concurrency and example findings; subsequent repairs recorded in test-audit-remediation-plan |
 | 2026-10-06-test-audit-backends.md | completed — audit appendix; PostgreSQL and Redis substrate findings; subsequent repairs recorded in test-audit-remediation-plan |
 | 2026-10-06-test-audit-operations.md | completed — audit appendix; core operations, CLI and data-contract findings; subsequent repairs recorded in test-audit-remediation-plan |
-| 2026-10-06-postgres-capacity-amplification-plan.md | retired-pending — soft-retired 2026-10-06 after closure-record repair; source pin is local to retained `HEAD`; physical deletion waits for publication |
-| 2026-09-15-broker-session-plan.md | retired-pending — soft-retired 2026-10-06; source pin is local to retained `HEAD`; physical deletion waits for publication |
-| 2026-09-15-session-lifecycle-integrity-remediation-plan.md | retired-pending — soft-retired 2026-10-06; source pin is local to retained `HEAD`; physical deletion waits for publication |
 | 2026-08-27-message-id-order-and-newest-selection-plan.md | completed - class 5+P; released core 8.0.0, PostgreSQL 4.0.0, and Redis 4.0.0 from exact tested SHA `194dea5bd4841f3c7be36be44f5657e9a20817e1`; re-contracts uniform retrieval as public-message-ID order, adds bounded Python `order="newest"` and CLI `--newest`, migrates fresh and v5 SQL targets to one supported surrogate-free v6 broker-owned layout while preserving caller sidecars, serializes PostgreSQL migration with an advisory lock and live version recheck, and records the owner-directed transfer of separate Weft/Taut adoption work |
 
 ## Retired Plans
