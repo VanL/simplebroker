@@ -763,6 +763,8 @@ def _build_cli_parser(
         "-q",
         "--quiet",
         action="store_true",
+        # An absent local flag must preserve the root quiet value [SB-CLI-2].
+        default=argparse.SUPPRESS,
         help="suppress warnings when alias shadows an existing queue",
     )
 

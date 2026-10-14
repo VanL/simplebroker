@@ -72,6 +72,47 @@ def test_alias_add_help_calls_target_a_canonical_queue_name(workdir: Path) -> No
     assert "existing queue that alias points to" not in out
 
 
+@pytest.mark.parametrize(
+    ("global_flags", "local_flags", "quiet"),
+    [
+        ((), (), False),
+        (("--quiet",), (), True),
+        (("-q",), (), True),
+        ((), ("--quiet",), True),
+        ((), ("-q",), True),
+        (("--quiet",), ("-q",), True),
+    ],
+    ids=["loud", "global-long", "global-short", "local-long", "local-short", "both"],
+)
+def test_alias_add_quiet_preserves_global_and_local_flags(
+    workdir: Path,
+    global_flags: tuple[str, ...],
+    local_flags: tuple[str, ...],
+    quiet: bool,
+) -> None:
+    """Local parser defaults must not erase explicit root quiet commentary policy."""
+    rc, _, err = run_cli("write", "shadow", "literal", cwd=workdir)
+    assert rc == 0, err
+    rc, _, err = run_cli("write", "jobs", "payload", cwd=workdir)
+    assert rc == 0, err
+
+    rc, out, err = run_cli(
+        *global_flags, "alias", "add", "shadow", "jobs", *local_flags, cwd=workdir
+    )
+    assert rc == 0, err
+    assert out == ""
+    if quiet:
+        assert err == ""
+    else:
+        assert "Queue 'shadow' already exists" in err
+    assert "Traceback" not in err
+
+    rc, out, err = run_cli("peek", "@shadow", cwd=workdir)
+    assert rc == 0, err
+    assert out == "payload"
+    assert err == ""
+
+
 @pytest.mark.sqlite_only
 def test_cmd_alias_add_remove_direct(workdir: Path) -> None:
     db_path = workdir / "test.db"

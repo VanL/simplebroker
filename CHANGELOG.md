@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve global `-q` / `--quiet` for `alias add` when no command-local quiet
+  flag is given; both global and local forms suppress alias-shadow commentary.
 - Roll back SQL transaction-body interruptions without leaving transaction
   ownership or PostgreSQL checkouts active, and preserve the original error
   when rollback also fails.
