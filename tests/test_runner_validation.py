@@ -154,10 +154,12 @@ class TestSQLiteRunnerValidation:
             setup_connection_phase,
         )
 
-        with pytest.raises(StopException, match="Retry interrupted"):
-            BrokerCore(runner, stop_event=stop_event)
+        # This test owns the runner even when borrowed-core construction stops.
+        with contextlib.closing(runner):
+            with pytest.raises(StopException, match="Retry interrupted"):
+                BrokerCore(runner, stop_event=stop_event)
 
-        assert not setup_called
+            assert not setup_called
 
     def test_broker_core_propagates_stop_to_exclusive_schema_setup(self) -> None:
         stop_event = threading.Event()

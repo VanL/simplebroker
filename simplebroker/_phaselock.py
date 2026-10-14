@@ -318,18 +318,7 @@ class _AdvisoryLock:
         should_stop_waiting: Callable[[], bool] | None = None,
         diagnostics: Callable[[], str] | None = None,
     ) -> bool:
-        if self._locked:
-            raise RuntimeError(
-                "AdvisoryFileLock does not support re-entrant acquisition. "
-                "Create a new lock instance or release before re-acquiring."
-            )
-
-        if fcntl is None and msvcrt is None:
-            raise PhaseLockUnavailable(
-                "No supported advisory file lock primitive is available"
-            )
-
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._prepare_acquisition()
         start = time.monotonic()
         try:
             process_locked = self._acquire_process_lock(
@@ -379,6 +368,19 @@ class _AdvisoryLock:
         finally:
             if not self._locked:
                 self.release()
+
+    def _prepare_acquisition(self) -> None:
+        """Validate and prepare the path before owning locks or starting a wait."""
+        if self._locked:
+            raise RuntimeError(
+                "AdvisoryFileLock does not support re-entrant acquisition. "
+                "Create a new lock instance or release before re-acquiring."
+            )
+        if fcntl is None and msvcrt is None:
+            raise PhaseLockUnavailable(
+                "No supported advisory file lock primitive is available"
+            )
+        self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def _wait_to_retry(
         self,

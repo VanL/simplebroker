@@ -15,9 +15,41 @@ from simplebroker import Queue, resolve_config
 from simplebroker._constants import Config
 from simplebroker._exceptions import OperationalError, StopException
 from simplebroker._runner import SQLiteRunner
-from simplebroker.db import BrokerCore, DBConnection
+from simplebroker.db import BrokerCore, BrokerDB, DBConnection
 
 pytestmark = [pytest.mark.sqlite_only]
+
+
+def test_collected_borrowed_core_preserves_callers_sqlite_connection(
+    tmp_path: Path,
+) -> None:
+    runner = SQLiteRunner(str(tmp_path / "borrowed.db"))
+    try:
+        core = BrokerCore(runner)
+        connection = runner._conn
+        reference = weakref.ref(core)
+        del core
+        gc.collect()
+        assert reference() is None
+        assert connection.execute("SELECT 42").fetchone() == (42,)
+    finally:
+        runner.close()
+
+
+def test_collected_sqlite_owner_closes_retained_driver_connection(
+    tmp_path: Path,
+) -> None:
+    core = BrokerDB(str(tmp_path / "owned.db"))
+    connection = core._conn
+    reference = weakref.ref(core)
+    try:
+        del core
+        gc.collect()
+        assert reference() is None
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 42")
+    finally:
+        connection.close()
 
 
 class ShutdownResource:

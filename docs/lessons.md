@@ -477,3 +477,12 @@ Dated moment-tier entries (foldable after age floor and distillation).
   readiness; verify prompt rejection or the documented child recovery policy
   before those locks are touched. Evidence: deep-review remediation's SQL
   alias/meta probes and process-lock reset.
+
+- 2026-10-14: A borrowed resource reference is not cleanup authority. A core
+  destructor that releases ambient runner state can run through cyclic GC
+  during another core's active operation, even after explicit cleanup and even
+  after failed construction. Put automatic cleanup on the owning specialization,
+  not the borrowed base. Prove the boundary with real collection and retained
+  driver handles; a later reconnect can hide premature disposal. Evidence:
+  core-finalizer ownership plan, native PostgreSQL ACTIVE-checkout regression,
+  SQLite owned/borrowed controls and Redis/Valkey checkout identity control.

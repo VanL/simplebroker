@@ -1388,6 +1388,11 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 
 ## Related Plans
 
+- [Core finalizer cleanup ownership](../plans/2026-10-14-core-finalizer-ownership-plan.md):
+  repair borrowed SQL cleanup under the existing [SB-API-3], [SB-API-7] and
+  [SB-API-11] ownership
+  contracts; no normative API change.
+
 - retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`;
   [SB-API-3] compatibility wording and existing transaction/fork safety fixes;
   see the ledger in `docs/plans/README.md`.

@@ -1344,7 +1344,9 @@ class BrokerCore:
         """Initialize with a SQL runner.
 
         Args:
-            runner: SQL runner instance for database operations
+            runner: Caller-owned SQL runner instance for database operations.
+                The caller must arrange cleanup; collecting this borrowed core
+                does not close the runner or release its current connection.
         """
         config = resolve_config(config=config)
         self._config = config
@@ -4193,12 +4195,6 @@ class BrokerCore:
             "Create a new instance in each process."
         )
 
-    def __del__(self) -> None:
-        """Ensure database connection is closed on object destruction."""
-        # Ignore any errors during cleanup
-        with contextlib.suppress(Exception):
-            self.close()
-
 
 class BrokerDB(BrokerCore):
     """SQLite-owning specialization of the shared SQL broker core.
@@ -4265,6 +4261,13 @@ class BrokerDB(BrokerCore):
         """Return the runner's current thread-local connection."""
 
         return cast(SQLiteRunner, self._runner)._conn
+
+    def __del__(self) -> None:
+        """Best-effort cleanup of this owner's SQLite runner."""
+        # Borrowed BrokerCore instances have no finalizer: a later collector
+        # must not release another operation's current runner connection.
+        with contextlib.suppress(Exception):
+            self.close()
 
     def __enter__(self) -> "BrokerDB":  # noqa: PYI034 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Enter context manager."""

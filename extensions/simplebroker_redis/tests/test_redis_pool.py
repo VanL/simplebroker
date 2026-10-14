@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import select
 import signal
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +22,38 @@ from simplebroker import BrokerSession, BrokerTarget, resolve_config
 from simplebroker._exceptions import DatabaseError, OperationalError
 
 pytestmark = [pytest.mark.redis_only]
+
+
+def test_collected_borrowed_core_preserves_active_redis_checkout(
+    redis_runner: RedisRunner,
+) -> None:
+    """Healthy-backend control: stale-core GC must not disconnect the pool."""
+    retired = RedisBrokerCore(redis_runner)
+    retired.close()
+    reference = weakref.ref(retired)
+    # Make retirement cyclic, without assuming a particular core reference
+    # graph. Collection must occur while the real checkout has a pending reply.
+    cycle: list[Any] = [retired]
+    cycle.append(cycle)
+    del retired
+    live = RedisBrokerCore(redis_runner)
+    pool = redis_runner.client.connection_pool
+    connection = pool.get_connection()
+    try:
+        connection.send_command("CLIENT", "ID")
+        identity = connection.read_response()
+        connection.send_command("PING")
+        del cycle
+        gc.collect()
+        assert reference() is None
+        assert connection.read_response() == "PONG"
+        connection.send_command("CLIENT", "ID")
+        assert connection.read_response() == identity
+        live.write("jobs", "survived")
+        assert live.peek_one("jobs", with_timestamps=False) == "survived"
+    finally:
+        pool.release(connection)
+        live.close()
 
 
 def _read_child_result(child: int, read_fd: int, timeout: float) -> tuple[bytes, int]:

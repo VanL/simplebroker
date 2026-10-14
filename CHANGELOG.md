@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevent garbage collection of a borrowed SQL core from closing another
+  operation's connection on a shared runner. This fixes intermittent PostgreSQL
+  connection failures, including after core construction fails during a
+  session-backed operation, and
+  protects caller-owned shared SQLite connections. Owned SQLite handles still
+  clean up their connections when collected.
+
 ## [8.7.1] - 2026-10-14
 
 SimpleBroker 8.7.1, `simplebroker-pg` 4.7.1, and `simplebroker-redis` 4.7.1

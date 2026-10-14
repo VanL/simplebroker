@@ -146,13 +146,30 @@ operation; a failure after publication pops and releases that exact operation.
 This prevents a failed nested acquisition from consuming its outer operation.
 
 Shared non-SQLite SQL cores carry a private successful-release latch inside
-`BrokerCore.close()`. Explicit repeated close and `__del__()` therefore cannot
+`BrokerCore.close()`. Explicit repeated close therefore cannot
 surrender a replacement core's runner lease. A session-managed core calls a
 backend's thread-checkout release hook only when construction acquired that
 lease; otherwise final factory shutdown remains the sole owner of runner close.
 SQLite keeps its
 existing tracked-snapshot retry behavior: successful connections leave the
 snapshot; failed closes remain tracked.
+
+Borrowed SQL `BrokerCore` instances have no destructor. Their runner reference
+does not confer cleanup ownership: cyclic collection can happen during a later
+core's operation, on the collecting thread, after its checkout is already
+ACTIVE but before its transaction flag is published. Calling `close()` then
+can return that live PostgreSQL checkout or close a caller's shared SQLite
+runner. A successful-session release latch alone cannot protect injected cores
+or constructors that fail before session ownership is assigned. Explicit
+caller/manager cleanup remains unchanged. Only owning `BrokerDB` retains
+best-effort finalization of its private SQLite runner.
+
+Redis/Valkey uses the independent `RedisBrokerCore`, without a core destructor;
+its thread-release hook is a no-op. Its owning Queue/session shutdown paths
+remain intentional and are not affected by this SQL-core correction. Native
+regressions retain real driver checkouts and force collection, rather than
+assuming a later successful operation proves the original connection survived.
+See [core finalizer ownership plan](../plans/2026-10-14-core-finalizer-ownership-plan.md).
 
 ### Suspended closeable Queue operations
 
