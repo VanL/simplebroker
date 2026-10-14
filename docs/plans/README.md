@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-10-14-create-parent-adoption-plan.md | active — adopt optional parent creation while preserving vendorable lock defaults; coordinated patch release follows |
 | 2026-10-14-core-finalizer-ownership-plan.md | completed — borrowed SQL GC ownership repaired; native backend proofs and single-file acquire refactor verified |
 | 2026-10-14-deep-review-remediation-plan.md | retired-pending — soft-retired 2026-10-14; source `49f0519` is local-only; physical deletion waits for publication |
 | 2026-10-13-ruff-default-drift-plan.md | retired-pending — soft-retired 2026-10-14; source pin is published; physical deletion waits for publication of `49f0519` and one-wave verification |

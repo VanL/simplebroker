@@ -1814,6 +1814,31 @@ def test_advisory_file_lock_rejects_same_instance_reentrant_context(
     assert result == [True]
 
 
+def test_advisory_file_lock_create_parent_control(tmp_path: Path) -> None:
+    non_existent_dir = tmp_path / "subdir" / "nested"
+    lock_path = non_existent_dir / "resource.lock"
+
+    lock_no_create = AdvisoryFileLock(
+        lock_path, timeout=0.1, retry_delay=0.01, create_parent=False
+    )
+    try:
+        with pytest.raises(PhaseLockTimeout) as exc_info:
+            lock_no_create.acquire()
+        assert isinstance(exc_info.value.cause, FileNotFoundError)
+        assert not non_existent_dir.exists()
+    finally:
+        lock_no_create.release()
+
+    lock_create = AdvisoryFileLock(lock_path, timeout=0.5, retry_delay=0.01)
+    with lock_create:
+        assert lock_create.locked
+        assert non_existent_dir.is_dir()
+        assert lock_path.exists()
+
+    with lock_no_create:
+        assert lock_no_create.locked
+
+
 def test_advisory_lock_unavailable_without_lock_primitives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

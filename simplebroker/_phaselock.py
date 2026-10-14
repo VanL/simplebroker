@@ -27,7 +27,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, cast
 
-__version__ = "1.0"
+__version__ = "1.1.0"
 
 try:  # Unix/Linux/macOS
     import fcntl
@@ -303,10 +303,18 @@ class PhaseRunResult:
 class _AdvisoryLock:
     """Cross-platform non-blocking advisory lock wrapper."""
 
-    def __init__(self, path: Path, *, timeout: float, retry_delay: float) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        timeout: float,
+        retry_delay: float,
+        create_parent: bool = True,
+    ) -> None:
         self.path = path
         self.timeout = timeout
         self.retry_delay = retry_delay
+        self.create_parent = create_parent
         self._file: BinaryIO | None = None
         self._locked = False
         self._process_lock: threading.RLock | None = None
@@ -380,7 +388,8 @@ class _AdvisoryLock:
             raise PhaseLockUnavailable(
                 "No supported advisory file lock primitive is available"
             )
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.create_parent:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def _wait_to_retry(
         self,
@@ -528,6 +537,11 @@ class AdvisoryFileLock(_AdvisoryLock):
 
     The lock is advisory. All cooperating processes must take the same lock
     path before touching the protected resource.
+
+    Missing parent directories are created by default. Set ``create_parent=False``
+    to leave directory creation to the caller. A missing parent then follows the
+    normal open retry policy: ``PhaseLockTimeout`` after ``timeout``, with its
+    ``cause`` set to the original ``FileNotFoundError`` (one attempt at zero).
     """
 
     @property

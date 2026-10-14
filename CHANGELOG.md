@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The single-file advisory-lock helper accepts `create_parent=False` to leave
+  parent-directory creation to its caller. Existing calls still create missing
+  parents by default; a missing parent with the option disabled retains the
+  normal bounded open-error retry and timeout behavior.
+
 ### Fixed
 
 - Prevent garbage collection of a borrowed SQL core from closing another
