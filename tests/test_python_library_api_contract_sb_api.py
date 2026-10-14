@@ -38,7 +38,7 @@ LLMS = ROOT / "llms.txt"
 def _section(code: str) -> str:
     text = SPEC.read_text(encoding="utf-8")
     match = re.search(
-        rf"^## .+ \[{re.escape(code)}\]\n(?P<body>.*?)(?=^## |\Z)",
+        rf"^## [^\n]+ \[{re.escape(code)}\]\n(?P<body>.*?)(?=^## |\Z)",
         text,
         re.MULTILINE | re.DOTALL,
     )

@@ -35,6 +35,11 @@ extension or newer.
 - Align Ruff suppression policy with its enforced scope and clarify that
   deprecated `Queue.conn` access remains readable through the 8.x release line.
 
+### Development
+
+- Keep Python API contract checks scoped to the named spec section when
+  later documentation references the same section code.
+
 ## [8.7.0] - 2026-10-13
 
 SimpleBroker 8.7.0, `simplebroker-pg` 4.7.0, and `simplebroker-redis` 4.7.0
