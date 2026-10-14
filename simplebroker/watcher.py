@@ -2048,7 +2048,7 @@ class QueueMoveWatcher(BaseWatcher):
 
     IMPORTANT: Resource Cleanup Requirements
     ---------------------------------------
-    This class inherits from QueueWatcher and has the same cleanup requirements:
+    This class inherits from BaseWatcher and has the same cleanup requirements:
     - Always call stop() when done
     - Use context managers when possible
     - Ensure threads are joined before program exit

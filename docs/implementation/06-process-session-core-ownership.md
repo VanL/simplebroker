@@ -404,6 +404,13 @@ new core or runner publication; adding a permanent `_closed` latch to the
 runner would assign that ownership to the wrong layer and break intentional
 close-then-reuse behavior.
 
+SQL core alias and metadata entry points check their stored PID before any
+operation or poison-state mutex. The mutation re-entry check itself probes the
+poison mutex, so a fork guard placed only immediately before `with self._lock`
+would still be too late. Inherited SQL cores reject rather than recover;
+newly constructed child handles retain the normal acquisition path. The native
+fork probes hold both mutexes and exercise each alias/metadata entry point.
+
 Fork recovery deliberately retains inherited SQLite connections, PostgreSQL
 pools, and Redis client/pool references in the child. Dropping a reference can
 run inherited cleanup and enter a process-owned lock held by a vanished parent
@@ -604,6 +611,9 @@ The core suite also includes an AST gate for the one-way import rule and
 subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
+
+- [Deep-review remediation](../plans/2026-10-14-deep-review-remediation-plan.md)
+  — SQL alias/meta fork rejection before operation and poison mutexes.
 
 - retired: 2026-10-06-postgres-capacity-amplification-plan — source `dad806b`;
   see the ledger in `docs/plans/README.md`

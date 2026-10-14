@@ -1,6 +1,6 @@
 # Test audit remediation
 
-Date: 2026-10-06. Status: completed (local remediation; uncommitted).
+Date: 2026-10-06. Status: completed (committed in `208c3a8`; Windows CI verified in Test `38458241452`).
 Class: 4 (cross-suite test and harness lifecycle repair, no intended product change).
 
 ## Goal
@@ -274,11 +274,12 @@ probe dumped `_handle_fork:607 -> get_connection:586`, then was killed/reaped;
 the parent holder was released/joined and manager closed. This is a confirmed
 example correctness issue, not a CI timing flake and not the core SB fork owner.
 No example/product implementation fix was made because this task authorizes
-test repairs. Keep a separate held-lock-fork owner repair as an explicit follow-up.
+test repairs. The owner repair is tracked in [deep-review remediation](2026-10-14-deep-review-remediation-plan.md).
 
-Windows execution is unavailable locally. Its native lock/path/signal variants
-and full CI must run after an authorized commit/push before cross-platform
-certification. Local green results do not prove absence of all application bugs.
+The repair documents and code landed in `208c3a8`. Windows CI Test
+`38458241452` subsequently verified the published descendant `6923276`,
+including native lock/path/signal variants. Local or CI green results do not
+prove absence of all application bugs.
 Uncertain duplicate and static-policy candidates remain rather than trading
 confidence for deletion count. The test-audit skill's authoring/owner/sensitivity
 rules caught the excess below; no skill modification is necessary.

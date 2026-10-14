@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Roll back SQL transaction-body interruptions without leaving transaction
+  ownership or PostgreSQL checkouts active, and preserve the original error
+  when rollback also fails.
+- Reject inherited SQL core alias and metadata calls before entering parent
+  locks, and reset process-local phase locks after fork.
+- Respect `--quiet` for Redis alias-shadow commentary, use the shared warning
+  category, and wake multi-queue activity waits through listener notification.
+- Recover standalone SQLite example managers without entering inherited locks
+  or closing parent connections; use the running event loop in async examples.
+
+### Documented
+
+- Align Ruff suppression policy with its enforced scope and clarify that
+  deprecated `Queue.conn` access remains readable through the 8.x release line.
+
 ## [8.7.0] - 2026-10-13
 
 SimpleBroker 8.7.0, `simplebroker-pg` 4.7.0, and `simplebroker-redis` 4.7.0

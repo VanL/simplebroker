@@ -1242,3 +1242,158 @@ class TestSQLiteRunnerForkSafety:
                 runner.close()
                 initial_connection.close()
                 runner_module._ABANDONED_FORK_CONNECTIONS.remove(initial_connection)
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "write",
+        "insert",
+        "claim",
+        "move",
+        "resync",
+        "delete",
+        "delete_ids",
+        "delete_queues",
+        "rename",
+        "broadcast",
+        "add_alias",
+        "remove_alias",
+        "vacuum",
+    ],
+)
+def test_sql_body_interrupt_settles_real_transaction(tmp_path, monkeypatch, operation):
+    """A body interrupt releases ownership and permits writes on both threads."""
+    from simplebroker._backends.sqlite.maintenance import _vacuum_without_lock
+
+    with db_module.BrokerDB(str(tmp_path / "interrupt.db")) as broker:
+        message_id = broker.write("jobs", "original")
+        broker.add_alias("shortcut", "jobs")
+        runner = cast(SQLiteRunner, broker._runner)
+        connection = runner.get_connection()
+        original_run = runner.run
+        interrupt = KeyboardInterrupt("body interrupt")
+        fired = False
+
+        def interrupted_run(*args, **kwargs):
+            nonlocal fired
+            if runner._transaction_owner is threading.current_thread() and not fired:
+                fired = True
+                raise interrupt
+            return original_run(*args, **kwargs)
+
+        operations = {
+            "write": lambda: broker.write("jobs", "new"),
+            "insert": lambda: broker.insert_messages(
+                [("jobs", "exact", message_id + 1)]
+            ),
+            "claim": lambda: broker.claim_one("jobs"),
+            "move": lambda: broker.move_one("jobs", "moved"),
+            "resync": broker._resync_timestamp_generator,
+            "delete": lambda: broker.delete("jobs"),
+            "delete_ids": lambda: broker.delete_message_ids("jobs", [message_id]),
+            "delete_queues": lambda: broker.delete_from_queues(["jobs"]),
+            "rename": lambda: broker.rename_queue("jobs", "renamed"),
+            "broadcast": lambda: broker.broadcast("new", queue_names=["jobs"]),
+            "add_alias": lambda: broker.add_alias("new_alias", "jobs"),
+            "remove_alias": lambda: broker.remove_alias("shortcut"),
+            "vacuum": lambda: _vacuum_without_lock(
+                runner, compact=False, config=resolve_config()
+            ),
+        }
+        monkeypatch.setattr(runner, "run", interrupted_run)
+        with pytest.raises(KeyboardInterrupt) as caught:
+            operations[operation]()
+        assert caught.value is interrupt
+        assert fired
+        assert runner._transaction_owner is None
+        assert connection.in_transaction is False
+        broker.write("jobs", "after")
+        assert broker.claim_one("jobs") is not None
+
+        def other_thread_progress():
+            timestamp = broker.write("jobs", "other thread")
+            assert broker.claim_one("jobs") is not None
+            return timestamp
+
+        with cf.ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(other_thread_progress)
+            assert result.result(timeout=scale_timeout_for_ci(3.0)) > message_id
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize("error_type", [SystemExit, GeneratorExit])
+def test_write_other_base_exceptions_release_ownership(
+    tmp_path, monkeypatch, error_type
+):
+    with db_module.BrokerDB(str(tmp_path / "other-interrupt.db")) as broker:
+        runner = cast(SQLiteRunner, broker._runner)
+        connection = runner.get_connection()
+        error = error_type("interrupt")
+        original_run = runner.run
+
+        def interrupted_run(*args, **kwargs):
+            if connection.in_transaction:
+                raise error
+            return original_run(*args, **kwargs)
+
+        monkeypatch.setattr(runner, "run", interrupted_run)
+        with pytest.raises(error_type) as caught:
+            broker.write("jobs", "new")
+        assert caught.value is error
+        assert runner._transaction_owner is None
+        assert not connection.in_transaction
+
+
+@pytest.mark.sqlite_only
+def test_resync_failed_begin_preserves_outer_transaction(tmp_path, monkeypatch):
+    with db_module.BrokerDB(str(tmp_path / "outer.db")) as broker:
+        runner = cast(SQLiteRunner, broker._runner)
+        connection = runner.get_connection()
+        runner.begin_immediate()
+        rollback_calls = []
+        original_rollback = runner.rollback
+
+        def counted_rollback():
+            rollback_calls.append(True)
+            original_rollback()
+
+        monkeypatch.setattr(runner, "rollback", counted_rollback)
+        with pytest.raises(RuntimeError) as caught:
+            broker._resync_timestamp_generator()
+        assert isinstance(caught.value.__cause__, OperationalError)
+        assert rollback_calls == []
+        assert connection.in_transaction
+        runner.commit()
+
+
+@pytest.mark.sqlite_only
+def test_body_interrupt_survives_driver_rollback_failure(tmp_path, monkeypatch):
+    with db_module.BrokerDB(str(tmp_path / "rollback-body.db")) as broker:
+        runner = cast(SQLiteRunner, broker._runner)
+        connection = runner.get_connection()
+        error = KeyboardInterrupt("primary")
+        original_run = runner.run
+        original_get = runner.get_connection
+        failed_connection = Mock()
+        failed_connection.rollback.side_effect = sqlite3.OperationalError(
+            "rollback I/O failure"
+        )
+
+        def interrupted_run(*args, **kwargs):
+            if connection.in_transaction:
+                monkeypatch.setattr(runner, "get_connection", lambda: failed_connection)
+                raise error
+            return original_run(*args, **kwargs)
+
+        monkeypatch.setattr(runner, "run", interrupted_run)
+        with pytest.raises(KeyboardInterrupt) as caught:
+            broker.write("jobs", "new")
+        assert caught.value is error
+        assert runner._transaction_owner is None
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+        monkeypatch.setattr(runner, "get_connection", original_get)
+        monkeypatch.setattr(runner, "run", original_run)
+        broker.write("jobs", "replacement")

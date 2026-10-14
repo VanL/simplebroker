@@ -68,6 +68,7 @@ def _listener() -> Any:
     listener._prefix = "simplebroker:tenant"
     listener._stop_event = threading.Event()
     listener._lock = threading.RLock()
+    listener._any_condition = threading.Condition(listener._lock)
     listener._ready = threading.Event()
     listener._conditions = {}
     listener._versions = {}

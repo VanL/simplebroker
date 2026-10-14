@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import contextlib
 import errno
 import os
+import signal
 import subprocess
 import sys
 import textwrap
 import threading
 import time
+import warnings
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -2151,3 +2154,72 @@ def test_xattrless_status_not_inherited_across_same_stem_targets(
 
     backup_service = PhaseLockService(tmp_path / "mydb.backup")
     assert not backup_service.has_phase("connection-v1")
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
+@pytest.mark.parametrize(
+    "held_guard", [False, True], ids=["path-lock", "registry-guard"]
+)
+def test_fork_child_replaces_inherited_process_locks(
+    tmp_path: Path, held_guard: bool
+) -> None:
+    """A vanished parent lock owner cannot block a fresh child advisory lock."""
+    lock_path = tmp_path / "child.phase.lock"
+    path_lock = phaselock_module._process_lock_for(lock_path)
+    inherited_lock = phaselock_module._PROCESS_LOCKS_GUARD if held_guard else path_lock
+    acquired = threading.Event()
+    release = threading.Event()
+    timeout = scale_timeout_for_ci(5.0)
+
+    def hold() -> None:
+        with inherited_lock:
+            acquired.set()
+            release.wait()
+
+    holder = threading.Thread(target=hold)
+    child: int | None = None
+    status: int | None = None
+    holder.start()
+    try:
+        assert acquired.wait(timeout), "parent lock holder never became ready"
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=(
+                    r"^This process \(pid=\d+\) is multi-threaded, "
+                    r"use of fork\(\) may lead to deadlocks in the child\.$"
+                ),
+                category=DeprecationWarning,
+            )
+            child = os.fork()
+        if child == 0:
+            status = 1
+            try:
+                with AdvisoryFileLock(lock_path, timeout=1.0, retry_delay=0.01):
+                    status = 0
+            finally:
+                os._exit(status)
+        deadline = time.monotonic() + timeout
+        status = None
+        while time.monotonic() < deadline:
+            waited, child_status = os.waitpid(child, os.WNOHANG)
+            if waited:
+                status = child_status
+                child = None
+                break
+            time.sleep(0.01)
+        assert status is not None, "child hung on an inherited process-lock guard"
+        assert os.WIFEXITED(status), f"child terminated abnormally: {status}"
+        assert os.WEXITSTATUS(status) == 0, (
+            "fresh child could not acquire advisory lock"
+        )
+    finally:
+        if child is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child, signal.SIGKILL)
+            os.waitpid(child, 0)
+        release.set()
+        holder.join(timeout=timeout)
+        assert not holder.is_alive(), "parent lock holder leaked"
+    with AdvisoryFileLock(lock_path, timeout=1.0, retry_delay=0.01):
+        assert lock_path.exists()

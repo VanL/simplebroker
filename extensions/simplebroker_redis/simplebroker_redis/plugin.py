@@ -152,6 +152,7 @@ class _SharedRedisActivityListener:
         self._prefix = key_prefix(namespace)
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
+        self._any_condition = threading.Condition(self._lock)
         self._ready = threading.Event()
         self._conditions: dict[str, threading.Condition] = {}
         self._versions: dict[str, int] = {}
@@ -196,11 +197,13 @@ class _SharedRedisActivityListener:
                         if queue_name in self._versions:
                             self._versions[queue_name] += 1
                             self._conditions[queue_name].notify_all()
+                            self._any_condition.notify_all()
         except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-004] exception
             if not self._stop_event.is_set():
-                self._error = exc
-                self._ready.set()
                 with self._lock:
+                    self._error = exc
+                    self._ready.set()
+                    self._any_condition.notify_all()
                     for condition in self._conditions.values():
                         condition.notify_all()
         finally:
@@ -257,9 +260,37 @@ class _SharedRedisActivityListener:
                 registration.condition.wait(min(0.05, remaining))
             return False
 
+    def wait_many(
+        self,
+        registrations: Sequence[_QueueWaiterRegistration],
+        timeout: float,
+        *,
+        stop_event: Any,
+    ) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._lock:
+            while not _is_stop_event_set(stop_event) and not self._stop_event.is_set():
+                if self._error is not None:
+                    raise OperationalError(str(self._error)) from self._error
+                for registration in registrations:
+                    current = self._versions.get(registration.queue_name, 0)
+                    if current != registration.version:
+                        if current > registration.version:
+                            registration.version += 1
+                        else:
+                            registration.version = current
+                        return True
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                # External stop events do not notify this listener's condition.
+                self._any_condition.wait(min(0.05, remaining))
+            return False
+
     def close(self) -> None:
         self._stop_event.set()
         with self._lock:
+            self._any_condition.notify_all()
             for condition in self._conditions.values():
                 condition.notify_all()
         thread = getattr(self, "_thread", None)
@@ -305,6 +336,20 @@ class RedisMultiQueueActivityWaiter:
         self._closed = False
 
     def wait(self, timeout: float) -> bool:
+        open_waiters = [w for w in self._waiters if not getattr(w, "_closed", False)]
+        if not self._closed and open_waiters:
+            first_listener = getattr(open_waiters[0], "_listener", None)
+            if isinstance(first_listener, _SharedRedisActivityListener) and all(
+                isinstance(w, RedisActivityWaiter)
+                and w._listener is first_listener
+                and w._stop_event is self._stop_event
+                for w in open_waiters
+            ):
+                return first_listener.wait_many(
+                    [w._registration for w in open_waiters],
+                    timeout,
+                    stop_event=self._stop_event,
+                )
         deadline = time.monotonic() + max(0.0, timeout)
         while not _is_stop_event_set(self._stop_event):
             for waiter in self._waiters:

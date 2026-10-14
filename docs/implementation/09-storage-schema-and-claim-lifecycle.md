@@ -106,6 +106,24 @@ changes without requiring a stored product-schema version bump. A crash after
 repair but before proof publication causes another idempotent pass; it cannot
 publish a false fast path.
 
+## Transaction interruption ownership
+
+SQL mutation and schema handlers enter their rollback boundary only after BEGIN
+succeeds. A failed same-thread nested BEGIN therefore cannot roll back an outer
+transaction. Existing contention retry wrappers still own BEGIN admission.
+SQLite v6 retains an outer pragma-restoration boundary around BEGIN and the
+inner transaction body, so failed admission restores connection settings too.
+
+A transaction-body `BaseException`, including interrupts and generator exits,
+attempts rollback before propagating. Secondary rollback failures are suppressed
+to preserve the original body error. SQLite's runner settles transaction
+ownership and invalidates a connection whose rollback failed; later work uses
+a fresh connection. PostgreSQL's unleased runner clears its transaction marker
+and returns its checkout, while schema handlers invalidate cached metadata.
+Timestamp resynchronization still translates ordinary errors to `RuntimeError`
+with the original cause. The separately owned sidecar, yielding-batch, and
+PostgreSQL vacuum state machines retain their own cleanup-error priorities.
+
 ## Concurrency and delivery realization
 
 **Consume claim boundary:** Read and move operations use atomic backend
@@ -136,7 +154,7 @@ still waits for any open batch transaction.
 
 Materialized SQL claim and move operations have one transaction shape:
 begin, execute, then commit every non-empty result before return; an empty
-result or ordinary exception rolls back. There is no deferred
+result or transaction-body `BaseException` rolls back. There is no deferred
 commit-after-return mode. Keeping that order in one path makes the public
 handoff boundary auditable and avoids a private flag that implied an unused
 second delivery policy.
@@ -149,8 +167,8 @@ claim or make that row pending again.
 
 **Physical-delete transaction boundary:** SQL queue-specific and all-queue
 delete explicitly begin before the backend plugin mutation, commit once on
-success, and roll back an ordinary failure before it propagates. This matches
-the exact-id and multi-queue SQL paths and makes [SB-OPS-3] atomicity hold for
+success, and roll back a transaction-body `BaseException` before it propagates.
+This matches the exact-id and multi-queue SQL paths and makes [SB-OPS-3] atomicity hold for
 injected non-autocommit runners as well as the default SQLite runner. Redis
 keeps its separately specified per-queue orchestration and partial-result
 boundary.
@@ -231,6 +249,13 @@ pending, claimed, and total rows; claimed does not prove consumer handoff.
 processes and platforms. The phase-lock module coordinates setup work with
 file locks and extended-attribute fallback so multiple processes do not race
 schema or optimization phases. It is internal, but deliberately self-contained.
+
+The process-local phase-lock registry, its guard, and Darwin discovery guard
+are replaced in the after-fork child hook before fresh advisory acquisition.
+An inherited Python lock may still name a vanished parent thread, whereas a
+fresh child advisory lock continues to coordinate processes through the normal
+OS file-lock path. Clearing this process-local cache does not discard durable
+phase markers or weaken cross-process exclusion.
 
 Ordinary setup, status publication, and vacuum keep their coordination-file
 names stable while an operation may hold them. Global `--cleanup` is the sole
@@ -392,6 +417,9 @@ evaluation; it does not adopt the index.
 Promoted to: none
 
 ## Related Plans
+
+- [Deep-review remediation](../plans/2026-10-14-deep-review-remediation-plan.md)
+  — transaction interruption settlement and child process-lock replacement.
 
 - retired: 2026-08-25-schema-and-representation-assumption-remediation-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns

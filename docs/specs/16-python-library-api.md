@@ -408,10 +408,10 @@ _Implementation mapping_:
   the supplied `Config` directly as that instance's snapshot, including for
   ephemeral operations and later lazy backend/core creation. Any documented
   per-call config replaces the retained snapshot for that call.
-- `Queue.conn` remains readable through 8.3.x for compatibility with code that
-  reached the connection manager directly, but it is deprecated and is not
-  part of the supported surface. A later plan may relocate or remove it. Use
-  `queue.session` to reach the minting scope when present,
+- `Queue.conn` remains readable through the 8.x release line for compatibility
+  with code that reached the connection manager directly, but it is deprecated
+  and is not part of the supported surface. A later plan may relocate or remove
+  it. Use `queue.session` to reach the minting scope when present,
   `session.connection()` for connection-level operations sharing that scope,
   or `open_broker()` for an independent connection.
 
@@ -1387,6 +1387,9 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 | [SB-API-15] | `extensions/simplebroker_pg/tests/test_connection_usage.py` (one population, marker grammar, fresh dictionaries, types, error forwarding, real shared owners, pool growth, listeners, transaction and role visibility); `extensions/simplebroker_pg/tests/test_connection_stats.py` (isolated cross-database totals and autovacuum workers); `tests/test_backend_probe.py` (materialization, retries, locking, fork and active-batch guards) |
 
 ## Related Plans
+
+- [Deep-review remediation](../plans/2026-10-14-deep-review-remediation-plan.md):
+  [SB-API-3] compatibility wording and existing transaction/fork safety fixes.
 
 - [Python 3.15 support](../plans/2026-10-13-python-315-support-plan.md): preserves the existing API and lifecycle contracts while extending interpreter validation; no normative API change.
 

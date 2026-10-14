@@ -2046,10 +2046,9 @@ class BrokerCore:
 
                 except IntegrityError as e:
                     # The only INSERT in _do_write_with_ts_retry targets the
-                    # messages table whose only unique constraints are the PK
-                    # (auto-assigned) and the ts column.  Any IntegrityError here
-                    # is therefore a timestamp conflict — regardless of backend
-                    # error message wording (SQLite vs Postgres).
+                    # messages table, whose unique constraints in schema v6 are on ts.
+                    # Any IntegrityError here is therefore a timestamp conflict,
+                    # regardless of backend error message wording (SQLite vs Postgres).
 
                     # Track conflict for metrics
                     self._ts_conflict_count += 1
@@ -2226,8 +2225,9 @@ class BrokerCore:
                         (queue, queue, keep_newest - 1),
                     )
                 self._runner.commit()
-            except Exception:
-                self._runner.rollback()
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    self._runner.rollback()
                 raise
             return timestamp
 
@@ -2269,8 +2269,9 @@ class BrokerCore:
                         (queue, message, message_id),
                     )
                 self._runner.commit()
-            except Exception:
-                self._runner.rollback()
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    self._runner.rollback()
                 raise
 
     def _build_retrieve_spec(
@@ -2397,8 +2398,9 @@ class BrokerCore:
 
                 return results_list
 
-            except Exception:
-                self._runner.rollback()
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    self._runner.rollback()
                 raise
 
     def _yield_transactional_batches(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-015] exception
@@ -3177,44 +3179,49 @@ class BrokerCore:
         with self._lock:
             try:
                 self._runner.begin_immediate()
+                try:
+                    # Get current values for logging
+                    old_last_ts = self._backend_plugin.read_last_ts(self._runner)
 
-                # Get current values for logging
-                old_last_ts = self._backend_plugin.read_last_ts(self._runner)
-
-                rows = list(self._runner.run(self._sql.GET_MAX_MESSAGE_TS, fetch=True))
-                max_msg_ts = rows[0][0] if rows and rows[0][0] is not None else 0
-
-                # Only resync if actually inconsistent
-                if max_msg_ts > old_last_ts:
-                    self._backend_plugin.advance_last_ts(
-                        self._runner,
-                        new_ts=int(max_msg_ts),
+                    rows = list(
+                        self._runner.run(self._sql.GET_MAX_MESSAGE_TS, fetch=True)
                     )
-                    surviving_last_ts = self._timestamp_gen.refresh_last_ts()
-                    self._runner.commit()
+                    max_msg_ts = rows[0][0] if rows and rows[0][0] is not None else 0
 
-                    # Decode timestamps for logging
-                    old_physical, old_logical = decode_hybrid_timestamp(old_last_ts)
-                    new_physical, new_logical = decode_hybrid_timestamp(
-                        surviving_last_ts
-                    )
+                    # Only resync if actually inconsistent
+                    if max_msg_ts > old_last_ts:
+                        self._backend_plugin.advance_last_ts(
+                            self._runner,
+                            new_ts=int(max_msg_ts),
+                        )
+                        surviving_last_ts = self._timestamp_gen.refresh_last_ts()
+                        self._runner.commit()
 
-                    warnings.warn(
-                        f"Timestamp generator resynchronized. "
-                        f"Old: {old_last_ts} ({old_physical}ns + {old_logical}), "
-                        f"New: {surviving_last_ts} "
-                        f"({new_physical}ns + {new_logical}). "
-                        f"Gap: {surviving_last_ts - old_last_ts} timestamps. "
-                        f"This indicates past state inconsistency.",
-                        RuntimeWarning,
-                        stacklevel=3,
-                    )
-                else:
-                    # State was actually consistent, just commit
-                    self._runner.commit()
+                        # Decode timestamps for logging
+                        old_physical, old_logical = decode_hybrid_timestamp(old_last_ts)
+                        new_physical, new_logical = decode_hybrid_timestamp(
+                            surviving_last_ts
+                        )
 
+                        warnings.warn(
+                            f"Timestamp generator resynchronized. "
+                            f"Old: {old_last_ts} ({old_physical}ns + {old_logical}), "
+                            f"New: {surviving_last_ts} "
+                            f"({new_physical}ns + {new_logical}). "
+                            f"Gap: {surviving_last_ts - old_last_ts} timestamps. "
+                            f"This indicates past state inconsistency.",
+                            RuntimeWarning,
+                            stacklevel=3,
+                        )
+                    else:
+                        # State was actually consistent, just commit
+                        self._runner.commit()
+
+                except BaseException:
+                    with contextlib.suppress(BaseException):
+                        self._runner.rollback()
+                    raise
             except Exception as e:
-                self._runner.rollback()
                 raise RuntimeError(
                     f"Failed to resynchronize timestamp generator: {e}"
                 ) from e
@@ -3485,8 +3492,9 @@ class BrokerCore:
                     )
                     self._runner.commit()
                     return deleted_count
-                except Exception:
-                    self._runner.rollback()
+                except BaseException:
+                    with contextlib.suppress(BaseException):
+                        self._runner.rollback()
                     raise
 
         # Execute with retry logic
@@ -3522,8 +3530,9 @@ class BrokerCore:
                     )
                     self._runner.commit()
                     return deleted_count
-                except Exception:
-                    self._runner.rollback()
+                except BaseException:
+                    with contextlib.suppress(BaseException):
+                        self._runner.rollback()
                     raise
 
         return self._run_with_retry(_do_delete_message_ids)
@@ -3600,8 +3609,9 @@ class BrokerCore:
                     )
                     self._runner.commit()
                     return deleted_count
-                except Exception:
-                    self._runner.rollback()
+                except BaseException:
+                    with contextlib.suppress(BaseException):
+                        self._runner.rollback()
                     raise
 
         return self._run_with_retry(_do_delete_from_queues)
@@ -3676,8 +3686,9 @@ class BrokerCore:
                         messages_renamed=messages_renamed,
                         aliases_retargeted=aliases_retargeted,
                     )
-                except Exception:
-                    self._runner.rollback()
+                except BaseException:
+                    with contextlib.suppress(BaseException):
+                        self._runner.rollback()
                     raise
 
         return self._run_with_retry(_do_rename_queue)
@@ -3808,9 +3819,10 @@ class BrokerCore:
 
                     # Commit the transaction
                     self._runner.commit()
-                except Exception:
-                    # Rollback on any error
-                    self._runner.rollback()
+                except BaseException:
+                    # Preserve the body error if transaction cleanup also fails.
+                    with contextlib.suppress(BaseException):
+                        self._runner.rollback()
                     raise
 
         # Execute with retry logic
@@ -3989,11 +4001,13 @@ class BrokerCore:
             self._load_aliases_locked()
 
     def get_alias_version(self) -> int:
+        self._check_fork_safety()
         with self._lock:
             self._refresh_alias_cache_if_needed_locked()
             return self._alias_cache_version
 
     def resolve_alias(self, alias: str) -> str | None:
+        self._check_fork_safety()
         with self._lock:
             self._refresh_alias_cache_if_needed_locked()
             return self._alias_cache.get(alias)
@@ -4003,16 +4017,19 @@ class BrokerCore:
         return resolve_queue_operand(queue, self.resolve_alias)[0]
 
     def has_alias(self, alias: str) -> bool:
+        self._check_fork_safety()
         with self._lock:
             self._refresh_alias_cache_if_needed_locked()
             return alias in self._alias_cache
 
     def list_aliases(self) -> list[tuple[str, str]]:
+        self._check_fork_safety()
         with self._lock:
             self._load_aliases_locked()
             return sorted(self._alias_cache.items())
 
     def aliases_for_target(self, target: str) -> list[str]:
+        self._check_fork_safety()
         with self._lock:
             rows = list(
                 self._runner.run(
@@ -4022,6 +4039,7 @@ class BrokerCore:
             return sorted(alias for (alias,) in rows)
 
     def get_meta(self) -> dict[str, int | str]:
+        self._check_fork_safety()
         with self._lock:
             return dict(self._backend_plugin.select_meta_items(self._runner))
 
@@ -4052,6 +4070,7 @@ class BrokerCore:
             raise ValueError("Cannot turn an existing alias target into an alias")
 
     def add_alias(self, alias: str, target: str) -> None:
+        self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("add_alias")
         self._validate_alias_target(alias, target)
         should_warn = self.queue_exists_and_has_messages(alias)
@@ -4081,11 +4100,13 @@ class BrokerCore:
                 self._increment_alias_version_locked()
                 self._load_aliases_locked()
                 self._runner.commit()
-            except Exception:
-                self._runner.rollback()
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    self._runner.rollback()
                 raise
 
     def remove_alias(self, alias: str) -> None:
+        self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("remove_alias")
         with self._lock:
             if self._alias_cache_version < 0:
@@ -4102,8 +4123,9 @@ class BrokerCore:
                 self._increment_alias_version_locked()
                 self._load_aliases_locked()
                 self._runner.commit()
-            except Exception:
-                self._runner.rollback()
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    self._runner.rollback()
                 raise
 
     def close(self) -> None:

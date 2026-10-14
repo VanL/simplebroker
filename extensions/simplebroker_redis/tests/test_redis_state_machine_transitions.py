@@ -324,6 +324,232 @@ def _redis_waiter_close_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
         assert releases == [listener]
 
 
+@pytest.mark.parametrize("event", ["activity", "error", "close"])
+def test_multi_waiter_wakes_by_shared_condition_notification(
+    monkeypatch: pytest.MonkeyPatch, event: str
+) -> None:
+    """A transport event must notify the blocked composite, not await a scan."""
+    with _started_listener(monkeypatch) as (listener, pubsub, _client):
+        stop = threading.Event()
+        registrations = [listener.register(name) for name in ("alpha", "beta")]
+        waiter = redis_plugin_module.RedisMultiQueueActivityWaiter(
+            [
+                redis_plugin_module.RedisActivityWaiter(listener, reg, stop)
+                for reg in registrations
+            ],
+            stop,
+        )
+        # On the pre-fix listener only per-queue conditions exist. Neither is
+        # entered by its polling composite, which fails the readiness witness.
+        condition = getattr(listener, "_any_condition", registrations[0].condition)
+        original_wait = condition.wait
+        entered = threading.Event()
+        notifications: list[bool] = []
+        results: list[bool | Exception] = []
+
+        def observed_wait(timeout: float | None = None) -> bool:
+            entered.set()
+            # Keep the real Condition and lock release. A long liveness valve
+            # prevents the normal stop-check timeout from masking lost notify.
+            notified = original_wait(2.0)
+            notifications.append(notified)
+            return notified
+
+        def run_wait() -> None:
+            try:
+                results.append(waiter.wait(3.0))
+            except OperationalError as exc:
+                results.append(exc)
+
+        monkeypatch.setattr(condition, "wait", observed_wait)
+        thread = threading.Thread(target=run_wait)
+        thread.start()
+        try:
+            assert entered.wait(1.0), "composite never blocked on a real condition"
+            if event == "activity":
+                pubsub.send(listener._channel("beta"))
+            elif event == "error":
+                pubsub.fail(RuntimeError("transport failed while waiting"))
+            else:
+                listener.close()
+            thread.join(3.0)
+            assert not thread.is_alive()
+            assert notifications == [True], "wait returned by timeout instead of notify"
+            if event == "activity":
+                assert results == [True]
+                assert [reg.version for reg in registrations] == [0, 1]
+            elif event == "close":
+                assert results == [False]
+            else:
+                assert len(results) == 1
+                assert isinstance(results[0], OperationalError)
+                assert "transport failed while waiting" in str(results[0])
+        finally:
+            stop.set()
+            listener.close()
+            thread.join(3.0)
+
+
+def test_multi_waiter_rescans_unrelated_notification_before_watched_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _started_listener(monkeypatch) as (listener, pubsub, _client):
+        stop = threading.Event()
+        watched = listener.register("watched")
+        unrelated = listener.register("unrelated")
+        waiter = redis_plugin_module.RedisMultiQueueActivityWaiter(
+            [redis_plugin_module.RedisActivityWaiter(listener, watched, stop)], stop
+        )
+        entered = [threading.Event(), threading.Event()]
+        notifications: list[bool] = []
+        results: list[bool] = []
+        original_wait = listener._any_condition.wait
+        entries = 0
+
+        def observed_wait(timeout: float | None = None) -> bool:
+            nonlocal entries
+            if entries < len(entered):
+                entered[entries].set()
+            entries += 1
+            # The actual lock is released by Condition.wait. The controller
+            # cannot publish before this wait is ready to receive notification.
+            notified = original_wait(2.0)
+            notifications.append(notified)
+            return notified
+
+        monkeypatch.setattr(listener._any_condition, "wait", observed_wait)
+        thread = threading.Thread(target=lambda: results.append(waiter.wait(5.0)))
+        thread.start()
+        try:
+            assert entered[0].wait(1.0)
+            pubsub.send(listener._channel("unrelated"))
+            assert entered[1].wait(1.0), (
+                "unrelated notification returned instead of rescanning"
+            )
+            # Re-entry under the listener lock proves the first notification
+            # was processed without returning activity for the watched queue.
+            with listener._lock:
+                assert listener._versions["unrelated"] == 1
+                assert watched.version == unrelated.version == 0
+            pubsub.send(listener._channel("watched"))
+            thread.join(3.0)
+            assert not thread.is_alive()
+            assert results == [True]
+            assert notifications == [True, True]
+            assert (watched.version, unrelated.version) == (1, 0)
+        finally:
+            stop.set()
+            listener.close()
+            thread.join(3.0)
+
+
+def test_multi_waiter_preserves_ordered_version_consumption_and_stop_priority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _started_listener(monkeypatch) as (listener, pubsub, _client):
+        stop = threading.Event()
+        alpha, beta = [listener.register(name) for name in ("alpha", "beta")]
+        waiter = redis_plugin_module.RedisMultiQueueActivityWaiter(
+            [
+                redis_plugin_module.RedisActivityWaiter(listener, reg, stop)
+                for reg in (alpha, beta)
+            ],
+            stop,
+        )
+        # Wait for the real transport to process all earlier queue messages.
+        barrier = listener.register("barrier")
+        for name in ("beta", "alpha", "alpha", "barrier"):
+            pubsub.send(listener._channel(name))
+        assert listener.wait(barrier, 1.0, stop_event=stop)
+        assert waiter.wait(0)
+        assert (alpha.version, beta.version) == (1, 0)
+        assert waiter.wait(0)
+        assert (alpha.version, beta.version) == (2, 0)
+        assert waiter.wait(0)
+        assert (alpha.version, beta.version) == (2, 1)
+        assert not waiter.wait(0)
+        # Dropping and recreating a registration resets its version to zero.
+        listener.unregister("alpha")
+        listener.register("alpha")
+        assert waiter.wait(0)
+        assert alpha.version == 0
+        pubsub.fail(RuntimeError("read failure"))
+        drive_until(lambda: listener._error is not None, timeout=1.0, interval=0.005)
+        with pytest.raises(OperationalError, match="read failure"):
+            waiter.wait(0)
+        stop.set()
+        assert not waiter.wait(0)
+
+
+@pytest.mark.parametrize("closed_child", [False, True])
+def test_multi_waiter_does_not_consume_activity_from_stopped_or_closed_child(
+    monkeypatch: pytest.MonkeyPatch, closed_child: bool
+) -> None:
+    with _started_listener(monkeypatch) as (listener, pubsub, _client):
+        stop = threading.Event()
+        child_stop = threading.Event()
+        child_stop.set()
+        alpha = listener.register("alpha")
+        beta = listener.register("beta")
+        first = redis_plugin_module.RedisActivityWaiter(listener, alpha, stop)
+        second = redis_plugin_module.RedisActivityWaiter(listener, beta, child_stop)
+        if closed_child:
+            monkeypatch.setattr(
+                redis_plugin_module._activity_registry, "release", lambda _: None
+            )
+            second.close()
+        waiter = redis_plugin_module.RedisMultiQueueActivityWaiter(
+            [first, second], stop
+        )
+        # The stopped live child has a distinct stop event, so compatibility
+        # fallback must honor its stop state. The closed-child case instead
+        # exercises fast-path filtering of a retired registration.
+        if closed_child:
+            beta.version = 1
+        else:
+            pubsub.send(listener._channel("beta"))
+            assert listener.wait(beta, 1.0, stop_event=stop)
+            beta.version = 0
+        assert not waiter.wait(0.05)
+        pubsub.send(listener._channel("alpha"))
+        assert waiter.wait(1.0)
+        assert alpha.version == 1
+        assert beta.version == (1 if closed_child else 0)
+
+
+def test_multi_waiter_retains_activity_from_different_real_listeners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with (
+        _started_listener(monkeypatch) as (
+            first_listener,
+            _first_pubsub,
+            _first_client,
+        ),
+        _started_listener(monkeypatch) as (
+            second_listener,
+            second_pubsub,
+            _second_client,
+        ),
+    ):
+        stop = threading.Event()
+        first = first_listener.register("alpha")
+        second = second_listener.register("beta")
+        barrier = second_listener.register("barrier")
+        waiter = redis_plugin_module.RedisMultiQueueActivityWaiter(
+            [
+                redis_plugin_module.RedisActivityWaiter(first_listener, first, stop),
+                redis_plugin_module.RedisActivityWaiter(second_listener, second, stop),
+            ],
+            stop,
+        )
+        second_pubsub.send(second_listener._channel("beta"))
+        second_pubsub.send(second_listener._channel("barrier"))
+        assert second_listener.wait(barrier, 1.0, stop_event=stop)
+        assert waiter.wait(0.1)
+        assert (first.version, second.version) == (0, 1)
+
+
 REDIS_ACTIVITY_LISTENER_TRANSITIONS = (
     TransitionCase(
         transition_id="START-READY",

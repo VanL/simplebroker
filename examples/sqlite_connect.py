@@ -48,6 +48,10 @@ from pathlib import Path, PurePath
 from types import TracebackType
 from typing import Any, Self, TypeVar, cast
 
+# In a fork child, retaining these handles prevents SQLite finalizers from
+# touching connections and file descriptors still owned by the parent.
+_ABANDONED_FORK_CONNECTIONS: list[sqlite3.Connection] = []
+
 # Platform-specific imports for file locking
 try:
     import fcntl
@@ -580,10 +584,7 @@ class SQLiteConnectionManager:
         Returns:
             sqlite3.Connection: Thread-local connection with optimizations applied
         """
-        # Check for fork
-        current_pid = os.getpid()
-        if current_pid != self._pid:
-            self._handle_fork(current_pid)
+        self._check_fork()
 
         # Get or create thread-local connection
         if not hasattr(self._thread_local, "conn"):
@@ -596,20 +597,28 @@ class SQLiteConnectionManager:
 
         return cast("sqlite3.Connection", self._thread_local.conn)
 
+    def _check_fork(self) -> None:
+        """Recover process-owned state before accessing inherited locks."""
+        current_pid = os.getpid()
+        if current_pid != self._pid:
+            self._handle_fork(current_pid)
+
     def _handle_fork(self, current_pid: int) -> None:
-        """Handle process fork by cleaning up inherited connections."""
-        if hasattr(self._thread_local, "conn"):
-            with contextlib.suppress(Exception):
-                self._thread_local.conn.close()
+        """Abandon parent resources without entering locks or closing handles."""
+        inherited_connections = list(self._all_connections)
+        thread_connection = getattr(self._thread_local, "conn", None)
+        if thread_connection is not None and not any(
+            conn is thread_connection for conn in inherited_connections
+        ):
+            inherited_connections.append(thread_connection)
+        _ABANDONED_FORK_CONNECTIONS.extend(inherited_connections)
 
+        self._setup_lock = threading.Lock()
+        self._connections_lock = threading.Lock()
+        self._all_connections = set()
         self._thread_local = threading.local()
-
-        with self._setup_lock:
-            self._completed_phases.clear()
-
-        with self._connections_lock:
-            self._all_connections.clear()
-
+        self._completed_phases = set()
+        self._created_files = set()
         self._pid = current_pid
 
     def _create_thread_connection(self) -> None:
@@ -662,6 +671,7 @@ class SQLiteConnectionManager:
         Args:
             phase: Setup phase to execute
         """
+        self._check_fork()
         if phase in self._completed_phases:
             return
 
@@ -863,6 +873,7 @@ class SQLiteConnectionManager:
 
     def close(self) -> None:
         """Close all connections and clean up resources."""
+        self._check_fork()
         with self._connections_lock:
             for conn in self._all_connections:
                 with contextlib.suppress(Exception):
@@ -897,6 +908,13 @@ class SQLiteConnectionManager:
 
     def __del__(self) -> None:
         """Destructor cleanup."""
+        if getattr(self, "_pid", None) != os.getpid():
+            # Returning alone still lets attribute teardown finalize inherited
+            # connections. Retain them without entering any inherited lock.
+            _ABANDONED_FORK_CONNECTIONS.extend(
+                self.__dict__.get("_all_connections", ())
+            )
+            return
         with contextlib.suppress(Exception):
             self.close()
 

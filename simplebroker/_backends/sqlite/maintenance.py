@@ -215,8 +215,9 @@ def _vacuum_without_lock(
             had_claimed_messages = True
             runner.run(DELETE_CLAIMED_BATCH, (batch_size,))
             runner.commit()
-        except Exception:
-            runner.rollback()
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                runner.rollback()
             raise
         time.sleep(0.001)
 

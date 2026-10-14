@@ -8,12 +8,14 @@ import subprocess
 import sys
 import threading
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from psycopg import Connection
 from psycopg import conninfo as pg_conninfo
+from psycopg import sql as pg_sql
 from simplebroker_pg import PostgresRunner, get_backend_plugin
 from simplebroker_pg.validation import connect
 
@@ -665,3 +667,81 @@ def test_postgres_cli_missing_database_is_not_backend_unavailable(
     assert code != 0
     assert "not available" not in stderr
     assert "Could not connect to Postgres target" in stderr
+
+
+@pytest.mark.parametrize("operation", ["bootstrap", "migration"])
+def test_real_schema_interrupt_returns_checkout_without_partial_publication(
+    pg_runner: PostgresRunner,
+    pg_schema: str,
+    create_pg_v5_schema: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    raw_pg_conn: Connection[Any],
+) -> None:
+    """Real unleased rollback releases checkout and preserves durable schema."""
+    from simplebroker_pg import schema as schema_module
+
+    if operation == "migration":
+        create_pg_v5_schema(pg_schema)
+    else:
+        schema_module.create_schema_if_needed(pg_runner, pg_schema)
+    original_run = pg_runner.run
+    error = KeyboardInterrupt("real schema body")
+    fired = False
+
+    def interrupted_run(*args: Any, **kwargs: Any) -> Iterable[tuple[Any, ...]]:
+        nonlocal fired
+        if pg_runner._in_transaction() and not fired:
+            fired = True
+            raise error
+        return original_run(*args, **kwargs)
+
+    def execute() -> None:
+        if operation == "bootstrap":
+            schema_module.initialize_database(
+                pg_runner, schema=pg_schema, run_with_retry=lambda call: call()
+            )
+        else:
+            schema_module.migrate_schema(
+                pg_runner,
+                current_version=5,
+                write_schema_version=lambda version: (
+                    pg_runner.backend_plugin.write_schema_version(pg_runner, version)
+                ),
+            )
+
+    try:
+        monkeypatch.setattr(pg_runner, "run", interrupted_run)
+        with pytest.raises(KeyboardInterrupt) as caught:
+            execute()
+        assert caught.value is error
+        assert fired
+        assert not pg_runner._in_transaction()
+        assert getattr(pg_runner._thread_local, "conn", None) is None
+        if operation == "bootstrap":
+            assert not schema_module.meta_table_exists(pg_runner)
+        else:
+            assert list(
+                pg_runner.run("SELECT schema_version FROM meta", fetch=True)
+            ) == [(5,)]
+            assert list(
+                pg_runner.run(
+                    "SELECT column_name FROM information_schema.columns WHERE table_schema = ? AND table_name = 'messages' AND column_name = 'order_id'",
+                    (pg_schema,),
+                    fetch=True,
+                )
+            ) == [("order_id",)]
+        execute()
+        assert list(pg_runner.run("SELECT schema_version FROM meta", fetch=True)) == [
+            (6,)
+        ]
+    finally:
+        # An interrupted bootstrap has no owned meta row for normal cleanup.
+        # This test owns the raw schema even when an assertion fails.
+        pg_runner.shutdown()
+        with raw_pg_conn.cursor() as cursor:
+            cursor.execute(
+                pg_sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                    pg_sql.Identifier(pg_schema)
+                )
+            )

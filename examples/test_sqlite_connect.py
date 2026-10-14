@@ -18,11 +18,17 @@ Usage:
     python test_sqlite_connect.py  # Run directly
 """
 
+import gc
 import os
+import select
+import signal
 import sqlite3
 import tempfile
 import threading
+import time
+import traceback
 import warnings
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
@@ -36,6 +42,7 @@ from sqlite_connect import (
     DatabaseError,
     OperationalError,
     SetupPhase,
+    SQLiteConnectError,
     SQLiteConnectionManager,
     StopException,
     _parse_bool,
@@ -54,6 +61,10 @@ from sqlite_connect import (
 # ==============================================================================
 
 
+class _WeakrefSQLiteConnection(sqlite3.Connection):
+    """A real driver connection whose finalization is observable via weakref."""
+
+
 @pytest.fixture(autouse=True)
 def close_owned_managers(monkeypatch):
     """Register cleanup at construction, including failed setup/assertions."""
@@ -66,7 +77,7 @@ def close_owned_managers(monkeypatch):
 
     monkeypatch.setattr(SQLiteConnectionManager, "__init__", tracked_initialize)
     try:
-        yield
+        yield managers
     finally:
         for manager in reversed(managers):
             manager.close()
@@ -567,19 +578,184 @@ class TestSQLiteConnectionManager:
         conn1 = manager.get_connection()
         assert isinstance(conn1, sqlite3.Connection)
 
-        # Simulate fork by changing PID
-        original_pid = manager._pid
-        manager._pid = original_pid + 1000
+        try:
+            # Simulate fork by changing PID.
+            manager._pid += 1000
+            conn2 = manager.get_connection()
+            assert isinstance(conn2, sqlite3.Connection)
+            assert conn2 is not conn1
+            assert manager._pid == os.getpid()
+            assert not manager._completed_phases
+            assert conn2.execute("SELECT 1").fetchone() == (1,)
+        finally:
+            # This PID simulation runs in the parent's process, so this test
+            # owns the abandoned handle and must release its retention reference.
+            conn1.close()
+            sqlite_connect._ABANDONED_FORK_CONNECTIONS[:] = [
+                conn
+                for conn in sqlite_connect._ABANDONED_FORK_CONNECTIONS
+                if conn is not conn1
+            ]
+            manager.close()
 
-        # This should detect fork and create new connection
-        conn2 = manager.get_connection()
-        assert isinstance(conn2, sqlite3.Connection)
-        assert conn2 is not conn1
-        assert manager._pid == os.getpid()
-        assert not manager._completed_phases
-        assert conn2.execute("SELECT 1").fetchone() == (1,)
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a real fork")
+    @pytest.mark.parametrize("entry", ["setup", "get_connection", "close"])
+    def test_fork_recovers_held_locks_preserving_parent_resources(
+        self, tmp_path, entry, monkeypatch, close_owned_managers
+    ):
+        """Every child entry must recover before touching inherited locks/state."""
+        manager = SQLiteConnectionManager(str(tmp_path / "parent.db"))
+        manager.setup(SetupPhase.CONNECTION)
+        marker = manager._get_phase_status_path(SetupPhase.CONNECTION)
+        conn = manager.get_connection()
+        conn.execute("CREATE TABLE parent_state (value TEXT)")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("INSERT INTO parent_state VALUES ('pending')")
 
-        manager.close()
+        # This manager remains unmigrated when its finalizer runs in the child.
+        finalizer = SQLiteConnectionManager(str(tmp_path / "finalizer.db"))
+        finalizer.setup(SetupPhase.CONNECTION)
+        connect = sqlite3.connect
+        with monkeypatch.context() as patcher:
+            patcher.setattr(
+                sqlite_connect.sqlite3,
+                "connect",
+                lambda *args, **kwargs: connect(
+                    *args, factory=_WeakrefSQLiteConnection, **kwargs
+                ),
+            )
+            finalizer_conn = finalizer.get_connection()
+        finalizer_ref = weakref.ref(finalizer)
+        finalizer_conn_ref = weakref.ref(finalizer_conn)
+        finalizer_marker = finalizer._get_phase_status_path(SetupPhase.CONNECTION)
+        ready = threading.Event()
+        release = threading.Event()
+
+        def hold_parent_locks():
+            with manager._setup_lock, manager._connections_lock:
+                ready.set()
+                release.wait(15.0)
+
+        holder = threading.Thread(target=hold_parent_locks)
+        holder.start()
+        read_fd, write_fd = os.pipe()
+        child_pid = None
+        try:
+            assert ready.wait(5.0), "parent holder did not acquire both locks"
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=(
+                        r"^This process \(pid=\d+\) is multi-threaded, "
+                        r"use of fork\(\) may lead to deadlocks in the child\.$"
+                    ),
+                    category=DeprecationWarning,
+                )
+                child_pid = os.fork()
+            if child_pid == 0:
+                os.close(read_fd)
+                exit_code = 1
+                try:
+                    first_call = {
+                        # This phase is unfinished in the parent. Without the
+                        # guard, setup must enter the inherited held setup lock.
+                        "setup": lambda: manager.setup(SetupPhase.OPTIMIZATION),
+                        "get_connection": manager.get_connection,
+                        "close": manager.close,
+                    }[entry]
+                    first_call()
+                    # Remove every child reference, including the fixture's
+                    # copied ownership list. A manual __del__ call cannot prove
+                    # that collecting the manager retains its SQLite handles.
+                    close_owned_managers.remove(finalizer)
+                    del finalizer
+                    del finalizer_conn
+                    gc.collect()
+                    assert finalizer_ref() is None, "victim manager was not collected"
+                    surviving_connection = finalizer_conn_ref()
+                    assert surviving_connection is not None, (
+                        "collecting the inherited manager finalized its connection"
+                    )
+                    assert finalizer_marker.exists()
+                    assert not surviving_connection.in_transaction
+                    # Never execute SQL on an inherited connection. The property
+                    # rejects premature close; actual SQL uses a child connection.
+                    assert conn.in_transaction
+                    assert any(
+                        abandoned is conn
+                        for abandoned in sqlite_connect._ABANDONED_FORK_CONNECTIONS
+                    )
+                    manager.setup(SetupPhase.CONNECTION)
+                    child_conn = manager.get_connection()
+                    assert child_conn is not conn
+                    assert child_conn.execute("SELECT 1").fetchone() == (1,)
+                    manager.close()
+                    assert marker.exists()
+                    assert finalizer_marker.exists()
+                    os.write(write_fd, b"completed")
+                    exit_code = 0
+                except (
+                    AssertionError,
+                    sqlite3.Error,
+                    SQLiteConnectError,
+                    OSError,
+                    RuntimeError,
+                ):
+                    os.write(write_fd, traceback.format_exc().encode()[:4096])
+                finally:
+                    try:
+                        if manager._pid == os.getpid():
+                            # Close only resources adopted/created by this child,
+                            # including when an earlier assertion fails.
+                            manager.close()
+                    finally:
+                        os.close(write_fd)
+                        os._exit(exit_code)
+
+            os.close(write_fd)
+            write_fd = -1
+            deadline = time.monotonic() + 5.0
+            readable, _, _ = select.select(
+                [read_fd], [], [], max(0.0, deadline - time.monotonic())
+            )
+            assert readable, f"child recovery through {entry} hung on parent locks"
+            payload = os.read(read_fd, 4096)
+            status = None
+            while time.monotonic() < deadline:
+                waited, candidate = os.waitpid(child_pid, os.WNOHANG)
+                if waited:
+                    status = candidate
+                    child_pid = None
+                    break
+                time.sleep(0.01)
+            assert status is not None, "child reported but did not exit"
+            assert os.WIFEXITED(status), f"child terminated abnormally: {status}"
+            assert os.WEXITSTATUS(status) == 0, payload.decode()
+            assert payload == b"completed"
+            assert marker.exists() and finalizer_marker.exists()
+            assert conn.in_transaction
+            assert conn.execute("SELECT value FROM parent_state").fetchall() == [
+                ("pending",)
+            ]
+            conn.rollback()
+            conn.execute("INSERT INTO parent_state VALUES ('after child')")
+            assert conn.execute("SELECT value FROM parent_state").fetchall() == [
+                ("after child",)
+            ]
+        finally:
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                os.waitpid(child_pid, 0)
+            os.close(read_fd)
+            if write_fd != -1:
+                os.close(write_fd)
+            release.set()
+            holder.join(5.0)
+            conn.rollback()
+            assert not holder.is_alive(), "parent holder did not release its locks"
 
     def test_connection_optimization_settings(self, temp_db_path):
         """Test connection optimization settings are applied."""

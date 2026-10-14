@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -306,8 +307,9 @@ def initialize_database(
             )
             runner.commit()
             return state
-        except Exception:
-            runner.rollback()
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                runner.rollback()
             _invalidate_meta_state(runner)
             raise
 
@@ -416,8 +418,9 @@ def migrate_schema(
 
         _validate_or_repair_current_v6(runner)
         runner.commit()
-    except Exception:
-        runner.rollback()
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            runner.rollback()
         _invalidate_meta_state(runner)
         raise
 

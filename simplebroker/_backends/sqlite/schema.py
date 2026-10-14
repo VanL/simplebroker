@@ -134,7 +134,8 @@ def initialize_database(
         )
         run_with_retry(runner.commit)
     except BaseException:
-        runner.rollback()
+        with contextlib.suppress(BaseException):
+            runner.rollback()
         raise
 
 
@@ -326,15 +327,16 @@ def ensure_schema_v4(
     if current_version != 3:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
+    runner.begin_immediate()
     try:
-        runner.begin_immediate()
         runner.run(CREATE_ALIASES_TABLE)
         runner.run(CREATE_ALIAS_TARGET_INDEX)
         runner.run(INSERT_ALIAS_VERSION_META)
         write_schema_version(4)
         runner.commit()
-    except Exception:
-        runner.rollback()
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            runner.rollback()
         raise
 
 
@@ -348,14 +350,15 @@ def ensure_schema_v5(
     if current_version != 4:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
+    runner.begin_immediate()
     try:
-        runner.begin_immediate()
         runner.run(CREATE_QUEUE_TS_INDEX)
         runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
         write_schema_version(5)
         runner.commit()
-    except Exception:
-        runner.rollback()
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            runner.rollback()
         raise
 
 
@@ -500,46 +503,51 @@ def ensure_schema_v6(
     )
     try:
         runner.begin_immediate()
-        runner.run(
-            create_messages_table_sql("simplebroker_messages_v6", if_not_exists=False)
-        )
-        runner.run(
-            "INSERT INTO simplebroker_messages_v6 (queue, body, ts, claimed) "
-            "SELECT queue, body, ts, claimed FROM messages"
-        )
-        source_count = int(
-            next(iter(runner.run("SELECT COUNT(*) FROM messages", fetch=True)))[0]
-        )
-        copied_count = int(
-            next(
-                iter(
-                    runner.run(
-                        "SELECT COUNT(*) FROM simplebroker_messages_v6",
-                        fetch=True,
-                    )
+        try:
+            runner.run(
+                create_messages_table_sql(
+                    "simplebroker_messages_v6", if_not_exists=False
                 )
-            )[0]
-        )
-        if source_count != copied_count:
-            raise RuntimeError(
-                "SQLite schema v6 migration row-count verification failed: "
-                f"source={source_count}, copied={copied_count}"
             )
+            runner.run(
+                "INSERT INTO simplebroker_messages_v6 (queue, body, ts, claimed) "
+                "SELECT queue, body, ts, claimed FROM messages"
+            )
+            source_count = int(
+                next(iter(runner.run("SELECT COUNT(*) FROM messages", fetch=True)))[0]
+            )
+            copied_count = int(
+                next(
+                    iter(
+                        runner.run(
+                            "SELECT COUNT(*) FROM simplebroker_messages_v6",
+                            fetch=True,
+                        )
+                    )
+                )[0]
+            )
+            if source_count != copied_count:
+                raise RuntimeError(
+                    "SQLite schema v6 migration row-count verification failed: "
+                    f"source={source_count}, copied={copied_count}"
+                )
 
-        runner.run(ALTER_MESSAGES_RENAME_V5)
-        runner.run(ALTER_MESSAGES_V6_RENAME_CURRENT)
-        runner.run(DROP_MESSAGES_V5)
-        runner.run(CREATE_QUEUE_TS_INDEX)
-        runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
-        if not _messages_v6_shape_is_current(runner):
-            raise RuntimeError("SQLite schema v6 migration produced an invalid shape")
-        _verify_foreign_keys_after_v6_rebuild(runner)
-        write_schema_version(6)
-        runner.commit()
-    except BaseException:
-        with contextlib.suppress(BaseException):
-            runner.rollback()
-        raise
+            runner.run(ALTER_MESSAGES_RENAME_V5)
+            runner.run(ALTER_MESSAGES_V6_RENAME_CURRENT)
+            runner.run(DROP_MESSAGES_V5)
+            runner.run(CREATE_QUEUE_TS_INDEX)
+            runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
+            if not _messages_v6_shape_is_current(runner):
+                raise RuntimeError(
+                    "SQLite schema v6 migration produced an invalid shape"
+                )
+            _verify_foreign_keys_after_v6_rebuild(runner)
+            write_schema_version(6)
+            runner.commit()
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                runner.rollback()
+            raise
     finally:
         _restore_v6_rebuild_pragmas(
             runner,

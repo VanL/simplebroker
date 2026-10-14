@@ -1511,3 +1511,112 @@ def test_rebuild_table_ddl_derives_from_canonical_builder() -> None:
     canonical_body = CREATE_MESSAGES_TABLE.split("(", 1)[1]
     rebuild_body = rebuild.split("(", 1)[1]
     assert canonical_body == rebuild_body
+
+
+@pytest.mark.parametrize("version", [3, 4, 5])
+def test_schema_interrupt_releases_real_transaction(tmp_path, monkeypatch, version):
+    path = tmp_path / "interrupt-schema.db"
+    create_sqlite_v5_layout(path)
+    runner = _runner(path)
+    original_run = runner.run
+    error = KeyboardInterrupt("migration body")
+    fired = False
+
+    def interrupted_run(*args, **kwargs):
+        nonlocal fired
+        if runner._transaction_owner is threading.current_thread() and not fired:
+            fired = True
+            raise error
+        return original_run(*args, **kwargs)
+
+    try:
+        connection = runner.get_connection()
+        monkeypatch.setattr(runner, "run", interrupted_run)
+        with pytest.raises(KeyboardInterrupt) as caught:
+            {3: ensure_schema_v4, 4: ensure_schema_v5, 5: ensure_schema_v6}[version](
+                runner,
+                current_version=version,
+                write_schema_version=lambda _: None,
+            )
+        assert caught.value is error
+        assert fired
+        assert runner._transaction_owner is None
+        assert not connection.in_transaction
+        runner.begin_immediate()
+        runner.commit()
+    finally:
+        runner.close()
+
+
+@pytest.mark.parametrize("version", [3, 4, 5])
+def test_failed_schema_begin_preserves_same_thread_outer_transaction(
+    tmp_path, monkeypatch, version
+):
+    path = tmp_path / "outer-schema.db"
+    create_sqlite_v5_layout(path)
+    runner = _runner(path)
+    rollback_calls = []
+    original_rollback = runner.rollback
+
+    def counted_rollback():
+        rollback_calls.append(True)
+        return original_rollback()
+
+    try:
+        connection = runner.get_connection()
+        runner.run("PRAGMA foreign_keys = ON")
+        runner.begin_immediate()
+        monkeypatch.setattr(runner, "rollback", counted_rollback)
+        with pytest.raises(OperationalError):
+            {3: ensure_schema_v4, 4: ensure_schema_v5, 5: ensure_schema_v6}[version](
+                runner,
+                current_version=version,
+                write_schema_version=lambda _: None,
+            )
+        assert rollback_calls == []
+        assert connection.in_transaction
+        assert runner._transaction_owner is threading.current_thread()
+        assert list(runner.run("PRAGMA legacy_alter_table", fetch=True)) == [(0,)]
+        assert list(runner.run("PRAGMA foreign_keys", fetch=True)) == [(1,)]
+        runner.commit()
+    finally:
+        runner.close()
+
+
+@pytest.mark.parametrize("rollback_fails", [False, True])
+def test_bootstrap_interrupt_preserves_primary_error(
+    tmp_path, monkeypatch, rollback_fails
+):
+    runner = _runner(tmp_path / "bootstrap-interrupt.db")
+    connection = runner.get_connection()
+    original_run = runner.run
+    original_rollback = runner.rollback
+    error = KeyboardInterrupt("bootstrap body")
+    fired = False
+
+    def interrupted_run(*args, **kwargs):
+        nonlocal fired
+        if connection.in_transaction and not fired:
+            fired = True
+            raise error
+        return original_run(*args, **kwargs)
+
+    def failing_rollback():
+        original_rollback()
+        raise SystemExit("secondary cleanup")
+
+    try:
+        monkeypatch.setattr(runner, "run", interrupted_run)
+        if rollback_fails:
+            monkeypatch.setattr(runner, "rollback", failing_rollback)
+        with pytest.raises(KeyboardInterrupt) as caught:
+            initialize_database(runner, run_with_retry=_run_direct)
+        assert caught.value is error
+        assert runner._transaction_owner is None
+        assert not connection.in_transaction
+        assert not meta_table_exists(runner)
+        monkeypatch.setattr(runner, "rollback", original_rollback)
+        initialize_database(runner, run_with_retry=_run_direct)
+        assert meta_table_exists(runner)
+    finally:
+        runner.close()

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import threading
+import time
+from typing import cast
 
 import pytest
 import simplebroker_redis.plugin as redis_plugin_module
@@ -494,3 +496,35 @@ def test_config_derived_namespaces_cannot_share_waiter(
         pytest.raises(ValueError, match="cannot safely share"),
     ):
         create_activity_waiter_for_queues([first, second], stop_event=threading.Event())
+
+
+@pytest.mark.parametrize("shape", ["empty", "closed", "mixed"])
+def test_multi_waiter_compatibility_fallback_remains_bounded(shape: str) -> None:
+    class StubWaiter:
+        def __init__(self, active: bool) -> None:
+            self.active = active
+
+        def wait(self, timeout: float) -> bool:
+            return self.active
+
+        def close(self) -> None:
+            self.active = False
+
+    stop = threading.Event()
+    children = [] if shape == "empty" else [StubWaiter(False), StubWaiter(True)]
+    # This legacy compatibility double intentionally exercises duck-typed fallback.
+    waiter = redis_plugin_module.RedisMultiQueueActivityWaiter(
+        cast("list[redis_plugin_module.RedisActivityWaiter]", children), stop
+    )
+    if shape == "closed":
+        waiter.close()
+    if shape == "mixed":
+        assert waiter.wait(0.05)
+        stop.set()
+        assert not waiter.wait(1.0)
+    else:
+        # Empty/closed wait retains bounded cadence rather than a busy loop
+        # or a new immediate-return contract. No sub-50ms scheduler budget.
+        started = time.monotonic()
+        assert not waiter.wait(0.05)
+        assert 0.05 <= time.monotonic() - started

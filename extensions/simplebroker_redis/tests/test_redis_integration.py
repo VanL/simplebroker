@@ -5,13 +5,12 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
-from types import SimpleNamespace
+import warnings
 from typing import Any, cast
 
 import pytest
 import redis
 import simplebroker_redis.core as redis_core_module
-import simplebroker_redis.plugin as redis_plugin_module
 from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys, encode_id
@@ -27,6 +26,8 @@ from simplebroker import (
 from simplebroker._broker_session import close_process_broker_sessions
 from simplebroker._exceptions import QueueNameError
 from simplebroker._targets import BrokerTarget
+from simplebroker.commands import cmd_alias_add
+from simplebroker.db import _AliasShadowsQueueWarning
 from simplebroker.ext import PollingStrategy
 
 pytestmark = [pytest.mark.redis_only]
@@ -1168,17 +1169,18 @@ def test_multi_queue_activity_waiter_stop_event_breaks_wait_promptly(
     assert waiter is not None
     entered_wait = threading.Event()
 
-    def observed_sleep(delay: float) -> None:
-        entered_wait.set()
-        time.sleep(delay)
-
-    # Only the composite waiter uses this module's sleep. Keep real cadence and
-    # pubsub transport; witness the completed quiet scan, not thread startup.
-    monkeypatch.setattr(
-        redis_plugin_module,
-        "time",
-        SimpleNamespace(monotonic=time.monotonic, sleep=observed_sleep),
+    condition = (
+        cast(RedisMultiQueueActivityWaiter, waiter)._waiters[0]._listener._any_condition
     )
+    original_wait = condition.wait
+
+    def observed_wait(timeout: float | None = None) -> bool:
+        entered_wait.set()
+        return original_wait(timeout)
+
+    # Preserve the real condition and stop cadence; witness the completed
+    # quiet scan before setting the external event, not just thread startup.
+    monkeypatch.setattr(condition, "wait", observed_wait)
     results: list[bool] = []
     thread = threading.Thread(target=lambda: results.append(waiter.wait(5.0)))
     try:
@@ -1194,4 +1196,31 @@ def test_multi_queue_activity_waiter_stop_event_breaks_wait_promptly(
         if thread.ident is not None:
             thread.join(5.0)
         waiter.close()
+        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+@pytest.mark.parametrize("quiet", [False, True])
+def test_alias_command_shadow_warning_respects_quiet_on_redis(
+    redis_url: str, redis_namespace: str, quiet: bool
+) -> None:
+    target = BrokerTarget("redis", redis_url, {"namespace": redis_namespace})
+    plugin = get_backend_plugin()
+    try:
+        with Queue("shadow", db_path=target) as queue:
+            queue.write("kept directly accessible")
+            with warnings.catch_warnings(record=True) as recorded:
+                warnings.simplefilter("always")
+                assert cmd_alias_add(target, "shadow", "jobs", quiet=quiet) == 0
+            if quiet:
+                assert recorded == []
+            else:
+                assert len(recorded) == 1
+                assert recorded[0].category is _AliasShadowsQueueWarning
+            with queue.get_connection() as core:
+                assert core.resolve_alias("shadow") == "jobs"
+                assert (
+                    core.peek_one("shadow", with_timestamps=False)
+                    == "kept directly accessible"
+                )
+    finally:
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 
@@ -727,3 +728,88 @@ def test_inherited_queue_rejects_before_parent_session_lock(
             future.result(timeout=5)
         queue.write("after")
         assert queue.read_many(4) == ["before", "during", "after"]
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
+@pytest.mark.parametrize(
+    ("method", "args"),
+    [
+        ("get_alias_version", ()),
+        ("resolve_alias", ("shortcut",)),
+        ("has_alias", ("shortcut",)),
+        ("list_aliases", ()),
+        ("aliases_for_target", ("jobs",)),
+        ("get_meta", ()),
+        ("add_alias", ("new_alias", "jobs")),
+        ("remove_alias", ("shortcut",)),
+    ],
+)
+def test_inherited_alias_meta_reject_before_parent_lock(
+    workdir: Path, method: str, args: tuple[str, ...]
+) -> None:
+    """Every SQL alias/meta entry rejects before touching a vanished owner's lock."""
+    from simplebroker import Queue
+    from tests.helper_scripts.timing import scale_timeout_for_ci
+
+    with BrokerDB(str(workdir / "aliases.db")) as core:
+        core.write("jobs", "parent")
+        core.add_alias("shortcut", "jobs")
+        acquired = threading.Event()
+        release = threading.Event()
+        timeout = scale_timeout_for_ci(5.0)
+
+        def hold() -> None:
+            # Mutation guards probe poison before reaching the operation lock.
+            # Holding both proves the fork guard precedes either inherited lock.
+            with core._lock, core._orphan_lock:
+                acquired.set()
+                release.wait()
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        try:
+            assert acquired.wait(timeout), "parent core-lock holder never became ready"
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=(
+                        r"^This process \(pid=\d+\) is multi-threaded, "
+                        r"use of fork\(\) may lead to deadlocks in the child\.$"
+                    ),
+                    category=DeprecationWarning,
+                )
+                child = os.fork()
+            if child == 0:
+                status = 1
+                try:
+                    try:
+                        getattr(core, method)(*args)
+                    except RuntimeError as error:
+                        if "forked process" in str(error):
+                            status = (
+                                2  # Distinguish rejection from fresh-child failure.
+                            )
+                            with Queue(
+                                "fresh", db_path=str(workdir / "fresh.db")
+                            ) as fresh:
+                                fresh.write("child")
+                                assert fresh.read_one() == "child"
+                            status = 0
+                finally:
+                    os._exit(status)
+            status = _wait_for_fork_child(child, timeout=timeout)
+            assert os.WIFEXITED(status), f"child terminated abnormally: {status}"
+            assert os.WEXITSTATUS(status) == 0, (
+                f"{method} fork probe failed: exit {os.WEXITSTATUS(status)} "
+                "(1: no fork rejection; 2: fresh child Queue failed)"
+            )
+        finally:
+            release.set()
+            holder.join(timeout=timeout)
+            assert not holder.is_alive(), "parent core-lock holder leaked"
+        assert core.resolve_alias("shortcut") == "jobs"
+        core.write("jobs", "after fork")
+        assert core.peek_many("jobs", 2, with_timestamps=False) == [
+            "parent",
+            "after fork",
+        ]

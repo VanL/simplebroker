@@ -109,9 +109,12 @@ _DARWIN_XATTR_PROVIDER_LOCK = threading.Lock()
 
 
 def _reset_darwin_xattr_lock_after_fork() -> None:
-    """Give a fork child an unlocked discovery guard."""
-    global _DARWIN_XATTR_PROVIDER_LOCK
+    """Give a fork child unlocked process and xattr discovery guards."""
+    global _PROCESS_LOCKS_GUARD, _PROCESS_LOCKS, _DARWIN_XATTR_PROVIDER_LOCK
 
+    # Parent threads cannot release locks inherited by the child [SB-API-11].
+    _PROCESS_LOCKS_GUARD = threading.Lock()
+    _PROCESS_LOCKS = {}
     _DARWIN_XATTR_PROVIDER_LOCK = threading.Lock()
 
 

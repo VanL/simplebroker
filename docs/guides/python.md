@@ -1113,7 +1113,7 @@ while the handle is still alive.
 `Queue.conn` is deprecated compatibility access. Use `queue.session` when you
 need the `BrokerSession` that minted a Queue, `session.connection()` for
 connection-level work sharing that session, or `open_broker()` when the work
-should own an independent connection. No runtime warning is emitted in 8.3.x.
+should own an independent connection. No runtime warning is emitted as of 8.7.
 
 Weft is the reference implementation of this pattern. Its public
 `WeftClient` owns a resolved `WeftContext`; `WeftContext.queue(name)` constructs

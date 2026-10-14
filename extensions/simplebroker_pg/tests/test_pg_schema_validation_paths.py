@@ -804,3 +804,57 @@ def test_v6_migration_promotes_renamed_ts_unique_index(
                     sql.Identifier(schema)
                 )
             )
+
+
+@pytest.mark.parametrize("operation", ["bootstrap", "migration"])
+@pytest.mark.parametrize("rollback_fails", [False, True])
+def test_schema_body_interrupt_invalidates_metadata_and_preserves_error(
+    operation: str, rollback_fails: bool
+) -> None:
+    error = KeyboardInterrupt("primary SQL body")
+
+    class InterruptedRunner(RecordingRunner):
+        def run(self, *args: Any, **kwargs: Any) -> list[tuple[Any, ...]]:
+            raise error
+
+        def rollback(self) -> None:
+            super().rollback()
+            if rollback_fails:
+                raise SystemExit("secondary rollback")
+
+    runner = InterruptedRunner()
+    runner.cached_state = object()
+    with pytest.raises(KeyboardInterrupt) as caught:
+        if operation == "bootstrap":
+            pg_schema.initialize_database(
+                runner, schema=runner.schema, run_with_retry=lambda call: call()
+            )
+        else:
+            migrate_schema(
+                runner, current_version=1, write_schema_version=lambda _: None
+            )
+    assert caught.value is error
+    assert runner.events == ["begin", "rollback"]
+    assert runner.cached_state is None
+
+
+@pytest.mark.parametrize("operation", ["bootstrap", "migration"])
+def test_schema_failed_begin_never_rolls_back_outer_checkout(operation: str) -> None:
+    error = OperationalError("BEGIN refused")
+
+    class RefusedRunner(RecordingRunner):
+        def begin_immediate(self) -> None:
+            raise error
+
+    runner = RefusedRunner()
+    with pytest.raises(OperationalError) as caught:
+        if operation == "bootstrap":
+            pg_schema.initialize_database(
+                runner, schema=runner.schema, run_with_retry=lambda call: call()
+            )
+        else:
+            migrate_schema(
+                runner, current_version=1, write_schema_version=lambda _: None
+            )
+    assert caught.value is error
+    assert runner.events == []

@@ -289,9 +289,14 @@ Requirements:
   Python-shebang tools that default discovery omits
 - Ruff preview rules remain opt-in and are not part of the default gate
 - global ignores are limited to explicitly documented repository-wide
-  conflicts; per-file ignores remain empty, and other suppressions are local,
-  narrow, carry a reason, protect a tested invariant, and require explicit
-  review before adoption
+  conflicts, and `per-file-ignores` is restricted to scoping `PLR2004` to
+  `simplebroker/` by allowing only `PLR2004` on non-`simplebroker/` trees
+  (`".github/**"`, `"benchmarks/**"`, `"bin/**"`, `"examples/**"`,
+  `"extensions/**"`, `"fuzz/**"`, `"tests/**"`); `tests/test_ruff_policy.py`
+  enforces the rule-code and shipped-package scope restriction, not that
+  particular list of paths. Other suppressions are local, narrow, carry a
+  reason, protect a tested invariant, and require explicit review before
+  adoption
 - intentionally broad exception or best-effort cleanup boundaries retain their
   runtime behavior through an explicit code structure where practical; a
   suppression is the reviewed last resort, not the default alternative to a
@@ -321,7 +326,8 @@ A separate movement-stable global raw-diagnostic inventory continues to cover
 every local `noqa`, including reasoned suppressions outside this registry. It
 is an exact aggregate by rule code: aggregate changes fail verification, while
 a same-code remove/add swap remains visible to source review rather than
-receiving false identity semantics. Per-file ignores, global ignores, and
+receiving false identity semantics. Global and per-file ignores outside the
+policy-tested configuration in `pyproject.toml` are not permitted. Additional
 baseline allowlists are not permitted. A cohesive parser, checklist, or state
 machine must not be fragmented merely to lower its score.
 
@@ -857,6 +863,9 @@ exists. A missing conversion, ledger mismatch, failed retrieval, or missing
 heading blocks deletion.
 
 ## Related Plans
+
+- [Deep-review remediation](../plans/2026-10-14-deep-review-remediation-plan.md):
+  clarification-only alignment of [DOM-10.1] with enforced Ruff policy.
 
 - retired: 2026-09-07-test-proof-quality-plan — source `646718f`; see the
   ledger in `docs/plans/README.md`.

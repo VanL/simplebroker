@@ -1,7 +1,7 @@
 # Whole test-surface audit
 
 Date: 2026-10-06. Status: completed (audit report, not remediation).
-Class: 3 (repository-wide report-only audit). Documentation remains uncommitted.
+Class: 3 (repository-wide report-only audit). Documentation landed in `208c3a8`.
 
 ## Source Documents
 

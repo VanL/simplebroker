@@ -58,7 +58,7 @@ def run_in_executor(func: Callable[..., T]) -> Callable[..., asyncio.Future[T]]:
 
     @functools.wraps(func)
     async def wrapper(self: "AsyncBroker", *args: Any, **kwargs: Any) -> T:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._executor, functools.partial(func, self, *args, **kwargs)
         )
@@ -246,7 +246,7 @@ class AsyncBroker:
 
         # Create task to monitor thread completion
         async def monitor_thread() -> None:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, thread.join)
             stop_event.set()
 
@@ -341,7 +341,7 @@ async def example_cross_queue_operation(broker: AsyncBroker) -> None:
     For operations that need to inspect or modify multiple queues, use the
     client's open_broker() handle instead of constructing BrokerDB directly.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def get_stats() -> list[tuple[str, int, int]]:
         with broker.client.broker() as broker_handle:

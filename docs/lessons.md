@@ -521,3 +521,11 @@ Dated moment-tier entries (foldable after age floor and distillation).
   Keep the actual fork parent, collector/shard assertions and bounded reaping
   intact. Evidence: Python 3.15 support plan, rejected helper prototype,
   three-interpreter strict-warning runs and isolated sensitivity controls.
+
+- 2026-10-14: A fork guard must precede every inherited lock, including locks
+  hidden inside validation or poison checks. An indirect later guard can make
+  an ordinary fork test pass while an earlier inherited mutex still deadlocks.
+  Have the actual parent owner hold all locks on the entry path and publish
+  readiness; verify prompt rejection or the documented child recovery policy
+  before those locks are touched. Evidence: deep-review remediation's SQL
+  alias/meta probes and process-lock reset.

@@ -59,6 +59,8 @@ from simplebroker._selection import SelectionOrder, validate_selection_order
 from simplebroker._sidecar import SidecarSession
 from simplebroker._timestamp import TimestampGenerator, validate_timestamp_bound
 from simplebroker.db import (
+    _ALIAS_SHADOW_WARNING_SUPPRESSED,
+    _AliasShadowsQueueWarning,
     _literal_prefix_from_fnmatch,
     _validate_queue_name_cached,
     _validate_queue_prefix,
@@ -2093,14 +2095,14 @@ class RedisBrokerCore:
             raise ValueError("Cannot turn an existing alias target into an alias")
         if result != 1:
             raise OperationalError(f"Unexpected Redis alias result: {result}")
-        if shadows_existing_queue:
+        if shadows_existing_queue and not _ALIAS_SHADOW_WARNING_SUPPRESSED.get():
             warnings.warn(
                 (
                     f"Queue '{alias}' already exists with messages. "
                     f"The alias @{alias} will redirect to '{target}' while "
                     f"the queue {alias} remains accessible directly."
                 ),
-                RuntimeWarning,
+                _AliasShadowsQueueWarning,
                 stacklevel=3,
             )
 
