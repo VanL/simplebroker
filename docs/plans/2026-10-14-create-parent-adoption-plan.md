@@ -1,6 +1,6 @@
 # Adopt optional advisory-lock parent creation
 
-Status: active
+Status: completed
 Class: 4 — compatibility surface of the single-file vendorable helper.
 Owner: implementation agent, authorized by the user to commit the existing feature and release all three packages.
 Boundary: `_phaselock.py` advisory-lock option, regression, release documentation and coordinated patch metadata.
@@ -11,7 +11,7 @@ Required action: preserve default behavior and single-file vendorability; do not
 
 - [x] Adopt the owner's existing create_parent/version/test changes after review.
 - [x] Document the option and preserve existing failure/cancellation/lock semantics.
-- [ ] Verify and commit/push the feature; then prepare core8.7.2/pg4.7.2/redis4.7.2 with matching floors and today's changelog, run the normal coordinated release.
+- [x] Verify and commit/push the feature; then prepare core8.7.2/pg4.7.2/redis4.7.2 with matching floors and today's changelog, run the normal coordinated release.
 
 ## Source Documents
 
@@ -204,3 +204,35 @@ was indistinguishable from lost writes, which is what the harness structure
 proves. F2 [nit] accepted the existing child stderr capture and declined extra
 diagnostic machinery. Review evidence:
 `/tmp/simplebroker-872-ci-test-review.out`.
+
+### Publication acceptance
+
+The clean full retry at release SHA
+`4d40faae9e5efe298a47ed7838c703ba952b3489` repeated every local gate:
+core 4061 passed/18 skipped, nested xdist one passed, benchmarks 20 passed,
+PostgreSQL shared 1773 passed/11 skipped and extension 427 passed/7 skipped,
+Redis shared 1765 passed/19 skipped and extension 393 passed/one skipped,
+examples 146 passed, plus shell/Ruff/format/types/three locks, clean Python3.11
+core wheel/sdist smoke and both extension builds. Exact-SHA Test
+`38624157334`, PostgreSQL `38624156989`, Redis `38624157609`, CodeQL
+`38624157219` and Scorecard passed. The helper then created immutable tags
+`v8.7.2`, `simplebroker_pg/v4.7.2` and `simplebroker_redis/v4.7.2` at that SHA.
+
+Tag Release Gate runs core `38626940882`, PostgreSQL `38626924150` and Redis
+`38626931947` all passed through Trusted Publishing and immutable GitHub
+Release finalization. Read-only verification confirmed exact tag SHAs, final
+immutable releases, versions, Python>=3.11 and Python3.15 metadata, matching
+core/extension floors, one wheel/one sdist/one combined Sigstore bundle per
+release, attestation subjects, and identical GitHub/PyPI SHA256 values:
+
+- core wheel `12abe632110905ee45911d4a21a690f100bddb8dc94ab9969f2ece588291e352`;
+  sdist `da2a31a5218a88b1adf1ba5caa82ce29a7d4b3af287bde35518bf1d2e021e050`
+- PostgreSQL wheel `bea499f7b5ca454bd65c471dea6922b100ac54f55cdf667f1c16f037aafb127e`;
+  sdist `65c6ce5878851f02a4c4e23027f15f86a261e6e38a66611c7feee2042d365c93`
+- Redis wheel `5e033b41f4b90c04bcb13319715e1b30214d774d3ef9b211651c23bc30c50764`;
+  sdist `38278a110ba9be49b0ff0d7574a6f0c7716743f19bdfff53f0e1959773688b7e`
+
+Published core wheel and sdist packaging smoke passed on Python3.15. A fresh
+isolated Python3.15 environment installed the exact three published versions,
+imported all packages and discovered the PostgreSQL and Redis backend plugins.
+The release goal and rollback boundary are therefore satisfied.
