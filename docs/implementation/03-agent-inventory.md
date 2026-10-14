@@ -38,8 +38,9 @@ under a 120-second bound. The read-only PostgreSQL attribution plan review
 completed with exit 0 in 261.6 seconds under a 540-second bound, returning PASS
 conditional on two test-design fixes. Scoped verification completed in 152.8
 seconds under the same bound, returning PASS for all nine accepted fixes.
-Findings and author dispositions are in
-`docs/plans/2026-10-13-postgres-connection-attribution-plan.md`. Native Codex
+Findings and author dispositions are in retired plan
+`00b837f:docs/plans/2026-10-13-postgres-connection-attribution-plan.md`; see
+the ledger in `docs/plans/README.md`. Native Codex
 independent review also returned PASS. Other families were not re-probed. The implementation review exited0 in246.6
 seconds under the same540-second bound, returning no blocker with seven P3
 findings; author dispositions are in the same plan.

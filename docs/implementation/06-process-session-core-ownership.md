@@ -612,8 +612,9 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
-- [Deep-review remediation](../plans/2026-10-14-deep-review-remediation-plan.md)
-  — SQL alias/meta fork rejection before operation and poison mutexes.
+- retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`; SQL
+  alias/meta fork rejection before operation and poison mutexes; see the
+  ledger in `docs/plans/README.md`.
 
 - retired: 2026-10-06-postgres-capacity-amplification-plan — source `dad806b`;
   see the ledger in `docs/plans/README.md`
@@ -664,8 +665,9 @@ options, session keys and listener keys remain unchanged. Putting labels in
 those keys would multiply resources; storing PID registrations in `meta`
 would create a stale-state cleanup lifecycle. PostgreSQL's own activity rows
 already own connection lifetime. No task, budget or liveness model belongs
-in this extension. The implementation plan is
-`docs/plans/2026-10-13-postgres-connection-attribution-plan.md`.
+in this extension. The implementation record is retired plan
+`00b837f:docs/plans/2026-10-13-postgres-connection-attribution-plan.md`; see
+the ledger in `docs/plans/README.md`.
 
 [SB-API-15] uses the existing materializing SQL probe. One raw activity row
 list supplies total pressure via length and owner credits via grouping.

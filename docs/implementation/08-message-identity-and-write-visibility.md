@@ -254,9 +254,10 @@ arithmetic is needed, including at the signed maximum.
 
 Exact-ID selection takes precedence over ranges in the query builders, so it
 must fetch once and terminate; advancing only the range bound would repeat
-the exact row. Redis combines eligible pending and claimed candidates in
-global ID order before emitting each page. Neither path changes selection
-outside peek generators or introduces a public cursor API.
+the exact row. Redis combines eligible pending and claimed candidates with
+per-state lookahead, then emits the global next ID; concatenating whole sorted
+pages could emit past an unseen candidate in another state. Neither path
+changes selection outside peek generators or introduces a public cursor API.
 
 Page fetching finishes before user yields; the Queue closeable iterator still
 owns operation entry and exit. The cursor is a value, so deleting its row does

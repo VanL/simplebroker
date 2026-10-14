@@ -15,10 +15,10 @@ Compatibility note (non-normative): Python 3.11 remains the minimum supported
 version. Standard, GIL-enabled CPython 3.15 is supported by core and the
 first-party PostgreSQL and Redis extensions. Core qualification covers Linux,
 macOS, and Windows; native extension qualification covers Linux. Free-threaded
-Python 3.15t and JIT-specific behavior are outside this qualification. The
-[Python 3.15 support plan](../plans/2026-10-13-python-315-support-plan.md)
-records the evidence; interpreter support changes none of the API or lifecycle
-contracts below.
+Python 3.15t and JIT-specific behavior are outside this qualification. Retired
+plan `2026-10-13-python-315-support-plan.md` at source `724519e` records the
+evidence; see the ledger in `docs/plans/README.md`. Interpreter support changes
+none of the API or lifecycle contracts below.
 
 ## Public surfaces [SB-API-1]
 
@@ -1388,12 +1388,18 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 
 ## Related Plans
 
-- [Deep-review remediation](../plans/2026-10-14-deep-review-remediation-plan.md):
-  [SB-API-3] compatibility wording and existing transaction/fork safety fixes.
+- retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`;
+  [SB-API-3] compatibility wording and existing transaction/fork safety fixes;
+  see the ledger in `docs/plans/README.md`.
 
-- [Python 3.15 support](../plans/2026-10-13-python-315-support-plan.md): preserves the existing API and lifecycle contracts while extending interpreter validation; no normative API change.
+- retired: 2026-10-13-python-315-support-plan — source `724519e`; preserves
+  the existing API and lifecycle contracts while extending interpreter
+  validation; no normative API change; see the ledger in
+  `docs/plans/README.md`.
 
-- [PostgreSQL connection attribution and usage snapshot](../plans/2026-10-13-postgres-connection-attribution-plan.md): implements the additive [SB-API-14] and [SB-API-15] contracts; [SB-API-13] is preserved.
+- retired: 2026-10-13-postgres-connection-attribution-plan — source `00b837f`;
+  implements the additive [SB-API-14] and [SB-API-15] contracts; [SB-API-13]
+  is preserved; see the ledger in `docs/plans/README.md`.
 
 - retired: 2026-10-06-postgres-capacity-amplification-plan — source `dad806b`;
   see the ledger in `docs/plans/README.md`.

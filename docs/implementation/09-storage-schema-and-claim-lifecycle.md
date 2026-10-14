@@ -418,8 +418,9 @@ Promoted to: none
 
 ## Related Plans
 
-- [Deep-review remediation](../plans/2026-10-14-deep-review-remediation-plan.md)
-  — transaction interruption settlement and child process-lock replacement.
+- retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`;
+  transaction interruption settlement and child process-lock replacement; see
+  the ledger in `docs/plans/README.md`.
 
 - retired: 2026-08-25-schema-and-representation-assumption-remediation-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns

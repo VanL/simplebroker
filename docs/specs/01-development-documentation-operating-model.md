@@ -864,8 +864,9 @@ heading blocks deletion.
 
 ## Related Plans
 
-- [Deep-review remediation](../plans/2026-10-14-deep-review-remediation-plan.md):
-  clarification-only alignment of [DOM-10.1] with enforced Ruff policy.
+- retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`;
+  clarification-only alignment of [DOM-10.1] with enforced Ruff policy; see
+  the ledger in `docs/plans/README.md`.
 
 - retired: 2026-09-07-test-proof-quality-plan — source `646718f`; see the
   ledger in `docs/plans/README.md`.
@@ -882,7 +883,8 @@ Local adoption record (soft-retired; not a live path claim):
 
 Local plans:
 
-- [Ruff default drift during release](../plans/2026-10-13-ruff-default-drift-plan.md)
+- retired: 2026-10-13-ruff-default-drift-plan — source `1b42554`; see the
+  ledger in `docs/plans/README.md`.
 
 - retired: 2026-09-07-critical-review-remediation-plan — source `dbace84`;
   see the ledger in `docs/plans/README.md`.

@@ -142,25 +142,8 @@ pass; bootstrap source `2f93ee5`)
   failure handler that cannot tell whether publication happened can consume an
   outer operation or leak the newly acquired one.
 
-- 2026-09-12: Canonical config storage is not a public key migration. Preserve lookup, iteration, opaque extras and receipt recognition separately; canonical-looking legacy extras must never drive broker settings. A naming view must carry the receipt through resolver gates without rereading env. Evidence: shared-configuration-loader plan and its collision/handoff regressions.
-
 Dated moment-tier entries (foldable after age floor and distillation).
 
-- 2026-08-24: A unique temp filename does not establish cleanup ownership.
-  If one process publishes by temp-write plus atomic replace while another
-  process glob-cleans the temp namespace, both operations must share the same
-  lock and the stale-state predicate must be rechecked after acquisition.
-  Otherwise a fresh-target contender can delete the active owner's temp file
-  and make `os.replace()` fail even though publication itself is atomic.
-  Read-only validity checks should report stale state, not perform unlocked
-  cleanup.
-- 2026-08-23: A durable timestamp CAS protects persisted monotonicity, not a
-  shared generator's process-local cache. Keep candidate calculation, durable
-  compare-and-advance, conflict refresh, and cache publication under one
-  generator lock; otherwise thread A can store `T`, thread B can store and
-  publish `T+1`, and then A can publish stale `T`. The implementation owner is
-  `docs/implementation/08-message-identity-and-write-visibility.md`; historical
-  fix `6f9bd065`.
 - 2026-08-14: A timeout stack is a sample of where work was executing, not
   proof that the sampled terminal call is stuck. Before assigning a storage
   deadlock, publish and acknowledge exact entered/returned phases from a
@@ -351,21 +334,6 @@ Dated moment-tier entries (foldable after age floor and distillation).
   and must verify the imported core path. Reversed ordering can import an
   unrelated same-named test package and produce a false compatibility failure.
   (Harvested from public-API/CLI remediation at `2605b79a`.)
-- 2026-08-23: A CLI preparse safety pass needs one grammar owner. Capture its
-  metadata while argparse actions are registered; do not maintain a parallel
-  option table or traverse argparse private actions in production. A
-  structural test may inspect those internals to prove every sensitive action
-  was captured and should be mutation-checked against new registrations.
-  (Harvested from maintainability remediation at `a490dcc4`.)
-- 2026-08-23: Judge schema migration success from schema and data facts inside
-  the owned transaction. Check the postcondition before publishing the schema
-  version, and never classify success by native exception prose. (Harvested
-  from maintainability remediation at `a490dcc4`; rationale in implementation
-  doc 09.)
-- 2026-08-23: Scoped test overrides that may nest or overlap need dynamic
-  context with token restoration. A process global or environment variable
-  lets one concurrent or reverse-order exit erase another caller's live
-  override. (Harvested from maintainability remediation at `a490dcc4`.)
 - 2026-08-23: Verification that must survive `python -O` uses explicit
   failures, not `assert`. Optimization removes assertions, so an assert-based
   release or repository gate can turn a failed invariant into success.
@@ -432,23 +400,11 @@ Dated moment-tier entries (foldable after age floor and distillation).
   claim window to one active iteration unless the public contract explicitly
   transfers ownership of a buffered batch. (Harvested from the examples
   alignment plan at `813dd7ce`.)
-- 2026-08-28: A global order over multiple paginated sorted sources needs
-  per-source lookahead and global-next emission. Concatenating whole sorted
-  pages can leap over an unseen value in another source, even when every page
-  is locally ordered. Prove the merged result across page boundaries and
-  asymmetric source sizes. (Harvested from the message-ID order plan at
-  `813dd7ce`.)
 - 2026-08-28: A pytest marker-policy gate must inspect evaluated collection
   marks, not decorator source syntax. Module marks can be assigned, augmented,
   appended, aliased, or constructed dynamically, while test-local opt-outs can
   remain valid; only the collected item exposes the effective policy. (Harvested
   from the shared-backend proof plan at `813dd7ce`.)
-- 2026-08-28: If iterator advancement itself claims or mutates state, check a
-  stop condition before calling `next()`, not only inside a `for` loop body.
-  Any wrapper that may end early must also close its delegate in `finally`;
-  closing only the outer generator does not forward cleanup automatically.
-  (Harvested from the verified-findings and closeable-iterator plans at
-  `813dd7ce`.)
 - 2026-08-28: Manual recovery of a tag-triggered release workflow must dispatch
   at the immutable tag ref, not at a branch plus a tag-shaped input. GitHub run
   identity and Trusted Publishing policy follow the workflow ref, so a branch
@@ -466,14 +422,6 @@ Dated moment-tier entries (foldable after age floor and distillation).
   `tests/conftest.py` imports `tests.helper_scripts.broker_factory`, which
   loads that `__init__`, so even a 40-second partial state broke collection
   for every concurrent session sharing the worktree. (Dead-code cleanup plan.)
-
-- 2026-09-14: A logical-name validator must not be applied to the assembled host
-  path. Compound database names own the optional project subdirectory and final
-  filename; project roots and arbitrary ancestors belong to the caller's
-  filesystem context. Verify CLI, config and project-discovery routes alongside
-  direct API paths: discovery can revalidate an ancestor that direct access
-  already accepts. Evidence: host-path/name-boundary plan and real Weft resolver
-  probes under edge-space ancestors, with literal-parent cleanup controls.
 
 - 2026-09-14: A performance proof must separate fixture setup from the behavior
   it measures. A raw SQLite `executemany()` on an autocommit runner can turn
