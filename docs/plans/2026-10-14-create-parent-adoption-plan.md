@@ -163,3 +163,44 @@ their connections when collected.)" Accepted cosmetic sentence rewrap. No other
 finding. Evidence `/tmp/simplebroker-872-metadata-{review.out,tests.log}`.
 The normal full helper and exact-SHA/tag publication gates follow this
 preparation commit; publication acceptance is still required before closure.
+
+### Exact-SHA CI diagnosis before publication
+
+The full local release gate passed at `826e25ff38414d9921b2a86227987782d1811179`:
+core 4061 passed/18 skipped, nested xdist one passed, benchmarks 20 passed,
+PostgreSQL shared 1773 passed/11 skipped and extension 427 passed/7 skipped,
+Redis shared 1765 passed/19 skipped and extension 393 passed/one skipped,
+examples 146 passed, plus shell/Ruff/format/types/three locks, clean Python3.11
+core wheel/sdist smoke and both extension builds. Exact-SHA PostgreSQL and Redis
+runs passed, as did CodeQL, Scorecard and dependency graphs. The helper correctly
+refused to tag after the newest core run `38618469588` failed; no release tags
+were created.
+
+That core run had two independent Windows failures. Python3.13's
+`test_multiprocessing_with_separate_instances` joined each writer for ten
+seconds, silently terminated a laggard, then reported its 11/15 partial writes
+as message loss without checking process liveness or exit status. Its contract
+is separate-instance concurrent writes; six/eight-way synchronized concurrent
+first-bootstrap is already owned by `test_sqlite_setup_contention.py`. The test
+now creates and closes the schema before launching all three writers, preserves
+the existing ten-second bound and 15-message/five-per-writer assertions, and
+reports active or unsuccessful child processes directly. It passed the default
+runner once and 20 serial repetitions; Ruff and format pass. The prior test
+behavior's red evidence is run `38618469588`; the same unchanged product SHA
+also passed the complete core run `38618465754`.
+
+Python3.14's `test_init_command_dispatch` timed out while the unique temporary
+SQLite database was inside its first `commit()` under coverage. The same SHA's
+identical Windows3.14 job passed in `38618465754` (3803 passed/268 skipped), no
+other process shared that test database, and neither release delta changes this
+commit path. GitHub reported Actions operational. Treat this as a runner I/O
+scheduling outlier and require a clean rerun; do not change the CLI timeout or
+product code without a repeatable signal.
+
+Bounded read-only Claude scoped review of the multiprocessing test exited0 with
+**no blocker**. F1 [P3] noted that the first comment attributed the original
+stall to slow bootstrap too strongly. Accepted: it now says bootstrap contention
+was indistinguishable from lost writes, which is what the harness structure
+proves. F2 [nit] accepted the existing child stderr capture and declined extra
+diagnostic machinery. Review evidence:
+`/tmp/simplebroker-872-ci-test-review.out`.

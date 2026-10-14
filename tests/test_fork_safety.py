@@ -218,6 +218,13 @@ def test_multiprocessing_with_separate_instances(workdir: Path):
     """Test that multiprocessing works when each process creates its own instance."""
     db_path = workdir / "test.db"
 
+    # This test owns the separate-instance write contract. Concurrent first
+    # bootstrap is covered by test_sqlite_setup_contention; doing it here made
+    # bootstrap contention indistinguishable from lost writes when the harness
+    # killed a worker.
+    with BrokerDB(str(db_path)):
+        pass
+
     # Start multiple workers
     processes = []
     try:
@@ -229,6 +236,13 @@ def test_multiprocessing_with_separate_instances(workdir: Path):
         # Wait for all to complete
         for p in processes:
             p.join(timeout=10)  # Add timeout to prevent hanging
+
+        active = [p.name for p in processes if p.is_alive()]
+        exitcodes = [p.exitcode for p in processes]
+        assert not active, f"writer processes exceeded the bounded runtime: {active}"
+        assert exitcodes == [0, 0, 0], (
+            f"writer processes exited unsuccessfully: {exitcodes}"
+        )
     finally:
         # Ensure all processes are terminated even if test fails
         for p in processes:
