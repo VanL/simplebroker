@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.7.1] - 2026-10-14
+
+SimpleBroker 8.7.1, `simplebroker-pg` 4.7.1, and `simplebroker-redis` 4.7.1
+are the coordinated release set. Both extensions require SimpleBroker 8.7.1
+or newer, and the core `pg` and `redis` extras require the matching 4.7.1
+extension or newer.
+
 ### Fixed
 
 - Preserve global `-q` / `--quiet` for `alias add` when no command-local quiet
@@ -15,9 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ownership or PostgreSQL checkouts active, and preserve the original error
   when rollback also fails.
 - Reject inherited SQL core alias and metadata calls before entering parent
-  locks, and reset process-local phase locks after fork.
-- Respect `--quiet` for Redis alias-shadow commentary, use the shared warning
-  category, and wake multi-queue activity waits through listener notification.
+  locks, and reset process-local phase locks after fork, avoiding child-process
+  hangs on locks held by another parent thread.
+- Respect `--quiet` for Redis alias-shadow commentary and use the shared warning
+  category. Redis multi-queue activity waits now wake through listener
+  notification instead of waiting for the polling fallback.
 - Recover standalone SQLite example managers without entering inherited locks
   or closing parent connections; use the running event loop in async examples.
 
