@@ -85,3 +85,12 @@ def test_dom15_fixture_checker_self_test() -> None:
 
     assert result.returncode == 0, _result_detail(result)
     assert "all mutation cases and probes pass" in result.stdout
+
+
+def test_check_doc_paths_self_test() -> None:
+    result = _run(
+        [sys.executable, str(REPO_ROOT / "bin" / "check-doc-paths"), "--self-test"]
+    )
+
+    assert result.returncode == 0, _result_detail(result)
+    assert "all claim, fence, and allowlist probes pass" in result.stdout

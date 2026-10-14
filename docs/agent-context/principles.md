@@ -26,6 +26,17 @@ Agent-usable means the document makes these explicit when relevant:
 - Follow explicit user corrections immediately.
 - State critical assumptions before broad or irreversible changes.
 - Report blockers with precise causes and the next missing input.
+- **Report surprise; do not absorb it.** When the program, the docs, or the
+  work itself behaves in a way the current account (theory, spec, or your own
+  expectation derived from them) says it should not, surface the mismatch —
+  even after finding a workaround. The owner's model is revised through
+  reported surprise; a silent local fix deletes the evidence. Agreeable,
+  locally competent agents are exactly the profile that absorbs a surprise
+  instead of reporting it. In planned work the deviation log is the surface;
+  outside a plan, say it to the human directly. Treat planning and research as
+  experiments that may falsify their own task brief: returning mid-task with
+  falsified premises, concrete code/test evidence, and a proposed re-scope is
+  a first-class outcome, not a failure to finish the assigned brief.
 - If something seems clear to a human but confusing to an agent, say so and
   propose a specific change that would make it easier for the agent to use
   correctly.
@@ -46,6 +57,10 @@ Common agent-confusing failure modes:
 - Avoid destructive commands unless explicitly requested.
 - Prefer extending the existing path over inventing a second one.
 - Update all producers and consumers together when changing a contract.
+- Negative lifecycle labels (`unused`, `dead`, `orphaned`, `stale`,
+  `superseded`) require affirmative full-tree grep evidence across code,
+  tests, `examples/`, scripts, and vendored or bootstrap consumers before
+  anything is deleted or retired.
 - Agents suggest dependencies; humans add them. Do not introduce a new
   dependency on your own — propose it with a justification (purpose, why the
   standard library or an already-vendored dependency will not do, cost of taking

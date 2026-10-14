@@ -70,7 +70,8 @@ Before calling the work done, check:
 - closure review diffs **every planned task** against executable
   evidence: a checked box, a passing default suite, or a test that
   exists but is gated off is not evidence — a skipped-everything run
-  exits 0
+  exits 0; run final verification over the exact full test and lint roots
+  that CI checks, not only the targeted subset used during iteration
 - any central skill or runbook used during the work was evaluated for possible
   improvement
 - any residual risk or skipped verification is called out
@@ -86,9 +87,11 @@ from a live path to a non-path citation:
 `- retired: 2026-05-02-example-plan — source <source_sha>; see the ledger
 in docs/plans/README.md`. The source SHA is a commit verifiably
 containing the plan file. This keeps the traceability gate clean (no dead
-path claims) while preserving the retrieval cue. Do not leave live-path
-backlinks to deleted plans, and do not delete the backlink itself — the
-spec's plan history remains part of its record.
+path claims) while preserving the retrieval cue. Before converting live-path
+backlinks, grep `tests/` for contract tests that assert exact plan filenames in
+`docs/specs/` and update those assertions in the same change. Do not leave
+live-path backlinks to deleted plans, and do not delete the backlink itself —
+the spec's plan history remains part of its record.
 
 Promoted-alternative retirement form: before physical plan deletion, convert
 each steady-state live source cue to

@@ -6,7 +6,9 @@ session-start trigger check is read-only; sweeps run only as authorized
 units of work. (Promotion provenance lives in the guidance repo's plan
 "2026-07-14-coalescing-layer-plan" — its repository, not this one.)
 This copy: adopted from agent-guidance @ `fc23eae` via retired plan
-`2026-07-16-agent-guidance-bootstrap-plan.md` at `197629e2`.
+`2026-07-16-agent-guidance-bootstrap-plan.md` at `197629e2`; synchronized
+with `agent-theory` @ `8f41a9d` via
+`docs/plans/2026-10-14-agent-theory-delta-wave-plan.md`.
 
 ## Purpose
 
@@ -174,20 +176,24 @@ For each tripped or requested fold:
 3. For each genuinely new cold cluster of 3+ entries, draft the
    distillation: a new or amended Golden Rule, an engineering-principles
    section, or a runbook amendment. **Verify the distillation across three
-   tiers** — text fidelity (it says what the entries said, grepped both
-   directions, not what memory says they said; memory-drafted rules
-   overclaim), symbol liveness (named functions, files, and flags still
-   exist), and — whenever the distillation is phrased as a present-tense
-   behavior claim, especially text landing in an implementation doc —
-   **behavioral parity**: reproduce that the code still does what the rule
-   claims. The first two tiers are mechanical; the third is mandatory for
-   any current-behavior claim. Verifying the incoming lessons is not
-   enough: a fold that touches a runbook or spec also **re-verifies the
-   pre-existing code examples adjacent to its edits** — those examples are
-   status claims too, and a stale one sits in the exact pattern the
-   incoming lesson warns about. When a fold changes an existing rule's
-   meaning, annotate it in place — `(revised YYYY-MM-DD; was: <gist>)` —
-   so citations to the rule stay interpretable across history.
+   tiers** ([DOM-14]) — text fidelity (it says what the entries said, grepped
+   both directions, not what memory says they said; memory-drafted rules
+   overclaim, and every distinct trigger, exception, and required action must
+   survive without lossy prose compression), symbol liveness (named functions,
+   files, and flags still exist), and — whenever the distillation is phrased as
+   a present-tense code or runtime behavior claim, especially text landing in
+   an implementation doc — **behavioral parity**: reproduce that the code still
+   does what the rule claims (doc-only folds with no runtime claim satisfy the
+   floor via text fidelity and path/anchor liveness). Verifying the incoming
+   lessons is not enough: a fold that touches a runbook or spec also
+   **re-verifies the pre-existing code examples adjacent to its edits** —
+   those examples are status claims too, and a stale one sits in the exact
+   pattern the incoming lesson warns about. When a fold changes an existing
+   rule's meaning, annotate it in place — `(revised YYYY-MM-DD; was: <gist>)` —
+   so citations to the rule stay interpretable across history. On dated lesson
+   bullets, place the marker **after** the leading `- YYYY-MM-DD:` prefix
+   (`- YYYY-MM-DD: (revised YYYY-MM-DD; was: <gist>) ...`) so the derivation
+   regex `^- 20[0-9]{2}-[0-9]{2}-[0-9]{2}:` still matches.
 4. Write the distillation and its fold cue in the surviving text:
    `(distilled from N entries, YYYY-MM-DD..YYYY-MM-DD, source <source_sha>)`.
    The cue names the pre-fold commit that contains the raw material — never
@@ -205,20 +211,29 @@ For each tripped or requested fold:
    and importance class. A lesson that encodes an **upstream framework
    fact** (not a house choice) carries a version-bound decay clock
    instead: when the pinned dependency makes the violation loudly
-   impossible — a removed API, an import that now raises — the lesson has
-   **expired** and folds to git with the version fact as its cue, no
-   distillation target owed. A still-live framework fact is platform
-   documentation, not a convention: scatter it to the nearest topic doc,
-   never a "our conventions" home. Golden rules and safety invariants are exempt
-   from automated decay entirely (importance floor); they change only by
-   explicit revision, supersession, or deprecation, always with the
+   impossible across every reachable path — a removed API, an import that
+   now raises — the lesson has **expired** and folds to git with the
+   version fact as its cue, no distillation target owed. When an upstream
+   pin bump changes behavior on the primary path without eliminating the
+   hazard on import, migration, or admin paths — or when an active inverse
+   rule is still owed — **qualify the lesson in place with the version
+   boundary or verify the inverse rule** rather than silently retiring it.
+   A still-live framework fact is platform documentation, not a convention:
+   scatter it to the nearest topic doc, never a "our conventions" home.
+   Golden rules and safety invariants are exempt from automated decay
+   entirely (importance floor); they change only by explicit revision,
+   supersession, or deprecation, always with the
    `(revised YYYY-MM-DD; was: <gist>)` marker. An uncited cold entry with
    no rule potential may be folded to a one-line summary rather than a
    rule.
 
 ### 3. Plans tier: harvest gate, then soft-retire
 
-For each completed or superseded plan:
+Audit **all eligible `completed` and `superseded` plans** in the sweep
+rather than a fixed small batch (which fails to converge when plan inflow
+exceeds batch size; when the backlog is large, fan out read-only
+harvest-gate audits in parallel and integrate their evidence before
+editing). For each completed or superseded plan:
 
 0. Skip plans marked `exemplar` in the status index — they are exempt
    until the index note says their exemplar role has been superseded.
@@ -229,6 +244,8 @@ For each completed or superseded plan:
    - lessons extracted where applicable
    - every spec backlink converted to the retired citation form:
      `- retired: <plan-name> — source <source_sha>; see docs/plans/README.md`
+     (grep `tests/` first for tests that assert exact backlink strings in
+     `docs/specs/` and update them in the same change)
    - every durable alternative promoted to its steady-state owner, or
      explicitly judged plan-local; each promoted live pair is reciprocal
 2. Superseded plans: confirm the successor names what it inherits before
@@ -275,7 +292,12 @@ For each completed or superseded plan:
   theme. Its fix is reclassification: extract only the genuinely homeless
   coherent clusters to their real homes and leave the misfiled remainder
   for its own domain's pass. Do not force a mega-runbook over unrelated
-  material just to make the count drop.
+  material just to make the count drop. When reclassifying older entries
+  into a section that previously tracked progress with a contiguous date
+  watermark, switch that section to explicit fold-record tracking
+  (`### Noncontiguous Lesson Fold Records` in `docs/coalescing.md`) so the
+  date cursor does not falsely claim the newly moved older entries were
+  already folded.
 - Presence in the always-read context is NOT promotion evidence; only
   explicit citation in work products counts.
 
@@ -283,7 +305,12 @@ For each completed or superseded plan:
 
 Any repository's sweep may find a rule that generalizes: **propose it
 upward** to the guidance repo's ledger/principles with SHA-pinned
-provenance (repo, source SHA, date range). **In the guidance repo**,
+provenance (repo, source SHA, date range). "Generalizes" means
+generalizes **the discipline** — process, theory transfer, review,
+refusal-recording. A product-engineering rule recurring across repos
+is evidence for each product's theory, never a fold-up candidate; only
+the discipline-level residue of such an episode ascends
+([AT-THEORY-7], "What ascends here"). **In the guidance repo**,
 candidates are tracked in its state file's fold-up tier and accepted
 only with the independence check below. Independence check first: two repos exhibiting the same
 rule counts as fold-up evidence only when the incidents or adaptations are

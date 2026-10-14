@@ -49,17 +49,30 @@ Unreleased promotion mistakes: git revert.
 
 ## Process and agent guidance
 
-As of 2026-07-16 this repository carries the agent-guidance operating
-model (adopted from agent-guidance @ `fc23eae`): shared agent context in
-`docs/agent-context/` (follow its machine index for the read order), process
-specs in `docs/specs/` (`[DOM-*]`), implementation docs in
-`docs/implementation/`, reusable skills in `skills/`, the lessons ledger
-in `docs/lessons.md`, and coalescing state in `docs/coalescing.md`.
-Agents start at `AGENTS.md`. For product *use* orientation, prefer
-`docs/agent-kernel.md` before deep-diving the root README.
+As of 2026-07-16 this repository carries the Agent Theory operating model
+(adopted from `agent-theory`, most recently synchronized at `8f41a9d`): shared
+agent context in `docs/agent-context/` (follow its machine index for the read
+order), process specs in `docs/specs/` (`[DOM-*]` and the `[AT-REF-*]` primer
+`docs/specs/02-agent-theory-and-program-theory.md`), implementation docs in
+`docs/implementation/`, reusable skills in `skills/`, the lessons ledger in
+`docs/lessons.md`, and coalescing state in `docs/coalescing.md`. Agents start
+at `AGENTS.md`. For product *use* orientation, prefer `docs/agent-kernel.md`
+before deep-diving the root README.
+
+### Understanding Agent Theory and Program Theory
+
+Read these on demand when onboarding or before drafting or extending a theory
+file (not at every session start):
+
+- `docs/specs/02-agent-theory-and-program-theory.md` — short primer defining
+  Agent Theory, program theory, and module theory and how the documents fit
+  together
+- `docs/program-theory.md` — the working theory of **this repository**
+- `skills/crystallize-program-theory/SKILL.md` — one-question-at-a-time
+  interview for writing or extending a product or module theory
 
 Plans in `docs/plans/` are dated implementation plans and historical
-execution references.
+execution references, tracked in `docs/plans/README.md`.
 
 These docs do not contain plans prior to **2026-03-16**, when formal on-disk
 planning started. Design decisions made before that date live only in commit

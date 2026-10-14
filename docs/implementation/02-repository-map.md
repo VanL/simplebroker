@@ -74,6 +74,7 @@ Quick pointers to the key guidance documents in this repository.
 |------|---------|
 | `docs/specs/00-specs-index.md` | Numbered entry point for specs |
 | `docs/specs/01-development-documentation-operating-model.md` | Governing spec for the documentation workflow |
+| `docs/specs/02-agent-theory-and-program-theory.md` | Definitional reference primer for Agent Theory, program theory, and module theory |
 | `docs/plans/README.md` | Plan directory rules |
 | `docs/implementation/00-implementation-index.md` | Numbered entry point for implementation docs |
 | `docs/implementation/01-documentation-system.md` | Why the documentation system is shaped this way |
@@ -91,6 +92,7 @@ Quick pointers to the key guidance documents in this repository.
 | `skills/README.md` | Skill directory purpose and conventions |
 | `skills/_template/SKILL.md` | Starter template for new reusable skills |
 | `skills/coalescing/SKILL.md` | Coalescing sweep: distill lessons, harvest and retire plans, promote skills |
+| `skills/crystallize-program-theory/SKILL.md` | Interview-driven crystallization of product or module theory |
 | `skills/debugging/SKILL.md` | Root-cause-first debugging with proof and replan gates |
 | `skills/brainstorming-to-plan/SKILL.md` | Bridge from exploration to a dated plan or spec delta |
 | `skills/call-agent/SKILL.md` | Invoke an independent reviewer agent (read-only postures, probes) |

@@ -59,6 +59,9 @@ FOREIGN_MARKERS = (
     "engram",
     "simplebroker",
 )
+FOREIGN_MARKER_RE = re.compile(
+    r"\b(" + "|".join(re.escape(m) for m in FOREIGN_MARKERS) + r")\b"
+)
 
 # Opt-in local convenience, unset by default. A sibling working copy is an
 # environment fact, not a portability claim: anything found this way is
@@ -78,8 +81,8 @@ def git(*args: str, repo: Path | None = None) -> subprocess.CompletedProcess:
 def attributed_repo(text: str, pos: int) -> str | None:
     """Does the citation name the repository it came from? Reporting only."""
     ctx = text[max(0, pos - 80) : pos].lower()
-    hits = [m for m in FOREIGN_MARKERS if m in ctx]
-    return max(hits, key=len) if hits else None
+    hits = list(FOREIGN_MARKER_RE.finditer(ctx))
+    return hits[-1].group(1) if hits else None
 
 
 def resolves_locally(sha: str) -> bool:
@@ -102,10 +105,62 @@ def in_local_checkout(sha: str) -> str | None:
     return None
 
 
+def resolve_remote_ref() -> str | None:
+    """Resolve the default remote branch via origin/HEAD, falling back to origin/main."""
+    sym = git("symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD")
+    if sym.returncode == 0 and sym.stdout.strip():
+        cand = sym.stdout.strip()
+        if git("rev-parse", "--verify", cand).returncode == 0:
+            return cand
+    for fallback in ("origin/main", "origin/HEAD"):
+        if git("rev-parse", "--verify", fallback).returncode == 0:
+            return fallback
+    return None
+
+
+def _parse_retired_plan_row(line: str) -> tuple[str, str] | None:
+    cells = [c.strip() for c in line.strip().strip("|").split("|")]
+    if len(cells) < 2 or set(cells[0]) <= {"-", " "}:
+        return None
+    plan_cell = cells[0].strip("`").strip()
+    sha_match = SHA_RE.search(cells[-1])
+    if not plan_cell or not sha_match:
+        return None
+    rel = (
+        plan_cell if plan_cell.startswith("docs/plans/") else f"docs/plans/{plan_cell}"
+    )
+    if not rel.endswith(".md"):
+        rel = f"{rel}.md"
+    return (sha_match.group(1), rel)
+
+
+def retired_plan_cues() -> list[tuple[str, str]]:
+    """Extract (sha, repo_relative_plan_path) from ## Retired Plans in docs/plans/README.md."""
+    readme = REPO_ROOT / "docs" / "plans" / "README.md"
+    if not readme.is_file():
+        return []
+    in_retired = False
+    in_table = False
+    results: list[tuple[str, str]] = []
+    for line in readme.read_text(errors="replace").splitlines():
+        if line.startswith("## "):
+            in_retired = line.strip() == "## Retired Plans"
+            in_table = False
+        elif in_retired and line.startswith("| Plan"):
+            in_table = True
+        elif in_table and not line.startswith("|"):
+            in_table = False
+        elif in_table:
+            parsed = _parse_retired_plan_row(line)
+            if parsed is not None:
+                results.append(parsed)
+    return results
+
+
 def classify_sha_claims(
     text: str,
     *,
-    remote_ok: bool,
+    remote_ref: str | None,
 ) -> tuple[set[str], list[str], list[str], list[str]]:
     """Classify each distinct cited commit without changing retrieval truth."""
 
@@ -118,9 +173,8 @@ def classify_sha_claims(
         seen.add(sha)
         if resolves_locally(sha):
             if (
-                remote_ok
-                and git("merge-base", "--is-ancestor", sha, "origin/main").returncode
-                != 0
+                remote_ref
+                and git("merge-base", "--is-ancestor", sha, remote_ref).returncode != 0
             ):
                 local_only.append(sha)
             continue
@@ -139,8 +193,14 @@ def classify_sha_claims(
     return seen, broken, local_only, foreign
 
 
-def broken_retrieval_cues(cues: list[tuple[str, str]]) -> list[str]:
-    """Return every explicit git-show cue that cannot be retrieved locally."""
+def broken_retrieval_cues(
+    cues: list[tuple[str, str]],
+    *,
+    seen: set[str],
+    local_only: list[str],
+    remote_ref: str | None,
+) -> list[str]:
+    """Return every explicit git-show or retired-plan cue that cannot be retrieved locally."""
 
     broken = []
     for sha, path in cues:
@@ -149,6 +209,13 @@ def broken_retrieval_cues(cues: list[tuple[str, str]]) -> list[str]:
             and git("cat-file", "-e", f"{sha}:{path}").returncode == 0
         ):
             broken.append(f"cue `git show {sha}:{path}` does not resolve here")
+        elif sha not in seen:
+            seen.add(sha)
+            if (
+                remote_ref
+                and git("merge-base", "--is-ancestor", sha, remote_ref).returncode != 0
+            ):
+                local_only.append(sha)
     return broken
 
 
@@ -174,8 +241,9 @@ def report_results(
     *,
     claim_count: int,
     cue_count: int,
+    retired_cue_count: int,
     lesson_count: int,
-    remote_ok: bool,
+    remote_ref: str | None,
     broken: list[str],
     local_only: list[str],
     foreign: list[str],
@@ -184,7 +252,8 @@ def report_results(
 
     print(
         f"coalesce-check: {claim_count} SHA claim(s) "
-        f"({len(foreign)} foreign claim(s)), {cue_count} retrieval cue(s); "
+        f"({len(foreign)} foreign claim(s)), {cue_count} retrieval cue(s) "
+        f"({retired_cue_count} retired-plan cue(s)); "
         f"lessons dated entries: {lesson_count}"
     )
     if foreign:
@@ -196,7 +265,7 @@ def report_results(
         print(
             f"  local-only pin ({len(local_only)}): "
             + ", ".join(local_only)
-            + "  [not in origin/main — published history cannot verify these]"
+            + f"  [not in {remote_ref} — published history cannot verify these]"
         )
     if broken:
         print(f"  BROKEN ({len(broken)}):")
@@ -205,7 +274,7 @@ def report_results(
         return 1
     print(
         "  all cues resolve locally"
-        + ("" if remote_ok else "  [no origin remote — publication check skipped]")
+        + ("" if remote_ref else "  [no origin remote — publication check skipped]")
     )
     return 0
 
@@ -220,7 +289,7 @@ def main() -> int:
         # History-dependent legs cannot be truthful here; skip loudly.
         # (Adopted from agent-theory @ 0423923 — scaffold contract
         # change: was false BROKEN/exit 1 on shallow clones.)
-        cues = sorted(set(CUE_RE.findall(text)))
+        cues = sorted(set(CUE_RE.findall(text)) | set(retired_plan_cues()))
         print(
             "coalesce-check: shallow clone detected — SHA-resolution and "
             "retrieval-cue checks SKIPPED (history absent; cues cannot be "
@@ -231,25 +300,27 @@ def main() -> int:
         print(f"  lessons dated entries: {count_lesson_entries()}")
         return 0
 
-    cues = sorted(set(CUE_RE.findall(text)))
-    # Known limitation (hub lessons 2026-08-07): the ancestry check
-    # hardcodes origin/main; a consumer with a different default branch
-    # gets false local-only-pin reports. Fix candidate: resolve the
-    # default via origin/HEAD, falling back to origin/main.
-    remote_ok = (
-        git("rev-parse", "--verify", "origin/HEAD").returncode == 0
-        or git("rev-parse", "--verify", "origin/main").returncode == 0
-    )
+    retired_cues = retired_plan_cues()
+    cues = sorted(set(CUE_RE.findall(text)) | set(retired_cues))
+    remote_ref = resolve_remote_ref()
     seen, broken, local_only, foreign = classify_sha_claims(
         text,
-        remote_ok=remote_ok,
+        remote_ref=remote_ref,
     )
-    broken.extend(broken_retrieval_cues(cues))
+    broken.extend(
+        broken_retrieval_cues(
+            cues,
+            seen=seen,
+            local_only=local_only,
+            remote_ref=remote_ref,
+        )
+    )
     return report_results(
         claim_count=len(seen),
         cue_count=len(cues),
+        retired_cue_count=len(retired_cues),
         lesson_count=count_lesson_entries(),
-        remote_ok=remote_ok,
+        remote_ref=remote_ref,
         broken=broken,
         local_only=local_only,
         foreign=foreign,

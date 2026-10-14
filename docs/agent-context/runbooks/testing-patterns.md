@@ -38,6 +38,27 @@ Use the narrowest real proof that still exercises the behavior under review.
 6. Name the regression being protected.
    “Happy path still works” is rarely enough on its own.
 
+7. Write expected labels and wire fixtures as independent literals.
+   Never import or project expected values from the system under test in a
+   round-trip or handshake test (`f(x) == f(x)`). Generate schema or storage
+   migration fixtures from prior release lineage rather than hand-editing
+   version metadata on current-schema state.
+
+8. Straddle repaired guards at the boundary.
+   When fixing an off-by-one, threshold, or validation guard, test both the
+   nearest valid input and the nearest invalid input across the boundary, and
+   include at least one test with a non-default resolved configuration at any
+   shared inner runner.
+
+9. Pair negative assertions with reachable positive setup and producer closure.
+   An `assert not ...` or empty-result check is vacuous unless the test first
+   proves the setup could have produced a match and closes or drains the
+   producer before asserting absence.
+
+10. Name an equivalence owner before deleting any test.
+    Never delete or consolidate a test without naming the surviving test that
+    covers the same boundary and failure mode.
+
 ## Common Failure Patterns
 
 ### Pattern 1: Mocked Core Behavior Hides the Bug
@@ -139,6 +160,9 @@ Fix:
 - poll the queue in short intervals so child error messages surface promptly
 - on failure, report received child IDs plus each process's PID, exit code, and
   liveness; do not turn a missing result into a silent pass
+- run threshold-bearing measurements in an exclusive phase: a
+  test-serialization group constrains only its own members, not work on
+  other runner workers
 
 ### Pattern 8: The Test Neutralizes the Hostile Default It Claims to Cover
 
@@ -159,11 +183,42 @@ Fix:
 - when reaching the seam requires altering the environment, name the altered
   dimension in the test and prove the default path in a companion test
 
+### Pattern 9: Contention Reduction, Negative Timing Windows, and Shared-Module Patching
+
+Symptoms:
+
+- a failing concurrency test passes only when run with `-n 0`, fewer workers,
+  added `sleep` padding, or extra retry loops
+- a test asserts `not event.wait(0.05)` to prove a thread is blocked, causing
+  false passes or scheduler-dependent flakes
+- a polling predicate mutates state or consumes items while checking readiness
+- monkeypatching `time.monotonic`, `os.getpid`, or `sys.platform` leaks into
+  background threads or parallel worker processes
+
+Fix:
+
+- treat any urge to lower concurrency (`-n 0`), pad sleeps/timeouts, or add
+  retries as a **theory-possession stop condition**: lower-concurrency runs are
+  diagnostic-only and never satisfy a completion gate
+- prove blocking and ordering positively with a causal wait-entry fence
+  (signaled immediately before entering the blocking call) rather than a
+  negative timing window
+- keep observational polling predicates side-effect-free
+- patch simulated clocks and platform seams on module-owned callables
+  (`_monotonic`, `_sleep`, `_getpid`) rather than shared standard-library
+  modules
+
 ## Verification Pattern
 
 For meaningful changes:
 
-1. run the smallest targeted proof
+1. run the smallest targeted proof (and when RED test execution was delegated
+   to a subagent, inspect the exact failure assertion in the subagent
+   transcript before advancing to GREEN; for P1-class defects, record one
+   mutation line proving the test fails when the production fix is reverted)
 2. run the nearest neighboring suite when blast radius justifies it
-3. run static checks when source files changed
+3. before declaring a slice or task complete, run static checks and tests over
+   the **exact full roots that CI checks** (for example `simplebroker tests
+   examples` or the repository's full gate matrix), not only the targeted
+   subset used during iteration
 4. call out anything not verified

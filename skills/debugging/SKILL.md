@@ -66,19 +66,27 @@ lands with a proof that the failure cannot silently return.
    a partial contract update (Rule 5), an unhandled error path (Rule 11).
    Fix the class where cheap; at minimum name it.
 5. **Write the failing test, watch it fail** (§10), then fix, then watch
-   it pass. Generate fixtures through production code paths. If the test
-   is hard to write, that is design information — record it, don't skip.
-   The only sanctioned alternative is testing-patterns Rule 5: name what
-   replaced red-green and why. This is a separate decision from step 1's
-   reproduction exception — a failure you could not reproduce live may
+   it pass. Generate fixtures through production code paths. When fixing an
+   off-by-one, threshold, or validation guard, straddle the boundary (test
+   both the nearest valid input and the nearest invalid input). For a
+   P1-class defect, record one mutation line (revert or break the
+   production fix, observe the named regression test fail, and restore). If
+   the test is hard to write, that is design information — record it, don't
+   skip. The only sanctioned alternative is testing-patterns Rule 5: name
+   what replaced red-green and why. This is a separate decision from step
+   1's reproduction exception — a failure you could not reproduce live may
    still get a deterministic regression test (e.g. by forcing the race
    condition in the harness); claim Rule 5 only when the *regression
    proof* itself is impractical, and say so explicitly.
 6. **Stop-and-replan gates.** Stop and report instead of continuing when:
    the root cause implicates the spec (deviation path); the fix wants to
-   add a second path instead of extending the canonical one (§1); or two
-   fix attempts have failed — the third attempt without new information
-   is thrashing.
+   add a second path instead of extending the canonical one (§1); the fix
+   reaches for reduced concurrency (`-n 0`, fewer workers), sleep/timeout
+   padding, or extra retry loops to quiet a contention or lock-order failure
+   (contention is a theory-possession stop condition; lower-concurrency runs
+   are diagnostic-only and never satisfy a completion gate); or two fix
+   attempts have failed — the third attempt without new information is
+   thrashing.
 
 ## Output Standard
 

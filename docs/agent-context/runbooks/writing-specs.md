@@ -104,10 +104,14 @@ be scanned as active.
 such as backstitch classify whole files via configuration globs
 (`planned_spec_globs`, `exploratory_spec_globs`); shipped code citing a
 classified file gets warning-class findings instead of full graph rules.
-There is usually **no per-section classification**: you cannot mark one
-paragraph of an active file as planned without downgrading the whole file.
-Many repos ship with these patterns empty — every scanned spec file is
-active until configuration adds them.
+File-glob classification is per-**file**: you cannot mark one paragraph of an
+active file as planned via file globs without downgrading the whole file. Where
+the repository's traceability checker supports inline section directives (such
+as `_Traceability: meta_` or `_Traceability: ignore <reason>_`), use those
+explicit section markers for genuinely non-behavioral or meta sections rather
+than reclassifying the parent file. Many repos ship with file-classification
+patterns empty — every scanned spec file is active until configuration adds
+them.
 
 Choosing a mechanism:
 
@@ -116,6 +120,7 @@ Choosing a mechanism:
 | Whole spec not yet adopted | Prose `Status: Proposed` + explicit out-of-scope for implementation; accept info-class unmapped debt or a meta classification if links must not be required |
 | Substantial in-flight behavior in a **new** file | New file path under a planned/exploratory classification (name the config change) |
 | Paragraph edit inside an existing active file | Promotion strategy A or B in `runbooks/writing-plans.md` §4d — not a reclassification of the parent file |
+| Non-behavioral or meta section inside an active file | Inline section directive (`_Traceability: meta_` or `_Traceability: ignore <reason>_`) where supported by the checker |
 
 **Owner:** spec/plan author names mechanism and promotion strategy.
 **Boundary:** classification and scanning require the spec tree; plan
@@ -154,6 +159,10 @@ reviewer's job includes checking rule-vs-code, not just rule-vs-intent.
 - Keep `## Related Plans` current.
 - If an implementation note exists for the touched area, update it in the same
   change.
+- When extracting, splitting, or simplifying a spec section, audit every
+  removed or rewritten paragraph clause-by-clause for distinct hazards,
+  exceptions, and boundary conditions so normative requirements are not lost in
+  prose compression.
 - If no spec exists for material new behavior, add one instead of burying the
   decision in a plan or commit message.
 - If a change is intentionally spec-free, make that explicit in the plan.

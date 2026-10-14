@@ -26,11 +26,12 @@ is the human entry and catalog). `CHANGELOG.md` records published deltas.
   advantage is significant (a genuinely parallel sweep, an isolation-worthy
   read), but the delegation contract is not waivable: you remain responsible
   for your entire brief; you wait for, verify, and integrate your delegate's
-  output before returning — NEVER return a "waiting" or partial-status
-  message over work still in flight; your delegate inherits your brief's
-  constraints and must not delegate further; and if your environment cannot
-  guarantee you will see the delegate's result before you must return, do
-  not delegate.
+  output before returning — including verifying the exact failure assertion
+  in the subagent transcript when RED test writing is delegated — NEVER return
+  a "waiting" or partial-status message over work still in flight; your
+  delegate inherits your brief's constraints and must not delegate further;
+  and if your environment cannot guarantee you will see the delegate's result
+  before you must return, do not delegate.
 - NEVER ADD AGENT SELF-ATTRIBUTION TO COMMITS OR PULL REQUESTS: no
   `Co-Authored-By:` trailers naming an AI tool, no "Generated with ..." lines,
   no agent names or emoji signatures in commit messages or PR descriptions.
@@ -60,6 +61,19 @@ and task-specific skill or runbook.
 audits, reviews, feature-fit and design opinions — not only for
 implementation. Skipping it because a task looks like verification is the
 observed failure mode.
+
+**Module theory** is how this repository's conceptual model is **extended**
+when depth is local (not a second global constitution):
+
+- On **entry** to a module that has theory (conventional name
+  `MODULE-THEORY.md` next to that code, or a path named from product theory),
+  read it before changing that module's public shape, rules, or ownership.
+- Do **not** load every module theory at session start.
+- Do **not** bulk local depth into `docs/program-theory.md`; extend with
+  module theory instead. Rules and checklist:
+  `docs/specs/01-development-documentation-operating-model.md` (`[DOM-2]`),
+  `docs/specs/02-agent-theory-and-program-theory.md` (`[AT-REF-4]`), and
+  `skills/crystallize-program-theory/SKILL.md` to write one.
 
 For product use or embedding rather than repository work, start with
 `docs/agent-kernel.md`, then follow its product-section-registry links to the

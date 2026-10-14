@@ -7,15 +7,17 @@ caught instances by hand before this gate existed.
 
 Adopted from agent-guidance @ `e42762c` via retired plan
 2026-07-28-propagate-guidance-delta-wave-plan (source `54fa706`; see
-`docs/plans/README.md`). Adapted
+`docs/plans/README.md`); synchronized with `agent-theory` @ `8f41a9d` via
+`docs/plans/2026-10-14-agent-theory-delta-wave-plan.md`. Adapted
 for this repository: the hub's `--scaffold` mode is dropped (no
 bootstrap generator here), the scan set covers this repo's extra agent
 surfaces (`docs/agent-kernel.md`, `llms.txt`), and path claims into the
 guidance surfaces must resolve against this repository's tree.
 
-
-Usage:
-  check-doc-paths [--root DIR]
+Modes:
+  check-doc-paths [--root DIR]   scan a tree (default: this repo)
+  check-doc-paths --self-test    firing tests for the claim scan, fenced
+                                 block stripping, and DECLARED_FUTURE_ARTIFACTS
 
 Exit 0 when every claim resolves; exit 1 listing the danglers.
 """
@@ -25,6 +27,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +56,13 @@ CLAIM_RE = re.compile(r"`((?:docs|skills|bin)/[A-Za-z0-9_./-]+)`")
 # Suffixes/patterns that are templates or globs, not claims.
 NON_CLAIM = re.compile(r"[*{}<>]|YYYY|<[a-z]|\.\.\.")
 
+# Governed future-artifact allowlist. Adopters may list contractually named
+# artifacts that intentionally do not exist yet. Honesty is enforced both
+# ways in check_tree:
+#   1. A listed path that now exists on disk fails as a stale suppression.
+#   2. A listed path that no scanned document claims fails as an unused entry.
+DECLARED_FUTURE_ARTIFACTS: set[str] = set()
+
 
 def iter_files(root: Path):
     for d in SCAN_DIRS:
@@ -66,20 +76,91 @@ def iter_files(root: Path):
             yield p
 
 
-def check_tree(root: Path) -> int:
-    failures = []
+def _prose_lines(text: str):
+    """Yield (1-indexed line_number, line) outside fenced code blocks.
+
+    Matches the CommonMark fence rules used by check-dom15-fixtures: an
+    opening or closing fence may be indented at most three spaces, and a
+    closing fence must use the same character, be at least as long as the
+    opener, and carry no trailing info string.
+    """
+    fence: tuple[str, int] | None = None
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        marker: tuple[str, int, str] | None = None
+        leading_spaces = len(line) - len(line.lstrip(" "))
+        stripped = line[leading_spaces:]
+        if leading_spaces <= 3 and stripped.startswith(("```", "~~~")):
+            char = stripped[0]
+            length = len(stripped) - len(stripped.lstrip(char))
+            marker = (char, length, stripped[length:])
+        if fence is None and marker is not None:
+            fence = (marker[0], marker[1])
+            continue
+        if fence is not None:
+            if (
+                marker is not None
+                and marker[0] == fence[0]
+                and marker[1] >= fence[1]
+                and not marker[2].strip()
+            ):
+                fence = None
+            continue
+        yield lineno, line
+
+
+def _stale_allowlist_failures(root: Path, declared_future: set[str]) -> list[str]:
+    return [
+        f"bin/check-doc-paths: `{declared}` exists but is still "
+        "listed in DECLARED_FUTURE_ARTIFACTS — remove the stale "
+        "suppression entry"
+        for declared in sorted(declared_future)
+        if (root / declared).exists() or (root / declared).is_symlink()
+    ]
+
+
+def _scan_claims(root: Path, declared_future: set[str]) -> tuple[list[str], set[str]]:
+    failures: list[str] = []
+    claimed_allowlisted: set[str] = set()
     for f in iter_files(root):
         text = f.read_text(errors="replace")
-        for m in CLAIM_RE.finditer(text):
-            claim = m.group(1)
-            if NON_CLAIM.search(claim):
-                continue
-            target = root / claim
-            if not (target.exists() or target.is_symlink()):
-                line = text.count("\n", 0, m.start()) + 1
-                failures.append(
-                    f"{f.relative_to(root)}:{line}: `{claim}` does not resolve"
-                )
+        line_iter = (
+            _prose_lines(text)
+            if f.suffix == ".md"
+            else enumerate(text.splitlines(), start=1)
+        )
+        for lineno, line in line_iter:
+            for m in CLAIM_RE.finditer(line):
+                claim = m.group(1)
+                if NON_CLAIM.search(claim):
+                    continue
+                if claim in declared_future:
+                    claimed_allowlisted.add(claim)
+                    continue
+                target = root / claim
+                if not (target.exists() or target.is_symlink()):
+                    failures.append(
+                        f"{f.relative_to(root)}:{lineno}: `{claim}` does not resolve"
+                    )
+    return failures, claimed_allowlisted
+
+
+def check_tree(
+    root: Path,
+    *,
+    declared_future: set[str] | None = None,
+) -> int:
+    active_declared = (
+        DECLARED_FUTURE_ARTIFACTS if declared_future is None else declared_future
+    )
+    failures = _stale_allowlist_failures(root, active_declared)
+    scan_failures, claimed_allowlisted = _scan_claims(root, active_declared)
+    failures.extend(scan_failures)
+    failures.extend(
+        f"bin/check-doc-paths: `{unused}` is allowlisted in "
+        "DECLARED_FUTURE_ARTIFACTS but no scanned surface claims it — "
+        "remove the unused suppression entry"
+        for unused in sorted(active_declared - claimed_allowlisted)
+    )
     if failures:
         print(f"check-doc-paths: {len(failures)} dangling path claim(s):")
         for fail in failures:
@@ -89,10 +170,132 @@ def check_tree(root: Path) -> int:
     return 0
 
 
+def self_test() -> int:
+    """Firing tests for claim scanning, fenced blocks, and allowlist honesty."""
+    import contextlib
+    import io
+
+    def quiet_check(root: Path, declared_future: set[str]) -> int:
+        with contextlib.redirect_stdout(io.StringIO()):
+            return check_tree(root, declared_future=declared_future)
+
+    def build(
+        tmp: str,
+        *,
+        spec_text: str,
+        materialize: str | None = None,
+    ) -> Path:
+        root = Path(tmp)
+        (root / "docs" / "specs").mkdir(parents=True)
+        (root / "docs" / "specs" / "01-sample.md").write_text(spec_text)
+        if materialize is not None:
+            target = root / materialize
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("{}")
+        return root
+
+    future_path = "docs/specs/99-future-artifact.md"
+    probes = [
+        (
+            "unlisted missing claim was not flagged",
+            "`docs/specs/missing.md`\n",
+            set(),
+            None,
+            None,
+            1,
+        ),
+        (
+            "fenced code block sample path was wrongly flagged",
+            "```markdown\n`docs/specs/fenced-example-only.md`\n```\n",
+            set(),
+            None,
+            None,
+            0,
+        ),
+        (
+            "info-string fence line inside code block closed early and hid trailing prose",
+            "```\n``` markdown\n```\n`docs/specs/missing-after-fence.md`\n",
+            set(),
+            None,
+            None,
+            1,
+        ),
+        (
+            "4-space-indented fence line hid broken path claim",
+            "    ```\n`docs/specs/indented-missing.md`\n    ```\n",
+            set(),
+            None,
+            None,
+            1,
+        ),
+        (
+            "unclosed fence hid interior sample path",
+            "```markdown\n`docs/specs/unclosed-fence-example.md`\n",
+            set(),
+            None,
+            None,
+            0,
+        ),
+        (
+            "allowlisted missing claim was wrongly flagged",
+            f"`{future_path}`\n",
+            {future_path},
+            None,
+            None,
+            0,
+        ),
+        (
+            "stale allowlist entry over an existing file passed",
+            f"`{future_path}`\n",
+            {future_path},
+            future_path,
+            None,
+            1,
+        ),
+        (
+            "unused allowlist entry passed",
+            "`docs/specs/01-sample.md`\n",
+            {future_path},
+            None,
+            None,
+            1,
+        ),
+        (
+            "symlink claim target was not treated as present",
+            "`docs/specs/link.md`\n",
+            set(),
+            None,
+            ("docs/specs/link.md", "01-sample.md"),
+            0,
+        ),
+    ]
+    failures: list[str] = []
+    for name, spec_text, declared, materialize, symlink, expected in probes:
+        with tempfile.TemporaryDirectory() as td:
+            root = build(td, spec_text=spec_text, materialize=materialize)
+            if symlink is not None:
+                (root / symlink[0]).symlink_to(symlink[1])
+            if quiet_check(root, declared) != expected:
+                failures.append(name)
+    if failures:
+        for f in failures:
+            print(f"check-doc-paths self-test FAIL: {f}")
+        return 1
+    print("check-doc-paths self-test: all claim, fence, and allowlist probes pass")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=str(REPO_ROOT))
+    ap.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run firing self-tests for check-doc-paths",
+    )
     args = ap.parse_args()
+    if args.self_test:
+        return self_test()
     return check_tree(Path(args.root))
 
 

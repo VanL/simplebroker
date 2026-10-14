@@ -107,16 +107,27 @@ The class is a claim; escalators are one-way and declared.
 
 ## Completion Gate
 
-Every requested item should have at least one evidence line:
+Every requested item must have at least one evidence line naming:
 
-- changed file and what changed
-- verification command and result
-- observed behavior or explicit residual risk
+- the changed file and what changed
+- the verification command and its output
+- the observed behavior or explicit residual risk
 
-A status document — a ledger, an execution log, a prior "passing" note, your
-own earlier summary — is a claim, not evidence. Every "done", "passing", or
-"ship-ready" assertion must cite a command rerun from the current state, not
-a document that says so.
+Three rules govern completion claims:
+
+- **Status documents are claims, not evidence.** A ledger, an execution log, a
+  prior "passing" note, or your own earlier summary does not prove current
+  state. Every "done", "passing", or "ship-ready" claim must cite a command
+  rerun against the current working tree.
+- **Stale open markers are not proof that work is unshipped.** An unchecked
+  box or an unflipped `Status:` header in an old plan can be stale; inspect the
+  actual code and tests before treating a plan as open work.
+- **Counts and completeness words must be verified by command.** Verify numeric
+  counts and words like `all`, `every`, `full`, `zero`, and `none` in plans,
+  commit messages, and handoff reports by running a command against the current
+  tree rather than estimating from memory. When an audit finds a gap in a
+  `"full"` contract, close the gap rather than weakening the contract wording
+  unless the owner explicitly approves a scope reduction.
 
 For spec-changing work, the final completion gate includes **traceability
 reconciliation**: the promoted spec, plan, implementation doc, and code form

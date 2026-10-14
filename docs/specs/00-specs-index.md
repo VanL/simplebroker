@@ -10,6 +10,8 @@ registry below remain the owners of exact intended behavior.
 ## Process specs
 
 1. `01-development-documentation-operating-model.md` — `[DOM-*]`
+2. `02-agent-theory-and-program-theory.md` — `[AT-REF-*]` (reference primer —
+   definitions of Agent Theory, program theory, and module theory)
 
 ## Product specs
 
@@ -51,7 +53,7 @@ Product section authority: `product-section-registry.md`.
 
 ## Naming
 
-- Process: keep `01-…` and `[DOM-*]`.
+- Process: keep `01-…`, `02-…`, `[DOM-*]`, and `[AT-REF-*]`.
 - Product: `10+` filenames and `[SB-*]` codes.
 - Prefer concise, descriptive titles over ticket-like names.
 

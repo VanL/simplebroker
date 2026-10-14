@@ -47,10 +47,24 @@ For non-trivial plans and completed work, run an independent review.
 
 Preferred order:
 
-1. a different agent family than the authoring agent
-2. if not available, a same-family agent with a clearly separate review role
-3. if no second agent is available, do a strict fresh-eyes review and note the
-   limitation
+1. **Tier 1 (required default):** a different agent family than the authoring
+   agent, selected from `docs/implementation/03-agent-inventory.md` and invoked
+   via `skills/call-agent/SKILL.md`
+2. **Tier 2 (fallback only after recorded Tier-1 unavailability):** a native
+   harness subagent (which inherits the authoring model family) with a clearly
+   separate review role, permitted only after two bounded, logged Tier-1
+   attempts fail and recorded in the plan's review log as
+   `same-family fallback (degraded)`
+3. **Tier 3:** if no second agent is available at all, do a strict fresh-eyes
+   review and note the limitation (`Review: unavailable — <reason>` on Class ≥3
+   plans)
+
+Why native subagents are Tier-2 fallback, not Tier-1 equivalent: a native
+harness subagent runs on the same model family and shares the author's framing
+priors. When a plan is organized around a plausible-sounding narrative or a
+static-metric cleanup, a same-family subagent can validate the plan's internal
+coherence instead of falsifying its premise — a risk motivating the
+different-family default.
 
 Attempts at a preferred reviewer are bounded and evidenced. Bound
 different-family attempts (default: two) with explicit timeouts, and record
@@ -76,6 +90,9 @@ Always point the reviewer at:
 - the active plan
 - the relevant implementation note
 - the current touched files
+- any standing invariants or refused alternatives (`[ALT-*]`) in force for the
+  touched surface (for example in `docs/program-theory.md` or a standing
+  invariants registry)
 - any important tests or verification commands
 
 Do not ask the reviewer to implement. The point is to surface errors, bad
@@ -94,12 +111,20 @@ nonexistent surfaces with identical confidence. (Promoted by hub owner
 direction 2026-08-07 from this repository's 2026-08-06 lessons.)
 
 **Premise- and falsifiability-check second.** After checking that named
-files and symbols exist, verify that cited Git SHAs resolve
-(`git cat-file -e`), that the claimed bug or hazard is actually
-reachable through the live call and lock graph, and that each proposed
-test would fail before the change and cannot pass by silent skip or
-green-on-arrival setup. Same-family reviewers routinely pass existence
-checks while inheriting a false causal premise.
+surfaces exist, verify:
+
+1. **Causal premise in code** — trace the named functions and call paths in the
+   repository to verify the bug, race, or bottleneck actually behaves the way
+   the plan claims. Do not trust the plan's prose summary of the code;
+   generative plan authoring does not self-falsify against earlier same-session
+   tool output.
+2. **Falsifiable proof** — verify that each proposed test would actually fail
+   before the production change (or under a one-line mutation of the production
+   guard) rather than passing tautologically through mocks, default configs, or
+   projected labels or silent skips.
+3. **Empirical identifiers by command** — verify commit SHAs (`git cat-file -e`),
+   line numbers, rule codes, and version facts via command against the tree
+   rather than model memory.
 
 ## 4. Recommended Plan Review Prompt
 
@@ -112,11 +137,18 @@ Use this or a close variant:
 > add ceremony without meaningfully addressing a real-world risk
 > identified in the code.
 >
-> Check specifically for invariants: what must not be changed (where
-> this repository keeps a standing-invariants registry, check the plan
-> against it). If you need to propose a new invariant, or there is a
-> meaningful risk that would be raised by implementing this plan,
-> describe that risk with a directive to raise it for human review.
+> Check specifically for invariants and refused alternatives: what must not be
+> changed (check `docs/program-theory.md` `[ALT-*]` records and any standing
+> invariants or suppression registries in force). If a finding would require
+> overturning a standing invariant or refused alternative, do not ask the
+> author to silently accommodate it — mark it `RECONSIDERATION REQUESTED` with
+> the new concrete evidence so it escalates to the human owner. If you need to
+> propose a new invariant, or there is a meaningful risk that would be raised
+> by implementing this plan, describe that risk with a directive to raise it
+> for human review.
+>
+> Verify the plan's causal premise directly in the code and confirm that its
+> proposed tests are falsifiable before grading wording or structure.
 >
 > You must answer PASS or BLOCKED, followed by your analysis of any
 > blocking issues, based upon your answers to these two questions:
@@ -151,8 +183,12 @@ scope decision.
 > **Goal of the change:** [one sentence].
 > **Explicitly accepted risks — do not re-litigate:** [list, or "none
 > declared"].
-> **Standing constraints this change must not cross:** [key invariants,
-> or the repo's invariants registry path, or "none registered"].
+> **Standing constraints and refused alternatives in force:** [key invariants,
+> `docs/program-theory.md` `[ALT-*]` IDs, or the repo's standing invariants
+> surface, or "none registered"]. Findings that would overturn a standing
+> constraint or refused alternative must be marked `RECONSIDERATION REQUESTED`
+> with new evidence for the human owner rather than treated as ordinary
+> author-actionable edits.
 > **Pre-existing concerns** (concurrency, error shapes, validation,
 > policy, lifecycle, style) are out-of-scope observations unless THIS
 > change makes them worse.
@@ -184,9 +220,13 @@ After the review returns:
 
 The loop is not complete until each review point has been:
 
-- accepted and addressed
+- accepted and addressed (with the plan's task list and code snippets verified
+  updated — a `fixed in plan` disposition row without the corresponding body
+  update is an incomplete review loop)
 - rejected with reasoning
-- or marked out of scope with reasoning
+- marked out of scope with reasoning
+- or escalated to the human owner as `RECONSIDERATION REQUESTED` when the
+  finding collides with a standing invariant or refused alternative (`[ALT-*]`)
 
 If the reviewer says they could not implement confidently and correctly, treat
 that as a blocker until the missing detail is fixed or the limitation is

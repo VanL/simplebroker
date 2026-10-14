@@ -26,20 +26,24 @@ from pathlib import Path
 DEFAULT_SPEC = "docs/specs/01-development-documentation-operating-model.md"
 
 CLASS_CELL_RE = re.compile(r"^(?:[0-5]\b|Class\s+[0-5]\+P\b|Escalate to [0-5]\b)")
-# Adopters: this marker list is repo-adapted by design. When your
+# Adopters: this pattern tuple is repo-adapted by design. When your
 # fixtures use local phrasing (name-based triggers, different negation
 # wording), EXTEND this tuple — do not reword your fixtures back to
 # canonical brackets. (Adaptation guidance lives in the agent-theory
 # repository's propagate-guidance skill, which is hub-only by design.)
-NEGATIVE_FACT_MARKERS = (
-    "no [DOM-5]",
-    "no behavior change",
-    "no observable behavior",
-    "not [DOM-6]-material",
-    "nothing changes",
-    "intent evidence",
-    "spec-cited intent",
-    "the cited section is the intent evidence",
+NEGATIVE_FACT_PATTERNS = (
+    re.compile(
+        r"\bno(?: other)? \[DOM-5\][^.;,—\[]*?\btriggers?\s+fires?\b", re.IGNORECASE
+    ),
+    re.compile(r"\bno (?:observable )?behavior change\b", re.IGNORECASE),
+    re.compile(r"\bnot \[DOM-6\]-material\b", re.IGNORECASE),
+    re.compile(r"\bnothing changes\b", re.IGNORECASE),
+)
+TRIGGER_FIRE_RE = re.compile(
+    r"\[DOM-[56]\][^.;,—\[]*?\btriggers?\s+fires?\b", re.IGNORECASE
+)
+CLAUSE_SPLIT_RE = re.compile(
+    r"[,;.—]|\b(?:but|yet|and|while|though|although|however)\b", re.IGNORECASE
 )
 
 
@@ -111,6 +115,52 @@ def fixture_rows(section: str) -> list[tuple[str, str]]:
     return rows
 
 
+def states_firing_trigger(fact: str) -> bool:
+    """True when any trigger-fire clause in `fact` is not directly negated."""
+    for clause in CLAUSE_SPLIT_RE.split(fact):
+        for match in TRIGGER_FIRE_RE.finditer(clause):
+            prefix = clause[: match.start()]
+            if not re.search(r"\bno(?: other)?\s+$", prefix, re.IGNORECASE):
+                return True
+    return False
+
+
+def has_negative_fact(fact: str) -> bool:
+    """True when at least one clause states a valid negative-trigger fact."""
+    return any(
+        p.search(clause)
+        for clause in CLAUSE_SPLIT_RE.split(fact)
+        for p in NEGATIVE_FACT_PATTERNS
+    )
+
+
+def _record_row(
+    fact: str,
+    cls: str,
+    seen_classes: set[str],
+    problems: list[str],
+) -> None:
+    if not CLASS_CELL_RE.match(cls):
+        problems.append(f"unknown class cell: {cls!r} (fixture: {fact[:50]}...)")
+        return
+    if "+P" in cls:
+        seen_classes.add("+P")
+        seen_classes.add(cls.split()[1].split("+")[0])
+    elif cls.startswith("Escalate to"):
+        seen_classes.add(cls.split()[-1][0])
+    else:
+        seen_classes.add(cls[0])
+    if cls[0] in ("1", "2") and not cls.startswith("Escalate"):
+        if not has_negative_fact(fact):
+            problems.append(
+                f"class-{cls[0]} fixture missing negative-trigger facts: {fact[:60]}..."
+            )
+        if states_firing_trigger(fact):
+            problems.append(
+                f"class-{cls[0]} fixture states that a trigger fires: {fact[:60]}..."
+            )
+
+
 def check(section: str) -> list[str]:
     problems: list[str] = []
     rows = fixture_rows(section)
@@ -119,24 +169,7 @@ def check(section: str) -> list[str]:
 
     seen_classes: set[str] = set()
     for fact, cls in rows:
-        if not CLASS_CELL_RE.match(cls):
-            problems.append(f"unknown class cell: {cls!r} (fixture: {fact[:50]}...)")
-            continue
-        if "+P" in cls:
-            seen_classes.add("+P")
-            seen_classes.add(cls.split()[1].split("+")[0])
-        elif cls.startswith("Escalate to"):
-            seen_classes.add(cls.split()[-1][0])
-        else:
-            seen_classes.add(cls[0])
-        if (
-            cls[0] in ("1", "2")
-            and (not cls.startswith("Escalate"))
-            and not any(m in fact for m in NEGATIVE_FACT_MARKERS)
-        ):
-            problems.append(
-                f"class-{cls[0]} fixture missing negative-trigger facts: {fact[:60]}..."
-            )
+        _record_row(fact, cls, seen_classes, problems)
 
     for required in ("0", "1", "2", "3", "4", "5", "+P"):
         if required not in seen_classes:
@@ -164,26 +197,9 @@ planning artifacts **subsume**: floors accumulate
 """
 
 
-def self_test() -> int:
-    failures = []
-    if check(GOOD_SAMPLE):
-        failures.append(f"good sample should pass, got: {check(GOOD_SAMPLE)}")
-    mutations = {
-        "unknown class": GOOD_SAMPLE.replace("| 0 |", "| 9 |"),
-        "missing +P fixture": GOOD_SAMPLE.replace(
-            "| skill change | Class 3+P (effective 5) |\n", ""
-        ),
-        "stripped negative facts": GOOD_SAMPLE.replace(
-            "typo — no behavior change", "typo"
-        ),
-        "deleted subsume rule": GOOD_SAMPLE.replace("subsume", "combine"),
-    }
-    for name, mutated in mutations.items():
-        if not check(mutated):
-            failures.append(f"mutation not caught: {name}")
+def _fence_probe_failures() -> list[str]:
+    """Fence probes mirror the production extract/check path."""
 
-    # Fence probes mirror the production extract/check path. Calling check()
-    # directly would bypass fence stripping and pass or fail vacuously.
     def check_document(text: str) -> list[str]:
         section = extract_section(text)
         return ["no section"] if section is None else check(section)
@@ -199,8 +215,6 @@ def self_test() -> int:
             False,
             "fenced-block fixture text was not ignored",
         ),
-        # A longer outer fence wrapping a shorter one must not leak its
-        # interior. A naive open/close toggle closes at the inner fence.
         (
             GOOD_SAMPLE
             + (
@@ -228,17 +242,69 @@ def self_test() -> int:
             False,
             "info-string line closed a fence early",
         ),
-        # A four-space-indented fence line is not a fence, so the bogus table
-        # must remain visible and produce problems.
+        (
+            GOOD_SAMPLE + "\n````markdown\n```\n" + bogus_table,
+            False,
+            "unclosed fence leaked its interior",
+        ),
         (
             GOOD_SAMPLE + "\n    ```\n" + bogus_table + "    ```\n",
             True,
             "4-space-indented line was wrongly treated as a fence",
         ),
     )
-    for document, expect_problems, failure in fence_probes:
-        if bool(check_document(document)) != expect_problems:
-            failures.append(failure)
+    return [
+        failure
+        for document, expect_problems, failure in fence_probes
+        if bool(check_document(document)) != expect_problems
+    ]
+
+
+def self_test() -> int:
+    failures = []
+    if check(GOOD_SAMPLE):
+        failures.append(f"good sample should pass, got: {check(GOOD_SAMPLE)}")
+    mutations = {
+        "unknown class": GOOD_SAMPLE.replace("| 0 |", "| 9 |"),
+        "missing +P fixture": GOOD_SAMPLE.replace(
+            "| skill change | Class 3+P (effective 5) |\n", ""
+        ),
+        "stripped negative facts": GOOD_SAMPLE.replace(
+            "typo — no behavior change", "typo"
+        ),
+        "firing trigger hidden behind negative marker": GOOD_SAMPLE.replace(
+            "typo — no behavior change",
+            "typo — no behavior change; a [DOM-5] risky trigger fires",
+        ),
+        "firing trigger after negated trigger in same sentence": GOOD_SAMPLE.replace(
+            "no [DOM-5] trigger fires",
+            "no [DOM-5] non-trivial trigger fires, but a [DOM-5] risky trigger fires",
+        ),
+        "firing trigger after conjunction without comma": GOOD_SAMPLE.replace(
+            "no [DOM-5] trigger fires",
+            "no [DOM-5] non-trivial changes but a [DOM-5] risky trigger fires",
+        ),
+        "firing trigger after though without comma": GOOD_SAMPLE.replace(
+            "no [DOM-5] trigger fires",
+            "no [DOM-5] non-trivial changes though a [DOM-5] risky trigger fires",
+        ),
+        "firing trigger after although without comma": GOOD_SAMPLE.replace(
+            "no [DOM-5] trigger fires",
+            "no [DOM-5] non-trivial changes although a [DOM-5] risky trigger fires",
+        ),
+        "firing trigger after however without comma": GOOD_SAMPLE.replace(
+            "no [DOM-5] trigger fires",
+            "no [DOM-5] non-trivial changes however a [DOM-5] risky trigger fires",
+        ),
+        "intent evidence alone without negative trigger fact": GOOD_SAMPLE.replace(
+            "no [DOM-5] trigger fires", "reversible"
+        ),
+        "deleted subsume rule": GOOD_SAMPLE.replace("subsume", "combine"),
+    }
+    for name, mutated in mutations.items():
+        if not check(mutated):
+            failures.append(f"mutation not caught: {name}")
+    failures.extend(_fence_probe_failures())
     # probe: missing target is an invocation error, not a crash
     if run(["--spec", "/nonexistent/dom15-spec.md"]) != 2:
         failures.append("missing spec file did not exit with invocation-error class")

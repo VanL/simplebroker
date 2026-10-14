@@ -18,6 +18,7 @@ Common candidates:
 - testing
 - debugging
 - release or deployment
+- crystallizing product or module theory (`skills/crystallize-program-theory/SKILL.md`)
 
 ## Layout
 

@@ -133,6 +133,7 @@ These roles should stay distinct even as simplebroker grows.
 | `docs/agent-context/README.md` | Shared context hub |
 | `docs/specs/00-specs-index.md` | Numbered entry point for specs |
 | `docs/specs/01-development-documentation-operating-model.md` | Governing operating-model spec |
+| `docs/specs/02-agent-theory-and-program-theory.md` | Definitional reference primer for Agent Theory, program theory, and module theory |
 | `docs/implementation/00-implementation-index.md` | Numbered entry point for implementation docs |
 | `docs/implementation/02-repository-map.md` | Quick pointer map for important docs |
 | `docs/implementation/03-agent-inventory.md` | Current observed agent availability and review preference |
