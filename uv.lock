@@ -863,7 +863,7 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "8.7.1"
+version = "8.7.2"
 source = { editable = "." }
 default-groups = []
 
@@ -936,7 +936,7 @@ release = [
 
 [[package]]
 name = "simplebroker-pg"
-version = "4.7.1"
+version = "4.7.2"
 source = { editable = "extensions/simplebroker_pg" }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
@@ -956,7 +956,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "simplebroker-redis"
-version = "4.7.1"
+version = "4.7.2"
 source = { editable = "extensions/simplebroker_redis" }
 dependencies = [
     { name = "redis" },

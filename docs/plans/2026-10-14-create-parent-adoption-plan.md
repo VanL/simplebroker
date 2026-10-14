@@ -146,3 +146,20 @@ doc-paths and diff checks pass. Logs: `/tmp/simplebroker-create-parent-{green,
 api-control,behavior-control,control-restored}.log`. Reviews:
 `/tmp/simplebroker-create-parent-{review,final-review}.out`. Test-audit authoring
 and sensitivity requirements used; no skill/runbook amendment is needed.
+
+### Coordinated release preparation
+
+Feature landed and pushed as `6e3388ec28f20c2116ca79093174ac0ace24c20f`.
+Prepared core8.7.2, pg4.7.2, redis4.7.2; root extra floors>=4.7.2 and both
+extension core floors>=8.7.2, dated2026-10-14 changelog preserving both deltas.
+Three `uv lock` runs changed only local package versions, no third-party update;
+all three locked/offline checks pass. Metadata/constants/release-workflow tests:
+215 passed, one Windows-only skip (1.74s). Ruff/format/docs and TOML metadata
+checks pass; Python>=3.11 and Python3.15 support retained.
+
+Separate bounded Claude metadata review exited0, **no blocker**. Optional F1:
+"the rewrap left a ragged line break (Owned SQLite handles still / clean up
+their connections when collected.)" Accepted cosmetic sentence rewrap. No other
+finding. Evidence `/tmp/simplebroker-872-metadata-{review.out,tests.log}`.
+The normal full helper and exact-SHA/tag publication gates follow this
+preparation commit; publication acceptance is still required before closure.

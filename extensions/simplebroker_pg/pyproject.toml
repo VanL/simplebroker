@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simplebroker-pg"
-version = "4.7.1"
+version = "4.7.2"
 description = "Postgres backend plugin for SimpleBroker"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.15",
 ]
 dependencies = [
-    "simplebroker>=8.7.1",
+    "simplebroker>=8.7.2",
     "psycopg[binary]>=3.3.6",
     "psycopg-pool>=3.3.3",
 ]
