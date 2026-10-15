@@ -455,6 +455,11 @@ Requirements:
   a real risk or improve correctness — whether the plan's causal premise holds
   in the code and its proposed proof is falsifiable, and whether a different
   engineer could implement the plan confidently and correctly
+- when reviewing a plan, the reviewer analyzes the plan as a whole — including
+  all amendments and revisions — with two lenses: (1) is this what an expert
+  developer would do and think well-crafted or elegant, and (2) is there a
+  known algorithm or computer science principle that should be applied here
+  instead of ad-hoc logic
 - the authoring agent considers each review point explicitly
 - the authoring agent either updates the work or records why the current path
   remains the best choice, and verifies that every `fixed in plan` disposition

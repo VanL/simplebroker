@@ -120,6 +120,15 @@ consistency:
    cat-file -e`, file inspection, present-state reruns) rather than accepting
    them from model memory.
 
+When reviewing a plan, analyze the plan **as a whole, including all
+amendments**, with two additional lenses:
+
+1. **Expert craft and elegance** — Is this what an expert developer would do
+   and think well-crafted or elegant, or have incremental patches accreted into
+   an awkward design?
+2. **Algorithmic and CS foundations** — Is there a known algorithm or computer
+   science principle that should be applied here instead of bespoke casework?
+
 The review is not complete until the authoring agent has considered each point,
 updated the work or documented why the existing path remains correct, and
 verified that every `fixed in plan` disposition is reflected in the plan's task

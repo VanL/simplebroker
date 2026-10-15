@@ -97,6 +97,7 @@ Quick pointers to the key guidance documents in this repository.
 | `skills/brainstorming-to-plan/SKILL.md` | Bridge from exploration to a dated plan or spec delta |
 | `skills/call-agent/SKILL.md` | Invoke an independent reviewer agent (read-only postures, probes) |
 | `skills/interface-review/SKILL.md` | Review an agent-facing surface (the CLI here) against `designing-agent-facing-interfaces.md` |
+| `skills/test-audit/SKILL.md` | Test authoring gate, sensitivity check, and test-surface audit workflow (with `skills/test-audit/SWEEP.md` for subsystem sweeps) |
 
 ## Update Guidance
 

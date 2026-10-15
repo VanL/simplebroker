@@ -63,15 +63,20 @@ every change, not an accidental side effect.
 ## What a program theory is [AT-REF-2]
 
 A **program theory** is the working explanatory model of a software system:
-what real-world problem it solves, what its core concepts are, who owns each
-boundary, what it refuses to build, and what evidence would show the model is
-wrong.
+what real-world problem it solves, **what using and extending it should feel
+like (its command/API grammar and the core composable operations new work must
+build on rather than inventing side doors)**, what its core concepts are, who
+owns each boundary, what it refuses to build, and what evidence would show the
+model is wrong.
 
 Following Peter Naur's *Programming as Theory Building* (1985), a program
 theory is **not**:
 
 - a formal mathematical proof,
-- a list of user requirements or API endpoints,
+- an exhaustive catalog of user requirements or flag-by-flag API schemas
+  (though concrete **taste anchors**—illustrative command grammars, verb
+  rhythms, and composable operations that communicate the program's **feel**—do
+  belong in program theory),
 - a dump of architecture diagrams, or
 - a document that can substitute for human understanding.
 
@@ -83,7 +88,7 @@ document** on disk. Agent Theory keeps that distinction explicit:
 | Concept | What it means in practice |
 |---------|---------------------------|
 | **Holding the theory (possession)** | A person's practical ability to place a new feature, explain why the code is shaped the way it is, reject ideas that do not fit the system, and diagnose surprising bugs. |
-| **The written account (`docs/program-theory.md`)** | A concise document in the repository that gives humans and zero-context agents the same vocabulary, boundaries, and non-goals at the start of a task. |
+| **The written account (`docs/program-theory.md`)** | A concise document in the repository that gives humans and zero-context agents the same vocabulary, idiom/feel, boundaries, and non-goals at the start of a task. |
 
 Memorizing `docs/program-theory.md` is not holding the theory. The file gives
 humans and agents a shared starting point; day-to-day work with specs, code,
@@ -94,7 +99,7 @@ You hold the theory of a program when you can do four things:
 
 1. Connect real-world problems to the structure of the code.
 2. Explain *why* each major boundary and design choice exists.
-3. Place a new feature request without breaking the existing design.
+3. Place a new feature request without breaking the existing design or idiom.
 4. Diagnose unexpected behavior when the system or an agent surprises you.
 
 A quick self-test: when the system misbehaves, do you feel *betrayed by an
@@ -107,7 +112,7 @@ Every repository has one `docs/program-theory.md`, and it always describes
 
 | Repository | What `docs/program-theory.md` describes |
 |------------|-----------------------------------------|
-| **A product or library repository** | That product's problem, concepts, ownership boundaries, non-goals, and falsifiers. |
+| **A product or library repository** | That product's problem, feel/idiom, composable operations, concepts, ownership boundaries, non-goals, and falsifiers. |
 | **The `agent-theory` hub repository** | The guidance system itself (how the process, documents, and gates work). |
 
 When you install the starter kit into a product repository, the installer
@@ -133,7 +138,7 @@ Each document surface in the repository answers a different question:
 
 | Document surface | Question it answers |
 |------------------|---------------------|
-| **Program theory** (`docs/program-theory.md`, `MODULE-THEORY.md`) | What kind of system or module is this? Why do these concepts, boundaries, and non-goals exist? |
+| **Program theory** (`docs/program-theory.md`, `MODULE-THEORY.md`) | What kind of system or module is this? What is its feel/idiom and core composable operations? Why do these concepts, boundaries, and non-goals exist? |
 | **Process and operating model** (`[DOM-*]`, `docs/agent-context/`, `skills/`) | How do humans and agents classify tasks, write plans, run reviews, verify changes, and maintain docs? |
 | **Product contracts** (`docs/specs/`, authoritative README sections) | What exact behavior, flags, schemas, and invariants must hold **right now**? |
 | **Implementation docs** (`docs/implementation/`) | Why is the current code structured this way, and where are the key edit points? |
@@ -166,6 +171,21 @@ concept → owner dialogue → draft theory → spec → implementation
 - **Crystallize before committing product behavior.** Before committing
   product-scope behavior or architecture, interview the owner and write at
   least a `Draft` theory.
+- **Communicate program feel ("taste up front"), not Big Design Up Front (BDUF).**
+  Coding agents cannot infer aesthetic taste or ergonomic feel from abstract
+  box-and-arrow diagrams alone. If a program theory states only abstract
+  ownership boundaries, agents will satisfy the diagram while inventing clunky,
+  inconsistent commands and side-door abstractions. A product's program theory
+  should state its **intrinsic feel, command/API grammar, and core composable
+  operations** up front with concrete "taste anchors" (for example: *"major
+  daily verbs at the top level, `noun verb` elsewhere; here are our core
+  operations—compose from these rather than inventing new primitives"*). What
+  separates **taste up front** from **BDUF** is *what* gets fixed before code
+  exists: fix the **problem, trust boundaries, composable operations, and
+  ergonomic feel** in program theory, while proving internal storage schemas,
+  file formats, and implementation machinery empirically through vertical
+  end-to-end slices rather than building horizontal framework layers in a
+  vacuum.
 - **Revise when reality pushes back.** Product-scope Class 5 work requires at
   least a current `Draft` account, and that account should be updated whenever
   implementation or debugging reveals a new constraint.

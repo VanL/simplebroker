@@ -126,16 +126,26 @@ surfaces exist, verify:
    line numbers, rule codes, and version facts via command against the tree
    rather than model memory.
 
+**Whole-plan craft and algorithmic check third.** When reviewing a plan,
+analyze the plan as a whole — including all amendments — with two lenses:
+
+1. Is this what an expert developer would do and think well-crafted or elegant?
+2. Is there a known algorithm or computer science principle that should be
+   applied here?
+
 ## 4. Recommended Plan Review Prompt
 
 Use this or a close variant:
 
 > Read the plan at [path] — including its `## Proposed Spec Delta` and
 > promotion strategy, if present — and review the associated code and
-> documentation. Look for errors, bad ideas, and latent ambiguities.
-> Watch out for performative overengineering — tests or processes that
-> add ceremony without meaningfully addressing a real-world risk
-> identified in the code.
+> documentation. Analyze the plan as a whole, including all amendments,
+> with two lenses: (1) is this what an expert developer would do and
+> think well-crafted or elegant? (2) is there a known algorithm or
+> computer science principle that should be applied here? Look for
+> errors, bad ideas, and latent ambiguities. Watch out for performative
+> overengineering — tests or processes that add ceremony without
+> meaningfully addressing a real-world risk identified in the code.
 >
 > Check specifically for invariants and refused alternatives: what must not be
 > changed (check `docs/program-theory.md` `[ALT-*]` records and any standing

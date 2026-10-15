@@ -1,6 +1,6 @@
 # Crystallize Program Theory
 
-Status: active — adopted from `agent-theory` @ `8f41a9d` per `docs/plans/2026-10-14-agent-theory-delta-wave-plan.md`.
+Status: active — adopted from `agent-theory` @ `296a7cd` per `docs/plans/2026-10-14-agent-theory-delta-wave-plan.md`.
 
 ## Purpose
 
@@ -11,9 +11,9 @@ Interview the product owner relentlessly until a theory file can be written:
   unit (typical path: `<module>/MODULE-THEORY.md`).
 
 Module theory is not a lesser document. It is how the model grows when product
-theory would become too long for general entry. See the primer
-`docs/specs/02-agent-theory-and-program-theory.md` `[AT-REF-4]` (module
-theory).
+theory would become too long for general entry. See
+`docs/specs/02-agent-theory-and-program-theory.md` `[AT-REF-4]` (and the
+`agent-theory` hub's `[AT-THEORY-2.1]`).
 
 The result is a transfer surface for agents and humans—not a requirements dump
 and not a copy of the agent-theory hub's own theory.
@@ -77,7 +77,7 @@ State that:
 - Possession stays practical; the file is a transfer surface.
 - Hub agent-theory text must not stand as product identity.
 - **Module theory is how we extend the product model** when depth is local
-  ([AT-THEORY-2.1])—not optional color commentary.
+  (`[AT-REF-4]` / hub `[AT-THEORY-2.1]`)—not optional color commentary.
 - You will ask **one question at a time**, give a **recommended answer**
   when useful, and wait for the owner.
 
@@ -87,8 +87,8 @@ understanding on the spine—or they explicitly ask for a draft from answers so 
 
 ### 2. Interview (one question at a time)
 
-This skill owns the interview spine ([AT-THEORY-8] by reference from hub
-program theory). For each item:
+This skill owns the interview spine (referenced by the `agent-theory` hub's
+`[AT-THEORY-8]`). For each item:
 
 1. Ask the question.
 2. Offer a short recommended direction grounded in repo evidence when possible.
@@ -105,13 +105,17 @@ before finalizing non-goals.
 
 1. **Problem world** — What affairs of the world does this program handle?
    For whom? What fails if it does not exist?
-2. **Desired feel** — What should using it feel like in one paragraph?
+2. **Desired feel & compositional idiom** — What should using and extending it
+   feel like? What are the core composable operations new work must build on
+   rather than inventing side doors?
 3. **Whole-program metaphor** — In three to seven bullets, what is the
    mental model (not the file tree)?
 4. **Core concepts** — Name each concept, its meaning, and its **owner**
    (this product / a module / the user / another system).
-5. **Matching surface** — How do CLI, API, UI, or docs express the same
-   model without inventing a second product?
+5. **Matching surface & taste anchors** — How do CLI, API, UI, or docs express
+   the same model without inventing a second product? What is the command/API
+   grammar (e.g., top-level reflex verbs vs. `noun verb`, projected domain
+   nouns, concrete taste-anchor examples)?
 6. **Non-goals** — What will competent people propose that you will refuse?
    Why? When would you reconsider?
 7. **Generative rule** — Is there one question that organizes a large part
@@ -151,7 +155,10 @@ theory required,” and promotion path for any product-scope ALT parked there.
 - Status / Owner / Boundary / Verification / Required action
 - What program theory means (short; link Naur)
 - Purpose and desired feel; whole-program mental model
-- Core concepts and ownership; principles; non-goals; falsifiers
+- Core concepts, ownership, and surface idiom / taste anchors (command or API
+  grammar + composable operations to build on — *taste up front*, while leaving
+  internal storage schemas to vertical implementation slices; `[REV-AT-005]`)
+- Principles; non-goals; falsifiers
 - How the model is extended (pointer to module theory convention)
 - Revisions/ALT if decided; related contracts
 

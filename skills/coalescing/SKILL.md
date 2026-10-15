@@ -7,7 +7,7 @@ units of work. (Promotion provenance lives in the guidance repo's plan
 "2026-07-14-coalescing-layer-plan" — its repository, not this one.)
 This copy: adopted from agent-guidance @ `fc23eae` via retired plan
 `2026-07-16-agent-guidance-bootstrap-plan.md` at `197629e2`; synchronized
-with `agent-theory` @ `8f41a9d` via
+with `agent-theory` @ `296a7cd` via
 `docs/plans/2026-10-14-agent-theory-delta-wave-plan.md`.
 
 ## Purpose
@@ -257,9 +257,12 @@ editing). For each completed or superseded plan:
    containing the plan file).
 4. Physical deletion is a dedicated follow-up change, made after
    re-checking each `retired-pending` plan's harvest gate from the
-   current tree — retrieval from the source SHA verified, the SHA
-   reachable from a retained ref. Second-agent verification is
-   optional, not required: deletion of source-pinned plans is
+   current tree — retrieval from the source SHA verified
+   (`git cat-file -e <source_sha>:docs/plans/<plan>.md`), the SHA
+   reachable from a retained ref (`git merge-base --is-ancestor <source_sha> <ref>`;
+   `bin/coalesce-check` verifies object existence and remote default-branch
+   ancestry, flagging unpushed branch commits as `local-only pin`). Second-agent
+   verification is optional, not required: deletion of source-pinned plans is
    reversible archive maintenance (hub owner decision 2026-08-07). Never soft-retire and delete in the same
    change. This Git-backed follow-up is plan-exempt and needs no separate
    commit authorization when it does not promote or materially revise durable

@@ -548,12 +548,15 @@ Recommended prompt:
 
 > Read the plan at [path] and its `## Proposed Spec Delta` (if present),
 > including the named promotion strategy. Carefully examine the plan, the
-> proposed spec text, and the associated code. Look for errors, bad ideas,
-> latent ambiguities, and performative overengineering — process,
-> abstraction, or ceremony that does not address a real risk or improve
-> correctness; recommending removal is as valuable as recommending
-> additions. Verify the plan's causal premise in the code and confirm that
-> its proposed tests are falsifiable. Don't do any implementation, but answer
+> proposed spec text, and the associated code. Analyze the plan as a whole,
+> including all amendments, with two lenses: (1) is this what an expert
+> developer would do and think well-crafted or elegant? (2) is there a known
+> algorithm or computer science principle that should be applied here? Look for
+> errors, bad ideas, latent ambiguities, and performative overengineering —
+> process, abstraction, or ceremony that does not address a real risk or
+> improve correctness; recommending removal is as valuable as recommending
+> additions. Verify the plan's causal premise in the code and confirm that its
+> proposed tests are falsifiable. Don't do any implementation, but answer
 > carefully: Could you implement this confidently and correctly against the
 > delta as promoted, if asked?
 
@@ -576,7 +579,8 @@ State what is explicitly not changing. This reduces scope creep.
 
 ### 10. Fresh-Eyes Review
 
-Before considering the plan complete, re-read it as if you are a new engineer.
+Before considering the plan complete, re-read the plan as a whole — including
+all amendments — as if you are a new engineer.
 
 Check for:
 
@@ -587,6 +591,11 @@ Check for:
 - tasks that are too large to review safely
 - hidden assumptions about local style or tooling
 - accidental drift away from the requested direction
+- expert-developer craft and elegance: is the assembled plan what an expert
+  developer would do and think well-crafted or elegant, or have amendments
+  turned it into a patchwork?
+- algorithmic and computer-science fit: is there a known algorithm or computer
+  science principle that should be applied here instead of ad-hoc logic?
 - performative overengineering: sections, gates, or abstractions the plan
   carries that do not address a real risk or improve correctness — cut
   them; a fresh-eyes pass that only adds is a warning sign

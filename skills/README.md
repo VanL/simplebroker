@@ -15,8 +15,8 @@ Common candidates:
 
 - running the project
 - adding new code in a recurring subsystem
-- testing
-- debugging
+- testing and test-surface auditing (`skills/test-audit/SKILL.md`)
+- debugging (`skills/debugging/SKILL.md`)
 - release or deployment
 - crystallizing product or module theory (`skills/crystallize-program-theory/SKILL.md`)
 

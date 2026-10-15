@@ -78,6 +78,7 @@ a suite version changes the picture, update this section per Maintenance.
 | gstack plan-eng-review, plan-ceo-review, grilling, review | `review-loops-and-agent-bootstrap.md` | Counts as independent review only when run as a **separate reviewer execution** (different agent family preferred, e.g. via /codex). The author adopting a review persona is a fresh-eyes self-review — allowed as the fallback, with the limitation disclosed. Dispositions still land in the plan |
 | gstack codex (invocation wrapper) | `skills/call-agent/SKILL.md` | Either works; the repo skill is the dependency-free path with read-only postures per agent, and it covers six families rather than one |
 | gstack spec | `writing-specs.md` | Repo governs spec shape: stable reference codes, `## Related Plans`, verification expectations |
+| gstack test-audit, external `test-audit` | `skills/test-audit/SKILL.md`; `testing-patterns.md` | Promoted into `skills/test-audit/SKILL.md` (with `skills/test-audit/SWEEP.md`). Repo rules govern runner commands, default parallelism, governed suppression registries (`../engineering-principles.md` §14), and Tier-1 preservation review (`skills/call-agent/SKILL.md`) |
 
 ## Known Conflicts (repo wins; know why)
 

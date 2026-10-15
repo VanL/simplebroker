@@ -50,7 +50,7 @@ Unreleased promotion mistakes: git revert.
 ## Process and agent guidance
 
 As of 2026-07-16 this repository carries the Agent Theory operating model
-(adopted from `agent-theory`, most recently synchronized at `8f41a9d`): shared
+(adopted from `agent-theory`, most recently synchronized at `296a7cd`): shared
 agent context in `docs/agent-context/` (follow its machine index for the read
 order), process specs in `docs/specs/` (`[DOM-*]` and the `[AT-REF-*]` primer
 `docs/specs/02-agent-theory-and-program-theory.md`), implementation docs in

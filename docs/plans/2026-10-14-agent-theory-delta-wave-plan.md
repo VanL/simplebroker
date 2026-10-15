@@ -1,17 +1,18 @@
 # Agent-Theory Delta Wave Propagation Plan (2026-10-14)
 
-- **Date:** 2026-10-14
+- **Date:** 2026-10-14 (revised 2026-10-15)
 - **Status:** completed — see index row in `docs/plans/README.md`
 - **Class:** 5+P (effective Class 5 — normative process spec `[DOM-*]` / `[AT-REF-*]`, shared `docs/agent-context/` guidance, reusable skills, and `bin/` verification gates; zero SimpleBroker product-contract or runtime code changes)
-- **Hub Pin:** `agent-theory` @ `8f41a9d` (`8f41a9d98cc419c530b13b3c3c0055794d786b99`), advancing from consumer pin `0423923` (landed in `6595df5`)
+- **Hub Pin:** `agent-theory` @ `296a7cd` (advancing from `8f41a9d` / `0423923`)
+- **Reviewed baseline:** `e04c27a`
 
 ## Goal
 
-Propagate the 2026-10-14 `agent-theory` delta wave (`0423923..8f41a9d`, including the `STE100` / `ba4dd7a` fold-up and `8f41a9d` ecosystem fold-up wave) into `simplebroker` while preserving all SimpleBroker-specific product ownership, layered SoT rules, Ruff static-analysis/McCabe complexity gates (`[DOM-10.1]`), suppression registry invariants (`[DOM-10.1.1]`), and program-theory contract checks.
+Propagate the 2026-10-14 / 2026-10-15 `agent-theory` delta wave (`0423923..296a7cd`, including the `STE100` / `ba4dd7a` fold-up, `8f41a9d` ecosystem fold-up wave, and `296a7cd` whole-plan review lenses, `skills/test-audit/` promotion, and taste-up-front boundary) into `simplebroker` while preserving all SimpleBroker-specific product ownership, layered SoT rules, Ruff static-analysis/McCabe complexity gates (`[DOM-10.1]`), suppression registry invariants (`[DOM-10.1.1]`), and program-theory contract checks.
 
 ## Source Documents
 
-- Theory: N/A — process-governance and shared agent-context propagation wave from `agent-theory` @ `8f41a9d`; SimpleBroker product theory in `docs/program-theory.md` (`[THEORY-1]`..`[THEORY-5]`) is unchanged.
+- Theory: N/A — process-governance and shared agent-context propagation wave from `agent-theory` @ `296a7cd`; SimpleBroker product theory in `docs/program-theory.md` (`[THEORY-1]`..`[THEORY-5]`) is unchanged.
 - `AGENTS.md` — repository agent entry point, subagent delegation contract, and module-theory reading rule
 - `docs/README.md` — product vs. process documentation ownership and entry routing
 - `docs/specs/00-specs-index.md` — process and product specification index
@@ -29,7 +30,7 @@ Propagate the 2026-10-14 `agent-theory` delta wave (`0423923..8f41a9d`, includin
 - `docs/implementation/01-documentation-system.md` — documentation system map
 - `docs/implementation/02-repository-map.md` — canonical file and skill inventory
 - `docs/implementation/10-ruff-suppression-registry.md` — governed `noqa` suppression inventory (`[DOM-10.1.1]`)
-- `skills/README.md`, `skills/call-agent/SKILL.md`, `skills/coalescing/SKILL.md`, `skills/debugging/SKILL.md` — reusable operational skills and index
+- `skills/README.md`, `skills/call-agent/SKILL.md`, `skills/coalescing/SKILL.md`, `skills/debugging/SKILL.md`, `skills/test-audit/SKILL.md`, `skills/test-audit/SWEEP.md` — reusable operational skills and index
 - `bin/check-doc-paths`, `bin/check-dom15-fixtures`, `bin/coalesce-check`, `tests/test_doc_gates.py` — mechanical governance gates and test suite
 
 ## Invariants and Boundaries
@@ -60,7 +61,7 @@ Propagate the 2026-10-14 `agent-theory` delta wave (`0423923..8f41a9d`, includin
 
 ### Slice 2 — Shared Agent Context, Runbooks, and Existing Skills (`docs/agent-context/`, `skills/`)
 
-- **`docs/agent-context/context.index.yaml`:** Bump `updated_at: 2026-10-14`.
+- **`docs/agent-context/context.index.yaml`:** Bump `updated_at: 2026-10-15`.
 - **`docs/agent-context/decision-hierarchy.md`:** Expand `## Completion Gate` with the three rules on status documents as claims, stale open markers, and mechanical verification of count/completeness words (`all`, `every`, `full`, `zero`, `none`).
 - **`docs/agent-context/principles.md`:** Add **Report surprise; do not absorb it** under `## Collaboration Standards` and full-tree grep evidence for negative lifecycle labels under `## Change Hygiene`.
 - **`docs/agent-context/engineering-principles.md`:** Apply hub `8f41a9d` additions across §2 (non-default resolved config), §4 (contention theory stop-condition and module-owned clock/platform seams), §8 (1/2/3 empirical check, `fixed in plan` sync, `RECONSIDERATION REQUESTED`, status-doc rerun), §10 (prior-release migration fixtures and independent wire literals), §11 (dead-code grep across `examples/`/scripts/consumers and `tests/` backlink grep before spec retirement), §12 (mechanical completeness verification), §14 (static complexity as visibility signal, governed suppression registry, zero self-suppression in governance tools with `[RUFF-SUP-003]` registry qualification, real-config `RUF100` probe), and `## Warning Signs`.
@@ -79,6 +80,18 @@ Propagate the 2026-10-14 `agent-theory` delta wave (`0423923..8f41a9d`, includin
 - **`bin/check-dom15-fixtures`:** Add `TRIGGER_FIRE_RE`, `CLAUSE_SPLIT_RE`, `states_firing_trigger()`, negated-clause handling in `has_negative_fact()`, and expanded `self_test()` probes while preserving `# noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception` and keeping McCabe complexity $\le 10$.
 - **`bin/coalesce-check`:** Add word-bounded `FOREIGN_MARKER_RE`, `resolve_remote_ref()`, and `retired_plan_cues()` (including retired-plan cues in `cues` and summary output) while preserving SimpleBroker's modular helper structure and `r"^- 20[0-9]{2}-[0-9]{2}-[0-9]{2}:"` lesson entry regex.
 - **`tests/test_doc_gates.py`:** Add `check-doc-paths --self-test` coverage alongside `check-dom15-fixtures --self-test`.
+
+### Slice 4 — 2026-10-15 Follow-Up Hub Delta (`8f41a9d..296a7cd`)
+
+- **Whole-plan review lenses (`[DOM-11]`, `engineering-principles.md` §8, `review-loops-and-agent-bootstrap.md` §3–§4, `writing-plans.md` §8 & §10, `skills/call-agent/SKILL.md` §2):** Add the two explicit whole-plan review lenses ((1) expert-developer craft/elegance across the assembled plan including all amendments, and (2) known algorithm or computer science principle vs. ad-hoc casework).
+- **Promoted `skills/test-audit/` (`SKILL.md` and `SWEEP.md`):** Adopt `skills/test-audit/SKILL.md` and `skills/test-audit/SWEEP.md` from `agent-theory` @ `296a7cd` and register in `skills/README.md`, `docs/implementation/02-repository-map.md`, and `docs/agent-context/runbooks/external-skill-suites.md`.
+- **Taste-up-front vs. BDUF (`docs/specs/02-agent-theory-and-program-theory.md` `[AT-REF-2]`–`[AT-REF-4]`, `skills/crystallize-program-theory/SKILL.md` Q2, Q5, §4) and `skills/coalescing/SKILL.md` step 3.4:** Propagate `[REV-AT-005]` taste-anchor guidance and `git cat-file -e` vs. `git merge-base --is-ancestor` clarification.
+
+## Revision Log
+
+| Date | Baseline SHA | Sections changed | Reason | Re-review status |
+|------|--------------|------------------|--------|------------------|
+| 2026-10-15 | `e04c27a` | Hub Pin (`8f41a9d` → `296a7cd`), Slice 4 | Propagate same-session hub follow-up commit `296a7cd` (whole-plan review lenses, `skills/test-audit/` promotion, taste-up-front boundary) | Verified by all repository gates + diff check against reviewed hub commit `296a7cd` |
 
 ## Independent Review Loop
 
