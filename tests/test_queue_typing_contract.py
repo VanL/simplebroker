@@ -185,6 +185,7 @@ def test_delete_none_fixture_is_rejected_by_mypy() -> None:
             "--config-file",
             str(ROOT / "pyproject.toml"),
             "--no-incremental",
+            "--show-traceback",
             "--show-error-codes",
             str(fixture),
         ],
@@ -195,7 +196,7 @@ def test_delete_none_fixture_is_rejected_by_mypy() -> None:
         timeout=30,
     )
 
-    assert result.returncode == 1, result.stderr or result.stdout
+    assert result.returncode == 1, result.stderr + result.stdout
     assert result.stderr == ""
     assert result.stdout.count("error:") == 1
     assert "[call-overload]" in result.stdout
@@ -213,6 +214,7 @@ def test_generator_order_fixture_is_rejected_by_mypy() -> None:
             "--config-file",
             str(ROOT / "pyproject.toml"),
             "--no-incremental",
+            "--show-traceback",
             "--show-error-codes",
             str(fixture),
         ],
@@ -223,7 +225,7 @@ def test_generator_order_fixture_is_rejected_by_mypy() -> None:
         timeout=30,
     )
 
-    assert result.returncode == 1, result.stderr or result.stdout
+    assert result.returncode == 1, result.stderr + result.stdout
     assert result.stderr == ""
     # Tie rejection to each intended consumer call, not mypy's English prose.
     import ast
