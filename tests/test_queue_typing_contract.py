@@ -175,7 +175,7 @@ def assert_delete_types(queue: Queue, message_id: int) -> None:
 
 
 @pytest.mark.xdist_group(name="mypy_subprocesses")
-def test_delete_none_fixture_is_rejected_by_mypy() -> None:
+def test_delete_none_fixture_is_rejected_by_mypy(tmp_path: Path) -> None:
     fixture = ROOT / "tests" / "typecheck_fixtures" / "queue_delete_none.py"
     result = subprocess.run(
         [
@@ -185,6 +185,8 @@ def test_delete_none_fixture_is_rejected_by_mypy() -> None:
             "--config-file",
             str(ROOT / "pyproject.toml"),
             "--no-incremental",
+            "--cache-dir",
+            str(tmp_path / "mypy-cache"),
             "--show-traceback",
             "--show-error-codes",
             str(fixture),
@@ -204,7 +206,7 @@ def test_delete_none_fixture_is_rejected_by_mypy() -> None:
 
 
 @pytest.mark.xdist_group(name="mypy_subprocesses")
-def test_generator_order_fixture_is_rejected_by_mypy() -> None:
+def test_generator_order_fixture_is_rejected_by_mypy(tmp_path: Path) -> None:
     fixture = ROOT / "tests" / "typecheck_fixtures" / "queue_generator_order.py"
     result = subprocess.run(
         [
@@ -214,6 +216,8 @@ def test_generator_order_fixture_is_rejected_by_mypy() -> None:
             "--config-file",
             str(ROOT / "pyproject.toml"),
             "--no-incremental",
+            "--cache-dir",
+            str(tmp_path / "mypy-cache"),
             "--show-traceback",
             "--show-error-codes",
             str(fixture),
