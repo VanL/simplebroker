@@ -64,7 +64,7 @@ fuzz = [
 ]
 release = [
     "build==1.6.1",
-    "hatchling==1.32.4",
+    "hatchling==1.33.0",
 ]
 
 [project.scripts]

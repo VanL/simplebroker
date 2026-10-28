@@ -130,7 +130,7 @@ fuzz = [
 ]
 release = [
     { name = "build", specifier = "==1.6.1" },
-    { name = "hatchling", specifier = "==1.32.4" },
+    { name = "hatchling", specifier = "==1.33.0" },
 ]
 
 [[package]]

@@ -294,6 +294,8 @@ class CustomBrokerConnection(BrokerConnection):
             "--config-file",
             str(PYPROJECT),
             "--no-incremental",
+            "--cache-dir",
+            str(tmp_path / "mypy-cache"),
             str(probe),
         ],
         cwd=ROOT,
