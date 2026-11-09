@@ -254,7 +254,7 @@ editing):
 | SM-POLLING row | `tests/test_watcher_transition_tables.py::test_polling_fires_transition_table[SM-POLLING::NATIVE_SAFETY_RECHECK]` | base: deadline 51.5 ≠ 80.0 |
 | Coupling: PG declared recheck > 2 idle checks (single and fan-in waiters) | `extensions/simplebroker_pg/tests/test_pg_quiet_connections.py::test_pg_waiters_declare_recheck_longer_than_two_pool_idle_checks` | base PG: no attribute |
 | Quiet watcher keeps only LISTEN, stays there across a window the old cadence could not, and still wakes on NOTIFY in < 5 s | `::test_quiet_watcher_holds_only_listener_and_still_wakes_promptly` | base PG: "kept 2 sessions; expected 1" |
-| Lost notification (row committed without `pg_notify` after the watcher is observed quiet) is recovered within `2R` + slack | `::test_safety_recheck_recovers_write_without_notification` | preservation proof (passes before and after); sensitivity control in the review record: fails with the recheck return disabled |
+| Lost notification (row committed without `pg_notify` into a never-notified queue after the watcher's first native-backed wait entry) is recovered within `2R′ + P` + slack | `::test_safety_recheck_recovers_write_without_notification` | preservation proof (passes before and after); sensitivity control in the review record: fails with the recheck return disabled |
 | First recheck after installation uses `max(R, 1)`; later rechecks use `R`; each return lands before the deadline plus one pass | `tests/test_watcher.py::TestPollingStrategy::test_first_recheck_after_installation_uses_one_second_floor` | contract pin (behavior predates this plan; the original delta misstated it) |
 | The pass term includes positive jitter (`R = 60`, maximal jitter returns in `[120, 120.115)`) | `::test_recheck_bound_includes_one_jittered_native_pass` | contract pin |
 | A declaration whose `2R` overflows is rejected before mutation; the largest finite range installs a finite deadline | `::test_invalid_waiter_safety_recheck_interval_is_rejected_before_mutation[1e+308/max]`, `::test_largest_finite_recheck_range_installs_finite_deadline` | prior commit: `DID NOT RAISE ValueError` for both overflow cases |
@@ -401,6 +401,11 @@ After the review fixes (F1–F4), rerun on the current tree:
 | ruff check, ruff format --check (CI paths), mypy (core + extensions, PostgreSQL extension tests, touched root tests) | clean |
 | `bin/check-plan-context`, `bin/check-doc-paths`, `python3 bin/check-dom15-fixtures` | OK |
 
+After the round-2 test fixes: `test_pg_quiet_connections.py` 3 passed ×5;
+`pytest extensions/simplebroker_pg/tests -m pg_only -n 4` 430 passed, 7
+skipped; ruff check, ruff format --check, mypy (core + extensions,
+PostgreSQL extension tests) clean.
+
 ### Measurement (disposable postgres:18, same machine, other agents running)
 
 Script: N child processes, each one consuming `QueueWatcher` on its own
@@ -445,6 +450,7 @@ a good fit. Owner decisions OD-1, OD-2 and OD-3 remain pending.
 | F2 | P3 | `safety_recheck_interval = 1e308` passes validation but `2R` overflows, installing an infinite deadline that silently disables quiet recovery. | Accepted, fixed: `_declared_safety_recheck_interval` rejects a declaration whose `2R` is not finite with `ValueError` before installation mutates state; [SB-API-6] states it. Tests add `1e308` and `sys.float_info.max` to the invalid-declaration cases (RED on 6679e17c: `DID NOT RAISE ValueError`) and `test_largest_finite_recheck_range_installs_finite_deadline` for the accepted boundary. |
 | F3 | P2 | The lost-notification test inserted the silent row right after the first handler acknowledgement, before the drain's local follow-up check, so the row could be admitted without a safety recheck. | Accepted, fixed: the spawned watcher optionally reports each re-entry into `wait_for_activity()`; the test inserts only after two entries following the acknowledgement (the first consumes the drain's local follow-up and runs its pending check, the second begins a quiet native wait), drops the unrelated short pool idle period, and keeps the `2R` + slack assertion. Sensitivity control recorded below. |
 | F4 | nit | The partial-rollback note predicted reconnect churn after removing only the waiter declaration; a 1–2 s recheck keeps the single connection in use in every 10 s idle check. | Accepted, fixed: the note now says either half can be reverted alone and that removing only the declaration keeps the connection open as before; the "roll both back together" requirement is removed. |
+| Round 2 | — | Round 2 (Codex, 2026-11-08, 6679e17c..86eed79e): FAIL — F1 verified; F3 open (false-pass schedule); new P2 startup-order defect. | Fixed: the lost-notification test never notifies the watched queue. It waits for the watcher's first loop entry into a wait, which follows the startup drain of the empty queue and must report `uses_native_activity() == True`, then commits the row with SQL and no `pg_notify`, so only the safety recheck can admit it. The startup-order defect is fixed by synchronizing the senders: the actor sends `("started",)` before `run_in_thread()`, so no watcher report can precede it. Tests and plan record only; no production change. |
 
 F3 sensitivity control (postgres:18, this worktree): with the recheck return
 temporarily disabled in `PollingStrategy.wait_for_activity()` (the
@@ -455,5 +461,14 @@ receive deadline: `AssertionError: silent: pid=…, exit=None, alive=True`,
 `1 failed in 30.96s`. Restored code: `3 passed` for the whole file. Under the
 same mutation the 6679e17c version of the test also failed in three runs here
 (30.97 s, 31.12 s, 31.20 s); its race is timing-dependent, and the reviewer's
-deterministic reproduction stands. The revised test removes the race by
-construction rather than by timing.
+deterministic reproduction stands. Round 2 showed that the 86eed79e two-entry
+gate still had a false-pass schedule (a delayed NOTIFY for "notified" could
+admit the row), so the round-2 version removes every NOTIFY on the watched
+queue instead.
+
+Round-2 sensitivity control (postgres:18, same mutation, restored from a byte
+copy afterward, `git diff` of `simplebroker/watcher.py` empty): with the
+recheck return disabled the round-2 test failed in 3 of 3 runs, each at its
+receive deadline (`AssertionError: silent: pid=…, exit=None, alive=True`;
+30.88 s, 31.04 s, 31.03 s). Restored: the test passed in 3 of 3 runs (2.83 s,
+2.40 s, 2.65 s), and the whole file passed in 5 of 5 runs.

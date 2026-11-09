@@ -46,9 +46,12 @@ def _quiet_watcher_actor(
 ) -> None:
     """Run one consuming watcher; report each handled body over ``pipe``.
 
-    With ``report_waits`` the watcher also sends ``("wait_entered",)`` each
-    time its loop re-enters ``PollingStrategy.wait_for_activity()``, which
-    acknowledges that the previous drain or pending-check decision finished.
+    With ``report_waits`` the watcher also sends
+    ``("wait_entered", uses_native_activity)`` each time its loop enters
+    ``PollingStrategy.wait_for_activity()``, which acknowledges that the
+    previous drain or pending-check decision (including the startup drain)
+    finished. ``("started",)`` is sent before the watcher thread starts, so it
+    always precedes every report.
     """
 
     watcher: QueueWatcher | None = None
@@ -77,12 +80,14 @@ def _quiet_watcher_actor(
             wait = watcher._strategy.wait_for_activity
 
             def report_wait(timeout: float | None = None) -> None:
-                pipe.send(("wait_entered",))
+                assert watcher is not None
+                pipe.send(("wait_entered", watcher._strategy.uses_native_activity()))
                 wait(timeout)
 
             patcher.setattr(watcher._strategy, "wait_for_activity", report_wait)
-        thread = watcher.run_in_thread()
+        # Announce before the thread exists so no watcher report can precede it.
         pipe.send(("started",))
+        thread = watcher.run_in_thread()
         assert pipe.poll(timeout), "parent command deadline expired"
         assert pipe.recv() == "close"
     except BaseException:
@@ -157,24 +162,24 @@ def _receive_skipping_waits(
         )
         message = pipe.recv()
         assert message[0] != "error", message[1]
-        if message != ("wait_entered",):
+        if message[0] != "wait_entered":
             return message, waits
         waits += 1
 
 
-def _await_wait_entries(
-    pipe: Connection, process: Any, count: int, timeout: float, phase: str
+def _await_native_wait_entry(
+    pipe: Connection, process: Any, timeout: float, phase: str
 ) -> None:
-    deadline = time.monotonic() + scale_timeout_for_ci(timeout)
-    for _ in range(count):
-        remaining = max(0.0, deadline - time.monotonic())
-        assert pipe.poll(remaining), (
-            f"{phase}: pid={process.pid}, exit={process.exitcode}, "
-            f"alive={process.is_alive()}"
-        )
-        message = pipe.recv()
-        assert message[0] != "error", message[1]
-        assert message == ("wait_entered",), message
+    """Return once the watcher loop enters a wait backed by a native waiter."""
+
+    remaining = scale_timeout_for_ci(timeout)
+    assert pipe.poll(remaining), (
+        f"{phase}: pid={process.pid}, exit={process.exitcode}, "
+        f"alive={process.is_alive()}"
+    )
+    message = pipe.recv()
+    assert message[0] != "error", message[1]
+    assert message == ("wait_entered", True), message
 
 
 def _owner_count(observer: Queue, label: str) -> int:
@@ -276,62 +281,55 @@ def test_quiet_watcher_holds_only_listener_and_still_wakes_promptly(
         writer.close()
 
 
+@pytest.mark.usefixtures("pg_runner")  # Owns the schema cleanup.
 def test_safety_recheck_recovers_write_without_notification(
     pg_dsn: str,
     pg_schema: str,
-    pg_runner: PostgresRunner,
     raw_pg_conn: psycopg.Connection[Any],
 ) -> None:
     """A committed row whose NOTIFY never arrives is found by the recheck.
 
-    The waiter declares R = 1 s here (the default is 60 s). The row is
-    committed only after the watcher is quiet, so no notification, local
-    follow-up or drain can find it: the [SB-API-6] safety recheck is the only
-    remaining path, and it must return within 2R plus one native pass, plus
-    the pending check and claim. Sensitivity control (recorded in the plan):
-    with the recheck return disabled, this test fails at the receive deadline.
+    The waiter declares R = 1 s here (the default is 60 s). Nothing ever
+    notifies the watched queue, and the row is committed only after the
+    watcher's startup drain found the queue empty and its loop entered a wait
+    backed by the native waiter. No notification, local follow-up or drain can
+    then admit the row: the [SB-API-6] safety recheck is the only path, and it
+    must return within 2R' + P, plus the pending check and claim. Sensitivity
+    control (recorded in the plan): with the recheck return disabled, this
+    test fails at its receive deadline.
     """
 
     recheck = 1.0
     label = f"recheck-{uuid.uuid4().hex[:12]}"
-    writer = Queue("jobs", runner=pg_runner, persistent=True)
-    try:
-        with _watcher_process(
-            pg_dsn,
-            pg_schema,
-            label,
-            safety_recheck=recheck,
-            report_waits=True,
-        ) as (process, pipe):
-            writer.write("notified")
-            message, _ = _receive_skipping_waits(pipe, process, 30.0, "notified")
-            assert message == ("handled", "notified")
-            # The handler acknowledges before its drain finishes. The first
-            # later wait entry consumes the drain's local follow-up and runs
-            # its pending check; the second begins a quiet native wait.
-            _await_wait_entries(pipe, process, 2, 30.0, "quiet wait")
+    with _watcher_process(
+        pg_dsn,
+        pg_schema,
+        label,
+        safety_recheck=recheck,
+        report_waits=True,
+    ) as (process, pipe):
+        # The first entry follows the startup drain of the empty queue.
+        _await_native_wait_entry(pipe, process, 30.0, "quiet native wait")
 
-            # Simulate a lost notification: commit a valid pending row through
-            # SQL that does not call pg_notify.
-            started = time.monotonic()
-            raw_pg_conn.execute(
-                sql.SQL(
-                    """
-                    WITH next_ts AS (
-                        UPDATE {schema}.meta
-                        SET last_ts = last_ts + 1
-                        WHERE singleton
-                        RETURNING last_ts
-                    )
-                    INSERT INTO {schema}.messages (queue, body, ts)
-                    SELECT %s, %s, last_ts FROM next_ts
-                    """
-                ).format(schema=sql.Identifier(pg_schema)),
-                ("jobs", "silent"),
-            )
-            message, _ = _receive_skipping_waits(pipe, process, 30.0, "silent")
-            elapsed = time.monotonic() - started
-            assert message == ("handled", "silent")
-            assert elapsed < 2 * recheck + scale_timeout_for_ci(1.5)
-    finally:
-        writer.close()
+        # Simulate a lost notification: commit a valid pending row through SQL
+        # that does not call pg_notify.
+        started = time.monotonic()
+        raw_pg_conn.execute(
+            sql.SQL(
+                """
+                WITH next_ts AS (
+                    UPDATE {schema}.meta
+                    SET last_ts = last_ts + 1
+                    WHERE singleton
+                    RETURNING last_ts
+                )
+                INSERT INTO {schema}.messages (queue, body, ts)
+                SELECT %s, %s, last_ts FROM next_ts
+                """
+            ).format(schema=sql.Identifier(pg_schema)),
+            ("jobs", "silent"),
+        )
+        message, _ = _receive_skipping_waits(pipe, process, 30.0, "silent")
+        elapsed = time.monotonic() - started
+        assert message == ("handled", "silent")
+        assert elapsed < 2 * recheck + scale_timeout_for_ci(1.5)
