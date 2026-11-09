@@ -1090,3 +1090,88 @@ def test_alias_write_wakes_the_canonical_queue_waiter(
         canonical.close()
         literal.close()
         core.close()
+
+
+@pytest.mark.parametrize("multi", [False, True], ids=["single", "multi"])
+def test_interrupted_waiter_construction_leaves_no_phantom_subscription(
+    pg_dsn: str,
+    pg_schema: str,
+    pg_plugin: BackendPlugin,
+    monkeypatch: pytest.MonkeyPatch,
+    multi: bool,
+) -> None:
+    """An interrupt during the subscription wait unwinds the registration.
+
+    Another waiter keeps the shared listener alive, so a leaked registration
+    would keep its queue channels subscribed with no owning waiter.
+    """
+    real_connect = psycopg.connect
+
+    def delayed_connect(*args: Any, **kwargs: Any) -> Any:
+        return _DelayedQueueListenConnection(real_connect(*args, **kwargs), 0.3)
+
+    runner = PostgresRunner(pg_dsn, schema=pg_schema)
+    anchor = Queue("anchor", runner=runner, persistent=True)
+    stop_event = threading.Event()
+    anchor_waiter: PostgresActivityWaiter | None = None
+
+    try:
+        anchor.write("warm")
+        assert anchor.read() == "warm"
+        monkeypatch.setattr(pg_runner_module.psycopg, "connect", delayed_connect)
+        waiter = anchor.create_activity_waiter(stop_event=stop_event)
+        monkeypatch.undo()
+        assert waiter is not None
+        anchor_waiter = cast(PostgresActivityWaiter, waiter)
+        listener = anchor_waiter._listener
+        reached_wait = threading.Event()
+
+        def interrupted_wait(timeout: float | None = None) -> bool:
+            del timeout
+            reached_wait.set()
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(listener._subscription_changed, "wait", interrupted_wait)
+        with pytest.raises(KeyboardInterrupt):
+            if multi:
+                PostgresMultiQueueActivityWaiter(
+                    pg_dsn,
+                    schema=pg_schema,
+                    queue_names=("alpha", "beta", "jobs"),
+                    stop_event=stop_event,
+                )
+            else:
+                PostgresActivityWaiter(
+                    pg_dsn,
+                    schema=pg_schema,
+                    queue_name="jobs",
+                    stop_event=stop_event,
+                )
+        monkeypatch.undo()
+
+        assert reached_wait.is_set()
+        with listener._lock:
+            assert listener._queue_refcounts == {"anchor": 1}
+            assert set(listener._conditions) == {"anchor"}
+            assert listener._fan_in_entries == {}
+        registry = pg_runner_module._activity_registry
+        assert registry._listeners[(registry._pid, pg_dsn, pg_schema)] == (
+            listener,
+            1,
+        )
+        _wait_until(
+            lambda: (
+                _listening_channels(listener)
+                == {
+                    _expected_schema_channel(pg_schema),
+                    _expected_queue_channel(pg_schema, "anchor"),
+                }
+            ),
+            timeout=5.0,
+        )
+    finally:
+        if anchor_waiter is not None:
+            anchor_waiter.close()
+        anchor.close()
+        runner.close()
+        pg_plugin.cleanup_target(pg_dsn, backend_options={"schema": pg_schema})

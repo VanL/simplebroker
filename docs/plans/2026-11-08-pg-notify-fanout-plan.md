@@ -188,7 +188,9 @@ Listener (one thread owns the connection; no cross-thread connection use):
   wake — conservative), then return immediately if every needed channel is
   already committed; otherwise request a generation, wake the thread and wait
   for the applied generation, bounded by the listener's startup timeout (5 s).
-  On timeout the registration is rolled back and `OperationalError` is raised.
+  On timeout the registration is rolled back and `OperationalError` is raised;
+  if the wait raises anything (any `BaseException`), the registration is
+  rolled back and the exception propagates.
   If the listener already failed or stopped, registration returns at once and
   the first `wait()` reports the stored error exactly as today.
 - Last unregister of a channel requests a pass (UNLISTEN) without waiting.
@@ -224,10 +226,11 @@ Listener (one thread owns the connection; no cross-thread connection use):
 | Listener connections no longer receive notifications for unregistered queues (fewer packets, listener-thread wakes, client CPU) | C — no loss | [THEORY-4] concrete pressure (measured fan-out) |
 | PostgreSQL ≥ 19: uninterested listener backends are not signaled and run no read transaction | C — no loss | same |
 | PostgreSQL ≤ 18: server `xact_commit` per write unchanged (`1 + listening backends in the database`) | N — measured, not improved | — |
-| First registration of a queue in a process that already has a listener adds one LISTEN round trip and one server transaction; last release adds one UNLISTEN | D — bounded (one round trip; today a process without a listener already pays connect + LISTEN) | [THEORY-4] concrete pressure justifies growth; owner decision 2 |
+| First registration of a queue in a process that already has a listener adds one LISTEN round trip and one server transaction; last release adds one UNLISTEN | D — bounded (one round trip per first registration; one per last release) | [THEORY-4] "Concrete pressure justifies growth" (measured fan-out); owner decision 2, pending |
+| A process's first waiter (fresh listener) pays connect + schema-channel LISTEN at startup and then a separate queue-channel LISTEN round trip and server transaction before its constructor returns: two LISTEN transactions where the baseline had one | D — bounded (one extra round trip per fresh listener; not folded into startup because registration follows `acquire`) | [THEORY-4] "Concrete pressure justifies growth"; owner decision 2, pending |
 | Registration can raise `OperationalError` if the subscription is not acknowledged within the listener startup timeout (5 s); registration is rolled back | A — mirrors the existing listener-startup timeout instead of degrading silently | [THEORY-4] explicit safety over magical recovery |
 | Pre-change writer → post-change waiter: wakes via the retained schema channel | N | — |
-| Post-change writer → pre-change waiter: the old waiter is not notified and wakes on its native idle re-poll (default 1–2 s) or caller polling until upgraded; no message loss | D during mixed-version rollout only; avoidable by upgrading waiting processes first | owner decision 1; no-compat-shim rule; wake hints are not delivery guarantees ([SB-API-6], [SB-DELIVERY-2]) |
+| Post-change writer → pre-change waiter: the old waiter is not notified and wakes on its native idle re-poll (default 1–2 s; measured 44–1275 ms) or caller polling until upgraded; no message loss | D during mixed-version rollout only; avoidable by upgrading waiting processes first | [THEORY-4] "Explicit safety over magical recovery": the guarantee is named narrowly (a waiter wake is a hint, delivery is owned by the drain and the named idle re-poll), so the rollout degrades latency, never delivery; contracts [SB-API-6], [SB-DELIVERY-2]. Rollout policy (clean break vs dual-NOTIFY transition) is owner decision 1, pending — not accepted |
 | `*` on the schema channel still wakes every waiter | N | — |
 | `pg_listening_channels()` on a listener backend lists per-queue channels | C — operator-visible detail | — |
 | PostgreSQL ≤ 18 listener backends scan their channel list per queue entry (`IsListeningOn` is linear); cost grows with queues per process | N — microseconds per entry at realistic counts | — |
@@ -235,13 +238,15 @@ Listener (one thread owns the connection; no cross-thread connection use):
 
 ## Owner decisions
 
-1. Mixed-version rollout. Recommended: no dual-NOTIFY shim; document "upgrade
+Both decisions are open (pending owner); nothing in this branch accepts them.
+
+1. Mixed-version rollout (pending). Author recommendation: no dual-NOTIFY shim; document "upgrade
    waiting processes before or together with writers" (post-change waiters
    accept both protocols, so listeners-first has no wake gap). Alternative: a
    transition release whose writers NOTIFY both channels, removed one release
    later; it doubles NOTIFY payloads and delays all benefit by a release.
-2. Accept that on PostgreSQL ≤ 18 the gain is client-side only (and the one
-   LISTEN round trip per first registration), with the server-side gain
+2. PostgreSQL ≤ 18 value (pending): accept that the gain there is client-side
+   only (and the LISTEN round trips in the register), with the server-side gain
    arriving with PostgreSQL 19. A PostgreSQL 18 server-side gain needs either
    a durable interest registry (rejected here) or deployment guidance to put
    unrelated brokers in separate databases.
@@ -294,7 +299,8 @@ Listener (one thread owns the connection; no cross-thread connection use):
      single and multi-queue waiters; broadcast wakes every target waiter; a
      write through an alias wakes the canonical queue's waiter only.
    - SM-PG-LISTENER transitions `SUBSCRIBE-QUEUE`, `UNSUBSCRIBE-LAST`,
-     `RESUBSCRIBE-DURING-UNLISTEN`, `SUBSCRIBE-TIMEOUT` and
+     `RESUBSCRIBE-DURING-UNLISTEN`, `SUBSCRIBE-TIMEOUT`,
+     `SUBSCRIBE-INTERRUPTED` (added for review finding F1) and
      `REGISTER-AFTER-FAILURE` (transport fake extended with a selectable
      descriptor and a statement gate);
    - waiter constructors release their registry reference when registration
@@ -366,7 +372,16 @@ PostgreSQL 18 server-side mechanism (Alternative N4).
 
 ## Review and execution record
 
-Cross-family review: pending (coordinator).
+Tier 1, Codex (codex exec -s read-only, reasoning effort high), 2026-11-08,
+scoped-change review of plan+implementation at 8e2d7f24 against 5d29fbf.
+Verdict: blocker: F1. The reviewer judged the generation handshake and
+socket-pair wake a direct, standard single-owner reconciliation pattern.
+
+| ID | Severity | Finding | Disposition |
+|----|----------|---------|-------------|
+| F1 | P2 | `register_queue` / `register_queue_set` rolled back only on subscription timeout. An interrupt (reproduced with `KeyboardInterrupt`) during the subscription wait left phantom queue registrations and a fan-in entry on a listener still held by another waiter, so their channels stayed subscribed with no owning waiter. | Accepted, fixed: both methods unwind their registration (`unregister_queue` / `unregister_queue_set`) when awaiting the subscription raises any `BaseException`, then re-raise. New `SM-PG-LISTENER` transition `SUBSCRIBE-INTERRUPTED` (single and set, anchor registration retained, gated LISTEN) and real-PostgreSQL `test_interrupted_waiter_construction_leaves_no_phantom_subscription[single/multi]` (public constructors, anchor waiter retains the listener) assert no phantom refcounts, conditions or fan-in entries, registry refcount 1, and that the orphaned channels end UNLISTENed; all three failed on 8e2d7f24. |
+| F2 | P3 | `RESUBSCRIBE-DURING-UNLISTEN` did not prove the registrant reached the subscription wait before UNLISTEN was released; a late-scheduled registrant let the unsafe mutation pass. | Accepted, fixed: the test wraps the subscription condition's `wait` with a witness event and asserts it fired while the UNLISTEN gate is still closed before releasing it. Under the unsafe mutation it now fails deterministically (`registrant took the fast path`, 3/3 runs). |
+| F3 | P3 | The difference register omitted the extra queue-LISTEN round trip for a fresh listener, and the mixed-version D row named contracts and policy but no theory principle; rollout policy must stay an open owner decision. | Accepted, fixed: added the fresh-listener row; the mixed-version row now names [THEORY-4] "Explicit safety over magical recovery"; both owner decisions are marked pending, not accepted. |
 
 ### Execution Log
 
@@ -481,3 +496,25 @@ row and the README upgrade-order note.
 Not measured: PostgreSQL 19 (needs a `postgres:19` image pull, not authorized
 in this track). Expected effect there is server `xact_commit` per unrelated
 write falling from `1 + N` toward 1; verify before claiming.
+
+Review round 1 fixes (F1–F3, see the review table above):
+
+- F1 RED on 8e2d7f24 runtime (`./bin/pytest-pg --fast -n 4 ... -k
+  "interrupted_waiter or INTERRUPTED"`): transition `SUBSCRIBE-INTERRUPTED`
+  `assert {'anchor': 1, 'alpha': 1, 'beta': 1, 'jobs': 1} == {'anchor': 1}`;
+  real-PostgreSQL `[single]` `assert {'anchor': 1, 'jobs': 1} == {'anchor': 1}`;
+  `[multi]` `assert {'anchor': 1, 'alpha': 1, 'beta': 1, 'jobs': 1} ==
+  {'anchor': 1}`. All pass after the unwind.
+- F2: under the unsafe "leave the committed set after UNLISTEN" mutation the
+  hardened `RESUBSCRIBE-DURING-UNLISTEN` fails 3/3 with
+  `registrant took the fast path`; it passes on the real code.
+- Reruns after the fixes: `./bin/pytest-pg -n 4 extensions/simplebroker_pg/tests`
+  `444 passed, 7 skipped`; shared PostgreSQL state-machine/watcher/waiter
+  files (`tests/test_state_machine_policy.py`,
+  `tests/test_watcher_transition_tables.py`, `tests/test_activity_waiter_api.py`,
+  `tests/test_watcher.py` under `./bin/pytest-pg --fast -n 4`) `71 passed`;
+  `tests/test_state_machine_policy.py`, `tests/test_plan_context_gate.py`,
+  `tests/test_doc_gates.py` pass; ruff check/format, both CI mypy commands,
+  suppression index, `check-dom15-fixtures`, `check-plan-context`,
+  `check-doc-paths` clean.
+

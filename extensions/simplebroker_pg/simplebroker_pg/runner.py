@@ -448,7 +448,14 @@ class _SharedActivityListener:
             if not needs_listen:
                 return versions
             generation = self._request_subscriptions_locked()
-        if not self._await_subscriptions(generation):
+        try:
+            subscribed = self._await_subscriptions(generation)
+        except BaseException:
+            # Any interruption (including KeyboardInterrupt) leaves no owner
+            # for this reference; unwind it so the channel can be UNLISTENed.
+            self.unregister_queue(queue_name)
+            raise
+        if not subscribed:
             self.unregister_queue(queue_name)
             raise OperationalError("Postgres activity listener did not subscribe")
         return versions
@@ -494,7 +501,13 @@ class _SharedActivityListener:
             if not needs_listen:
                 return fan_in_id, versions, wildcard_version
             generation = self._request_subscriptions_locked()
-        if not self._await_subscriptions(generation):
+        try:
+            subscribed = self._await_subscriptions(generation)
+        except BaseException:
+            # Same ownership rule as register_queue: no waiter will release it.
+            self.unregister_queue_set(fan_in_id)
+            raise
+        if not subscribed:
             self.unregister_queue_set(fan_in_id)
             raise OperationalError("Postgres activity listener did not subscribe")
         return fan_in_id, versions, wildcard_version

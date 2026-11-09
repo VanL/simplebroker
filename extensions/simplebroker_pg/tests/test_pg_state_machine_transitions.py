@@ -450,13 +450,23 @@ def _listener_resubscribes_during_unlisten(monkeypatch: pytest.MonkeyPatch) -> N
                 message="UNLISTEN did not start",
                 diagnostics=lambda: {"statements": list(connection.statements)},
             )
+            reached_wait = threading.Event()
+            original_wait = listener._subscription_changed.wait
+
+            def observed_wait(timeout: float | None = None) -> bool:
+                reached_wait.set()
+                return original_wait(timeout)
+
+            monkeypatch.setattr(listener._subscription_changed, "wait", observed_wait)
             thread = threading.Thread(
                 target=lambda: results.append(listener.register_queue("jobs"))
             )
             thread.start()
             # The in-flight UNLISTEN already left the committed set, so the
-            # registrant must wait for a later LISTEN instead of returning.
-            thread.join(timeout=0.1)
+            # registrant must reach the subscription wait while UNLISTEN is
+            # still gated, instead of returning on the fast path.
+            assert reached_wait.wait(1.0), "registrant took the fast path"
+            assert not gate.is_set()
             assert results == []
         finally:
             gate.set()
@@ -467,6 +477,73 @@ def _listener_resubscribes_during_unlisten(monkeypatch: pytest.MonkeyPatch) -> N
             f'UNLISTEN "{jobs_channel}"',
             f'LISTEN "{jobs_channel}"',
         ]
+
+
+def _listener_subscription_interrupt_unwinds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _started_listener(monkeypatch) as (listener, connection):
+        # Another waiter keeps the listener and its own subscription alive.
+        assert listener.register_queue("anchor") == (0, 0)
+        gate = threading.Event()
+        connection.gated_prefix = "LISTEN"
+        connection.execute_gate = gate
+        reached_wait = threading.Event()
+
+        def interrupted_wait(timeout: float | None = None) -> bool:
+            del timeout
+            reached_wait.set()
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(listener._subscription_changed, "wait", interrupted_wait)
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                listener.register_queue("jobs")
+            assert reached_wait.is_set()
+            reached_wait.clear()
+            with pytest.raises(KeyboardInterrupt):
+                listener.register_queue_set(("alpha", "beta"))
+            assert reached_wait.is_set()
+            assert listener._queue_refcounts == {"anchor": 1}
+            assert set(listener._conditions) == {"anchor"}
+            assert set(listener._versions) == {"anchor"}
+            assert listener._fan_in_entries == {}
+        finally:
+            gate.set()
+        orphaned = [
+            _expected_queue_channel("transition_contract", name)
+            for name in ("jobs", "alpha", "beta")
+        ]
+        anchor_channel = _expected_queue_channel("transition_contract", "anchor")
+
+        def settled() -> bool:
+            with listener._lock:
+                return (
+                    listener._subscription_applied == listener._subscription_requested
+                    and listener._listening == {anchor_channel}
+                )
+
+        drive_until(
+            settled,
+            timeout=1.0,
+            interval=0.005,
+            message="interrupted registrations were not unsubscribed",
+            diagnostics=lambda: {
+                "statements": list(connection.statements),
+                "listening": sorted(listener._listening),
+            },
+        )
+        executed = [
+            statement
+            for batch in connection.statements
+            for statement in batch.split("; ")
+        ]
+        for channel in orphaned:
+            mentions = [
+                statement for statement in executed if f'"{channel}"' in statement
+            ]
+            # Never subscribed, or the last word on the channel is UNLISTEN.
+            assert not mentions or mentions[-1] == f'UNLISTEN "{channel}"'
 
 
 def _listener_registers_after_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -719,6 +796,16 @@ PG_LISTENER_TRANSITIONS = (
         effects="removes the registration's refcounts, conditions and fan-in entry",
         expected_result="OperationalError identifies the missing subscription",
         payload=_listener_subscription_times_out,
+    ),
+    TransitionCase(
+        transition_id="SUBSCRIBE-INTERRUPTED",
+        start_state="ready with another registration and a stalled LISTEN",
+        event="a queue or queue set registration is interrupted in its wait",
+        guard="the subscription wait raises a BaseException",
+        next_state="ready with only the other registration",
+        effects="unwinds refcounts, conditions and the fan-in entry; reconciles",
+        expected_result="the interruption propagates and no phantom remains",
+        payload=_listener_subscription_interrupt_unwinds,
     ),
     TransitionCase(
         transition_id="REGISTER-AFTER-FAILURE",
