@@ -1,18 +1,18 @@
 # Performance branches integration and paired benchmark
 
 Class: 5 (hardening applies): integrates public-contract revisions and resource lifecycles from eight reviewed branches.
-Status: active
+Status: completed — all eight branches landed; owner-requested quiet-host full benchmark rerun complete
 Owner: repository owner; integration agent
-Boundary: SB-1 through SB-8, SB-4 owner-selected [30,60) safety recheck, semantic merge repairs, paired full benchmark. Preserve unrelated main edits to simplebroker/_scripts.py and tests/test_dev_scripts.py.
+Boundary: SB-1 through SB-8, SB-4 owner-selected [30,60) safety recheck, semantic merge repairs, paired full benchmark. Keep the pre-existing cleanup edits in simplebroker/_scripts.py and tests/test_dev_scripts.py in their separately authorized commit.
 Verification: targeted regression controls, full core and backend suites, lint/types/documentation gates, agy independent review, full 36-cell benchmark before and after main merge.
-Required action: complete verification, commit integration, merge into main, rerun identical benchmark, and close this plan and feature index rows.
+Required action: retain the recorded benchmark pins and regression evidence; reassess performance on deployment workloads rather than treating these short samples as guarantees.
 
 ## Goal
 
 - [x] Record accepted policy decisions and verify SB-4 [30,60) rechecks and idle/churn behavior.
 - [x] Run baseline full benchmark at 5d29fbf, 36 combinations, three trials each, 100 operations/sample and 100-byte messages.
-- [ ] Merge all eight feature tips, repair semantic conflicts, verify and land on main.
-- [ ] Run identical full benchmark on merged main, report changes and limitations.
+- [x] Merge all eight feature tips, repair semantic conflicts, verify and land on main.
+- [x] Run identical full benchmark on merged main, report changes and limitations.
 
 ## Source Documents
 
@@ -24,7 +24,7 @@ Baseline: main 5d29fbf. Promotion strategy B: atomic integration of feature cont
 
 ## Context and Invariants
 
-Generated IDs and row insertion commit atomically and in ID order; meta-before-messages lock order stays intact. Notifications remain hints; recovery drains durable work. Listener releases identify the exact instance, including constructor failure. Forked children abandon inherited resources. Session and Queue ownership remain unchanged. No new dependency, public knob, schema or wire change beyond approved SB-3 protocol. Maintain listeners-first rollout. No commits include unrelated main edits.
+Generated IDs and row insertion commit atomically and in ID order; meta-before-messages lock order stays intact. Notifications remain hints; recovery drains durable work. Listener releases identify the exact instance, including constructor failure. Forked children abandon inherited resources. Session and Queue ownership remain unchanged. No new dependency, public knob, schema or wire change beyond approved SB-3 protocol. Maintain listeners-first rollout. Performance commits exclude the pre-existing main cleanup edits; the owner separately authorized committing those edits.
 
 ## Tasks and Proofs
 
@@ -35,7 +35,7 @@ Generated IDs and row insertion commit atomically and in ID order; meta-before-m
 5. M1: WRITE_GENERATED_MESSAGE must use SB-3 queue-channel SQL helper. Existing notify tests fail on stale merged code (20 unrelated packets vs0; wrong channel); rerun against integrated candidate.
 6. M2: both waiter constructor rollback calls pass listener=self._listener to SB-6 release; align test doubles. Three-way merge control reproduced TypeError and retained registry entry for each constructor. Run failure/interruption and registry lifecycle tests.
 7. Reconcile SB-8 changelog with SB-7 streak budget and record SB-2 D3 accepted by owner. Close feature plans/index upon verified completion.
-8. Full core and PostgreSQL/Redis verification, ruff/types and doc gates; agy scoped integration review and disposition. Commit only authorized changes, verify git log, merge main preserving its two unrelated modifications.
+8. Full core and PostgreSQL/Redis verification, ruff/types and doc gates; agy scoped integration review and disposition. Commit only authorized changes, verify git log, merge main with its separately committed cleanup edits.
 9. Run full benchmark again on merged main. Report best-of-three as harness defines it, retain individual trials and distinguish noise from gains. Benchmark does not measure quiet watcher behavior (step2 does).
 
 ## Hardening and Rollback
@@ -139,3 +139,67 @@ boundaries directly informed the listener test repair. Both corrections fit
 existing guidance; no new skill or parallel policy was needed.
 
 Corrected Redis shared suite: 1799 passed, 20 skipped in 127.33s (0:02:07). All selected tests pass.
+
+## Final landing and benchmark results
+
+All eight feature tips landed on main at `a5ace930d5338293e542f7f11509c98add63a18c`.
+The independent existing cleanup edits are commit `4304873`. Main was clean
+at benchmark start. The final closure commit changes documentation only;
+`a5ace93` is the measured production-code pin. No remote push was requested.
+
+The first paired full matrix completed 36 cells / 108 trials per revision.
+It overlapped a separate Weft workload and is **superseded for comparison**:
+its backend geometric-mean ratios were SQLite +19.5%, PostgreSQL +9.6%,
+Redis -15.1%. Raw `before.json` and `after.json` remain unchanged. Short
+alternating diagnostics failed to reproduce the large Redis regression, and
+longer PostgreSQL diagnostics showed the unchanged baseline swinging from
+1,113 to 496 reads/s, confirming that the original timing window was unstable.
+
+The owner requested a rerun after the Weft benchmarks. Both complete
+matrices were rerun back-to-back, base `5d29fbf` then candidate `a5ace93`,
+with the same Python/dependencies, 100 operations/sample, 100-byte messages,
+three trials/cell, default workloads/access modes and disposable services.
+Both exited 0 with 36 cells / 108 trials. No task-owned tests or measurements
+ran concurrently. All 53 process snapshots (15-second sampling) contained no
+identified Weft benchmark workers. The normal Weft task monitor remained;
+this is a quieter shared host, not an exclusive laboratory. Sampling cannot
+exclude work between snapshots.
+
+Primary evidence in the task artifact directory above:
+`rerun-before.json`, `rerun-after.json`, corresponding `.meta.json` and `.log`
+files, `rerun-load-samples.json`, `comparison-rerun.md`, and `compare-rerun.py`.
+The separate cleanup change affects disposable service removal outside timed
+operations. Neither revision was edited during its timed run.
+
+### Full rerun matrix
+
+Each cell is baseline → candidate operations/second, followed by percentage
+change, using the harness's best of three. Raw trials are retained.
+
+| Backend / access | Writes | Reads | Peeks | Mixed |
+|---|---:|---:|---:|---:|
+| sqlite / cli | 18.2 → 18.0 (-1.4%) | 15.9 → 15.9 (-0.0%) | 15.9 → 15.7 (-1.0%) | 16.2 → 16.3 (+0.7%) |
+| sqlite / api | 876.8 → 943.4 (+7.6%) | 940.1 → 959.9 (+2.1%) | 1210.6 → 1235.7 (+2.1%) | 1028.5 → 1059.5 (+3.0%) |
+| sqlite / optimized-api | 8632.0 → 8559.0 (-0.8%) | 9545.7 → 9888.8 (+3.6%) | 35067.7 → 36879.4 (+5.2%) | 11420.1 → 11805.4 (+3.4%) |
+| pg / cli | 7.6 → 7.8 (+2.2%) | 6.8 → 6.9 (+1.6%) | 7.0 → 7.2 (+1.8%) | 7.2 → 7.3 (+1.8%) |
+| pg / api | 121.7 → 167.4 (+37.6%) | 124.4 → 145.3 (+16.7%) | 111.1 → 186.6 (+67.9%) | 105.5 → 164.2 (+55.6%) |
+| pg / optimized-api | 890.0 → 1112.6 (+25.0%) | 1362.3 → 1289.1 (-5.4%) | 5407.1 → 5165.0 (-4.5%) | 1695.1 → 1715.7 (+1.2%) |
+| redis / cli | 9.7 → 10.0 (+3.2%) | 9.5 → 9.8 (+3.1%) | 9.6 → 9.8 (+2.1%) | 9.5 → 9.9 (+4.1%) |
+| redis / api | 285.5 → 437.3 (+53.2%) | 310.7 → 464.3 (+49.4%) | 264.7 → 483.3 (+82.6%) | 199.1 → 459.3 (+130.7%) |
+| redis / optimized-api | 2431.9 → 2940.5 (+20.9%) | 5986.5 → 6438.6 (+7.6%) | 4703.4 → 4750.8 (+1.0%) | 4245.9 → 4233.0 (-0.3%) |
+
+
+The geometric mean of the 12 cell ratios per backend is SQLite **+2.0%**,
+PostgreSQL **+14.7%**, Redis **+24.8%**. This weights each cell equally; it is
+not a workload-weighted production forecast. No cell regressed by more than
+10%. PostgreSQL optimized reads (-5.4%) and peeks (-4.5%) are retained as
+observed small regressions; the short samples do not establish a causal
+regression or statistical significance. The largest gains are in ordinary
+API calls; the matrix does not isolate individual branch contributions,
+measure project-scoped admission reuse, or replace the separate idle/churn
+measurement.
+
+All feature plan index rows and this integration row are closed. The
+requested SB-4 policy, documentation, tests and live reclamation/churn proof,
+separate existing-edit commit, main merge, and complete before/after rerun
+are finished.

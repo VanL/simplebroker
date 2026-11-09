@@ -29,7 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-11-09-performance-branches-integration-plan.md | active — class 5; owner-authorized SB-1..SB-8 integration, SB-4 [30,60) policy, full paired benchmark; agy plan PASS |
+| 2026-11-09-performance-branches-integration-plan.md | completed — class 5; SB-1..SB-8 landed; SB-4 [30,60) verified; agy no blocker; full 36-cell paired rerun complete |
 | 2026-11-08-pg-write-lock-hold-plan.md | completed — class 4; PostgreSQL ordinary generated writes allocate, insert, notify and commit in one pipelined exchange behind the high-water row lock; Codex findings F1/F2 (round 1) and F3 (round 2) fixed, round 3 PASS; owner accepted the merged-statement exception row 2026-11-09 |
 | 2026-11-08-backend-plugin-resolution-cache-plan.md | completed — class 5 with risky trigger; once-per-process entry-point resolution on `perf/sb-plugin-cache`; Codex F1-F4 fixed (fork child resolves afresh and never releases inherited plugins); F4 closed by owner decision F4-O2 (fork-safe plugin finalizers documented); D3 owner-accepted 2026-11-09; integration gates passed; D2 owner-accepted 2026-11-08 |
 | 2026-11-08-pg-notify-fanout-plan.md | completed — class 4; PostgreSQL per-queue activity notification channels with listener-side LISTEN reconciliation; branch `perf/sb-notify-fanout`; cross-family review passed (round 2); owner decisions 1-2 decided 2026-11-08 |
