@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from importlib import metadata
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
@@ -619,8 +620,48 @@ def resolve_runner_backend_plugin(
     return plugin
 
 
+# Successful entry-point resolutions for the life of this process, by backend
+# name [SB-API-11]. Only validated plugins are stored: an unknown, ambiguous,
+# unloadable or invalid registration is rescanned on the next lookup, so a
+# later install or repair is seen. get/setdefault on a plain dict take no lock,
+# so a forked child never waits on a resolution in flight in its parent, and
+# the fork hook below gives the child an empty memo. Coupling: tests that
+# substitute ``metadata.entry_points`` must substitute this mapping too
+# (monkeypatch), or their stub plugins see and leak memoized resolutions.
+_RESOLVED_ENTRY_POINT_PLUGINS: dict[str, BackendPlugin] = {}
+
+# Memos inherited across fork, kept alive and never read or released. One
+# mapping per fork generation, each holding at most the few backend names its
+# parent resolved, so the retention is bounded by fork depth.
+_INHERITED_RESOLUTIONS: list[dict[str, BackendPlugin]] = []
+
+
+def _forget_resolutions_after_fork() -> None:
+    """Give a fork child no retained resolutions [SB-API-11].
+
+    A plugin object created by the parent's lookup may own locks or resources
+    that parent threads hold at fork time; the child resolves afresh instead,
+    as it did before resolutions were retained. The inherited mapping is kept
+    alive, never released: dropping its last reference here would run a
+    plugin finalizer inside the fork hook, where a parent-held lock blocks the
+    child before ``os.fork()`` returns.
+    """
+    global _RESOLVED_ENTRY_POINT_PLUGINS
+
+    _INHERITED_RESOLUTIONS.append(_RESOLVED_ENTRY_POINT_PLUGINS)
+    _RESOLVED_ENTRY_POINT_PLUGINS = {}
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_resolutions_after_fork)
+
+
 def _load_entry_point_plugin(name: str) -> BackendPlugin:
-    """Load an external backend plugin by entry point name."""
+    """Resolve an external backend plugin by entry point name [SB-API-11]."""
+    resolved = _RESOLVED_ENTRY_POINT_PLUGINS.get(name)
+    if resolved is not None:
+        return resolved
+
     matches = list(
         metadata.entry_points().select(
             group=BACKEND_ENTRY_POINT_GROUP,
@@ -649,7 +690,11 @@ def _load_entry_point_plugin(name: str) -> BackendPlugin:
                 f"'{getattr(plugin, 'name', None)}'"
             )
         _ensure_backend_plugin_capabilities(cast(BackendPlugin, plugin))
-        return cast(BackendPlugin, plugin)
+        # Racing first lookups may each load; the first stored plugin wins, so
+        # every caller in the process shares one object.
+        return _RESOLVED_ENTRY_POINT_PLUGINS.setdefault(
+            name, cast(BackendPlugin, plugin)
+        )
 
     raise UnknownBackendPluginError(f"Unknown backend plugin: {name}")
 

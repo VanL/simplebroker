@@ -286,6 +286,37 @@ Unknown backend entry-point lookup raises the private
 callers. Project resolution catches that type to add install guidance; other
 plugin runtime failures propagate without depending on exception prose.
 
+Successful entry-point resolution is retained per process in
+`simplebroker/_backend_plugins.py::_RESOLVED_ENTRY_POINT_PLUGINS`
+([SB-API-11]). `importlib.metadata.entry_points()` reads every installed
+distribution's metadata, about 0.75 ms with 32 distributions and longer in
+larger environments, and Queue identity, `backend_name`, `BrokerTarget.plugin`,
+connection setup and each queue in a multi-queue waiter all resolve the
+backend. The memo is a plain dict, not `functools.cache` or a locked registry:
+racing first lookups may both load, `setdefault` makes them share the first
+stored plugin, and the absence of a lock means a forked child cannot inherit a
+resolution lock held by a parent thread. An `os.register_at_fork` child hook
+installs an empty memo, the `_phaselock.py` pattern, because a retained plugin
+created by a class or factory entry point may own a lock that a parent thread
+holds at fork time; reusing it would block a fresh child Queue, which resolved
+afresh before resolutions were retained. The hook moves the inherited memo onto
+`_INHERITED_RESOLUTIONS` instead of dropping it: releasing the last reference
+inside the hook would run a plugin finalizer before `os.fork()` returns in the
+child, where a parent-held lock blocks it. That retention is bounded: one
+mapping per fork generation, each holding the few backends its parent
+resolved, never read or freed. Only validated plugins are stored, so
+an unknown, ambiguous, unloadable or invalid registration is rescanned on the
+next lookup. Retaining a success gives up one diagnostic: a duplicate
+registration installed after a name's first successful lookup is no longer
+reported as ambiguous by that process (an explicit tradeoff, recorded for owner
+disposition in the resolution-cache plan). Other in-place metadata changes
+lose little, because the plugin module stays in `sys.modules` and live handles
+keep their plugin object; rescanning could only fail new handles or import a
+second copy of a moved plugin module beside the first. Tests that
+replace `metadata.entry_points` also replace the memo through monkeypatch; the
+module comment marks that coupling. The built-in SQLite plugin does not use
+the memo because it does not scan entry points.
+
 Post-parse CLI failure mapping is cause-owned rather than phase-owned.
 `_classify_cli_error()` checks `DatabaseError` first because `DataError` also
 inherits `ValueError`, then recognizes the private caller-validation type plus

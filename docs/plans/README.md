@@ -31,6 +31,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 |------|--------|
 | 2026-11-09-performance-branches-integration-plan.md | active — class 5; owner-authorized SB-1..SB-8 integration, SB-4 [30,60) policy, full paired benchmark; agy plan PASS |
 | 2026-11-08-pg-write-lock-hold-plan.md | active — class 4; PostgreSQL ordinary generated writes allocate, insert, notify and commit in one pipelined exchange behind the high-water row lock; Codex findings F1/F2 (round 1) and F3 (round 2) fixed, round 3 PASS; owner accepted the merged-statement exception row 2026-11-09 |
+| 2026-11-08-backend-plugin-resolution-cache-plan.md | active — class 5 with risky trigger; once-per-process entry-point resolution on `perf/sb-plugin-cache`; Codex F1-F4 fixed (fork child resolves afresh and never releases inherited plugins); F4 closed by owner decision F4-O2 (fork-safe plugin finalizers documented); owner disposition of D3 pending; D2 owner-accepted 2026-11-08 |
 | 2026-10-14-agent-theory-delta-wave-plan.md | completed — class 5+P propagation of agent-theory 8f41a9d delta wave across DOM specs, AT-REF primer, shared agent-context, skills, and doc/coalescing gates |
 | 2026-10-14-create-parent-adoption-plan.md | completed — vendorable optional parent creation shipped in coordinated 8.7.2/4.7.2 releases with exact-SHA CI and artifact verification |
 | 2026-10-14-core-finalizer-ownership-plan.md | completed — borrowed SQL GC ownership repaired; native backend proofs and single-file acquire refactor verified |

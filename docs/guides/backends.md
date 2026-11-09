@@ -106,6 +106,21 @@ full backend packages also use private core modules. Backend plugins declare a
 code-level `backend_api_version`; core checks it during backend resolution and
 release tooling verifies the first-party packages move with the core backend
 seam. That handshake is not stored in broker databases or backend metadata.
+Core retains one validated plugin object per backend name per process and
+returns it for every later lookup of that name
+([SB-API-11](../specs/16-python-library-api.md#ext-advanced-and-backend-facing-exports-sb-api-11)).
+A factory or class registered as the entry point is therefore not called once
+per lookup; racing first lookups may still call it more than once, and all of
+them get the one retained result. A failed lookup is not retained, so the next
+lookup sees a newly installed or repaired backend; replacing a backend the
+process already resolved takes effect in new processes. A forked child starts
+with nothing retained and loads the entry point again.
+A plugin's finalizer must be fork-safe. A forked child keeps the plugin objects
+its parent retained, and its interpreter may finalize them when it exits, so a
+finalizer must not take a lock that a parent thread could hold at fork. Check
+the PID first and abandon inherited resources, as the first-party PostgreSQL
+and Redis resource finalizers do, or reset such locks with
+`os.register_at_fork(after_in_child=...)`.
 
 Backend API v2 publicly exports `DeliveryGuarantee`,
 `validate_delivery_guarantee()`, `MaintenanceSchedule`, and

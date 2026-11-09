@@ -328,6 +328,11 @@ def counting_backend(monkeypatch: pytest.MonkeyPatch) -> CountingBackendPlugin:
         "simplebroker._backend_plugins.metadata.entry_points",
         lambda: EntryPointsMock([entry_point]),
     )
+    # Resolutions are memoized per process [SB-API-11]; each test's plugin
+    # starts from an empty memo that monkeypatch discards afterwards.
+    monkeypatch.setattr(
+        "simplebroker._backend_plugins._RESOLVED_ENTRY_POINT_PLUGINS", {}
+    )
     return plugin
 
 
