@@ -2124,9 +2124,11 @@ def test_run_logs_command_and_enforces_subprocess_contract(
     ]
 
 
-def test_cleanup_container_forces_removal_without_raising(
+def test_cleanup_container_removes_container_and_volumes_without_raising(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """``-v`` removes the data volume the Postgres and Valkey images declare;
+    ``rm -f`` alone leaves one behind per run, even with ``--rm``."""
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -2139,7 +2141,7 @@ def test_cleanup_container_forces_removal_without_raising(
 
     assert calls == [
         (
-            ["docker", "rm", "-f", "temporary-container"],
+            ["docker", "rm", "-f", "-v", "temporary-container"],
             {
                 "cwd": REPO_ROOT,
                 "check": False,
