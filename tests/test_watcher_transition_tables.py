@@ -331,11 +331,19 @@ WATCHER_LIFECYCLE_TRANSITIONS = (
     ),
     _case(
         "RECOVERED_FAILURE_NEW_STREAK",
-        "running after successful start and initial drain",
+        "running after a processing wait returned normally",
         "ordinary failure",
         "starting a new failure streak",
         "reset the retry count and time the new streak from the failure",
         "same watcher recovers from repeated failures after the retry budget age",
+    ),
+    _case(
+        "RESTART_FAILURE_BEFORE_HEALTHY_WAIT",
+        "restarted and drained, no processing wait returned yet",
+        "ordinary failure",
+        "same failure streak",
+        "count the failure in the open streak",
+        "third consecutive failure propagates although every restart drained",
     ),
     _case(
         "ERROR_HANDLER_FAILURE",
@@ -378,19 +386,25 @@ class _RecoveringWatcher(QueueWatcher):
         *args: Any,
         failures: int,
         clock: list[float],
+        healthy: bool,
         **kwargs: Any,
     ) -> None:
         self.entries = 0
         self.failures = failures
         self.clock = clock
+        self.healthy = healthy
+        self.failure = RuntimeError("processing loop failed")
         super().__init__(*args, **kwargs)
 
     def _process_messages(self) -> None:
         self.entries += 1
         if self.entries <= self.failures:
-            # Each established period outlasts the per-streak time budget.
-            self.clock[0] += watcher_module.MAX_TOTAL_RETRY_TIME + 1.0
-            raise RuntimeError("established run failed")
+            if self.healthy:
+                # A wait returned normally, then the healthy period outlasted
+                # the per-streak time budget before this failure.
+                self._record_healthy_wait()
+                self.clock[0] += watcher_module.MAX_TOTAL_RETRY_TIME + 1.0
+            raise self.failure
         self.stop(join=False)
 
 
@@ -467,7 +481,8 @@ def _assert_retry_transition(
         watcher.stop(join=False)
 
 
-def _assert_recovered_failure_new_streak(
+def _assert_retry_streak_transition(
+    payload: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -483,17 +498,26 @@ def _assert_recovered_failure_new_streak(
 
     monkeypatch.setattr(watcher_module, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(watcher_module, "interruptible_sleep", record_sleep)
+    healthy = payload == "RECOVERED_FAILURE_NEW_STREAK"
     watcher = _RecoveringWatcher(
         "jobs",
         lambda message, timestamp: None,
-        db=str(tmp_path / "RECOVERED_FAILURE_NEW_STREAK.db"),
+        db=str(tmp_path / f"{payload}.db"),
         failures=3,
         clock=clock,
+        healthy=healthy,
     )
     try:
-        watcher._run_with_retries(max_retries=3)
-        assert watcher.entries == 4
-        assert sleeps == [2, 2, 2]
+        if healthy:
+            watcher._run_with_retries(max_retries=3)
+            assert watcher.entries == 4
+            assert sleeps == [2, 2, 2]
+        else:
+            with pytest.raises(RuntimeError, match="processing loop failed") as raised:
+                watcher._run_with_retries(max_retries=3)
+            assert raised.value is watcher.failure
+            assert watcher.entries == 3
+            assert sleeps == [2, 4]
     finally:
         watcher.stop(join=False)
 
@@ -635,8 +659,11 @@ def test_watcher_lifecycle_fires_transition_table(
         _assert_retry_transition(transition_case.payload, tmp_path, monkeypatch)
         return
 
-    if transition_case.payload == "RECOVERED_FAILURE_NEW_STREAK":
-        _assert_recovered_failure_new_streak(tmp_path, monkeypatch)
+    if transition_case.payload in {
+        "RECOVERED_FAILURE_NEW_STREAK",
+        "RESTART_FAILURE_BEFORE_HEALTHY_WAIT",
+    }:
+        _assert_retry_streak_transition(transition_case.payload, tmp_path, monkeypatch)
         return
 
     if transition_case.payload == "ERROR_HANDLER_FAILURE":

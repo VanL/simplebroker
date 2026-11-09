@@ -212,7 +212,7 @@ MAX_TOTAL_RETRY_TIME: Final[int] = 300  # 5 minutes max
 """Maximum seconds one watcher failure streak may spend retrying.
 
 A streak is timed from run start, or from the first failure after the watcher
-was established (strategy start and initial drain succeeded).
+was healthy (a processing wait returned normally after its latest restart).
 """
 
 # ==============================================================================

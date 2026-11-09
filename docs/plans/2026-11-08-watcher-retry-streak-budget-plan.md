@@ -1,34 +1,40 @@
 # Watcher retry limits per failure streak
 
-Class: 4 — risky: the [DOM-5] "compatibility surface" trigger fires. Public
-`run_forever()` and `run()` callers, and `threading.excepthook` for
-`run_in_thread()`, no longer receive the exception for a failure that recurs
-after every successful start and initial drain (register row 5). Private
-implementation names and silent spec text do not exclude a compatibility
-change (review F1; the author's original class-3 claim rejected this trigger).
-It also changes intended (observable) watcher behavior with no governing spec
-text, contract test or explicit user requirement as intent evidence. No other
-risky trigger fires: no async or deferred work; one execution context; no CLI
-shape or storage change; rollback is a plain revert with no rollout order. No
-normative spec text changes, so not class 5 (see Q2 for the class-5
-follow-up). Hardening content: Hidden couplings; Rollback, Rollout and Success
-Signals; Testing Plan (what not to mock); Context and Key Files; Fresh-Eyes
+Class: 4 — risky: the [DOM-5] "compatibility surface" trigger fires (review
+F1). Public `run_forever()` and `run()` callers, and `threading.excepthook` for
+`run_in_thread()`, no longer receive the exceptions a healthy long-lived
+watcher used to raise (`TimeoutError` after 300 s of uptime; the third failure
+over the run's life), and every retry now emits a WARNING log record, which
+Python's last-resort handler prints to stderr when the application has not
+configured logging (for example `broker watch`). Private implementation names
+and silent spec text do not exclude a compatibility change. It also changes
+intended (observable) watcher behavior with no governing spec text, contract
+test or explicit user requirement as intent evidence. No other risky trigger
+fires: no async or deferred work; one execution context; no CLI shape or
+storage change; rollback is a plain revert with no rollout order. No normative
+spec text changes, so not class 5 (see Q2 for the class-5 follow-up).
+Hardening content: Hidden couplings; Rollback, Rollout and Success Signals;
+Testing Plan (what not to mock); Context and Key Files; Fresh-Eyes
 comprehension questions.
-Status: active — implemented and verified on branch
-`perf/sb-watcher-retry-budget` (base `perf/sb-base` = `5d29fbf`);
-cross-family review complete with no blocker (F1, F2 fixed in this plan);
-owner decisions Q1 and Q2 open.
+Status: active — revision 2 implemented and verified on branch
+`perf/sb-watcher-retry-budget` (base `perf/sb-base` = `5d29fbf`). Revision 1
+(`2a732d8`) passed cross-family review SB-7 with no blocker (F1, F2 fixed in
+`9473af3`). The owner decided Q1 on 2026-11-09; revision 2 implements that
+decision and has not been re-reviewed. Q2 open.
 Owner: SimpleBroker product owner; implementation agent for this track.
-Boundary: `simplebroker/watcher.py` `BaseWatcher._run_with_retries` and
-`_check_retry_timeout`, plus the `MAX_TOTAL_RETRY_TIME` docstring in
-`simplebroker/_constants.py`. `PollingStrategy`, activity waiters, backends,
-`_handle_retry` backoff and `_process_with_retry` are out of scope.
+Boundary: `simplebroker/watcher.py` `BaseWatcher._run_with_retries`,
+`_record_healthy_wait`, `_check_retry_timeout`, and the two
+`_process_messages` implementations (`BaseWatcher`, `QueueMoveWatcher`), plus
+the `MAX_TOTAL_RETRY_TIME` docstring in `simplebroker/_constants.py`.
+`PollingStrategy`, activity waiters, backends, `_handle_retry` backoff and
+`_process_with_retry` are out of scope.
 Verification: shared watcher tests on SQLite and PostgreSQL that fail on
-`5d29fbf` for the intended reasons; one `SM-WATCHER-LIFECYCLE` transition row;
-owning watcher test files; shared watcher suite on PostgreSQL; ruff, format,
-mypy; fix-reverted sensitivity control.
-Required action: coordinator runs the cross-family review and records it
-below; owner answers Q1 (the one diminution row) and Q2.
+`5d29fbf` (revision 1) and on `9473af3` (revision 2) for the intended reasons;
+two `SM-WATCHER-LIFECYCLE` transition rows; owning watcher test files; shared
+watcher suite on PostgreSQL; ruff, format, mypy; fix-reverted sensitivity and
+mutation controls.
+Required action: coordinator decides whether revision 2 needs another
+cross-family review; owner answers Q2.
 
 ## Goal
 
@@ -40,6 +46,12 @@ below; owner answers Q1 (the one diminution row) and Q2.
 - [x] Within one failure streak the limits are unchanged: `max_retries` (3)
       consecutive failures, or 300 s, end the run; the first streak is still
       measured from run start.
+- [x] Revision 2 (owner decision 2026-11-09): only a processing wait that
+      returns normally after a restart ends a streak. A failure that recurs at
+      the first wait after every restart ends the run after three failures,
+      with the exception surfaced.
+- [x] Revision 2: every retry logs a WARNING naming the error, the retry
+      number and limit, and the streak age.
 - [x] No new knob, path or public signature.
 
 ## Source Documents
@@ -126,33 +138,47 @@ Base evidence (new tests, fix absent) is in Verification below.
 
 ## Design
 
-A failure streak is the sequence of consecutive failed attempts since the
-watcher was last established. The watcher is established once
-`_start_strategy()` and the initial drain have both succeeded (the brief's
-"successful start and drain"; it is the only health witness the loop owns,
-because `_process_messages` and `_drain_queue` are subclass hooks).
+Revision 2 (owner decision 2026-11-09) replaces revision 1's health witness.
 
-- At establishment, `_run_with_retries` sets `retry_count = 0` and marks the
-  streak closed.
-- The first failure after establishment opens a new streak: its time budget
-  starts at that failure (`streak_start = _monotonic()`).
+A failure streak is the sequence of consecutive failed attempts since the
+watcher was last healthy. The watcher is healthy once, after its latest
+(re)start, a processing wait (`wait_for_activity()` in `_process_messages`)
+returns normally, through activity or timeout. A successful strategy start and
+initial drain are not enough: a restart whose first wait fails stays in the
+open streak.
+
+- `_run_with_retries` clears `self._healthy_wait_since_start` before each
+  attempt.
+- Both `_process_messages` implementations (`BaseWatcher`, `QueueMoveWatcher`)
+  call `_record_healthy_wait()` right after every wait that returns, which sets
+  the flag. It is a single setter, so the coupling has one name.
+- On an ordinary failure, `_run_with_retries` checks the flag. If it is set,
+  the streak is over: `retry_count = 0` and `streak_start = _monotonic()`, so
+  the new streak is timed from this failure. Then the count increments as
+  before.
 - The first streak opens at run start, as before, so time spent in a failing
   first attempt still counts (`test_absolute_timeout_exceeded` unchanged).
   Uniform reading: the budget measures time since the watcher was last
   healthy, or since it began trying to become healthy.
+- Each failure that will be retried (`retry_count < max_retries`) logs one
+  WARNING from `_run_with_retries`, the streak owner:
+  `Watcher error (retry n/3, failure streak age X.Xs): <Type>: <message>`.
+  The terminal failure keeps `_handle_retry`'s existing ERROR (`Watcher failed
+  after 3 retries`); `_handle_retry` keeps its DEBUG backoff line and its
+  signature. Like that ERROR, the WARNING is not gated by
+  `BROKER_LOGGING_ENABLED`.
 - `_check_retry_timeout` is unchanged apart from its docstring; it receives the
   streak start.
 
-Why not restart the clock at establishment (the literal reading of "reset both
-after a successful start and drain"): the processing loop then runs for hours,
-and the next failure finds `elapsed > 300` and dies, reproducing the bug.
+Why the clock restarts at the failure, not at the healthy wait: a healthy
+processing loop runs for hours, so a clock restarted at the witness would find
+`elapsed > 300` at the next failure and die, reproducing the bug.
 
-Why no other health witness (for example "the processing loop completed one
-wait"): it would require a hook inside the overridable `_process_messages`
-(and `QueueMoveWatcher` overrides it) or new strategy state; the loop already
-owns the start and initial-drain boundary. It stays open as an owner option
-under Q1, because it would bound the row-5 restart loop with the existing
-limits.
+Revision 1 used a successful start plus initial drain as the witness. That left
+a failure that recurs at the first wait after every restart in an indefinite
+2 s restart loop (register row 5, class D in revision 1). The owner chose the
+processing-wait witness (the reviewer's alternative), which bounds that loop
+with the existing limits.
 
 ## Invariants and Constraints
 
@@ -166,31 +192,45 @@ limits.
 4. `_handle_retry`, `_check_retry_timeout` and `_run_with_retries` keep their
    signatures (subclasses and tests override them).
 5. No new configuration, constant or public name.
+6. A streak ends only at `_record_healthy_wait()`; a subclass that overrides
+   `_process_messages` without calling it keeps every failure of the run in
+   one streak (the `5d29fbf` behavior), never a looser one.
 
 ## Hidden couplings
 
+- The witness crosses methods: `_run_with_retries` clears
+  `_healthy_wait_since_start`, the two `_process_messages` implementations set
+  it through `_record_healthy_wait()`, and the failure branch reads it. Comments
+  at each site name the other. No in-repository or Weft subclass overrides
+  `_process_messages` (checked by grep; Weft's `MultiQueueWatcher` inherits
+  `BaseWatcher._process_messages`).
 - `_handle_retry(e, retry_count, max_retries)` derives the backoff from the
-  count, so the reset also resets the backoff to 2 s for a new streak.
+  count, so a new streak also restarts the backoff at 2 s.
 - SB-6 (`perf/sb-listener-recovery`) depends on this loop to recover a
   PostgreSQL watcher after the server ends the LISTEN session; its CHANGELOG
   entry states the old limits ("at most two recoveries per run, and none once
   the run is more than five minutes old"), which this change makes false.
-  Merging both requires rewording that sentence.
+  Merging both requires rewording that sentence. The Redis track (SB-8) has the
+  same dependency.
 - Without SB-6, a PostgreSQL watcher whose shared listener failed re-acquires
-  the failed listener on every restart: start and drain succeed, the next wait
-  raises. With this change that is the row-4 shape below (indefinite 2 s
-  restart loop) instead of death after three failures. The Redis registry has
-  the same shape (SB-6 Q2).
+  the failed listener on every restart: start and drain succeed and the first
+  wait raises. With revision 2 that run ends after three failures with the
+  error surfaced, as on `5d29fbf`; with SB-6 the new listener's wait returns
+  and closes the streak.
 
 ## Observable-difference register
 
+Against `5d29fbf` (revision 2):
+
 | Change | Class | Theory basis |
 |--------|-------|--------------|
-| A watcher whose run is older than 300 s survives an ordinary failure that its retry recovers from and keeps handling writes (was: `TimeoutError` at the first retry, before any reconnect) | C — no loss; restores recovery | [THEORY-3] bounded waiting or consumption; [THEORY-5]/[REV-THEORY-002] the backend owns its restart, so the watcher must not turn a recoverable substrate event terminal because of its own uptime |
-| Failures separated by successful recoveries do not accumulate; a new streak starts with retry count 0 and the 2 s backoff (was: the third failure over the run's life was terminal, and backoff kept growing) | C — no loss | same |
+| A healthy watcher whose run is older than 300 s survives an ordinary failure that its retry recovers from and keeps handling writes (was: `TimeoutError` at the first retry, before any reconnect) | C — no loss; restores recovery | [THEORY-3] bounded waiting or consumption; [THEORY-5]/[REV-THEORY-002] the backend owns its restart, so the watcher must not turn a recoverable substrate event terminal because of its own uptime |
+| Failures separated by genuine recoveries (a restart whose processing wait then returns) do not accumulate; a new streak starts with retry count 0 and the 2 s backoff (was: the third failure over the run's life was terminal, and backoff kept growing) | C — no loss | same |
+| A failure that recurs at the first processing wait after every restart, although each start and initial drain succeed, stays one streak: the third consecutive failure ends the run and the exception reaches the `run_forever()`/`run()` caller or `threading.excepthook` | N — same terminal behavior as `5d29fbf`. Revision 1's D row (an indefinite 2 s restart loop) is withdrawn by the owner decision of 2026-11-09 | [THEORY-4] explicit safety over magical recovery; [THEORY-6] the persistent failure stays diagnosable from the owning operation |
 | Within one streak, 3 consecutive failures or 300 s still end the run; the first streak is still timed from run start | N — unchanged | [THEORY-4] guarantees named narrowly |
 | `TimeoutError` text unchanged; its "Retries" and "Time elapsed" now report the current streak, which is the budget actually enforced | N — same text, consistent meaning | [THEORY-6] diagnosable from the owning operation |
-| A failure that recurs after every successful start and initial drain (for example a processing-loop or native-wait failure that reconnecting does not fix) now restarts indefinitely every ~2 s, delivering through each restart's initial drain, with each failure logged at DEBUG; was: the run ended on the third failure (about 6 s) and the exception reached the `run_forever()` caller or `threading.excepthook` | D — loss of the terminal signal for this one failure shape; owner ratification requested (Q1) | Argued under [THEORY-3] (the watcher still performs its owned function: each restart re-establishes and drains) and [THEORY-4] (stated narrowly in CHANGELOG rather than implied as general recovery). Counter-pressure: [THEORY-4] "explicit safety over magical recovery" and [THEORY-6] diagnosability, since the failure is visible only at DEBUG |
+| Each retried failure logs WARNING `Watcher error (retry n/3, failure streak age X.Xs): <Type>: <message>` (was DEBUG). Not gated by `BROKER_LOGGING_ENABLED`, like the existing exhaustion ERROR; an application without logging configuration (for example `broker watch`) sees it on stderr through Python's last-resort handler; stdout is unchanged | A — owner-decided 2026-11-09 | [THEORY-4] failures are reported rather than absorbed; [THEORY-6] diagnosable; [THEORY-4] Unix composability: diagnostics on stderr, data on stdout |
+| A subclass that overrides `_process_messages` must call `_record_healthy_wait()` after each normal wait, or all its failures stay in one streak | N — such a subclass keeps the `5d29fbf` behavior; private hook, no known override | [THEORY-4] small concept count: one named setter |
 
 ## Alternatives (plan-local unless the owner promotes them)
 
@@ -199,14 +239,14 @@ limits.
 - Time every streak, including the first, from its first failure: rejected;
   changes the first-attempt budget that `test_absolute_timeout_exceeded` pins
   with no evidence that it is wrong.
-- Health witness inside `_process_messages` (recovery qualified by a
-  successful processing wait instead of start plus initial drain): not adopted
-  here because it changes the chosen health witness and both processing-loop
-  implementations (`BaseWatcher._process_messages` and
-  `QueueMoveWatcher._process_messages`). It reuses the existing limits with no
-  new knob, so it remains an owner option under Q1 (review F2).
-- A cap on recovered streaks or a new knob: rejected by the brief (no new
-  knobs); offered to the owner as an option under Q1.
+- Successful start plus initial drain as the witness (revision 1): replaced
+  by owner decision 2026-11-09; it left the recurring first-wait failure in an
+  unbounded restart loop.
+- A cap on recovered streaks or a new knob: not chosen by the owner (Q1).
+- Logging alone (WARNING without a changed witness): not a bound (review F2);
+  the owner chose it together with the processing-wait witness.
+- Emit the WARNING from `_handle_retry`: it lacks the streak age, and adding a
+  parameter would break existing `_handle_retry` overrides.
 
 ## Tasks
 
@@ -220,7 +260,14 @@ limits.
 3. Docs: implementation doc 07 `SM-WATCHER-LIFECYCLE` row, spec 16 Related
    Plans backlink, CHANGELOG Unreleased/Fixed, this plan and its index row.
    Done.
-4. Sensitivity control, full gates, commit. Done.
+4. Sensitivity control, full gates, commit. Done (`2a732d8`; review
+   dispositions `9473af3`).
+5. Revision 2 (owner decision 2026-11-09): RED tests for the recurring
+   first-wait failure, the WARNING log, the move-watcher witness and the
+   `RESTART_FAILURE_BEFORE_HEALTHY_WAIT` row; rework the recovery scenarios so
+   each recovery includes a normal processing wait; move the witness into both
+   `_process_messages` implementations; WARNING per retry; docs; sensitivity
+   and mutation controls; gates; commit. Done.
 
 ## Testing Plan
 
@@ -235,30 +282,69 @@ limits.
   strategy's sub-second burst sleeps stay real. No real sleep decides an
   outcome; the watcher runs synchronously in the test thread.
   - `test_failure_after_retry_budget_age_recovers_and_handles_later_write`:
-    the first wait after a successful start and drain moves the clock 301 s
+    a processing wait returns, then the next wait moves the clock 301 s
     forward and fails; the recovered watcher must handle a write made after
-    recovery. Base: `TimeoutError`.
-  - `test_recovered_failures_do_not_accumulate_retry_count`: the first wait
-    after each of three successful starts fails (each failure writes one
-    message, which the next restart's initial drain delivers); the watcher must
-    then handle a later write. Base: the third failure propagates.
+    recovery. `5d29fbf`: `TimeoutError`.
+  - `test_move_watcher_failure_after_retry_budget_age_recovers`: the same
+    scenario through `QueueMoveWatcher`'s own `_process_messages`.
+  - `test_recovered_failures_do_not_accumulate_retry_count`: three failures,
+    the second and third each after a restart whose processing wait returned
+    (each failure writes one message, which the next restart's initial drain
+    delivers, so the next wait returns on that activity); the watcher must
+    then handle a later write. `5d29fbf`: the third failure propagates.
+  - `test_wait_failure_after_every_restart_ends_run_after_retry_limit`: the
+    first processing wait after every restart fails although start and drain
+    succeed; the third failure must reach the `run_forever()` caller.
+    `9473af3`: does not raise (keeps restarting).
+  - `test_each_retry_logs_warning_with_streak_context` (caplog): two retries in
+    one streak log WARNING with the retry number, the error and the streak age
+    (the second at least 5 s, after a 5 s clock jump). `9473af3`: no WARNING.
   - `test_failure_streak_after_recovery_keeps_retry_limits[retries|time]`:
     after one recovery, restarts fail; the run must still end after three
     consecutive failures, or with `TimeoutError` once that streak passes 300 s.
     Pins invariant 1 against an over-broad reset.
 - `tests/test_watcher_transition_tables.py` (SQLite only, state-machine
-  inventory): new row `RECOVERED_FAILURE_NEW_STREAK`; `_process_messages`
-  fails on its first three entries and each established period outlasts the
-  budget; the run must reach a fourth entry with backoffs `[2, 2, 2]`.
+  inventory): `RECOVERED_FAILURE_NEW_STREAK` (a `_process_messages` override
+  records a healthy wait, outlasts the budget and fails, three times; the run
+  reaches a fourth entry with backoffs `[2, 2, 2]`) and
+  `RESTART_FAILURE_BEFORE_HEALTHY_WAIT` (the override fails three times without
+  a healthy wait; the third failure propagates with backoffs `[2, 4]`).
 - Do not mock the queue, backend, drain or handler dispatch. Only the clock,
   the backoff sleep and the scripted failures are controlled.
 
-## Verification and Gates (run 2026-11-08, foreground, worktree state = this commit)
+## Verification and Gates
 
-Fix: `simplebroker/watcher.py` `_run_with_retries` lines 941–1006
-(`streak_start`/`established` at 956–957, reset at 979–980, new streak at
-999–1001); `_check_retry_timeout` docstring at 847; `MAX_TOTAL_RETRY_TIME`
-docstring at `simplebroker/_constants.py` 211.
+### Revision 2 (run 2026-11-09, foreground, worktree state = the revision 2 commit)
+
+Code: `simplebroker/watcher.py` `BaseWatcher._process_messages` (865; witness
+at 882), `_record_healthy_wait` (904–913), `_run_with_retries` (957–1031:
+witness cleared at 982, new streak at 1014–1018, WARNING at 1020–1025),
+`QueueMoveWatcher._process_messages` (2192; witness at 2200);
+`MAX_TOTAL_RETRY_TIME` docstring at `simplebroker/_constants.py` 211.
+
+| Command | Result |
+|---------|--------|
+| New tests on `9473af3` code (SQLite): `python -m pytest -n 0 tests/test_watcher_edge_cases.py -k "every_restart or logs_warning or retry_budget_age or accumulate_retry_count or keeps_retry_limits"` and the two transition rows | `test_wait_failure_after_every_restart_ends_run_after_retry_limit`: `Failed: DID NOT RAISE OperationalError` (keeps restarting); `test_each_retry_logs_warning_with_streak_context`: `assert 0 == 2` (no WARNING records); `RESTART_FAILURE_BEFORE_HEALTHY_WAIT`: `DID NOT RAISE RuntimeError`; the reworked recovery scenarios, both limit pins and `RECOVERED_FAILURE_NEW_STREAK` pass |
+| Same selection with revision 2 (SQLite) | all pass |
+| `python -m pytest -n 4 tests/test_watcher_edge_cases.py tests/test_watcher_transition_tables.py tests/test_state_machine_policy.py tests/test_plan_context_gate.py` | 87 passed |
+| `python -m pytest -n 4 tests/test_watcher*.py tests/test_state_machine_policy.py tests/test_cli_watch.py tests/test_queue_move_watcher.py tests/test_multi_queue_watcher_example.py tests/test_commands_error_ownership.py tests/test_commands_stdout_delivery.py tests/test_python_library_api_contract_sb_api.py tests/test_connection_config.py tests/test_move_checkpoint_semantics.py tests/test_cli_broken_pipe.py tests/test_ruff_policy.py tests/test_plan_context_gate.py examples/tests` (SQLite) | 557 passed |
+| `uv run ./bin/pytest-pg tests/test_watcher_edge_cases.py -n 4` (PostgreSQL 18) | 35 passed |
+| `uv run ./bin/pytest-pg tests/test_watcher*.py -n 4` (shared watcher suite on PostgreSQL) | 186 passed |
+| `uv run ./bin/pytest-pg tests/test_queue_move_watcher.py tests/test_cli_watch.py` plus PostgreSQL `test_pg_notify.py`, `test_pg_activity_waiter_lifecycle.py`, `test_pg_example_multi_queue_watcher.py`, `-n 4` | 19 passed (shared), 21 passed (extension) |
+| Sensitivity: revision 2 code reverted (`git apply -R` of the saved `simplebroker/` patch), tests kept; SQLite and PostgreSQL | the recurring-failure test fails `DID NOT RAISE OperationalError`, the WARNING test fails `assert 0 == 2`, `RESTART_FAILURE_BEFORE_HEALTHY_WAIT` fails `DID NOT RAISE RuntimeError` (SQLite); 2 failed, 4 passed on PostgreSQL with the same messages |
+| Control W1: witness moved, no WARNING | only the WARNING test fails |
+| Control W2: `QueueMoveWatcher._process_messages` does not record healthy waits | only `test_move_watcher_failure_after_retry_budget_age_recovers` fails |
+| Control W3: `BaseWatcher._process_messages` does not record healthy waits | the budget-age, accumulation and both limit tests fail |
+| Restore | `simplebroker/watcher.py` sha256 `35d2a9cd…85cd9` before and after; `git diff -- simplebroker/` equals the saved patch (sha256 `7e1656a0…3304a`) |
+| `ruff check .`; `bin/ruff_suppression_index.py --check`; `ruff format --check` on the CI paths | all clean (351 files already formatted) |
+| mypy on `simplebroker`, `bin/release.py`, `bin/ruff_suppression_index.py`, both extension packages; mypy on every core test file (CI flags) | no issues (68 and 217 source files) |
+| `python3 bin/check-plan-context`; `python3 bin/check-doc-paths`; `python3 bin/check-dom15-fixtures` | all OK |
+
+### Revision 1 (run 2026-11-08 at `2a732d8`; superseded witness, kept as history)
+
+Fix at `2a732d8`: `simplebroker/watcher.py` `_run_with_retries` lines
+941–1006 (`streak_start`/`established` at 956–957, reset at 979–980, new
+streak at 999–1001).
 
 | Command | Result |
 |---------|--------|
@@ -281,13 +367,15 @@ docstring at `simplebroker/_constants.py` 211.
 
 ## Rollback, Rollout and Success Signals
 
-- Rollback: revert the commit. No persistence, schema, wire or public API
-  change.
+- Rollback: revert the revision 2 commit to return to revision 1's witness,
+  or all three branch commits to return to `5d29fbf`. No persistence, schema,
+  wire or public API change.
 - Rollout: none. One-way doors: none.
-- Post-deploy signal: a long-running watcher logs one `Watcher error (retry
-  1/3)` at DEBUG after a backend restart and continues; no `Watcher retry
-  timeout exceeded` for watchers whose backend recovered within the streak
-  limits.
+- Post-deploy signal: after a backend restart a long-running watcher logs one
+  WARNING `Watcher error (retry 1/3, failure streak age ...)` and continues; no
+  `Watcher retry timeout exceeded` for watchers whose backend recovered within
+  the streak limits. A watcher that cannot get one working wait after restarts
+  logs `Watcher failed after 3 retries` and its caller sees the error.
 
 ## Deviation Log
 
@@ -299,29 +387,26 @@ docstring at `simplebroker/_constants.py` 211.
   cross-family review to the coordinator after implementation and forbids
   calling reviewers here, so implementation preceded review. The review found
   no blocker and asked for no implementation change.
+- 2026-11-09: Owner decision on Q1 (via the coordinator) changes the health
+  witness from start plus initial drain to the first processing wait that
+  returns normally, and raises each retry log to WARNING. Implemented as
+  revision 2 after review SB-7; not re-reviewed yet.
 
 ## Out of Scope
 
-- Changing the per-streak limits, the backoff, or the retry log levels.
+- Changing the per-streak limits or the backoff, and gating the retry WARNING
+  on `BROKER_LOGGING_ENABLED`.
 - Listener recovery (SB-6) and idle connections (SB-4).
 
 ## Owner questions
 
-- Q1: register row 5 (an indefinite 2 s restart loop for a failure that
-  recurs after every successful start and initial drain). Decision open; the
-  options are of two different kinds:
-  - Bounded policy (ends the loop):
-    - ratify the loop as is;
-    - a cap on consecutive streaks that end within one retry cycle (a new
-      rule);
-    - the reviewer's alternative: qualify recovery by a successful processing
-      wait instead of start plus initial drain. This reuses the existing
-      limits with no new knob, but changes the health witness and both
-      processing-loop implementations (`BaseWatcher._process_messages` and
-      `QueueMoveWatcher._process_messages`).
-  - Observability only (does not bound the loop): log the retries of such a
-    loop above DEBUG. This can be combined with any bounded-policy option, but
-    on its own leaves the restart loop unbounded.
+- Q1 — decided 2026-11-09 by the owner, on the coordinator's
+  recommendation: a streak ends only after a processing wait that returns
+  normally (the reviewer's alternative), reusing the existing limits with no
+  new knob; and every retry logs at WARNING. Implemented in revision 2; the
+  options considered were ratifying revision 1's restart loop, a cap on short
+  streaks, this witness, and WARNING logging alone (which would not bound the
+  loop).
 - Q2: should `[SB-API-6]` state the per-streak retry contract (three
   consecutive failures or 300 s per streak; the first streak timed from run
   start)? That is a class-5 spec addition.
@@ -348,14 +433,21 @@ changed.
 | F1 | P3 | The loss of the exception that public `run_forever()` callers used to see is a [DOM-5] compatibility surface; private names and silent spec text do not exclude it | Accepted, fixed: reclassified as class 4 in the plan header and the `docs/plans/README.md` index row; existing hardening content kept and listed in the header; Deviation Log records that review followed implementation |
 | F2 | P3 | Q1 presented a higher retry log level as a bound, but it only improves visibility and leaves the restart loop unbounded | Accepted, fixed: Q1 now separates bounded-policy options from the observability-only option, and records the reviewer's alternative (a successful processing wait qualifies recovery, reusing the existing limits with no new knob, at the cost of changing the health witness and both processing-loop implementations) as an owner option; the Alternatives entry is updated to match; the owner decision stays open |
 
+Revision 2 (owner decision on Q1, the commit after `9473af3`) has not been
+reviewed; the coordinator decides whether it needs another round.
+
 ## Fresh-Eyes Review
 
-- Can a later streak escape the time budget? No: the first failure after
-  establishment sets `streak_start`, and every loop pass checks it.
-- Can a later streak escape the count? No: the count resets only at
-  establishment, which a failing restart never reaches.
+- Can a later streak escape the time budget? No: the first failure after a
+  healthy wait sets `streak_start`, and every loop pass checks it.
+- Can a later streak escape the count? No: the count resets only when a
+  failure follows a healthy wait, which a restart that fails before or at its
+  first wait never reaches.
+- Can a stale healthy flag leak into the next attempt? No: `_run_with_retries`
+  clears it before every attempt.
 - Does the first streak change? No: it opens at run start and stays open until
-  establishment.
-- Comprehension check for reviewers: (a) why does restarting the clock at
-  establishment not fix the bug? (b) which failure shape loses its terminal
-  signal? (c) why must the first streak stay timed from run start?
+  a failure follows a healthy wait.
+- Comprehension check for reviewers: (a) why does the clock restart at the
+  failure rather than at the healthy wait? (b) why is a successful start and
+  initial drain not a recovery? (c) what does a `_process_messages` override
+  need to do, and what happens if it does not?
