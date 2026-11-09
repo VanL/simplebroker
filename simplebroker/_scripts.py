@@ -155,10 +155,15 @@ def _docker_port(container_name: str) -> str | None:
 
 
 def _cleanup_container(container_name: str) -> None:
-    """Remove the temporary Docker container if it still exists."""
+    """Remove the temporary Docker container and its anonymous volumes.
+
+    The Postgres and Valkey images declare their data directories volumes, so
+    each run gets an anonymous one. ``rm -f`` without ``-v`` leaves it behind,
+    even for a container started with ``--rm``.
+    """
 
     subprocess.run(
-        ["docker", "rm", "-f", container_name],
+        ["docker", "rm", "-f", "-v", container_name],
         cwd=ROOT,
         check=False,
         stdout=subprocess.DEVNULL,
