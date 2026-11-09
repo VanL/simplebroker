@@ -1356,6 +1356,38 @@ _POLLING_BURST_SLEEP_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS["BURST_SLEEP"]
 _POLLING_JITTER_FACTOR_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS["JITTER_FACTOR"]
 
 
+def _declared_safety_recheck_interval(waiter: ActivityWaiter | None) -> float | None:
+    """Validate a waiter's optional ``safety_recheck_interval`` declaration.
+
+    A backend-native waiter may declare how often a quiet strategy must still
+    return for a safety recheck, because the backend owns its notification
+    loss model. ``None`` (or no attribute) selects the strategy default.
+
+    Spec: [SB-API-6]
+    """
+    if waiter is None:
+        return None
+    declared = getattr(waiter, "safety_recheck_interval", None)
+    if declared is None:
+        return None
+    if isinstance(declared, bool) or not isinstance(declared, (int, float)):
+        raise TypeError(
+            "activity waiter safety_recheck_interval must be None or a "
+            "non-boolean int or float"
+        )
+    try:
+        interval = float(declared)
+    except OverflowError as exc:
+        raise ValueError(
+            "activity waiter safety_recheck_interval must be finite"
+        ) from exc
+    if not math.isfinite(interval) or interval <= 0:
+        raise ValueError(
+            "activity waiter safety_recheck_interval must be finite and positive"
+        )
+    return interval
+
+
 class PollingStrategy:
     """High-performance polling strategy with burst handling and PRAGMA data_version."""
 
@@ -1383,7 +1415,11 @@ class PollingStrategy:
         self._local_activity_pending_for_drain = False
         self._local_activity_empty_check = False
         self._activity_burst_remaining = 0
+        # Default safety-recheck interval for a native waiter that declares
+        # none. An installed waiter's validated declaration overrides it
+        # without changing this default ([SB-API-6]).
         self._native_idle_poll_interval = max(1.0, self._max_interval * 10)
+        self._waiter_safety_recheck_interval: float | None = None
         self._next_native_idle_poll_at = _monotonic()
         self._schedule_next_native_idle_poll(initial=True)
 
@@ -1539,6 +1575,7 @@ class PollingStrategy:
             return None
 
         self._activity_waiter = None
+        self._waiter_safety_recheck_interval = None
         self._native_activity_pending = False
         self._activity_burst_remaining = 0
         return waiter
@@ -1559,14 +1596,21 @@ class PollingStrategy:
         Passing the installed object, including ``None`` while already using
         polling fallback, is an exact no-op that returns ``None``. A distinct
         replacement preserves data-version and local-activity state while
-        resetting the backoff and backend-native activity generation.
+        resetting the backoff and backend-native activity generation. The
+        safety-recheck schedule restarts from the replacement's declared
+        interval; an invalid declaration raises before any state changes.
         """
         if activity_waiter is self._activity_waiter:
             return None
 
-        next_idle_poll_at = self._next_native_idle_poll_deadline(initial=True)
+        declared_interval = _declared_safety_recheck_interval(activity_waiter)
+        next_idle_poll_at = self._next_native_idle_poll_deadline(
+            initial=True,
+            interval=self._effective_safety_recheck_interval(declared_interval),
+        )
         displaced = self._activity_waiter
         self._activity_waiter = activity_waiter
+        self._waiter_safety_recheck_interval = declared_interval
         self._native_activity_pending = False
         self._activity_burst_remaining = 0
         self._check_count = 0
@@ -1580,7 +1624,12 @@ class PollingStrategy:
         on_data_version_change: Callable[[], None] | None = None,
         activity_waiter: ActivityWaiter | None = None,
     ) -> None:
-        """Initialize the strategy."""
+        """Initialize the strategy.
+
+        An invalid waiter safety-recheck declaration raises before the
+        previous waiter is detached or any strategy state changes.
+        """
+        declared_interval = _declared_safety_recheck_interval(activity_waiter)
         old_waiter = self.detach_activity_waiter()
         if old_waiter is not None and old_waiter is not activity_waiter:
             old_waiter.close()
@@ -1589,6 +1638,7 @@ class PollingStrategy:
         self._data_version = None
         self._data_change_callback = on_data_version_change
         self._activity_waiter = activity_waiter
+        self._waiter_safety_recheck_interval = declared_interval
         self._activity_burst_remaining = 0
         self._schedule_next_native_idle_poll(initial=True)
 
@@ -1633,9 +1683,28 @@ class PollingStrategy:
                 return
             self._get_delay()
 
-    def _next_native_idle_poll_deadline(self, *, initial: bool = False) -> float:
-        """Calculate a staggered fallback-poll deadline without mutating state."""
-        interval = self._native_idle_poll_interval
+    def _effective_safety_recheck_interval(self, declared: float | None) -> float:
+        """Return a waiter's declared interval, else the strategy default."""
+        if declared is None:
+            return self._native_idle_poll_interval
+        return declared
+
+    def _next_native_idle_poll_deadline(
+        self,
+        *,
+        initial: bool = False,
+        interval: float | None = None,
+    ) -> float:
+        """Calculate a staggered safety-recheck deadline without mutating state.
+
+        The deadline is drawn uniformly from ``[R, 2R)`` after now, where ``R``
+        is the installed waiter's declared ``safety_recheck_interval`` or the
+        strategy default ``max(1, 10 * max_interval)`` ([SB-API-6]).
+        """
+        if interval is None:
+            interval = self._effective_safety_recheck_interval(
+                self._waiter_safety_recheck_interval
+            )
         if initial:
             interval = max(1.0, interval)
         jittered_interval = _uniform(
