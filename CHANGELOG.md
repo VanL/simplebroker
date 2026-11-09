@@ -68,7 +68,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of the failed one. A watcher's ordinary retry therefore wakes on later
   writes again; previously every retry reused the failed listener until the
   watcher exhausted its retries and stopped. Recovery happens within the
-  watcher's retry limits.
+  watcher's per-streak retry limits described below.
+- Watchers apply their retry limits per failure streak. A watcher is healthy
+  again once, after a restart, a processing wait returns normally (activity or
+  timeout); its next failure then starts a new streak with a fresh retry count
+  and a fresh five-minute budget timed from that failure. Previously the budget
+  ran from the start of the watcher run and the count never reset, so a watcher
+  running for more than five minutes stopped with `TimeoutError` on its first
+  transient error (for example a PostgreSQL restart), and any watcher stopped
+  on its third error even after recovering from the first two. Within one
+  streak the limits are unchanged: three consecutive failures, or five minutes
+  from run start for the first streak, end the run. A restart that starts and
+  drains but whose first wait fails again is not a recovery, so a failure that
+  recurs after every restart still ends the run after three attempts and
+  reaches the caller.
+- Each watcher retry now logs a WARNING (previously DEBUG) naming the error,
+  the retry number and limit, and the age of the failure streak. Like the
+  existing error logged when retries are exhausted, it is not controlled by
+  `BROKER_LOGGING_ENABLED`; an application that has not configured logging,
+  such as `broker watch`, shows it on stderr.
 
 ## [8.7.2] - 2026-10-14
 

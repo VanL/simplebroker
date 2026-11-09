@@ -1,11 +1,13 @@
 """Test edge cases in watcher.py to increase coverage."""
 
 import contextlib
+import logging
+import re
 import signal
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, NoReturn, cast
 from unittest.mock import Mock, patch
@@ -33,6 +35,50 @@ pytestmark = [pytest.mark.shared]
 
 class WatcherTestError(Exception):
     """Exercise watcher boundaries with an otherwise unknown exception."""
+
+
+def _wait_normally() -> None:
+    """Script entry that lets the real processing wait run and return."""
+
+
+class _ScriptedFailureStrategy(PollingStrategy):
+    """Inject transient backend failures at the watcher's strategy boundary.
+
+    A backend-native waiter reports a lost server connection from
+    ``wait_for_activity`` (for example when a PostgreSQL restart ends the
+    LISTEN session), and a restart that cannot reconnect fails in ``start``.
+    Script entry ``n`` runs before the ``n``-th real call and may raise; when
+    it returns, or once the script is exhausted, the real method runs.
+    """
+
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        *,
+        before_start: Sequence[Callable[[], None]] = (),
+        before_wait: Sequence[Callable[[], None]] = (),
+    ) -> None:
+        super().__init__(stop_event)
+        self._before_start = list(before_start)
+        self._before_wait = list(before_wait)
+        self.starts = 0
+        self.waits = 0
+        # A broken scenario must end the synchronous run, not hang the test.
+        self._give_up_at = time.monotonic() + scale_timeout_for_ci(10.0)
+
+    def start(self, *args: Any, **kwargs: Any) -> None:
+        self.starts += 1
+        if self.starts <= len(self._before_start):
+            self._before_start[self.starts - 1]()
+        super().start(*args, **kwargs)
+
+    def wait_for_activity(self, timeout: float | None = None) -> None:
+        self.waits += 1
+        if time.monotonic() > self._give_up_at:
+            self._stop_event.set()
+        if self.waits <= len(self._before_wait):
+            self._before_wait[self.waits - 1]()
+        super().wait_for_activity(timeout)
 
 
 class TestWatcherEdgeCases(WatcherTestBase):
@@ -643,6 +689,364 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
                 assert "retry timeout exceeded" in str(exc_info.value)
                 assert f"{watcher_module.MAX_TOTAL_RETRY_TIME}s" in str(exc_info.value)
+
+    @staticmethod
+    def _control_retry_time(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> tuple[list[float], list[float]]:
+        """Return ``(clock offset, retry backoffs)`` controls for one run.
+
+        The watcher clock becomes real time plus ``offset[0]``. Retry backoff
+        (``2**n`` seconds) returns at once and is recorded; the strategy's
+        sub-second burst sleeps stay real so a broken scenario cannot spin.
+        """
+        offset = [0.0]
+        backoffs: list[float] = []
+        real_monotonic = watcher_module._monotonic
+
+        def backoff_without_waiting(
+            seconds: float,
+            stop_event: threading.Event | None = None,
+        ) -> bool:
+            if seconds < 1.0:
+                return interruptible_sleep(seconds, stop_event)
+            backoffs.append(seconds)
+            return not (stop_event is not None and stop_event.is_set())
+
+        monkeypatch.setattr(
+            watcher_module, "_monotonic", lambda: real_monotonic() + offset[0]
+        )
+        monkeypatch.setattr(
+            watcher_module, "interruptible_sleep", backoff_without_waiting
+        )
+        return offset, backoffs
+
+    def test_failure_after_retry_budget_age_recovers_and_handles_later_write(
+        self,
+        broker_target,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A healthy watcher older than the retry budget survives one failure.
+
+        The budget bounds a failure streak, not the run: a long-lived watcher
+        whose backend restarts must reconnect instead of dying on its uptime.
+        """
+        offset, backoffs = self._control_retry_time(monkeypatch)
+        stop_event = threading.Event()
+        handled: list[str] = []
+        writer = Queue("jobs", db_path=broker_target)
+        writer.write("before")
+
+        def lose_connection_after_budget_age() -> NoReturn:
+            offset[0] += watcher_module.MAX_TOTAL_RETRY_TIME + 1.0
+            raise OperationalError("server closed the connection unexpectedly")
+
+        def write_after_recovery() -> None:
+            writer.write("after")
+
+        strategy = _ScriptedFailureStrategy(
+            stop_event,
+            before_wait=[
+                _wait_normally,
+                lose_connection_after_budget_age,
+                write_after_recovery,
+            ],
+        )
+
+        def handler(body: str, _timestamp: int) -> None:
+            handled.append(body)
+            if body == "after":
+                stop_event.set()
+
+        try:
+            with self.create_test_watcher(
+                broker_target,
+                "jobs",
+                handler,
+                stop_event=stop_event,
+                polling_strategy=strategy,
+            ) as watcher:
+                watcher.run_forever()
+        finally:
+            writer.close()
+
+        assert handled == ["before", "after"]
+        assert strategy.starts == 2
+        assert backoffs == [2]
+
+    def test_move_watcher_failure_after_retry_budget_age_recovers(
+        self,
+        broker_target,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The move watcher's own processing loop also witnesses health."""
+        offset, backoffs = self._control_retry_time(monkeypatch)
+        stop_event = threading.Event()
+        moved: list[str] = []
+        writer = Queue("jobs", db_path=broker_target)
+        writer.write("before")
+
+        def lose_connection_after_budget_age() -> NoReturn:
+            offset[0] += watcher_module.MAX_TOTAL_RETRY_TIME + 1.0
+            raise OperationalError("server closed the connection unexpectedly")
+
+        def write_after_recovery() -> None:
+            writer.write("after")
+
+        strategy = _ScriptedFailureStrategy(
+            stop_event,
+            before_wait=[
+                _wait_normally,
+                lose_connection_after_budget_age,
+                write_after_recovery,
+            ],
+        )
+
+        def handler(body: str, _timestamp: int) -> None:
+            moved.append(body)
+            if body == "after":
+                stop_event.set()
+
+        try:
+            with self.create_test_move_watcher(
+                broker_target,
+                "jobs",
+                "done",
+                handler,
+                stop_event=stop_event,
+                polling_strategy=strategy,
+            ) as watcher:
+                watcher.run_forever()
+        finally:
+            writer.close()
+
+        assert moved == ["before", "after"]
+        assert strategy.starts == 2
+        assert backoffs == [2]
+
+    def test_recovered_failures_do_not_accumulate_retry_count(
+        self,
+        broker_target,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Failures separated by genuine recoveries do not accumulate.
+
+        A recovery is a restart whose processing wait then returns normally.
+        """
+        _offset, backoffs = self._control_retry_time(monkeypatch)
+        stop_event = threading.Event()
+        handled: list[str] = []
+        writer = Queue("jobs", db_path=broker_target)
+
+        def lose_connection(attempt: int) -> Callable[[], None]:
+            def fail() -> NoReturn:
+                # The next restart's initial drain delivers this write, and
+                # its activity lets the following processing wait return.
+                writer.write(f"during-{attempt}")
+                raise OperationalError(f"server closed the connection ({attempt})")
+
+            return fail
+
+        def write_after_recoveries() -> None:
+            writer.write("after")
+
+        strategy = _ScriptedFailureStrategy(
+            stop_event,
+            before_wait=[
+                lose_connection(1),
+                _wait_normally,
+                lose_connection(2),
+                _wait_normally,
+                lose_connection(3),
+                write_after_recoveries,
+            ],
+        )
+
+        def handler(body: str, _timestamp: int) -> None:
+            handled.append(body)
+            if body == "after":
+                stop_event.set()
+
+        try:
+            with self.create_test_watcher(
+                broker_target,
+                "jobs",
+                handler,
+                stop_event=stop_event,
+                polling_strategy=strategy,
+            ) as watcher:
+                watcher.run_forever()
+        finally:
+            writer.close()
+
+        assert handled == ["during-1", "during-2", "during-3", "after"]
+        assert strategy.starts == 4
+        # Every failure is the first retry of its streak.
+        assert backoffs == [2, 2, 2]
+
+    def test_wait_failure_after_every_restart_ends_run_after_retry_limit(
+        self,
+        broker_target,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Restarts that start and drain but never wait successfully stay one streak.
+
+        A failure that recurs at the first processing wait after every restart
+        is not a recovery: the third consecutive failure ends the run and
+        reaches the ``run_forever()`` caller.
+        """
+        _offset, backoffs = self._control_retry_time(monkeypatch)
+        stop_event = threading.Event()
+        handled: list[str] = []
+        writer = Queue("jobs", db_path=broker_target)
+        wait_failure = OperationalError("listener connection is gone")
+
+        def fail_first_wait(attempt: int) -> Callable[[], None]:
+            def fail() -> NoReturn:
+                # The next restart's initial drain still delivers this write.
+                writer.write(f"during-{attempt}")
+                raise wait_failure
+
+            return fail
+
+        strategy = _ScriptedFailureStrategy(
+            stop_event,
+            # One failure more than the limit; a run that outlives them stops.
+            before_wait=[
+                fail_first_wait(1),
+                fail_first_wait(2),
+                fail_first_wait(3),
+                fail_first_wait(4),
+                stop_event.set,
+            ],
+        )
+
+        try:
+            with (
+                self.create_test_watcher(
+                    broker_target,
+                    "jobs",
+                    lambda body, _timestamp: handled.append(body),
+                    stop_event=stop_event,
+                    polling_strategy=strategy,
+                ) as watcher,
+                pytest.raises(OperationalError) as raised,
+            ):
+                watcher.run_forever()
+        finally:
+            writer.close()
+
+        assert raised.value is wait_failure
+        assert handled == ["during-1", "during-2"]
+        assert strategy.starts == 3
+        assert backoffs == [2, 4]
+
+    def test_each_retry_logs_warning_with_streak_context(
+        self,
+        broker_target,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Every retry in a streak logs a WARNING with its error and streak age."""
+        offset, backoffs = self._control_retry_time(monkeypatch)
+        stop_event = threading.Event()
+
+        def first_outage() -> NoReturn:
+            raise OperationalError("first outage")
+
+        def second_outage() -> NoReturn:
+            offset[0] += 5.0
+            raise OperationalError("second outage")
+
+        strategy = _ScriptedFailureStrategy(
+            stop_event,
+            before_wait=[first_outage, second_outage, stop_event.set],
+        )
+
+        with (
+            caplog.at_level(logging.WARNING, logger="simplebroker.watcher"),
+            self.create_test_watcher(
+                broker_target,
+                "jobs",
+                lambda body, _timestamp: None,
+                stop_event=stop_event,
+                polling_strategy=strategy,
+            ) as watcher,
+        ):
+            watcher.run_forever()
+
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "simplebroker.watcher"
+            and record.levelno == logging.WARNING
+        ]
+        assert len(warnings) == 2, warnings
+        assert "retry 1/3" in warnings[0]
+        assert "OperationalError: first outage" in warnings[0]
+        assert "retry 2/3" in warnings[1]
+        assert "OperationalError: second outage" in warnings[1]
+        ages = [
+            float(match.group(1))
+            for message in warnings
+            if (match := re.search(r"failure streak age (\d+\.\d)s", message))
+        ]
+        assert len(ages) == 2, warnings
+        assert ages[0] < 5.0 <= ages[1]
+        assert backoffs == [2, 4]
+        assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+    @pytest.mark.parametrize("limit", ["retries", "time"])
+    def test_failure_streak_after_recovery_keeps_retry_limits(
+        self,
+        broker_target,
+        monkeypatch: pytest.MonkeyPatch,
+        limit: str,
+    ) -> None:
+        """A recovered watcher's next failure streak is still bounded."""
+        offset, backoffs = self._control_retry_time(monkeypatch)
+        stop_event = threading.Event()
+        restart_failure = OperationalError("connection refused")
+        writer = Queue("jobs", db_path=broker_target)
+        # The initial drain delivers this, so the first processing wait returns.
+        writer.write("seed")
+
+        def lose_connection_after_long_run() -> NoReturn:
+            offset[0] += 1000.0
+            raise OperationalError("server closed the connection unexpectedly")
+
+        def refuse_restart() -> NoReturn:
+            if limit == "time":
+                offset[0] += watcher_module.MAX_TOTAL_RETRY_TIME + 1.0
+            raise restart_failure
+
+        strategy = _ScriptedFailureStrategy(
+            stop_event,
+            before_start=[lambda: None, refuse_restart, refuse_restart],
+            before_wait=[_wait_normally, lose_connection_after_long_run],
+        )
+
+        try:
+            with self.create_test_watcher(
+                broker_target,
+                "jobs",
+                lambda message, timestamp: None,
+                stop_event=stop_event,
+                polling_strategy=strategy,
+            ) as watcher:
+                if limit == "retries":
+                    with pytest.raises(OperationalError) as raised:
+                        watcher.run_forever()
+                    assert raised.value is restart_failure
+                    assert strategy.starts == 3
+                else:
+                    with pytest.raises(TimeoutError, match=r"Retries: 2,"):
+                        watcher.run_forever()
+                    assert strategy.starts == 2
+        finally:
+            writer.close()
+
+        assert backoffs == [2, 4]
 
     def test_interruptible_sleep_responsiveness(self, broker, broker_target) -> None:
         """Test that watcher responds quickly to stop signals."""

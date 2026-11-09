@@ -848,8 +848,8 @@ class BaseWatcher(ABC):
         """Check if retry timeout has been exceeded.
 
         Args:
-            start_time: Time when retries started
-            retry_count: Current retry attempt number
+            start_time: Time when the current failure streak started
+            retry_count: Failures so far in the current streak
 
         Raises:
             TimeoutError: If maximum retry time exceeded
@@ -870,11 +870,16 @@ class BaseWatcher(ABC):
         2. Checks for pending messages (if subclass supports it)
         3. Drains the queue
 
-        Subclasses can override this method to implement custom logic.
+        Subclasses can override this method to implement custom logic. An
+        override must call ``_record_healthy_wait()`` after every wait that
+        returns normally; otherwise every failure in the run stays in one
+        retry failure streak (see ``_run_with_retries``).
         """
         while True:
             # Wait until something might have happened
             self._strategy.wait_for_activity()
+            # Health witness for _run_with_retries: this wait returned normally.
+            self._record_healthy_wait()
 
             # Check stop before processing
             self._check_stop()
@@ -895,6 +900,17 @@ class BaseWatcher(ABC):
                 self._drain_queue()
             finally:
                 self._pending_messages_precheck_confirmed = False
+
+    def _record_healthy_wait(self) -> None:
+        """Close the current retry failure streak: a processing wait returned.
+
+        ``_process_messages`` implementations call this after every
+        ``wait_for_activity()`` that returns without raising (activity or
+        timeout). It is the only health witness ``_run_with_retries`` accepts:
+        a restart whose strategy start and initial drain succeed, but whose
+        first processing wait fails, stays in the same failure streak.
+        """
+        self._healthy_wait_since_start = True
 
     def _handle_retry(
         self,
@@ -941,16 +957,29 @@ class BaseWatcher(ABC):
     def _run_with_retries(self, max_retries: int = 3) -> None:
         """Run the watcher with retry logic.
 
+        Retry limits apply per failure streak: the consecutive failed attempts
+        since the watcher was last healthy, meaning that after its latest
+        (re)start a processing wait returned normally
+        (``_record_healthy_wait()``). A successful strategy start and initial
+        drain alone do not end a streak. Within one streak the run ends after
+        ``max_retries`` failures or ``MAX_TOTAL_RETRY_TIME`` seconds. The first
+        streak is timed from run start; a later streak is timed from the
+        failure that opened it, so a healthy watcher's uptime never counts
+        against its recovery. Each failure that will be retried logs a WARNING.
+
         Args:
-            max_retries: Maximum number of retry attempts
+            max_retries: Maximum number of failures in one failure streak
         """
         retry_count = 0
-        start_time = _monotonic()
+        streak_start = _monotonic()
 
         while retry_count < max_retries:
-            # Check absolute timeout
-            self._check_retry_timeout(start_time, retry_count)
+            # Check the current failure streak's absolute timeout
+            self._check_retry_timeout(streak_start, retry_count)
 
+            # Set by _record_healthy_wait() from _process_messages; only a
+            # processing wait that returns normally ends a failure streak.
+            self._healthy_wait_since_start = False
             try:
                 self._check_stop()
 
@@ -982,7 +1011,18 @@ class BaseWatcher(ABC):
                 # Propagate KeyboardInterrupt so callers can handle it specifically
                 raise
             except Exception as e:
+                if self._healthy_wait_since_start:
+                    # The watcher was healthy before this failure: open a new
+                    # streak with fresh limits, timed from this failure.
+                    retry_count = 0
+                    streak_start = _monotonic()
                 retry_count += 1
+                if retry_count < max_retries:
+                    logger.warning(
+                        f"Watcher error (retry {retry_count}/{max_retries}, "
+                        f"failure streak age {_monotonic() - streak_start:.1f}s): "
+                        f"{type(e).__name__}: {e}"
+                    )
                 should_retry = self._handle_retry(e, retry_count, max_retries)
                 if retry_count >= max_retries:
                     raise
@@ -2156,6 +2196,8 @@ class QueueMoveWatcher(BaseWatcher):
         """
         while not self._stop_event.is_set():
             self._strategy.wait_for_activity()
+            # Health witness for _run_with_retries: this wait returned normally.
+            self._record_healthy_wait()
             if self._stop_event.is_set():
                 break
 

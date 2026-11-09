@@ -209,7 +209,11 @@ which is used for transactional claim/move operations.
 # ==============================================================================
 
 MAX_TOTAL_RETRY_TIME: Final[int] = 300  # 5 minutes max
-"""Maximum time in seconds to retry watcher initialization before giving up."""
+"""Maximum seconds one watcher failure streak may spend retrying.
+
+A streak is timed from run start, or from the first failure after the watcher
+was healthy (a processing wait returned normally after its latest restart).
+"""
 
 # ==============================================================================
 # PROJECT SCOPING CONSTANTS
