@@ -9,10 +9,13 @@ active backend).
 
 No broker internals are mocked. The only sanctioned patch in this module is
 the active backend's timestamp fault-injection seam: persisted
-``broker._timestamp_gen.generate`` for SQL or local
-``broker._timestamp_gen._reserve_candidates`` for Redis. These force the
+``broker._timestamp_gen.generate`` for the shared SQL transaction, or local
+``broker._timestamp_gen._reserve_candidates`` for Redis and for SQL backends
+that allocate the committed ID server-side (PostgreSQL). These force the
 timestamp-conflict retry path that cannot occur naturally; see
-tests/test_timestamp_resilience.py for the precedent.
+tests/test_timestamp_resilience.py for the precedent. A server-allocating
+backend commits ``max(candidate, last_ts + 1)``, so its conflict also needs a
+stored row above a corrupted durable high-water.
 """
 
 import threading
@@ -24,6 +27,12 @@ import pytest
 from .helper_scripts.broker_factory import active_backend
 
 pytestmark = pytest.mark.shared
+
+
+def _allocates_server_side(broker) -> bool:
+    """Whether ordinary writes use the backend's server-side allocation hook."""
+    plugin = getattr(broker, "_backend_plugin", None)
+    return callable(getattr(plugin, "write_generated_message", None))
 
 
 def test_broker_write_returns_committed_id(broker):
@@ -59,9 +68,13 @@ def test_retry_path_returns_surviving_row_id(broker):
     occupant_ts = rows[0][1]
 
     calls = 0
-    if active_backend() == "redis":
+    if active_backend() == "redis" or _allocates_server_side(broker):
         seam = "_reserve_candidates"
         original = broker._timestamp_gen._reserve_candidates
+        if _allocates_server_side(broker):
+            # The server only uses a candidate above durable high-water, so
+            # model the corrupted high-water that lets the occupant collide.
+            broker._backend_plugin.write_last_ts(broker._runner, occupant_ts - 1)
 
         def collide_twice(count=None):
             nonlocal calls
@@ -98,6 +111,14 @@ def test_retry_path_returns_surviving_row_id(broker):
 
 def test_retry_exhaustion_raises_without_returning(broker):
     """If every attempt conflicts, write() raises; no stale ID escapes."""
+    if _allocates_server_side(broker):
+        pytest.skip(
+            "unreachable with server-side allocation: after the resync rung the "
+            "backend allocates above the repaired high-water; the self-healing "
+            "replacement proof is extensions/simplebroker_pg/tests/"
+            "test_pg_write_allocation.py::"
+            "test_persistently_conflicting_candidate_self_heals_after_resync"
+        )
     broker.write("exhaust", "occupant")
     rows = list(broker.peek_generator("exhaust", with_timestamps=True))
     occupant_ts = rows[0][1]

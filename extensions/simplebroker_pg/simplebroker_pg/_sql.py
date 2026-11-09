@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from simplebroker._constants import LOGICAL_COUNTER_MASK
 from simplebroker._selection import sql_direction
 from simplebroker._sql import RetrieveOperation, RetrieveQuerySpec
 
@@ -206,6 +207,38 @@ SELECT pg_notify(
 FROM inserted
 """
 
+# [SB-ID-1], [SB-ID-2], [SB-ID-4]: allocate, insert, and notify one ordinary
+# generated write. PostgresBackendPlugin.write_generated_message runs it after
+# LOCK_LAST_TS_ROW in the same pipelined transaction. Never make it a
+# transaction's first statement: PostgreSQL takes its ROW EXCLUSIVE lock on
+# messages at analysis time, before the UPDATE waits for the meta row, which
+# would invert the meta-row-then-messages order that broadcast, rename, and
+# keep_newest rely on and deadlock against them.
+# The allocation equals TimestampGenerator._next_components() evaluated against
+# durable high-water: the candidate when it is ahead, otherwise last_ts + 1 in
+# the same physical grain. An exhausted logical counter allocates nothing (zero
+# rows, no mutation) instead of rolling into the next physical grain.
+WRITE_GENERATED_MESSAGE = f"""
+WITH allocated AS (
+    UPDATE meta
+    SET last_ts = CASE WHEN last_ts < ? THEN ? ELSE last_ts + 1 END
+    WHERE singleton = TRUE
+      AND (last_ts < ? OR (last_ts & {LOGICAL_COUNTER_MASK}) < {LOGICAL_COUNTER_MASK})
+    RETURNING last_ts
+),
+inserted AS (
+    INSERT INTO messages (queue, body, ts)
+    SELECT ?, ?, last_ts
+    FROM allocated
+    RETURNING queue, ts
+)
+SELECT inserted.ts, pg_notify(
+    'simplebroker_' || substr(md5(current_schema()), 1, 24),
+    inserted.queue
+)
+FROM inserted
+"""
+
 # [SB-DELIVERY-9] runs after the generated row insert in the same transaction.
 # A missing OFFSET row yields NULL and therefore claims nothing.
 CLAIM_OLDER_PENDING = """
@@ -288,7 +321,9 @@ WHERE n.nspname = ?
 # Broadcast must take the meta last_ts row lock BEFORE the messages table
 # lock: writers allocate their timestamp (meta row lock) inside the insert
 # transaction before INSERT touches messages.  Acquiring in the opposite
-# order deadlocks against any in-flight write.
+# order deadlocks against any in-flight write.  Ordinary generated writes run
+# this statement first in their pipelined transaction for the same reason
+# (see WRITE_GENERATED_MESSAGE).
 LOCK_LAST_TS_ROW = "SELECT last_ts FROM meta WHERE singleton = TRUE FOR UPDATE"
 LOCK_BROADCAST_SCOPE = "LOCK TABLE messages IN SHARE ROW EXCLUSIVE MODE"
 # Same lock mode, separate owner: keep-write acquires it after LOCK_LAST_TS_ROW.

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- PostgreSQL ordinary writes no longer hold the `last_ts` high-water row lock
+  across client round trips. `simplebroker-pg` locks the row, allocates the
+  committed message ID server-side (the larger of the client candidate and
+  `last_ts + 1`), inserts, notifies, and commits in one pipelined transaction,
+  so concurrent writers stop serializing on network and client scheduling
+  latency and stale candidates no longer retry. Message-ID uniqueness,
+  monotonic high-water, ID-ordered commit visibility for `after_timestamp`
+  readers, atomic allocation with the row, and logical-counter exhaustion
+  behavior are unchanged. Core probes a new optional `write_generated_message`
+  backend hook; backends without it, `keep_newest` writes, SQLite, and Redis
+  keep their existing write path. No backend API version change.
+
 ## [8.7.2] - 2026-10-14
 
 SimpleBroker 8.7.2, `simplebroker-pg` 4.7.2, and `simplebroker-redis` 4.7.2

@@ -40,10 +40,16 @@ def _write_during_collection(
     retired: list[weakref.ReferenceType[BrokerCore]],
     write: Callable[[], Any],
 ) -> None:
-    """Delegate real BEGIN and driver I/O; choose GC after the query is ACTIVE."""
+    """Delegate the write's real transaction and driver I/O; collect while ACTIVE.
+
+    An ordinary PostgreSQL write is one pipelined ``run_transaction``; a
+    ``keep_newest`` or other shared-path write starts with ``BEGIN``. Either
+    entry arms the collection, so the witness is the write's own checkout.
+    """
     assert retired and all(reference() is not None for reference in retired)
     owner = threading.current_thread()
     begin = PostgresRunner.begin_immediate
+    run_transaction = PostgresRunner.run_transaction
     wait = psycopg.Connection.wait
     armed = False
     collected = False
@@ -53,6 +59,16 @@ def _write_during_collection(
         armed = True
         try:
             begin(runner)
+        finally:
+            armed = False
+
+    def transaction_with_collection(
+        runner: PostgresRunner, statements: Any
+    ) -> list[list[tuple[Any, ...]]]:
+        nonlocal armed
+        armed = True
+        try:
+            return run_transaction(runner, statements)
         finally:
             armed = False
 
@@ -84,9 +100,12 @@ def _write_during_collection(
 
     with monkeypatch.context() as patcher:
         patcher.setattr(PostgresRunner, "begin_immediate", begin_with_collection)
+        patcher.setattr(PostgresRunner, "run_transaction", transaction_with_collection)
         patcher.setattr(psycopg.Connection, "wait", wait_with_collection)
         write()
-    assert collected, "the real BEGIN must reach ACTIVE and collect the retired core"
+    assert collected, (
+        "the real write transaction must reach ACTIVE and collect the retired core"
+    )
 
 
 @pytest.mark.parametrize("explicit_close", [False, True])
@@ -198,7 +217,7 @@ def test_ordinary_session_core_collection_preserves_later_operation(
                 queue.cleanup_connections()
 
         # Open the replacement before arming the collection boundary, so the
-        # witness is its write's BEGIN rather than an initialization query.
+        # witness is its write's transaction rather than an initialization query.
         with queue.get_connection():
             pass
         _write_during_collection(

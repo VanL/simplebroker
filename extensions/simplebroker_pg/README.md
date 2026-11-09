@@ -48,6 +48,17 @@ first trim therefore stalls row mutations on unrelated queues; measured
 100k/220k displaced rows took about 425/1000 ms on PostgreSQL 18. Cost is
 linear in displaced rows and has no bounded-time guarantee.
 
+An ordinary generated write (no `keep_newest`) is one pipelined PostgreSQL
+transaction: it locks the high-water metadata row, allocates the larger of the
+client's candidate and `last_ts + 1`, inserts, notifies, and commits, without
+waiting on the client in between. The row lock therefore covers only server
+execution and the commit, and a stale candidate never retries. Generated rows
+still commit in message-ID order, and an exhausted logical counter still
+refuses allocation until the clock catches up. This requires a SimpleBroker
+core that probes the optional `write_generated_message` backend hook;
+libpq 14 or newer provides pipeline mode, and older libpq runs the same
+statements in an explicit transaction.
+
 Persistent Queues for one process-session target share one bounded connection
 pool. Each operation borrows a checkout and returns it when the operation
 finishes. A transaction or suspended iterator retains its checkout until it

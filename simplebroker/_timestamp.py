@@ -184,10 +184,12 @@ class TimestampGenerator:
         """Reserve unique local timestamp candidates without persisting them.
 
         Direct backends use this when target selection and insertion happen in
-        one atomic server-side operation. The server-side operation remains
-        responsible for advancing persisted ``last_ts`` if it commits at least
-        one candidate. An empty target set may therefore leave a harmless gap
-        in this process-local cache without changing broker state.
+        one atomic server-side operation, and SQL backends use it for a
+        server-allocated generated write (``write_generated_message``). The
+        server-side operation remains responsible for advancing persisted
+        ``last_ts`` if it commits at least one candidate. An empty target set or
+        a failed operation may therefore leave a harmless gap in this
+        process-local cache without changing broker state.
         """
 
         if isinstance(count, bool) or not isinstance(count, int):
@@ -208,6 +210,22 @@ class TimestampGenerator:
                 self._last_ts = candidate
                 candidates.append(candidate)
             return candidates
+
+    def _publish_allocated(self, timestamp: int) -> None:
+        """Publish a committed, server-allocated ID into the local cache.
+
+        A server-allocated write commits ``max(candidate, last_ts + 1)`` for a
+        candidate from :meth:`_reserve_candidates`, so the committed ID can
+        exceed the reservation. The durable advance happens on the server,
+        outside this lock; publication is therefore a monotone maximum under
+        the lock, which keeps a slower caller from regressing ``_last_ts``
+        below a later caller's value (the same hazard ``generate()`` closes by
+        holding the lock across its durable compare-and-advance).
+        """
+
+        self._ensure_pid()
+        with self._lock:
+            self._last_ts = max(self._last_ts, timestamp)
 
     # -- internal helpers -------------------------------------
 

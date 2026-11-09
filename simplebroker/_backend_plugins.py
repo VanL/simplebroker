@@ -42,6 +42,18 @@ class BackendPlugin(Protocol):
       and the rename path); Postgres uses it to take a stable advisory
       lock ordering.  Note: prepare_broadcast is NOT optional -- it is a
       required protocol member, called directly by BrokerCore.broadcast.
+    - write_generated_message(runner, *, queue, message, candidate) -> int | None
+      -- probed by BrokerCore for an ordinary write (no keep_newest). In one
+      atomic backend operation it advances durable last_ts to
+      max(candidate, last_ts + 1), inserts the pending row with that ID,
+      publishes the activity notification, and commits, returning the
+      committed ID. When candidate <= last_ts and last_ts's logical counter is
+      already at its final value it must change nothing and return None. The
+      high-water serialization must be held from allocation through commit
+      (generated rows commit in ID order), and it must be acquired before any
+      lock on the messages storage. Raises IntegrityError, with nothing
+      committed, when the chosen ID is already stored. Postgres implements it
+      as one pipelined transaction; absent, the shared SQL transaction runs.
     """
 
     name: str

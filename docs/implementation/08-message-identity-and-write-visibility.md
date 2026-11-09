@@ -2,7 +2,11 @@
 
 Owner: timestamp allocation in `simplebroker/_timestamp.py`; exact-insert
 admission in `simplebroker/_message_insert.py`; SQL write transactions in
-`simplebroker/db.py`; Redis ordinary-write allocation and row publication in
+`simplebroker/db.py`; PostgreSQL server-allocated ordinary writes in
+`extensions/simplebroker_pg/simplebroker_pg/plugin.py`
+(`write_generated_message`), `extensions/simplebroker_pg/simplebroker_pg/_sql.py`,
+and `extensions/simplebroker_pg/simplebroker_pg/runner.py`
+(`run_transaction`); Redis ordinary-write allocation and row publication in
 `extensions/simplebroker_redis/simplebroker_redis/core.py` and
 `extensions/simplebroker_redis/simplebroker_redis/scripts.py`.
 
@@ -16,7 +20,9 @@ Persistence load delegates its header-floor meaning to
 
 Verification: shared reserved-zero and SQL transaction-ordering tests; the
 real-SQLite `SM-TIMESTAMP-GENERATOR::SHARED_INSTANCE_SERIALIZATION` transition;
-a real two-connection PostgreSQL monotone-resync test; plus real-Valkey
+a real two-connection PostgreSQL monotone-resync test; real-PostgreSQL
+server-allocation, lock-order, exhaustion, atomicity, and checkpoint-reader
+tests; plus real-Valkey
 stale-fence, two-writer visibility, monotone-resync, command-count, same-core
 contention, and `SM-REDIS-WRITE` transition tests.
 
@@ -24,7 +30,10 @@ Required action: keep zero decodable but reject it at exact-insert admission;
 keep every expected Redis Lua result before the first mutation; preserve the
 single shared conflict budget and the post-commit wakeup/maintenance order;
 never narrow one `TimestampGenerator` instance's lock below its complete
-allocation, durable advance or refresh, and cache-publication transition.
+allocation, durable advance or refresh, and cache-publication transition;
+server-allocated writes publish only through the monotone
+`_publish_allocated`; a PostgreSQL generated write locks the high-water row
+before any statement that touches `messages`.
 
 ## Selection-bound conversion boundary
 
@@ -63,14 +72,75 @@ that were already applied.
 
 ## SQL ordinary writes
 
-SQLite and PostgreSQL use the shared `BrokerCore.write()` transaction owner.
-The real runner sequence is:
+SQLite uses the shared `BrokerCore.write()` transaction owner. The real runner
+sequence is:
 
 `begin → high-water compare-and-advance → row insert → commit`
 
 The pass-through recorder in `tests/test_write_visibility.py` observes that
 sequence without replacing SQL execution. Redis is explicitly excluded from
 that SQL-only proof.
+
+### PostgreSQL server-allocated writes
+
+PostgreSQL implements the optional `write_generated_message` backend hook, so
+`BrokerCore._do_write_transaction()` routes an ordinary write (no
+`keep_newest`) through `_do_server_allocated_write()`. The core reserves one
+local candidate (`TimestampGenerator._reserve_candidates`), and the plugin runs
+one pipelined implicit transaction through `PostgresRunner.run_transaction()`:
+
+`lock high-water row (LOCK_LAST_TS_ROW) → allocate max(candidate, last_ts + 1), insert, notify (WRITE_GENERATED_MESSAGE) → Sync commits`
+
+Both statements and the Sync leave the client without waiting for a result,
+so the row lock is held only while the server executes and commits. The
+previous sequence held it across the `INSERT` and `COMMIT` round trips, and a
+stale candidate added a failed compare-and-advance, a `meta` read, and a second
+trip to the back of the lock queue. Measured on the evidence workload this made
+PostgreSQL write throughput flat in writer count; see
+`docs/plans/2026-11-08-pg-write-lock-hold-plan.md`.
+
+What the row lock still guarantees, and why each piece of the shape exists:
+
+- **Commit order equals ID order.** The lock is released only after the
+  holder's commit is visible, so the next allocation is above every visible
+  generated ID and commits after it. Checkpoint readers therefore keep the
+  guarantee the shared transaction gives them. The commit's WAL flush stays
+  inside the lock; that is the irreducible serial cost.
+- **The server's choice is the generator's choice.** `candidate` when it is
+  above durable high-water, otherwise `last_ts + 1` in the same physical grain.
+  That is `TimestampGenerator._next_components()` evaluated against durable
+  high-water with the reservation-time clock sample, so stale candidates cost
+  nothing. When the stored logical counter is already 4095 the statement
+  allocates nothing (zero rows, no mutation); the core refreshes its cache and
+  the generator waits for the clock or raises `TimestampError` (`[SB-ID-4]`).
+  A plain `GREATEST(last_ts + 1, candidate)` would roll into the next physical
+  grain instead.
+- **Lock order.** The row lock statement must come first. PostgreSQL takes a
+  statement's relation locks when it analyzes it, so a single combined
+  statement would hold `ROW EXCLUSIVE` on `messages` while waiting for the row
+  — the inverse of broadcast, rename, and `keep_newest` (row lock, then
+  `SHARE ROW EXCLUSIVE`). That inversion was reproduced as `deadlock detected`
+  and is pinned by `test_queued_writer_does_not_deadlock_broadcast_lock_order`.
+- **Atomicity.** Everything up to the Sync is one implicit transaction; an
+  `IntegrityError` (allocated ID already stored above a corrupted high-water)
+  rolls back the allocation too, and `write()`'s existing ladder resynchronizes
+  and retries. After resync the server allocates above the repaired high-water,
+  so a persistent candidate conflict self-heals on PostgreSQL.
+- **Transport.** psycopg flushes each pipelined statement as it is queued, so
+  the residual client exposure inside the lock is the non-blocking gap between
+  the client's sends, not a round trip. Without libpq pipeline support
+  (libpq < 14) the runner runs the same statements inside an explicit
+  `BEGIN`/`COMMIT`: same semantics, the old round-trip cost.
+
+Client-side binding of a multi-statement simple query would remove the send
+gap too, but it puts message bodies into statement text that PostgreSQL logs
+on statement errors by default. Moving every `messages`-locking path to
+"table lock first" so a single statement suffices is a proposed follow-up in
+the plan, not current behavior.
+
+`tests/test_write_visibility.py` records the PostgreSQL write as one
+`run_transaction` exchange; real-PostgreSQL proofs live in
+`extensions/simplebroker_pg/tests/test_pg_write_allocation.py`.
 
 When `keep_newest` is present, shared SQL extends the same transaction:
 
@@ -112,6 +182,17 @@ or its retry outside the lock would reopen the stale-cache ordering. The
 advance method, proves another thread cannot enter it through the same
 generator, then checks both durable high-water and `_last_ts` against the
 maximum returned value.
+
+Reservation-based writes (Redis and PostgreSQL ordinary writes) use a
+different transition: `_reserve_candidates` updates only the cache under the
+lock and the backend advances durable high-water outside it. Redis commits
+exactly the reserved candidate, so the reservation is already the publication.
+PostgreSQL may commit an ID above the reservation (`last_ts + 1`), so the core
+then installs it with `_publish_allocated`, a monotone maximum under the lock
+(`RESERVE_PUBLISH` firing row). A monotone publication cannot regress
+`_last_ts`, so the stale-cache hazard above does not reopen even though the
+durable step is outside the generator lock. A failed backend operation can
+leave the cache ahead of durable state; later candidates simply start higher.
 
 ## SQL conflict repair
 
@@ -288,7 +369,18 @@ writes, and direct-core latency. The deterministic performance gate is one
 data `EVAL` for a steady-state ordinary write; timing samples are diagnostic,
 not pass/fail thresholds.
 
+The PostgreSQL server-allocated write likewise needs no migration: reverting
+the core or the extension restores the shared transaction, and mixed fleets
+serialize correctly because both shapes lock the high-water row first. Its
+deterministic gate is one `run_transaction` exchange per ordinary write.
+Post-release signals are write throughput that scales past one writer, no
+`idle in transaction` holder of the `meta` row, zero conflict metrics under
+contention, and no `deadlock detected` involving `meta` and `messages`.
+
 ## Related plan
+
+- active: [2026-11-08-pg-write-lock-hold-plan](../plans/2026-11-08-pg-write-lock-hold-plan.md)
+  — PostgreSQL server-allocated generated writes and their lock-order proof.
 
 - retired: 2026-09-11-keyset-peek-pagination-plan — source `3868d7a`;
   see the ledger in `docs/plans/README.md`.
