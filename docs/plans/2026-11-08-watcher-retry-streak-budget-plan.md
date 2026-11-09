@@ -1,18 +1,23 @@
 # Watcher retry limits per failure streak
 
-Class: 3 — changes intended (observable) watcher behavior with no governing
-spec text, contract test or explicit user requirement as intent evidence, so
-not class 2. No [DOM-5] risky trigger fires: no async or deferred work is
-added; one execution context; the retry policy is not a documented public
-contract (`[SB-API-6]`, README and guides are silent; `_run_with_retries`,
-`_check_retry_timeout` and `MAX_TOTAL_RETRY_TIME` are private); no CLI shape or
-storage change; rollback is a plain revert with no rollout order. The closest
-candidate, "compatibility surface", was considered and rejected for that
-reason; a reviewer may escalate. No normative spec text changes, so not class
-5 (see Q2 for the class-5 follow-up).
+Class: 4 — risky: the [DOM-5] "compatibility surface" trigger fires. Public
+`run_forever()` and `run()` callers, and `threading.excepthook` for
+`run_in_thread()`, no longer receive the exception for a failure that recurs
+after every successful start and initial drain (register row 5). Private
+implementation names and silent spec text do not exclude a compatibility
+change (review F1; the author's original class-3 claim rejected this trigger).
+It also changes intended (observable) watcher behavior with no governing spec
+text, contract test or explicit user requirement as intent evidence. No other
+risky trigger fires: no async or deferred work; one execution context; no CLI
+shape or storage change; rollback is a plain revert with no rollout order. No
+normative spec text changes, so not class 5 (see Q2 for the class-5
+follow-up). Hardening content: Hidden couplings; Rollback, Rollout and Success
+Signals; Testing Plan (what not to mock); Context and Key Files; Fresh-Eyes
+comprehension questions.
 Status: active — implemented and verified on branch
-`perf/sb-watcher-retry-budget` (base `perf/sb-base` = `5d29fbf`); cross-family
-review pending (coordinator).
+`perf/sb-watcher-retry-budget` (base `perf/sb-base` = `5d29fbf`);
+cross-family review complete with no blocker (F1, F2 fixed in this plan);
+owner decisions Q1 and Q2 open.
 Owner: SimpleBroker product owner; implementation agent for this track.
 Boundary: `simplebroker/watcher.py` `BaseWatcher._run_with_retries` and
 `_check_retry_timeout`, plus the `MAX_TOTAL_RETRY_TIME` docstring in
@@ -145,7 +150,9 @@ and the next failure finds `elapsed > 300` and dies, reproducing the bug.
 Why no other health witness (for example "the processing loop completed one
 wait"): it would require a hook inside the overridable `_process_messages`
 (and `QueueMoveWatcher` overrides it) or new strategy state; the loop already
-owns the start and initial-drain boundary.
+owns the start and initial-drain boundary. It stays open as an owner option
+under Q1, because it would bound the row-5 restart loop with the existing
+limits.
 
 ## Invariants and Constraints
 
@@ -192,8 +199,12 @@ owns the start and initial-drain boundary.
 - Time every streak, including the first, from its first failure: rejected;
   changes the first-attempt budget that `test_absolute_timeout_exceeded` pins
   with no evidence that it is wrong.
-- Health witness inside `_process_messages`: rejected; second path into a
-  subclass hook.
+- Health witness inside `_process_messages` (recovery qualified by a
+  successful processing wait instead of start plus initial drain): not adopted
+  here because it changes the chosen health witness and both processing-loop
+  implementations (`BaseWatcher._process_messages` and
+  `QueueMoveWatcher._process_messages`). It reuses the existing limits with no
+  new knob, so it remains an owner option under Q1 (review F2).
 - A cap on recovered streaks or a new knob: rejected by the brief (no new
   knobs); offered to the owner as an option under Q1.
 
@@ -283,6 +294,11 @@ docstring at `simplebroker/_constants.py` 211.
 - 2026-11-08: The brief's "reset both after a successful start and drain"
   cannot be applied literally to the time budget (see Design); the count
   resets at establishment and the clock restarts at the next failure.
+- 2026-11-09: Reclassified from class 3 to class 4 after review F1. Class 4
+  requires review before implementation; the track brief assigns the
+  cross-family review to the coordinator after implementation and forbids
+  calling reviewers here, so implementation preceded review. The review found
+  no blocker and asked for no implementation change.
 
 ## Out of Scope
 
@@ -291,11 +307,21 @@ docstring at `simplebroker/_constants.py` 211.
 
 ## Owner questions
 
-- Q1: ratify register row 5 (indefinite 2 s restart loop for a failure that
-  recurs after every successful start and initial drain), or choose a bound
-  for it, for example a cap on consecutive streaks that end within one retry
-  cycle, or raising the retry log level. Either is a new rule, not part of
-  this fix.
+- Q1: register row 5 (an indefinite 2 s restart loop for a failure that
+  recurs after every successful start and initial drain). Decision open; the
+  options are of two different kinds:
+  - Bounded policy (ends the loop):
+    - ratify the loop as is;
+    - a cap on consecutive streaks that end within one retry cycle (a new
+      rule);
+    - the reviewer's alternative: qualify recovery by a successful processing
+      wait instead of start plus initial drain. This reuses the existing
+      limits with no new knob, but changes the health witness and both
+      processing-loop implementations (`BaseWatcher._process_messages` and
+      `QueueMoveWatcher._process_messages`).
+  - Observability only (does not bound the loop): log the retries of such a
+    loop above DEBUG. This can be combined with any bounded-policy option, but
+    on its own leaves the restart loop unbounded.
 - Q2: should `[SB-API-6]` state the per-streak retry contract (three
   consecutive failures or 300 s per streak; the first streak timed from run
   start)? That is a class-5 spec addition.
@@ -303,12 +329,24 @@ docstring at `simplebroker/_constants.py` 211.
 ## Independent Review Loop
 
 - Author family: Claude (implementation agent)
-- Reviewer family: pending — coordinator runs the cross-family review
-- Review invocation: coordinator-owned per the track brief (`skills/call-agent/SKILL.md`)
+- Reviewer family: Codex (OpenAI)
+- Review invocation: `skills/call-agent/SKILL.md`, run by the coordinator (`timeout 3600 codex exec -s read-only -c model_reasoning_effort="high"` in this worktree; combined plan and implementation review)
 
 ## Review and execution record
 
-(Coordinator: record the cross-family review, findings and dispositions here.)
+Review SB-7, 2026-11-09, of `2a732d8` against `5d29fbf`. Verdict: no blocker.
+The reviewer verified both SHAs, the nine-file diff, the baseline causal path,
+the cited history and test falsifiability; paired in-memory probes with the
+unchanged retry-owner methods reproduced the baseline failures and confirmed
+recovery and exhaustion. Documentation gates and `git diff --check` passed.
+The SQLite and PostgreSQL suite counts were not rerun by the reviewer (the
+review was read-only). Both findings ask only for plan changes; no code
+changed.
+
+| ID | Severity | Finding | Disposition |
+|----|----------|---------|-------------|
+| F1 | P3 | The loss of the exception that public `run_forever()` callers used to see is a [DOM-5] compatibility surface; private names and silent spec text do not exclude it | Accepted, fixed: reclassified as class 4 in the plan header and the `docs/plans/README.md` index row; existing hardening content kept and listed in the header; Deviation Log records that review followed implementation |
+| F2 | P3 | Q1 presented a higher retry log level as a bound, but it only improves visibility and leaves the restart loop unbounded | Accepted, fixed: Q1 now separates bounded-policy options from the observability-only option, and records the reviewer's alternative (a successful processing wait qualifies recovery, reusing the existing limits with no new knob, at the cost of changing the health witness and both processing-loop implementations) as an owner option; the Alternatives entry is updated to match; the owner decision stays open |
 
 ## Fresh-Eyes Review
 
