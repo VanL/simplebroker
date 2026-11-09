@@ -342,9 +342,12 @@ redis-py re-raises the first read failure; and a silent resubscription would
 hide the fire-and-forget delivery gap from waiters that believe they were
 continuously subscribed. Release is identity-checked, so releasing a replaced
 listener is a no-op that never counts against its replacement. The registry
-does not close a replaced listener: its thread closed its own Pub/Sub
-connection when it failed, and closing it would turn the stored failure into
-quiet wait results for holders that have not observed it yet. Plan:
+does not close a replaced listener. Its cleanup is listener-owned and eventual:
+the thread publishes the failure, then closes its Pub/Sub connection in its
+`finally`, possibly after a replacement was handed out, so the steady-state
+connection budget (one live listener per key) is unchanged. Closing it from the
+registry would turn the stored failure into quiet wait results for holders that
+have not observed it yet. Plan:
 `2026-11-08-redis-listener-failure-recovery-plan.md`.
 
 ### Fork recovery before process-owned locks

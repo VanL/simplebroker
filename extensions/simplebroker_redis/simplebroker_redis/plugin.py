@@ -409,9 +409,10 @@ class _RedisActivityRegistry:
         """Surrender one reference to ``listener``; close it after the last one.
 
         Releasing a listener that ``listener()`` already replaced is a no-op.
-        Its thread closed its own Pub/Sub connection when it failed, and closing
-        it here would turn the stored failure into quiet wait results for
-        holders that have not observed it yet.
+        Its thread owns its cleanup: after publishing the failure it closes its
+        own Pub/Sub connection, possibly after the replacement was handed out.
+        Closing it here would turn the stored failure into quiet wait results
+        for holders that have not observed it yet.
         """
         self._reset_after_fork_if_needed()
         listener_to_close: _SharedRedisActivityListener | None = None

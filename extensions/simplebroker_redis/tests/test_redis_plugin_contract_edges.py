@@ -399,9 +399,10 @@ def test_activity_registry_never_hands_out_a_failed_listener(
     assert registry.listener("redis://example/0", "tenant") is replacement
 
     # Both holders of the failed listener release it. That must neither count
-    # against the replacement nor close the failed listener: its thread already
-    # closed its Pub/Sub connection, and closing it would turn the stored
-    # failure into quiet wait results for holders that have not observed it yet.
+    # against the replacement nor close the failed listener: its thread owns
+    # closing its Pub/Sub connection after publishing the failure, and closing
+    # it here would turn the stored failure into quiet wait results for holders
+    # that have not observed it yet.
     registry.release(failed)
     registry.release(failed)
     assert failed.close_calls == 0

@@ -151,10 +151,14 @@ Base evidence, real Valkey 7.2 (`5d29fbf` code):
 This is the PostgreSQL fix's shape; the Redis registry already had the
 identity-checked release that the PostgreSQL change had to add.
 
-Why the registry does not close a replaced listener: its thread already closed
-its Pub/Sub object and client, so nothing remains to release; and `close()`
-sets `_stop_event`, which turns the stored failure into quiet `False` waits for
-holders that have not yet observed it, leaving them on a dead listener.
+Why the registry does not close a replaced listener: cleanup is
+listener-owned and eventual. The thread publishes `_error` first and then
+closes its Pub/Sub object and client in its `finally`, so a replacement can be
+handed out while that cleanup is still pending; the thread finishes it without
+the registry. The steady-state connection budget is unchanged (one live
+listener per key). And `close()` sets `_stop_event`, which turns the stored
+failure into quiet `False` waits for holders that have not yet observed it,
+leaving them on a dead listener.
 
 Why no in-place reconnect and no driver-level retry on the Pub/Sub
 connection: [THEORY-4] explicit safety over magical recovery. Redis Pub/Sub is
@@ -166,7 +170,8 @@ reads everything written meanwhile.
 
 The failure flag is the listener's own published terminal state (`_error` is
 set only on the thread's terminal exception path, after which the thread
-exits), read under the registry lock at hand-out time. No probe, round trip,
+closes its transports and exits), read under the registry lock at hand-out
+time. No probe, round trip,
 or read-back is added.
 
 ## Invariants and Constraints
@@ -209,9 +214,9 @@ or read-back is added.
 |--------|-------|--------------|
 | After the server closes the shared Pub/Sub connection (`CLIENT KILL`, restart, failover), a watcher's first retry gets a new listener and keeps handling writes through notifications (was: re-acquired the failed listener and died after its retries, about 6 s later with real backoff) | C — no loss; restores watcher retry recovery | [THEORY-3] watcher/waiter adapter; [THEORY-4] explicit safety over magical recovery (failure surfaced once, recovery through the explicit retry plus drain) |
 | Waiters holding the failed listener keep raising the stored `OperationalError` on every wait | N — unchanged | [THEORY-4] failure stays explicit |
-| A new waiter created after a failure opens a new Pub/Sub connection; the failed listener's thread already closed its own | N — budget unchanged (one live listener per key) | [REV-THEORY-004] substrate owned below handles |
+| A new waiter created after a failure opens a new Pub/Sub connection; the failed listener's thread closes its own in its `finally`, possibly after the replacement is handed out (listener-owned eventual cleanup) | N — steady-state budget unchanged (one live listener per key; at most one failed listener's connection transiently overlaps the replacement) | [REV-THEORY-004] substrate owned below handles |
 | Creating the replacement can fail (server still down): the waiter constructor raises the listener startup `OperationalError` and the watcher retry counts it | N — same as creating the first listener | [THEORY-4] |
-| A failed listener is no longer closed by the registry at its holders' last release (it was closed then before; its transports were already closed by its thread) | N — no resource remains; holders already saw or will see the stored error | [THEORY-4]; [REV-THEORY-004] |
+| A failed listener is no longer closed by the registry at its holders' last release (it was closed then before); its thread closes its own transports after publishing the failure | N — listener-owned eventual cleanup; holders already saw or will see the stored error | [THEORY-4]; [REV-THEORY-004] |
 | The watcher's retry limits are unchanged: at most two recoveries per run, none once the run is more than five minutes old | N — unchanged, stated in CHANGELOG so the fix is not over-claimed | [THEORY-4] guarantees named narrowly |
 
 ## Alternatives (plan-local unless the owner promotes them)
@@ -223,7 +228,8 @@ or read-back is added.
   second path, a window where `listener()` still returns it, and a
   listener-to-registry dependency.
 - Keep a refcount for replaced listeners and close them at their last release:
-  rejected; no resource remains, and closing would make holders' waits quiet.
+  rejected; the listener's thread already owns closing its transports, and
+  closing would make holders' waits quiet.
 - Recover inside the waiter (re-acquire on error): rejected; a second recovery
   path, and waiters do not own the substrate ([SB-API-6]).
 - `getattr(listener, "_error", None)` to tolerate fakes without the attribute:
@@ -252,14 +258,20 @@ or read-back is added.
 - `extensions/simplebroker_redis/tests/test_redis_integration.py::test_watcher_handles_writes_after_listener_connection_is_killed`
   (real Valkey): a real `QueueWatcher` and writer on a target URL carrying a
   unique `client_name`; `CLIENT KILL ID` of the one `TYPE pubsub` client with
-  that name; asserts a write made after the kill is handled, the watcher
+  that name; asserts a write made after recovery is handled, the watcher
   thread is alive, and no thread exception occurred. The `client_name` scopes
   the kill to this test's listener on a server shared with parallel xdist
-  workers (`CLIENT KILL TYPE pubsub` would kill theirs). `BROKER_MAX_INTERVAL
-  = 2.0` pushes the native idle re-poll to 20–40 s so only a live
-  notification can deliver the write within 5 s. The retry backoff is patched
-  to immediate (the PostgreSQL sibling's seam) so the unfixed watcher dies
-  before the write instead of racing it; the fresh watcher stays within its
+  workers (`CLIENT KILL TYPE pubsub` would kill theirs). The write is made
+  only after a causal witness (review F1): a pass-through wrapper on
+  `_SharedRedisActivityListener.wait` records which listener the watcher
+  waits on, and the first wait on a second listener proves the replacement
+  waiter is waiting after recovery's initial drain (the watcher waits only
+  from its processing loop, after its start drain finds no more work).
+  `BROKER_MAX_INTERVAL = 2.0` pushes the native idle re-poll to 20–40 s, so
+  with the drain already finished only a live notification can deliver the
+  write within 5 s. The retry backoff is patched to immediate (the PostgreSQL
+  sibling's seam) so recovery, or the unfixed watcher's exhaustion, happens
+  well inside the 5 s witness deadline; the fresh watcher stays within its
   first retry, independent of the retry-budget bug.
 - `extensions/simplebroker_redis/tests/test_redis_plugin_contract_edges.py::test_activity_registry_never_hands_out_a_failed_listener`:
   failed listener replaced; replacement shared; two releases of the failed one
@@ -272,7 +284,7 @@ or read-back is added.
   `test_activity_registry_releases_only_owned_reference`; the new registry
   test also exercises it with a replaced listener.
 
-## Verification and Gates (run 2026-11-08, foreground, worktree state = this commit)
+## Verification and Gates (round 1: run 2026-11-08, foreground, commit `f7c0731`; round-2 evidence after review fixes is in the review record)
 
 | Command | Result |
 |---------|--------|
@@ -346,16 +358,34 @@ or read-back is added.
 - 2026-11-08 execution: tasks 1–5 done on `perf/sb-redis-listener-recovery`;
   evidence in "Verification and Gates". Docker containers started for the
   probe and by `bin/pytest-redis` were removed.
-- Cross-family review: (coordinator: record the review, findings and
-  dispositions here.)
+- Cross-family review (coordinator, SB-8, of `f7c0731`): blocker F1 (P2) and
+  F2 (P3); no capability diminution found. Full review in the coordinator's
+  scratchpad (`tracks/review-sb-SB8/review.md`).
+
+| ID | Finding | Disposition |
+|----|---------|-------------|
+| F1 (P2) | The watcher test's timed 2 s join did not prove recovery's initial drain had finished; slow replacement startup could let that drain consume `"after"` with no live notification. | Accepted, fixed: the settle join is replaced by a causal witness. A pass-through wrapper on `_SharedRedisActivityListener.wait` records which listener the watcher waits on; the first wait on a second listener proves the replacement waiter is waiting after recovery's initial drain (the watcher waits only from its processing loop, after its start drain finds no more work). `"after"` is written only after that witness; the registration predates the write, so the version bump is observed; the idle re-poll stays at 20–40 s. Baseline sensitivity control rerun (below). |
+| F2 (P3) | Prose said the failed listener's transports were already closed when replacement begins; `_error` is published before `finally` closes them, so replacement can return while that cleanup is pending. | Accepted, fixed: plan Design, register rows, Alternatives and Fresh-Eyes, implementation doc 06, the `release()` docstring and the registry-test comment now describe listener-owned eventual cleanup with the steady-state connection budget unchanged. The asynchronous cleanup design is kept. |
+
+Round-2 evidence (2026-11-09, foreground, worktree state = the review-fix
+commit):
+
+| Command | Result |
+|---------|--------|
+| Sensitivity: `git apply -R` of the `plugin.py` patch against `5d29fbf` (sha256 `4bdea77e…04a2`, fix plus corrected docstring), tests kept; `uv run ./bin/pytest-redis <test_redis_integration.py, test_redis_plugin_contract_edges.py> -k "listener_connection_is_killed or never_hands_out" -n 0` | 2 failed: `AssertionError: replacement_waiting=False handled=['before'] watcher_alive=False thread_errors=[OperationalError('Connection closed by server.')]` (log `Watcher failed after 3 retries`); registry test at `assert replacement is not failed` |
+| Restore (`git apply` of the same patch) | `git diff 5d29fbf` of `plugin.py` byte-identical to the patch (sha256 `4bdea77e…04a2`) |
+| the same two tests with the fix, 5 separate `bin/pytest-redis` runs | 2 passed each run (about 1.5 s each) |
+| `uv run ./bin/pytest-redis extensions/simplebroker_redis/tests -n 4` | 395 passed, 1 skipped (opt-in diagnostic probe) |
+| `ruff check .`; `ruff format --check` on the CI paths; mypy on the core/PG/Redis packages and on every Redis test file; `bin/check-plan-context`; `bin/check-doc-paths`; `git diff --check` | all clean |
 
 ## Fresh-Eyes Review
 
 - Could a holder see a quiet `False` from the failed listener? Only if it is
   closed; the registry never closes a replaced listener, and the holder's own
   `close()` only unregisters and releases (no-op).
-- Could two live listeners exist for one key? Only transiently a failed
-  (transport-closed) one plus the replacement; never two live ones.
+- Could two live listeners exist for one key? Only transiently a failed one
+  (whose thread is closing or has closed its transports) plus the
+  replacement; never two live ones.
 - Could the replacement be closed early? Only by a release naming it; releases
   of replaced listeners are no-ops.
 - Comprehension check for reviewers: (a) why does redis-py's own reconnect

@@ -15,7 +15,11 @@ import simplebroker_redis.core as redis_core_module
 from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys, encode_id
-from simplebroker_redis.plugin import RedisActivityWaiter, RedisMultiQueueActivityWaiter
+from simplebroker_redis.plugin import (
+    RedisActivityWaiter,
+    RedisMultiQueueActivityWaiter,
+    _SharedRedisActivityListener,
+)
 from simplebroker_redis.validation import key_prefix
 
 import simplebroker.watcher as watcher_module
@@ -946,11 +950,18 @@ def test_watcher_handles_writes_after_listener_connection_is_killed(
 
     The ``client_name`` in the target URL names this test's connections so the
     kill reaches only its listener on a server shared with parallel workers.
-    The large ``BROKER_MAX_INTERVAL`` pushes the native idle re-poll (20-40 s)
-    beyond the test deadline, so only a notification on a live listener can
-    deliver the write. The retry backoff is made immediate so a watcher that
-    re-acquires the failed listener exhausts its retries before the write
-    instead of racing it; the settle wait affects only that failure timing.
+
+    The write is made only after a causal witness: the watcher waits on its
+    listener only from its processing loop, after its (re)start drain finds no
+    more work, so the first wait on a second listener proves the replacement
+    waiter is waiting after recovery's initial drain. That drain therefore
+    cannot consume the write, and the large ``BROKER_MAX_INTERVAL`` pushes the
+    native idle re-poll (20-40 s) beyond the test deadline, so only a
+    notification on the live replacement listener can deliver it. The wait
+    wrapper only records which listener is waited on and keeps the real wait.
+    The retry backoff is made immediate so recovery, or the exhaustion of a
+    watcher that re-acquires the failed listener, happens well within the
+    witness deadline.
     """
     monkeypatch.setattr(watcher_module, "interruptible_sleep", lambda *_args: True)
     thread_errors: list[BaseException | None] = []
@@ -959,6 +970,24 @@ def test_watcher_handles_writes_after_listener_connection_is_killed(
         "excepthook",
         lambda args: thread_errors.append(args.exc_value),
     )
+    waited_listeners: list[_SharedRedisActivityListener] = []
+    replacement_waiting = threading.Event()
+    original_wait = _SharedRedisActivityListener.wait
+
+    def witnessed_wait(
+        listener: _SharedRedisActivityListener,
+        registration: Any,
+        timeout: float,
+        *,
+        stop_event: Any,
+    ) -> bool:
+        if not any(known is listener for known in waited_listeners):
+            waited_listeners.append(listener)
+            if len(waited_listeners) > 1:
+                replacement_waiting.set()
+        return original_wait(listener, registration, timeout, stop_event=stop_event)
+
+    monkeypatch.setattr(_SharedRedisActivityListener, "wait", witnessed_wait)
     client_name = f"sbtest-listener-{uuid.uuid4().hex[:12]}"
     separator = "&" if "?" in redis_url else "?"
     target_url = f"{redis_url}{separator}client_name={client_name}"
@@ -991,15 +1020,15 @@ def test_watcher_handles_writes_after_listener_connection_is_killed(
         assert len(listener_ids) == 1, f"expected one listener for {client_name}"
         assert admin.client_kill_filter(_id=listener_ids[0]) == 1
 
-        # Returns early only if the watcher thread dies.
-        thread.join(timeout=2.0)
-        writer.write("after")
-        handled_after = seen["after"].wait(5.0)
+        recovered = replacement_waiting.wait(5.0)
+        if recovered:
+            writer.write("after")
+        handled_after = recovered and seen["after"].wait(5.0)
         thread.join(timeout=1.0)
 
         assert handled_after and thread.is_alive() and thread_errors == [], (
-            f"handled={handled!r} watcher_alive={thread.is_alive()} "
-            f"thread_errors={thread_errors!r}"
+            f"replacement_waiting={recovered} handled={handled!r} "
+            f"watcher_alive={thread.is_alive()} thread_errors={thread_errors!r}"
         )
     finally:
         watcher.stop(timeout=5.0)
