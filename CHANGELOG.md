@@ -48,6 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hear writes from newer clients and fall back to their idle re-poll (about
   1–2 seconds by default) until upgraded; newer waiters still hear older
   writers, so upgrade waiting processes before or with their writers.
+- Project-scoped PostgreSQL and Redis targets are validated per process
+  session instead of once per persistent Queue. Once a session records a
+  successful admission, later persistent Queues and `BrokerSession` handles
+  on the same target, backend options, and configuration reuse it (first
+  users racing before that may each validate), so they no longer
+  open a dedicated inspection connection (on PostgreSQL, one connection and
+  five catalog statements each). The first use in every new session still
+  validates, a failed admission is retried on the next use, and a target
+  changed by another process after admission is detected when the next session
+  starts. Ephemeral operations, injected runners, `open_broker()`, and SQLite
+  are unchanged.
 
 ## [8.7.2] - 2026-10-14
 

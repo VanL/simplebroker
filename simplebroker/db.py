@@ -778,23 +778,46 @@ class DBConnection:
                 )
 
     def _ensure_project_target_initialized(self) -> None:
+        """Admit a project-scoped service target before first use.
+
+        Persistent managers share one admission per process session: the
+        session records success, and later managers on the same session key
+        skip live validation. Ephemeral, injected-runner, and ``open_broker()``
+        managers keep a per-manager record. A failed admission is never
+        recorded.
+
+        Spec: [SB-API-11]
+        """
         target = self._resolved_target
         if (
             target is None
             or target.backend_name == "sqlite"
             or target.config_path is None
-            or self._project_setup_complete
         ):
             return
+        session = self._ensure_shared_session() if self._share_in_process else None
+        if self._project_target_admitted(session):
+            return
         with self._project_setup_lock:
-            if self._project_setup_complete:
+            if self._project_target_admitted(session):
                 return
             _initialize_project_backend_target(
                 target,
                 config=self._config,
                 stop_event=self._stop_event,
             )
-            self._project_setup_complete = True
+            if session is None:
+                self._project_setup_complete = True
+            else:
+                session.record_project_target_admitted()
+
+    def _project_target_admitted(
+        self,
+        session: "_ProcessBrokerSession | None",
+    ) -> bool:
+        if session is None:
+            return self._project_setup_complete
+        return session.project_target_admitted()
 
     def _create_managed_connection(self) -> BrokerConnection:
         """Create one owned connection/core for the current thread."""
@@ -971,13 +994,13 @@ class DBConnection:
 
         # The registry retains the inherited graph before replacing its locks.
         # Do not close parent resources or carry its operation leases forward.
+        # The child session starts unadmitted, so project setup runs again.
         key, session = acquire_process_broker_session(
             self._db_path_arg,
             config=self._config,
             factory_builder=_build_process_session_core_factory,
         )
         self._project_setup_lock = threading.Lock()
-        self._project_setup_complete = False
         self._thread_local = threading.local()
         self._shared_key, self._shared_session = key, session
         self._shared_released = False

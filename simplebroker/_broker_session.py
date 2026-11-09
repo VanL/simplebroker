@@ -201,6 +201,25 @@ class _ProcessBrokerSession:
         self._closing = False
         self._closed = False
         self._factory_close_deferred = False
+        # [SB-API-11] project-target admission belongs to the session, not to
+        # each Queue: set once after a successful live validation or setup and
+        # never cleared. A new session (last lease released, registry
+        # shutdown, fork, or a different key) starts unadmitted.
+        self._project_target_admitted = False
+
+    def project_target_admitted(self) -> bool:
+        """Return whether project-target setup already succeeded for this session."""
+
+        return self._project_target_admitted
+
+    def record_project_target_admitted(self) -> None:
+        """Record one successful project-target admission for this session.
+
+        Call only after live validation or setup returned without error; a
+        failed admission is never recorded, so the next first use retries it.
+        """
+
+        self._project_target_admitted = True
 
     def get_connection(
         self,
