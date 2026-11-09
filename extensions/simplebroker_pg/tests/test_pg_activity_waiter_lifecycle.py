@@ -16,12 +16,16 @@ class _Listener:
         events: list[str],
         *,
         unregister_error: BaseException | None = None,
+        register_error: BaseException | None = None,
     ) -> None:
         self.events = events
         self.unregister_error = unregister_error
+        self.register_error = register_error
 
     def register_queue(self, queue_name: str) -> tuple[int, int]:
         self.events.append(f"register:{queue_name}")
+        if self.register_error is not None:
+            raise self.register_error
         return 0, 0
 
     def unregister_queue(self, queue_name: str) -> None:
@@ -34,6 +38,8 @@ class _Listener:
         queue_names: tuple[str, ...],
     ) -> tuple[int, dict[str, int], int]:
         self.events.append(f"register-set:{','.join(queue_names)}")
+        if self.register_error is not None:
+            raise self.register_error
         return 7, dict.fromkeys(queue_names, 0), 0
 
     def unregister_queue_set(self, fan_in_id: int) -> None:
@@ -186,3 +192,46 @@ def test_postgres_multi_waiter_base_exception_is_terminal_and_stops_cleanup(
     ]
     waiter.close()
     assert len(events) == 3
+
+
+@pytest.mark.parametrize("multi", [False, True], ids=["single", "multi"])
+def test_postgres_waiter_registration_failure_releases_listener_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    multi: bool,
+) -> None:
+    """A subscription failure in the constructor surrenders the registry reference.
+
+    The listener rolls back its own registration before raising, so the
+    constructor owns only the registry reference it acquired.
+    """
+    events: list[str] = []
+    failure = pg_runner_module.OperationalError(
+        "Postgres activity listener did not subscribe"
+    )
+    listener = _Listener(events, register_error=failure)
+    registry = _Registry(listener, events)
+    monkeypatch.setattr(pg_runner_module, "_activity_registry", registry)
+
+    with pytest.raises(pg_runner_module.OperationalError) as raised:
+        if multi:
+            pg_runner_module.PostgresMultiQueueActivityWaiter(
+                "postgresql://example/test",
+                schema="broker_data",
+                queue_names=("alpha", "beta"),
+                stop_event=threading.Event(),
+            )
+        else:
+            pg_runner_module.PostgresActivityWaiter(
+                "postgresql://example/test",
+                schema="broker_data",
+                queue_name="jobs",
+                stop_event=threading.Event(),
+            )
+
+    assert raised.value is failure
+    registered = "register-set:alpha,beta" if multi else "register:jobs"
+    assert events == [
+        "acquire:postgresql://example/test:broker_data",
+        registered,
+        "release:postgresql://example/test:broker_data",
+    ]

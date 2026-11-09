@@ -35,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effect in new processes, and a duplicate registration added after a
   successful lookup is no longer reported by that process. A forked child
   retains nothing and resolves each backend again.
+- `simplebroker-pg`: writes, moves, renames and broadcasts now NOTIFY a
+  per-queue channel instead of one channel per schema, and the shared
+  activity listener LISTENs only the queues it waits on (plus the schema
+  channel, for the `*` wildcard and older writers). Listener connections no
+  longer receive or wake for unrelated queues. PostgreSQL 19 additionally
+  skips signaling uninterested listening sessions; through PostgreSQL 18 the
+  server still signals every listening session in the database. Creating a
+  waiter for a newly watched queue costs one LISTEN round trip and raises
+  `OperationalError` if the listener cannot subscribe within its startup
+  timeout. Upgrade order: waiters from `simplebroker-pg` 4.7.x and older do not
+  hear writes from newer clients and fall back to their idle re-poll (about
+  1–2 seconds by default) until upgraded; newer waiters still hear older
+  writers, so upgrade waiting processes before or with their writers.
 
 ## [8.7.2] - 2026-10-14
 

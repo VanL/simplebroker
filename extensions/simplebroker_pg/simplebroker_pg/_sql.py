@@ -6,6 +6,22 @@ from simplebroker._constants import LOGICAL_COUNTER_MASK
 from simplebroker._selection import sql_direction
 from simplebroker._sql import RetrieveOperation, RetrieveQuerySpec
 
+from ._identifiers import QUEUE_ACTIVITY_CHANNEL_PREFIX
+
+
+def _queue_activity_channel_sql(queue_expression: str) -> str:
+    """Return SQL computing ``queue_activity_channel_name`` for an expression.
+
+    Wire protocol shared with ``_identifiers.queue_activity_channel_name``:
+    every NOTIFY for queue activity targets the canonical queue's channel and
+    carries the queue name as payload.
+    """
+    return (
+        f"'{QUEUE_ACTIVITY_CHANNEL_PREFIX}' || "
+        f"substr(md5(current_schema() || chr(31) || {queue_expression}), 1, 24)"
+    )
+
+
 POSTGRES_CONNECTION_STATS_SQL = """
 SELECT pg_catalog.jsonb_build_object(
     'numbackends',
@@ -110,7 +126,7 @@ WITH deleted AS (
 )
 SELECT COUNT(*) FROM deleted
 """
-RENAME_QUEUE_MESSAGES_COUNT = """
+RENAME_QUEUE_MESSAGES_COUNT = f"""
 WITH renamed AS (
     UPDATE messages
     SET queue = ?
@@ -122,7 +138,7 @@ renamed_count AS (
 ),
 notified AS (
     SELECT pg_notify(
-        'simplebroker_' || substr(md5(current_schema()), 1, 24),
+        {_queue_activity_channel_sql("notifications.payload")},
         notifications.payload
     )
     FROM renamed_count
@@ -194,18 +210,21 @@ SELECT
 FROM messages
 """
 INSERT_ALIAS = "INSERT INTO aliases (alias, target) VALUES (?, ?)"
-INSERT_MESSAGE = """
+INSERT_MESSAGE = f"""
 WITH inserted AS (
     INSERT INTO messages (queue, body, ts)
     VALUES (?, ?, ?)
     RETURNING queue
 )
 SELECT pg_notify(
-    'simplebroker_' || substr(md5(current_schema()), 1, 24),
+    {_queue_activity_channel_sql("queue")},
     queue
 )
 FROM inserted
 """
+_MOVE_TARGET_CHANNEL_SQL = _queue_activity_channel_sql(
+    "(SELECT queue_name FROM target_queue)"
+)
 
 # [SB-ID-1], [SB-ID-2], [SB-ID-4]: allocate, insert, and notify one ordinary
 # generated write. PostgresBackendPlugin.write_generated_message runs it after
@@ -455,7 +474,7 @@ def build_retrieve_query(
             ),
             notified AS (
                 SELECT pg_notify(
-                    'simplebroker_' || substr(md5(current_schema()), 1, 24),
+                    {_MOVE_TARGET_CHANNEL_SQL},
                     (SELECT queue_name FROM target_queue)
                 )
                 FROM updated

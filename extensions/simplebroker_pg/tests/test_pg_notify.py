@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
-from typing import Any, cast
+from collections.abc import Iterator
+from typing import Any, Self, cast
 
+import psycopg
 import pytest
+import simplebroker_pg.runner as pg_runner_module
 from simplebroker_pg import PostgresRunner
-from simplebroker_pg.runner import PostgresMultiQueueActivityWaiter
+from simplebroker_pg.runner import (
+    PostgresActivityWaiter,
+    PostgresMultiQueueActivityWaiter,
+)
 
 from simplebroker import Queue, create_activity_waiter_for_queues
 from simplebroker._backend_plugins import BackendPlugin
+from simplebroker.db import BrokerCore
 from simplebroker.ext import PollingStrategy
 
 pytestmark = [pytest.mark.pg_only]
@@ -669,3 +677,501 @@ def test_multi_queue_activity_waiter_clamps_each_queue_version(
             pg_waiter.close()
         queue_a.close()
         queue_b.close()
+
+
+# --- Per-queue notification channels -------------------------------------
+#
+# Wire-protocol literals are computed here from the documented byte layout,
+# never imported from the code under test: mixed client versions depend on
+# both sides agreeing on these exact channel names.
+
+
+def _expected_schema_channel(schema: str) -> str:
+    digest = hashlib.md5(schema.encode("ascii"), usedforsecurity=False).hexdigest()
+    return f"simplebroker_{digest[:24]}"
+
+
+def _expected_queue_channel(schema: str, queue_name: str) -> str:
+    payload = f"{schema}\x1f{queue_name}".encode("ascii")
+    digest = hashlib.md5(payload, usedforsecurity=False).hexdigest()
+    return f"simplebroker_q_{digest[:24]}"
+
+
+def _collect_notifications(
+    conn: psycopg.Connection[Any],
+    *,
+    expected_count: int,
+    timeout: float = 5.0,
+    quiet: float = 0.3,
+) -> list[tuple[str, str]]:
+    """Collect notifications until ``expected_count`` arrive, then a quiet window."""
+    received: list[tuple[str, str]] = []
+    deadline = time.monotonic() + timeout
+    while len(received) < expected_count and time.monotonic() < deadline:
+        for notify in conn.notifies(timeout=0.1):
+            received.append((notify.channel, notify.payload))
+    for notify in conn.notifies(timeout=quiet):
+        received.append((notify.channel, notify.payload))
+    return received
+
+
+def _listening_channels(listener: Any) -> set[str]:
+    """Observe the listener backend's subscriptions through its own session."""
+    conn = listener._conn
+    assert conn is not None
+    rows = conn.execute("SELECT pg_listening_channels()").fetchall()
+    return {str(row[0]) for row in rows}
+
+
+class _CountingListenerConnection:
+    """Real psycopg connection that records every delivered notification."""
+
+    def __init__(self, conn: psycopg.Connection[Any], sink: list[str]) -> None:
+        self._conn = conn
+        self._sink = sink
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+    def notifies(self, **kwargs: Any) -> Iterator[Any]:
+        inner = self._conn.notifies(**kwargs)
+        try:
+            for notify in inner:
+                self._sink.append(notify.payload)
+                yield notify
+        finally:
+            inner.close()
+
+
+def test_writer_operations_notify_only_their_queue_channels(
+    pg_runner: PostgresRunner,
+    pg_dsn: str,
+    pg_schema: str,
+    pg_plugin: BackendPlugin,
+) -> None:
+    """Write, move, rename and broadcast notify per-queue channels, not the schema."""
+    core = BrokerCore(pg_runner, backend_plugin=pg_plugin)
+    source = Queue("jobs", runner=pg_runner, persistent=True)
+    queue_names = ("jobs", "moved", "old", "new", "b1", "b2")
+    channels = {name: _expected_queue_channel(pg_schema, name) for name in queue_names}
+    schema_channel = _expected_schema_channel(pg_schema)
+    assert all(len(channel.encode()) <= 63 for channel in channels.values())
+
+    try:
+        core.write("jobs", "seed")
+        core.write("old", "seed")
+        core.write("b1", "seed")
+        core.write("b2", "seed")
+        with psycopg.connect(pg_dsn, autocommit=True) as raw:
+            for channel in (*channels.values(), schema_channel):
+                raw.execute(f'LISTEN "{channel}"')
+
+            core.write("jobs", "payload")
+            assert source.move("moved") is not None
+            core.rename_queue("old", "new")
+            assert core.broadcast("hello", queue_names=("b1", "b2")) == 2
+
+            expected = sorted(
+                [
+                    (channels["jobs"], "jobs"),
+                    (channels["moved"], "moved"),
+                    (channels["old"], "old"),
+                    (channels["new"], "new"),
+                    (channels["b1"], "b1"),
+                    (channels["b2"], "b2"),
+                ]
+            )
+            received = _collect_notifications(raw, expected_count=len(expected))
+            assert sorted(received) == expected
+            assert all(channel != schema_channel for channel, _ in received)
+    finally:
+        source.close()
+        core.close()
+
+
+def test_listener_subscribes_only_registered_queue_channels(
+    pg_runner: PostgresRunner,
+    pg_schema: str,
+) -> None:
+    """The listener backend LISTENs its schema channel plus registered queues only."""
+    jobs = Queue("jobs", runner=pg_runner, persistent=True)
+    alpha = Queue("alpha", runner=pg_runner, persistent=True)
+    beta = Queue("beta", runner=pg_runner, persistent=True)
+    stop_event = threading.Event()
+    jobs_waiter: PostgresActivityWaiter | None = None
+    fan_in_waiter: PostgresMultiQueueActivityWaiter | None = None
+
+    try:
+        waiter = jobs.create_activity_waiter(stop_event=stop_event)
+        assert waiter is not None
+        jobs_waiter = cast(PostgresActivityWaiter, waiter)
+        multi = create_activity_waiter_for_queues([alpha, beta], stop_event=stop_event)
+        assert multi is not None
+        fan_in_waiter = cast(PostgresMultiQueueActivityWaiter, multi)
+        listener = jobs_waiter._listener
+        assert fan_in_waiter._listener is listener
+
+        assert _listening_channels(listener) == {
+            _expected_schema_channel(pg_schema),
+            _expected_queue_channel(pg_schema, "jobs"),
+            _expected_queue_channel(pg_schema, "alpha"),
+            _expected_queue_channel(pg_schema, "beta"),
+        }
+
+        jobs.close()
+        jobs_waiter = None
+        _wait_until(
+            lambda: (
+                _listening_channels(listener)
+                == {
+                    _expected_schema_channel(pg_schema),
+                    _expected_queue_channel(pg_schema, "alpha"),
+                    _expected_queue_channel(pg_schema, "beta"),
+                }
+            )
+        )
+    finally:
+        if fan_in_waiter is not None:
+            fan_in_waiter.close()
+        if jobs_waiter is not None:
+            jobs_waiter.close()
+        jobs.close()
+        alpha.close()
+        beta.close()
+
+
+def test_unrelated_writes_are_not_delivered_to_the_listener(
+    pg_dsn: str,
+    pg_schema: str,
+    pg_plugin: BackendPlugin,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Writes to queues nobody here waits on never reach this listener connection."""
+    delivered: list[str] = []
+    real_connect = psycopg.connect
+
+    def counting_connect(*args: Any, **kwargs: Any) -> Any:
+        return _CountingListenerConnection(real_connect(*args, **kwargs), delivered)
+
+    runner_wait = PostgresRunner(pg_dsn, schema=pg_schema)
+    runner_write = PostgresRunner(pg_dsn, schema=pg_schema)
+    waiting = Queue("jobs", runner=runner_wait, persistent=True)
+    jobs_writer = Queue("jobs", runner=runner_write, persistent=True)
+    noise_writer = Queue("other", runner=runner_write, persistent=True)
+    stop_event = threading.Event()
+
+    try:
+        jobs_writer.write("warm")
+        assert jobs_writer.read() == "warm"
+        # Only the shared listener created by this waiter is wrapped.
+        monkeypatch.setattr(pg_runner_module.psycopg, "connect", counting_connect)
+        waiter = waiting.create_activity_waiter(stop_event=stop_event)
+        monkeypatch.undo()
+        assert waiter is not None
+        for index in range(20):
+            noise_writer.write(f"noise-{index}")
+        # Notifications reach one listener in commit order, so the barrier's
+        # wake proves every earlier noise notification was already offered.
+        jobs_writer.write("barrier")
+        assert waiter.wait(2.0) is True
+        assert delivered.count("other") == 0
+        assert delivered.count("jobs") == 1
+    finally:
+        waiting.close()
+        jobs_writer.close()
+        noise_writer.close()
+        runner_wait.close()
+        runner_write.close()
+        pg_plugin.cleanup_target(pg_dsn, backend_options={"schema": pg_schema})
+
+
+class _DelayedQueueListenCursor:
+    def __init__(self, cursor: Any, delay: float) -> None:
+        self._cursor = cursor
+        self._delay = delay
+
+    def __enter__(self) -> Self:
+        self._cursor.__enter__()
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self._cursor.__exit__(*args)
+
+    def execute(self, statement: str, *args: Any, **kwargs: Any) -> Any:
+        if 'LISTEN "simplebroker_q_' in statement:
+            time.sleep(self._delay)
+        return self._cursor.execute(statement, *args, **kwargs)
+
+
+class _DelayedQueueListenConnection:
+    """Real listener connection whose per-queue LISTEN commits late."""
+
+    def __init__(self, conn: psycopg.Connection[Any], delay: float) -> None:
+        self._conn = conn
+        self._delay = delay
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+    def cursor(self, *args: Any, **kwargs: Any) -> _DelayedQueueListenCursor:
+        return _DelayedQueueListenCursor(
+            self._conn.cursor(*args, **kwargs), self._delay
+        )
+
+
+def test_waiter_construction_waits_for_its_queue_listen(
+    pg_dsn: str,
+    pg_schema: str,
+    pg_plugin: BackendPlugin,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write committed right after construction returns must wake the waiter.
+
+    The real per-queue LISTEN is delayed. If construction returned before that
+    LISTEN committed, the immediate write would commit first and PostgreSQL
+    would never deliver its notification to the listener backend.
+    """
+    delay = 0.5
+    real_connect = psycopg.connect
+
+    def delayed_connect(*args: Any, **kwargs: Any) -> Any:
+        return _DelayedQueueListenConnection(real_connect(*args, **kwargs), delay)
+
+    runner_wait = PostgresRunner(pg_dsn, schema=pg_schema)
+    runner_write = PostgresRunner(pg_dsn, schema=pg_schema)
+    anchor = Queue("anchor", runner=runner_wait, persistent=True)
+    waiting = Queue("jobs", runner=runner_wait, persistent=True)
+    multi_a = Queue("alpha", runner=runner_wait, persistent=True)
+    multi_b = Queue("beta", runner=runner_wait, persistent=True)
+    writer = Queue("jobs", runner=runner_write, persistent=True)
+    beta_writer = Queue("beta", runner=runner_write, persistent=True)
+    stop_event = threading.Event()
+    anchor_waiter = None
+    fan_in_waiter = None
+
+    try:
+        writer.write("warm")
+        assert writer.read() == "warm"
+        # Start the shared listener first, wrapping only its connection, so
+        # the measured construction below pays only for its queue subscription.
+        monkeypatch.setattr(pg_runner_module.psycopg, "connect", delayed_connect)
+        anchor_waiter = anchor.create_activity_waiter(stop_event=stop_event)
+        monkeypatch.undo()
+        assert anchor_waiter is not None
+
+        started = time.monotonic()
+        waiter = waiting.create_activity_waiter(stop_event=stop_event)
+        elapsed = time.monotonic() - started
+        writer.write("immediate")
+        assert waiter is not None
+        assert elapsed >= delay
+        assert waiter.wait(2.0) is True
+
+        fan_in_waiter = create_activity_waiter_for_queues(
+            [multi_a, multi_b], stop_event=stop_event
+        )
+        beta_writer.write("immediate")
+        assert fan_in_waiter is not None
+        assert fan_in_waiter.wait(2.0) is True
+    finally:
+        if fan_in_waiter is not None:
+            fan_in_waiter.close()
+        if anchor_waiter is not None:
+            anchor_waiter.close()
+        for queue in (anchor, waiting, multi_a, multi_b, writer, beta_writer):
+            queue.close()
+        runner_wait.close()
+        runner_write.close()
+        pg_plugin.cleanup_target(pg_dsn, backend_options={"schema": pg_schema})
+
+
+def test_schema_channel_notifications_still_wake_waiters(
+    pg_runner: PostgresRunner,
+    pg_dsn: str,
+    pg_schema: str,
+) -> None:
+    """Pre-change writers and the ``*`` wildcard use the schema channel."""
+    jobs = Queue("jobs", runner=pg_runner, persistent=True)
+    alpha = Queue("alpha", runner=pg_runner, persistent=True)
+    beta = Queue("beta", runner=pg_runner, persistent=True)
+    stop_event = threading.Event()
+    schema_channel = _expected_schema_channel(pg_schema)
+    jobs_waiter = None
+    fan_in_waiter = None
+
+    try:
+        jobs_waiter = jobs.create_activity_waiter(stop_event=stop_event)
+        fan_in_waiter = create_activity_waiter_for_queues(
+            [alpha, beta], stop_event=stop_event
+        )
+        assert jobs_waiter is not None
+        assert fan_in_waiter is not None
+        with psycopg.connect(pg_dsn, autocommit=True) as raw:
+            raw.execute("SELECT pg_notify(%s, %s)", (schema_channel, "other"))
+            assert jobs_waiter.wait(0.2) is False
+            assert fan_in_waiter.wait(0.2) is False
+
+            raw.execute("SELECT pg_notify(%s, %s)", (schema_channel, "jobs"))
+            assert jobs_waiter.wait(2.0) is True
+            assert fan_in_waiter.wait(0.2) is False
+
+            raw.execute("SELECT pg_notify(%s, %s)", (schema_channel, "beta"))
+            assert fan_in_waiter.wait(2.0) is True
+            assert jobs_waiter.wait(0.2) is False
+
+            raw.execute("SELECT pg_notify(%s, %s)", (schema_channel, "*"))
+            assert jobs_waiter.wait(2.0) is True
+            assert fan_in_waiter.wait(2.0) is True
+    finally:
+        if jobs_waiter is not None:
+            jobs_waiter.close()
+        if fan_in_waiter is not None:
+            fan_in_waiter.close()
+        jobs.close()
+        alpha.close()
+        beta.close()
+
+
+def test_broadcast_wakes_every_target_waiter(
+    pg_runner: PostgresRunner,
+    pg_plugin: BackendPlugin,
+) -> None:
+    """One broadcast transaction wakes each selected queue's waiter."""
+    core = BrokerCore(pg_runner, backend_plugin=pg_plugin)
+    queues = {
+        name: Queue(name, runner=pg_runner, persistent=True)
+        for name in ("b1", "b2", "b3")
+    }
+    stop_event = threading.Event()
+    waiters: dict[str, Any] = {}
+
+    try:
+        for name in queues:
+            core.write(name, "seed")
+        for name, queue in queues.items():
+            waiters[name] = queue.create_activity_waiter(stop_event=stop_event)
+            assert waiters[name] is not None
+            # Absorb the seed write's notification if it arrives late.
+            waiters[name].wait(0.05)
+
+        assert core.broadcast("hello", queue_names=("b1", "b2")) == 2
+        assert waiters["b1"].wait(2.0) is True
+        assert waiters["b2"].wait(2.0) is True
+        assert waiters["b3"].wait(0.2) is False
+    finally:
+        for queue in queues.values():
+            queue.close()
+        core.close()
+
+
+def test_alias_write_wakes_the_canonical_queue_waiter(
+    pg_runner: PostgresRunner,
+    pg_plugin: BackendPlugin,
+) -> None:
+    """Writes through ``@alias`` notify the canonical queue, not the alias name."""
+    core = BrokerCore(pg_runner, backend_plugin=pg_plugin)
+    canonical = Queue("jobs", runner=pg_runner, persistent=True)
+    literal = Queue("nick", runner=pg_runner, persistent=True)
+    stop_event = threading.Event()
+
+    try:
+        core.add_alias("nick", "jobs")
+        canonical_waiter = canonical.create_activity_waiter(stop_event=stop_event)
+        literal_waiter = literal.create_activity_waiter(stop_event=stop_event)
+        assert canonical_waiter is not None
+        assert literal_waiter is not None
+
+        core.write(core.canonicalize_queue("@nick"), "payload")
+
+        assert canonical_waiter.wait(2.0) is True
+        assert literal_waiter.wait(0.2) is False
+        assert canonical.read() == "payload"
+    finally:
+        canonical.close()
+        literal.close()
+        core.close()
+
+
+@pytest.mark.parametrize("multi", [False, True], ids=["single", "multi"])
+def test_interrupted_waiter_construction_leaves_no_phantom_subscription(
+    pg_dsn: str,
+    pg_schema: str,
+    pg_plugin: BackendPlugin,
+    monkeypatch: pytest.MonkeyPatch,
+    multi: bool,
+) -> None:
+    """An interrupt during the subscription wait unwinds the registration.
+
+    Another waiter keeps the shared listener alive, so a leaked registration
+    would keep its queue channels subscribed with no owning waiter.
+    """
+    real_connect = psycopg.connect
+
+    def delayed_connect(*args: Any, **kwargs: Any) -> Any:
+        return _DelayedQueueListenConnection(real_connect(*args, **kwargs), 0.3)
+
+    runner = PostgresRunner(pg_dsn, schema=pg_schema)
+    anchor = Queue("anchor", runner=runner, persistent=True)
+    stop_event = threading.Event()
+    anchor_waiter: PostgresActivityWaiter | None = None
+
+    try:
+        anchor.write("warm")
+        assert anchor.read() == "warm"
+        monkeypatch.setattr(pg_runner_module.psycopg, "connect", delayed_connect)
+        waiter = anchor.create_activity_waiter(stop_event=stop_event)
+        monkeypatch.undo()
+        assert waiter is not None
+        anchor_waiter = cast(PostgresActivityWaiter, waiter)
+        listener = anchor_waiter._listener
+        reached_wait = threading.Event()
+
+        def interrupted_wait(timeout: float | None = None) -> bool:
+            del timeout
+            reached_wait.set()
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(listener._subscription_changed, "wait", interrupted_wait)
+        with pytest.raises(KeyboardInterrupt):
+            if multi:
+                PostgresMultiQueueActivityWaiter(
+                    pg_dsn,
+                    schema=pg_schema,
+                    queue_names=("alpha", "beta", "jobs"),
+                    stop_event=stop_event,
+                )
+            else:
+                PostgresActivityWaiter(
+                    pg_dsn,
+                    schema=pg_schema,
+                    queue_name="jobs",
+                    stop_event=stop_event,
+                )
+        monkeypatch.undo()
+
+        assert reached_wait.is_set()
+        with listener._lock:
+            assert listener._queue_refcounts == {"anchor": 1}
+            assert set(listener._conditions) == {"anchor"}
+            assert listener._fan_in_entries == {}
+        registry = pg_runner_module._activity_registry
+        assert registry._listeners[(registry._pid, pg_dsn, pg_schema)] == (
+            listener,
+            1,
+        )
+        _wait_until(
+            lambda: (
+                _listening_channels(listener)
+                == {
+                    _expected_schema_channel(pg_schema),
+                    _expected_queue_channel(pg_schema, "anchor"),
+                }
+            ),
+            timeout=5.0,
+        )
+    finally:
+        if anchor_waiter is not None:
+            anchor_waiter.close()
+        anchor.close()
+        runner.close()
+        pg_plugin.cleanup_target(pg_dsn, backend_options={"schema": pg_schema})

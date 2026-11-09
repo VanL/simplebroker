@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import queue
+import socket
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -42,48 +45,94 @@ class _Cursor:
         return None
 
     def execute(self, statement: str) -> None:
-        self._connection.statements.append(statement)
+        self._connection.execute_statement(statement)
 
 
 class _ScriptedPGConnection:
-    """Thread-safe fake for only the nondeterministic psycopg transport."""
+    """Thread-safe fake for only the nondeterministic psycopg transport.
+
+    ``fileno()`` is a real socket so the listener's selector observes
+    readiness exactly as it would for libpq; every scripted event signals it.
+    """
 
     def __init__(self) -> None:
         self.events: queue.Queue[object] = queue.Queue()
         self.statements: list[str] = []
         self.closed = False
+        self.execute_gate: threading.Event | None = None
+        self.gated_prefix = ""
+        self.gated_statement: str | None = None
+        self._readable, self._signal = socket.socketpair()
+        self._readable.setblocking(False)
 
     def cursor(self) -> _Cursor:
         return _Cursor(self)
 
-    def notifies(self, *, timeout: float, stop_after: int) -> Iterator[object]:
+    def fileno(self) -> int:
+        return self._readable.fileno()
+
+    def execute_statement(self, statement: str) -> None:
+        gate = self.execute_gate
+        if gate is not None and statement.startswith(self.gated_prefix):
+            self.gated_statement = statement
+            gate.wait(5.0)
+        self.statements.append(statement)
+
+    def _post(self, event: object) -> None:
+        self.events.put(event)
+        with contextlib.suppress(OSError):
+            self._signal.send(b"\0")
+
+    def notifies(
+        self, *, timeout: float, stop_after: int | None = None
+    ) -> Iterator[object]:
         del stop_after
+        with contextlib.suppress(OSError):
+            while self._readable.recv(4096):
+                pass
         try:
             event = self.events.get(timeout=timeout)
         except queue.Empty:
             return
-        if event is _CLOSED:
-            return
-        if isinstance(event, BaseException):
-            raise event
-        yield event
+        while True:
+            if event is _CLOSED:
+                return
+            if isinstance(event, BaseException):
+                raise event
+            yield event
+            try:
+                event = self.events.get_nowait()
+            except queue.Empty:
+                return
 
     def notify(self, payload: str) -> None:
-        self.events.put(SimpleNamespace(payload=payload))
+        self._post(SimpleNamespace(payload=payload))
 
     def fail(self, error: BaseException) -> None:
-        self.events.put(error)
+        self._post(error)
 
     def close(self) -> None:
         if self.closed:
             return
         self.closed = True
-        self.events.put(_CLOSED)
+        self._post(_CLOSED)
+
+    def release_transport(self) -> None:
+        self._readable.close()
+        self._signal.close()
+
+
+def _expected_queue_channel(schema: str, queue_name: str) -> str:
+    payload = f"{schema}\x1f{queue_name}".encode("ascii")
+    digest = hashlib.md5(payload, usedforsecurity=False).hexdigest()
+    return f"simplebroker_q_{digest[:24]}"
 
 
 @contextmanager
 def _started_listener(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    startup_timeout: float = 1.0,
 ) -> Iterator[tuple[_SharedActivityListener, _ScriptedPGConnection]]:
     connection = _ScriptedPGConnection()
     monkeypatch.setattr(
@@ -91,15 +140,18 @@ def _started_listener(
         "connect",
         lambda *args, **kwargs: connection,
     )
-    listener = _SharedActivityListener(
-        "postgresql://transport.invalid/db",
-        schema="transition_contract",
-        startup_timeout=1.0,
-    )
     try:
-        yield listener, connection
+        listener = _SharedActivityListener(
+            "postgresql://transport.invalid/db",
+            schema="transition_contract",
+            startup_timeout=startup_timeout,
+        )
+        try:
+            yield listener, connection
+        finally:
+            listener.close()
     finally:
-        listener.close()
+        connection.release_transport()
 
 
 def _listener_starts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -136,16 +188,19 @@ def _listener_start_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
         return connection
 
     monkeypatch.setattr(pg_runner_module.psycopg, "connect", slow_connect)
-    with pytest.raises(
-        pg_runner_module.OperationalError,
-        match="did not start",
-    ):
-        _SharedActivityListener(
-            "postgresql://transport.invalid/db",
-            schema="transition_contract",
-            startup_timeout=0.01,
-        )
-    assert connection.closed
+    try:
+        with pytest.raises(
+            pg_runner_module.OperationalError,
+            match="did not start",
+        ):
+            _SharedActivityListener(
+                "postgresql://transport.invalid/db",
+                schema="transition_contract",
+                startup_timeout=0.01,
+            )
+        assert connection.closed
+    finally:
+        connection.release_transport()
 
 
 def _listener_registers_and_refcounts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -310,6 +365,208 @@ def _listener_unregisters_last_reference(monkeypatch: pytest.MonkeyPatch) -> Non
         assert listener._queue_refcounts == {}
         assert listener._conditions == {}
         assert listener._versions == {}
+
+
+def _listener_subscribes_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _started_listener(monkeypatch) as (listener, connection):
+        assert listener.register_queue("jobs") == (0, 0)
+        jobs_channel = _expected_queue_channel("transition_contract", "jobs")
+        assert connection.statements[1:] == [f'LISTEN "{jobs_channel}"']
+        assert listener.register_queue("jobs") == (0, 0)
+        fan_in_id, versions, wildcard_version = listener.register_queue_set(
+            ("jobs", "beta")
+        )
+        beta_channel = _expected_queue_channel("transition_contract", "beta")
+        assert connection.statements[1:] == [
+            f'LISTEN "{jobs_channel}"',
+            f'LISTEN "{beta_channel}"',
+        ]
+        assert versions == {"jobs": 0, "beta": 0}
+        assert wildcard_version == 0
+        listener.unregister_queue_set(fan_in_id)
+
+
+def _listener_unsubscribes_last_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _started_listener(monkeypatch) as (listener, connection):
+        listener.register_queue("jobs")
+        listener.register_queue("jobs")
+        jobs_channel = _expected_queue_channel("transition_contract", "jobs")
+        listener.unregister_queue("jobs")
+        time.sleep(0.05)
+        assert f'UNLISTEN "{jobs_channel}"' not in connection.statements
+        listener.unregister_queue("jobs")
+        drive_until(
+            lambda: f'UNLISTEN "{jobs_channel}"' in connection.statements,
+            timeout=1.0,
+            interval=0.005,
+            message="last unregister did not UNLISTEN the queue channel",
+            diagnostics=lambda: {"statements": list(connection.statements)},
+        )
+        assert listener.register_queue("jobs") == (0, 0)
+        assert connection.statements[-1] == f'LISTEN "{jobs_channel}"'
+
+
+def _listener_subscription_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _started_listener(monkeypatch, startup_timeout=0.1) as (
+        listener,
+        connection,
+    ):
+        gate = threading.Event()
+        connection.execute_gate = gate
+        try:
+            with pytest.raises(
+                pg_runner_module.OperationalError,
+                match="did not subscribe",
+            ):
+                listener.register_queue("jobs")
+            assert listener._queue_refcounts == {}
+            assert listener._conditions == {}
+            with pytest.raises(
+                pg_runner_module.OperationalError,
+                match="did not subscribe",
+            ):
+                listener.register_queue_set(("alpha", "beta"))
+            assert listener._queue_refcounts == {}
+            assert listener._fan_in_entries == {}
+        finally:
+            gate.set()
+
+
+def _listener_resubscribes_during_unlisten(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _started_listener(monkeypatch) as (listener, connection):
+        listener.register_queue("jobs")
+        jobs_channel = _expected_queue_channel("transition_contract", "jobs")
+        gate = threading.Event()
+        connection.gated_prefix = "UNLISTEN"
+        connection.execute_gate = gate
+        results: list[tuple[int, int]] = []
+        thread: threading.Thread | None = None
+        try:
+            listener.unregister_queue("jobs")
+            drive_until(
+                lambda: connection.gated_statement is not None,
+                timeout=1.0,
+                interval=0.005,
+                message="UNLISTEN did not start",
+                diagnostics=lambda: {"statements": list(connection.statements)},
+            )
+            reached_wait = threading.Event()
+            original_wait = listener._subscription_changed.wait
+
+            def observed_wait(timeout: float | None = None) -> bool:
+                reached_wait.set()
+                return original_wait(timeout)
+
+            monkeypatch.setattr(listener._subscription_changed, "wait", observed_wait)
+            thread = threading.Thread(
+                target=lambda: results.append(listener.register_queue("jobs"))
+            )
+            thread.start()
+            # The in-flight UNLISTEN already left the committed set, so the
+            # registrant must reach the subscription wait while UNLISTEN is
+            # still gated, instead of returning on the fast path.
+            assert reached_wait.wait(1.0), "registrant took the fast path"
+            assert not gate.is_set()
+            assert results == []
+        finally:
+            gate.set()
+            if thread is not None:
+                thread.join(timeout=1.0)
+        assert results == [(0, 0)]
+        assert connection.statements[-2:] == [
+            f'UNLISTEN "{jobs_channel}"',
+            f'LISTEN "{jobs_channel}"',
+        ]
+
+
+def _listener_subscription_interrupt_unwinds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _started_listener(monkeypatch) as (listener, connection):
+        # Another waiter keeps the listener and its own subscription alive.
+        assert listener.register_queue("anchor") == (0, 0)
+        gate = threading.Event()
+        connection.gated_prefix = "LISTEN"
+        connection.execute_gate = gate
+        reached_wait = threading.Event()
+
+        def interrupted_wait(timeout: float | None = None) -> bool:
+            del timeout
+            reached_wait.set()
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(listener._subscription_changed, "wait", interrupted_wait)
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                listener.register_queue("jobs")
+            assert reached_wait.is_set()
+            reached_wait.clear()
+            with pytest.raises(KeyboardInterrupt):
+                listener.register_queue_set(("alpha", "beta"))
+            assert reached_wait.is_set()
+            assert listener._queue_refcounts == {"anchor": 1}
+            assert set(listener._conditions) == {"anchor"}
+            assert set(listener._versions) == {"anchor"}
+            assert listener._fan_in_entries == {}
+        finally:
+            gate.set()
+        orphaned = [
+            _expected_queue_channel("transition_contract", name)
+            for name in ("jobs", "alpha", "beta")
+        ]
+        anchor_channel = _expected_queue_channel("transition_contract", "anchor")
+
+        def settled() -> bool:
+            with listener._lock:
+                return (
+                    listener._subscription_applied == listener._subscription_requested
+                    and listener._listening == {anchor_channel}
+                )
+
+        drive_until(
+            settled,
+            timeout=1.0,
+            interval=0.005,
+            message="interrupted registrations were not unsubscribed",
+            diagnostics=lambda: {
+                "statements": list(connection.statements),
+                "listening": sorted(listener._listening),
+            },
+        )
+        executed = [
+            statement
+            for batch in connection.statements
+            for statement in batch.split("; ")
+        ]
+        for channel in orphaned:
+            mentions = [
+                statement for statement in executed if f'"{channel}"' in statement
+            ]
+            # Never subscribed, or the last word on the channel is UNLISTEN.
+            assert not mentions or mentions[-1] == f'UNLISTEN "{channel}"'
+
+
+def _listener_registers_after_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _started_listener(monkeypatch) as (listener, connection):
+        connection.fail(RuntimeError("notification read failed"))
+        drive_until(
+            lambda: listener._error is not None,
+            timeout=1.0,
+            interval=0.005,
+            message="listener transition did not become observable",
+            diagnostics=lambda: {"error": repr(listener._error)},
+        )
+        started = time.monotonic()
+        queue_version, wildcard_version = listener.register_queue("jobs")
+        assert time.monotonic() - started < 0.5
+        with pytest.raises(RuntimeError, match="notification read failed"):
+            listener.wait(
+                queue_name="jobs",
+                stop_event=threading.Event(),
+                timeout=0.1,
+                last_queue_version=queue_version,
+                last_wildcard_version=wildcard_version,
+            )
 
 
 def _listener_close_stops_wait(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -499,6 +756,66 @@ PG_LISTENER_TRANSITIONS = (
         effects="removes condition, version, and refcount; duplicate close is a no-op",
         expected_result="no jobs registration remains",
         payload=_listener_unregisters_last_reference,
+    ),
+    TransitionCase(
+        transition_id="SUBSCRIBE-QUEUE",
+        start_state="ready without a jobs channel subscription",
+        event="jobs is registered alone, again, and inside a jobs/beta fan-in",
+        guard="the queue channel is not yet committed on the listener session",
+        next_state="ready LISTENing the jobs and beta queue channels",
+        effects="the listener thread LISTENs each new queue channel once",
+        expected_result="registration returns only after its LISTEN executed",
+        payload=_listener_subscribes_queue,
+    ),
+    TransitionCase(
+        transition_id="UNSUBSCRIBE-LAST",
+        start_state="ready with two jobs references and a LISTENed jobs channel",
+        event="both jobs registrations close, then jobs registers again",
+        guard="UNLISTEN only when no registered queue maps to the channel",
+        next_state="ready LISTENing the jobs channel again",
+        effects="UNLISTEN follows the last release; re-registration re-LISTENs",
+        expected_result="no UNLISTEN while a reference remains",
+        payload=_listener_unsubscribes_last_queue,
+    ),
+    TransitionCase(
+        transition_id="RESUBSCRIBE-DURING-UNLISTEN",
+        start_state="ready with the jobs channel UNLISTEN in flight",
+        event="jobs registers again before that UNLISTEN completes",
+        guard="a channel leaves the committed set before its UNLISTEN executes",
+        next_state="ready LISTENing the jobs channel again",
+        effects="the registrant waits for the next pass, which re-LISTENs",
+        expected_result="registration returns only after the new LISTEN",
+        payload=_listener_resubscribes_during_unlisten,
+    ),
+    TransitionCase(
+        transition_id="SUBSCRIBE-TIMEOUT",
+        start_state="ready with a stalled subscription transport",
+        event="a queue or queue set registers",
+        guard="the subscription is not acknowledged before the startup timeout",
+        next_state="ready without the rolled-back registrations",
+        effects="removes the registration's refcounts, conditions and fan-in entry",
+        expected_result="OperationalError identifies the missing subscription",
+        payload=_listener_subscription_times_out,
+    ),
+    TransitionCase(
+        transition_id="SUBSCRIBE-INTERRUPTED",
+        start_state="ready with another registration and a stalled LISTEN",
+        event="a queue or queue set registration is interrupted in its wait",
+        guard="the subscription wait raises a BaseException",
+        next_state="ready with only the other registration",
+        effects="unwinds refcounts, conditions and the fan-in entry; reconciles",
+        expected_result="the interruption propagates and no phantom remains",
+        payload=_listener_subscription_interrupt_unwinds,
+    ),
+    TransitionCase(
+        transition_id="REGISTER-AFTER-FAILURE",
+        start_state="failed",
+        event="a queue registers",
+        guard="the listener thread has stored a failure and exited",
+        next_state="failed with jobs registered",
+        effects="registration does not wait for a subscription that cannot happen",
+        expected_result="the stored failure reaches the next wait",
+        payload=_listener_registers_after_failure,
     ),
     TransitionCase(
         transition_id="STOP-WAIT",

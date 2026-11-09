@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import os
+import selectors
+import socket
 import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -21,7 +23,7 @@ from simplebroker._runner import SetupPhase
 
 from ._connection_owner import _owner
 from ._failure_order import capture_ordinary_pg_cleanup
-from ._identifiers import activity_channel_name
+from ._identifiers import activity_channel_name, queue_activity_channel_name
 from .validation import quote_ident
 
 # The listener owns one separate connection, so the default bounds each active
@@ -269,8 +271,23 @@ def _invalidates_bootstrap(exc: psycopg.Error) -> bool:
     return sqlstate in {"3F000", "42P01"}
 
 
+_LISTENER_POLL_INTERVAL = 0.1
+"""Longest listener wait slice; bounds stop observation without a wake byte."""
+
+
 class _SharedActivityListener:
-    """Process-local LISTEN worker shared by pg watchers for one schema."""
+    """Process-local LISTEN worker shared by pg watchers for one schema.
+
+    State machine ``SM-PG-LISTENER`` (docs/implementation/07). The listener
+    thread is the only user of its connection. From startup it LISTENs the
+    schema channel, which carries the ``*`` wildcard and notifications from
+    writers that predate per-queue channels. For every registered queue it
+    also LISTENs that queue's channel; registration returns only after that
+    LISTEN committed, so every write committed afterwards reaches this
+    session. Routing stays payload-based, so channel collisions and
+    schema-channel traffic cannot wake an unregistered queue.
+    Plan: docs/plans/2026-11-08-pg-notify-fanout-plan.md.
+    """
 
     def __init__(
         self,
@@ -280,8 +297,10 @@ class _SharedActivityListener:
         startup_timeout: float = 5.0,
     ) -> None:
         self._dsn = dsn
+        self._schema = schema
         self._connection_kwargs = _owner.capture()
         self._channel = activity_channel_name(schema)
+        self._subscription_timeout = startup_timeout
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
         self._conditions: dict[str, threading.Condition] = {}
@@ -290,15 +309,33 @@ class _SharedActivityListener:
         self._fan_in_entries: dict[int, _FanInWaiterEntry] = {}
         self._next_fan_in_id = 0
         self._wildcard_version = 0
+        # Queue-channel subscriptions. Registrants advance the requested
+        # generation; the listener thread publishes the generation it applied.
+        # ``_listening`` holds channels whose LISTEN committed and whose
+        # UNLISTEN has not started, so it alone may justify the fast path.
+        self._queue_channels: dict[str, str] = {}
+        self._listening: set[str] = set()
+        self._subscription_requested = 0
+        self._subscription_applied = 0
+        self._subscription_changed = threading.Condition(self._lock)
         self._ready = threading.Event()
         self._conn: psycopg.Connection[Any] | None = None
         self._error: Exception | None = None
+        # The listener thread owns and closes both ends after it starts.
+        self._wake_reader, self._wake_writer = socket.socketpair()
+        self._wake_reader.setblocking(False)
+        self._wake_writer.setblocking(False)
         self._thread = threading.Thread(
             target=self._run,
             name=f"simplebroker-pg-listener-{self._channel}",
             daemon=True,
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except BaseException:
+            self._wake_reader.close()
+            self._wake_writer.close()
+            raise
         if not self._ready.wait(timeout=startup_timeout):
             self.close()
             raise OperationalError("Postgres activity listener did not start")
@@ -309,6 +346,7 @@ class _SharedActivityListener:
             raise OperationalError(str(self._error)) from self._error
 
     def _run(self) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-019] exception
+        selector: selectors.BaseSelector | None = None
         try:
             conn = psycopg.connect(
                 self._dsn, autocommit=True, **self._connection_kwargs
@@ -316,15 +354,19 @@ class _SharedActivityListener:
             self._conn = conn
             with conn.cursor() as cur:
                 cur.execute(f"LISTEN {quote_ident(self._channel)}")
+            selector = selectors.DefaultSelector()
+            selector.register(conn.fileno(), selectors.EVENT_READ)
+            selector.register(self._wake_reader, selectors.EVENT_READ)
             self._ready.set()
 
             while not self._stop_event.is_set():
-                # A single commit can emit several notifications (rename fires
-                # old + new), and psycopg drains them into one batch. Consume the
-                # whole batch each pass: breaking early closes the generator and
-                # discards notifications already pulled from libpq but not yet
-                # yielded, so those waiters would never wake.
-                for notify in conn.notifies(timeout=0.1, stop_after=64):
+                self._apply_subscriptions(conn)
+                # One pass drains psycopg's backlog (notifications received
+                # during a LISTEN) and polls once without blocking. A single
+                # commit can emit several notifications (rename fires old +
+                # new); consume the whole batch, because closing the generator
+                # early discards notifications already pulled from libpq.
+                for notify in conn.notifies(timeout=0):
                     with self._lock:
                         if notify.payload == "*":
                             self._wildcard_version += 1
@@ -338,6 +380,9 @@ class _SharedActivityListener:
                             for entry in self._fan_in_entries.values():
                                 if notify.payload in entry.queue_set:
                                     entry.condition.notify_all()
+                for key, _mask in selector.select(timeout=_LISTENER_POLL_INTERVAL):
+                    if key.fileobj is self._wake_reader:
+                        self._drain_wake()
         except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-004] exception
             if not self._stop_event.is_set():
                 self._error = exc
@@ -347,21 +392,111 @@ class _SharedActivityListener:
                         condition.notify_all()
                     for entry in self._fan_in_entries.values():
                         entry.condition.notify_all()
+                    self._subscription_changed.notify_all()
         finally:
             self._ready.set()
+            if selector is not None:
+                selector.close()
             if self._conn is not None:
                 with contextlib.suppress(Exception):
                     self._conn.close()
+            self._wake_reader.close()
+            self._wake_writer.close()
+
+    def _apply_subscriptions(self, conn: psycopg.Connection[Any]) -> None:
+        """Reconcile queue-channel LISTENs with registrations (listener thread)."""
+        with self._lock:
+            requested = self._subscription_requested
+            if requested == self._subscription_applied:
+                return
+            desired = set(self._queue_channels.values())
+            to_listen = sorted(desired - self._listening)
+            to_unlisten = sorted(self._listening - desired)
+            # Leave the committed set before UNLISTEN runs so a concurrent
+            # registrant cannot take the fast path on a closing subscription.
+            self._listening.difference_update(to_unlisten)
+        statements = [f"UNLISTEN {quote_ident(channel)}" for channel in to_unlisten]
+        statements.extend(f"LISTEN {quote_ident(channel)}" for channel in to_listen)
+        if statements:
+            # One simple-protocol batch: one implicit transaction per pass.
+            with conn.cursor() as cur:
+                cur.execute("; ".join(statements))
+        with self._lock:
+            self._listening.update(to_listen)
+            self._subscription_applied = requested
+            self._subscription_changed.notify_all()
+
+    def _drain_wake(self) -> None:
+        with contextlib.suppress(BlockingIOError, InterruptedError):
+            while self._wake_reader.recv(4096):
+                pass
+
+    def _wake(self) -> None:
+        # Coalescing and best effort: a full buffer already guarantees a wake,
+        # and a closed socket means the listener thread has exited.
+        with contextlib.suppress(OSError):
+            self._wake_writer.send(b"\0")
+
+    def _request_subscriptions_locked(self) -> int:
+        self._subscription_requested += 1
+        return self._subscription_requested
+
+    def _await_subscriptions(self, generation: int) -> bool:
+        """Wait until the listener applied ``generation``.
+
+        Returns ``False`` only on timeout. A stopped or failed listener
+        returns ``True`` at once: its next ``wait()`` reports that state.
+        """
+        self._wake()
+        deadline = time.monotonic() + self._subscription_timeout
+        with self._lock:
+            while (
+                self._subscription_applied < generation
+                and self._error is None
+                and not self._stop_event.is_set()
+                and self._thread.is_alive()
+            ):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._subscription_changed.wait(timeout=remaining)
+            return True
+
+    def _register_queue_locked(self, queue_name: str) -> bool:
+        """Count one reference; return whether its channel needs a LISTEN."""
+        refcount = self._queue_refcounts.get(queue_name, 0)
+        self._queue_refcounts[queue_name] = refcount + 1
+        if refcount == 0:
+            self._conditions[queue_name] = threading.Condition(self._lock)
+            self._versions[queue_name] = 0
+            self._queue_channels[queue_name] = queue_activity_channel_name(
+                self._schema, queue_name
+            )
+        return self._queue_channels[queue_name] not in self._listening
 
     def register_queue(self, queue_name: str) -> tuple[int, int]:
-        """Register a waiter queue and return its current notification versions."""
+        """Register a waiter queue and return its current notification versions.
+
+        Versions are captured before the subscription is awaited, so a
+        notification routed while it is pending counts as activity.
+        """
         with self._lock:
-            refcount = self._queue_refcounts.get(queue_name, 0)
-            self._queue_refcounts[queue_name] = refcount + 1
-            if refcount == 0:
-                self._conditions[queue_name] = threading.Condition(self._lock)
-                self._versions[queue_name] = 0
-            return self._versions[queue_name], self._wildcard_version
+            needs_listen = self._register_queue_locked(queue_name)
+            versions = self._versions[queue_name], self._wildcard_version
+            if not needs_listen:
+                return versions
+            generation = self._request_subscriptions_locked()
+        try:
+            subscribed = self._await_subscriptions(generation)
+        except BaseException:
+            # Any interruption (including KeyboardInterrupt) leaves no owner
+            # for this reference; unwind it so the channel can be UNLISTENed.
+            self.unregister_queue(queue_name)
+            raise
+        if not subscribed:
+            self.unregister_queue(queue_name)
+            raise OperationalError("Postgres activity listener did not subscribe")
+        return versions
 
     def unregister_queue(self, queue_name: str) -> None:
         """Release a waiter queue registration."""
@@ -374,9 +509,12 @@ class _SharedActivityListener:
                 return
             condition = self._conditions.pop(queue_name, None)
             self._versions.pop(queue_name, None)
+            self._queue_channels.pop(queue_name, None)
             del self._queue_refcounts[queue_name]
             if condition is not None:
                 condition.notify_all()
+            self._request_subscriptions_locked()
+        self._wake()
 
     def register_queue_set(
         self, queue_names: tuple[str, ...]
@@ -393,10 +531,24 @@ class _SharedActivityListener:
             self._fan_in_entries[fan_in_id] = entry
 
             versions: dict[str, int] = {}
+            needs_listen = False
             for queue_name in queue_names:
-                queue_version, _ = self.register_queue(queue_name)
-                versions[queue_name] = queue_version
-            return fan_in_id, versions, self._wildcard_version
+                needs_listen = self._register_queue_locked(queue_name) or needs_listen
+                versions[queue_name] = self._versions[queue_name]
+            wildcard_version = self._wildcard_version
+            if not needs_listen:
+                return fan_in_id, versions, wildcard_version
+            generation = self._request_subscriptions_locked()
+        try:
+            subscribed = self._await_subscriptions(generation)
+        except BaseException:
+            # Same ownership rule as register_queue: no waiter will release it.
+            self.unregister_queue_set(fan_in_id)
+            raise
+        if not subscribed:
+            self.unregister_queue_set(fan_in_id)
+            raise OperationalError("Postgres activity listener did not subscribe")
+        return fan_in_id, versions, wildcard_version
 
     def unregister_queue_set(self, fan_in_id: int) -> None:
         """Release one fan-in waiter registration."""
@@ -504,6 +656,7 @@ class _SharedActivityListener:
 
     def close(self) -> None:
         self._stop_event.set()
+        self._wake()
         if self._conn is not None:
             with contextlib.suppress(Exception):
                 self._conn.close()
@@ -512,6 +665,7 @@ class _SharedActivityListener:
                 condition.notify_all()
             for entry in self._fan_in_entries.values():
                 entry.condition.notify_all()
+            self._subscription_changed.notify_all()
         self._thread.join(timeout=1.0)
 
 
@@ -584,9 +738,14 @@ class PostgresActivityWaiter:
         self._stop_event = stop_event
         self._listener = _activity_registry.acquire(dsn, schema=schema)
         self._closed = False
-        self._last_queue_version, self._last_wildcard_version = (
-            self._listener.register_queue(queue_name)
-        )
+        try:
+            self._last_queue_version, self._last_wildcard_version = (
+                self._listener.register_queue(queue_name)
+            )
+        except BaseException:
+            # Registration failed and rolled itself back; release our reference.
+            _activity_registry.release(dsn, schema=schema)
+            raise
 
     def wait(self, timeout: float) -> bool:
         """Wait for a relevant queue notification until timeout expires."""
@@ -651,11 +810,16 @@ class PostgresMultiQueueActivityWaiter:
         self._stop_event = stop_event
         self._listener = _activity_registry.acquire(dsn, schema=schema)
         self._closed = False
-        (
-            self._fan_in_id,
-            self._last_queue_versions,
-            self._last_wildcard_version,
-        ) = self._listener.register_queue_set(queue_names)
+        try:
+            (
+                self._fan_in_id,
+                self._last_queue_versions,
+                self._last_wildcard_version,
+            ) = self._listener.register_queue_set(queue_names)
+        except BaseException:
+            # Registration failed and rolled itself back; release our reference.
+            _activity_registry.release(dsn, schema=schema)
+            raise
 
     def wait(self, timeout: float) -> bool:
         """Wait for any watched queue notification until timeout expires."""
