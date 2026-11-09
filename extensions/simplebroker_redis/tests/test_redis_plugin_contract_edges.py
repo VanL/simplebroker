@@ -367,6 +367,54 @@ def test_activity_registry_releases_only_owned_reference() -> None:
     assert owned.close_calls == 1
 
 
+def test_activity_registry_never_hands_out_a_failed_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeListener(redis_plugin_module._SharedRedisActivityListener):
+        def __init__(self, target: str, namespace: str) -> None:
+            self._target = target
+            self._namespace = namespace
+            self._error: Exception | None = None
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    monkeypatch.setattr(
+        redis_plugin_module,
+        "_SharedRedisActivityListener",
+        FakeListener,
+    )
+    registry = redis_plugin_module._RedisActivityRegistry()
+
+    failed = cast(FakeListener, registry.listener("redis://example/0", "tenant"))
+    assert registry.listener("redis://example/0", "tenant") is failed
+    failed._error = RuntimeError("Connection closed by server.")
+
+    replacement = cast(
+        FakeListener,
+        registry.listener("redis://example/0", "tenant"),
+    )
+    assert replacement is not failed
+    assert registry.listener("redis://example/0", "tenant") is replacement
+
+    # Both holders of the failed listener release it. That must neither count
+    # against the replacement nor close the failed listener: its thread owns
+    # closing its Pub/Sub connection after publishing the failure, and closing
+    # it here would turn the stored failure into quiet wait results for holders
+    # that have not observed it yet.
+    registry.release(failed)
+    registry.release(failed)
+    assert failed.close_calls == 0
+    assert replacement.close_calls == 0
+
+    registry.release(replacement)
+    assert replacement.close_calls == 0
+    registry.release(replacement)
+    assert replacement.close_calls == 1
+    assert registry._listeners == {}
+
+
 def test_activity_registry_holds_listener_across_lookup_register_gap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -377,6 +425,7 @@ def test_activity_registry_holds_listener_across_lookup_register_gap(
         def __init__(self, target: str, namespace: str) -> None:
             self._target = target
             self._namespace = namespace
+            self._error: Exception | None = None
             self.registrations = 0
             self.register_calls = 0
             self.close_calls = 0

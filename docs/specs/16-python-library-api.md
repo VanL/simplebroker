@@ -1449,6 +1449,10 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
   repairs `BaseWatcher` retry limits under [SB-API-6], which does not specify
   them; no normative API change.
 
+- [Redis listener failure recovery](../plans/2026-11-08-redis-listener-failure-recovery-plan.md):
+  a failed shared Redis Pub/Sub listener is replaced instead of reused, so
+  watcher retry recovers under the existing [SB-API-6] waiter contract; no
+  normative API change.
 - [Core finalizer cleanup ownership](../plans/2026-10-14-core-finalizer-ownership-plan.md):
   repair borrowed SQL cleanup under the existing [SB-API-3], [SB-API-7] and
   [SB-API-11] ownership

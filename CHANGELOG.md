@@ -87,6 +87,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing error logged when retries are exhausted, it is not controlled by
   `BROKER_LOGGING_ENABLED`; an application that has not configured logging,
   such as `broker watch`, shows it on stderr.
+- `simplebroker-redis`: when the server closes the shared Pub/Sub listener
+  connection (for example a server restart, failover or `CLIENT KILL`), waiters
+  on that listener still raise `OperationalError`, but the next waiter gets a
+  new listener instead of the failed one. A watcher's ordinary retry therefore
+  wakes on later writes again; previously every retry reused the failed
+  listener until the watcher exhausted its retries and stopped. Recovery happens
+  within the watcher's per-streak retry limits described above.
 
 ## [8.7.2] - 2026-10-14
 

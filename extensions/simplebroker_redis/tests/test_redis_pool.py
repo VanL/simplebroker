@@ -509,6 +509,7 @@ def test_shared_activity_registry_is_pid_scoped(
         def __init__(self, target: str, namespace: str) -> None:
             self._target = target
             self._namespace = namespace
+            self._error: Exception | None = None
             self.closed = False
 
         def close(self) -> None:

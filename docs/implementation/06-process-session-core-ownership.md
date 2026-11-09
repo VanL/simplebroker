@@ -393,6 +393,26 @@ has one LISTEN connection. Closing the replaced listener from the registry
 would also turn the stored failure into quiet wait results for holders that
 have not observed it yet. Plan: `2026-11-08-pg-listener-failure-recovery-plan.md`.
 
+The Redis registry never hands out a listener whose thread has published a
+failure (for example, the server closed its Pub/Sub connection). The next
+acquire creates a replacement under the same key. Holders of the failed
+listener keep it, see the stored failure on their next wait, and recover only
+by acquiring again: the watcher's ordinary retry creates a new waiter, whose
+initial drain covers writes made while no subscription existed. The listener
+does not reconnect in place. Its Pub/Sub connection comes from
+`redis.Redis.from_url()`, whose pooled connections carry no driver retry, so
+redis-py re-raises the first read failure; and a silent resubscription would
+hide the fire-and-forget delivery gap from waiters that believe they were
+continuously subscribed. Release is identity-checked, so releasing a replaced
+listener is a no-op that never counts against its replacement. The registry
+does not close a replaced listener. Its cleanup is listener-owned and eventual:
+the thread publishes the failure, then closes its Pub/Sub connection in its
+`finally`, possibly after a replacement was handed out, so the steady-state
+connection budget (one live listener per key) is unchanged. Closing it from the
+registry would turn the stored failure into quiet wait results for holders that
+have not observed it yet. Plan:
+`2026-11-08-redis-listener-failure-recovery-plan.md`.
+
 ### Fork recovery before process-owned locks
 
 Every process-owned state holder checks its PID before acquiring an inherited
@@ -703,6 +723,9 @@ real PostgreSQL in `extensions/simplebroker_pg/tests/test_pg_project_admission.p
 - active: 2026-11-08-pg-listener-failure-recovery-plan — the PostgreSQL
   activity registry replaces a failed shared listener instead of handing it
   out again; release is identity-checked.
+- active: 2026-11-08-redis-listener-failure-recovery-plan — the Redis activity
+  registry replaces a failed shared Pub/Sub listener instead of handing it out
+  again.
 
 - retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`; SQL
   alias/meta fork rejection before operation and poison mutexes; see the
