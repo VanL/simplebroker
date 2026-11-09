@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Watchers apply their retry limits per failure streak. Once a watcher has
+  started and drained successfully, its next failure starts a new streak with a
+  fresh retry count and a fresh five-minute budget timed from that failure.
+  Previously the budget ran from the start of the watcher run and the count
+  never reset, so a watcher running for more than five minutes stopped with
+  `TimeoutError` on its first transient error (for example a PostgreSQL
+  restart), and any watcher stopped on its third error even after recovering
+  from the first two. Within one streak the limits are unchanged: three
+  consecutive failures, or five minutes from run start for the first streak,
+  end the run. A failure that recurs after every successful restart now keeps
+  the watcher restarting every two seconds instead of ending the run.
+
 ## [8.7.2] - 2026-10-14
 
 SimpleBroker 8.7.2, `simplebroker-pg` 4.7.2, and `simplebroker-redis` 4.7.2

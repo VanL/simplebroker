@@ -848,8 +848,8 @@ class BaseWatcher(ABC):
         """Check if retry timeout has been exceeded.
 
         Args:
-            start_time: Time when retries started
-            retry_count: Current retry attempt number
+            start_time: Time when the current failure streak started
+            retry_count: Failures so far in the current streak
 
         Raises:
             TimeoutError: If maximum retry time exceeded
@@ -941,15 +941,24 @@ class BaseWatcher(ABC):
     def _run_with_retries(self, max_retries: int = 3) -> None:
         """Run the watcher with retry logic.
 
+        Retry limits apply per failure streak: the consecutive failed attempts
+        since the watcher was last established (strategy start and initial
+        drain both succeeded). Within one streak the run ends after
+        ``max_retries`` failures or ``MAX_TOTAL_RETRY_TIME`` seconds. The first
+        streak is timed from run start; a later streak is timed from the
+        failure that opened it, so an established watcher's uptime never
+        counts against its recovery.
+
         Args:
-            max_retries: Maximum number of retry attempts
+            max_retries: Maximum number of failures in one failure streak
         """
         retry_count = 0
-        start_time = _monotonic()
+        streak_start = _monotonic()
+        established = False
 
         while retry_count < max_retries:
-            # Check absolute timeout
-            self._check_retry_timeout(start_time, retry_count)
+            # Check the current failure streak's absolute timeout
+            self._check_retry_timeout(streak_start, retry_count)
 
             try:
                 self._check_stop()
@@ -964,6 +973,11 @@ class BaseWatcher(ABC):
                 finally:
                     self._in_initial_drain = False
                 self._check_stop()
+
+                # Established: the failure streak, if any, is over. The next
+                # failure opens a new streak with fresh retry limits.
+                retry_count = 0
+                established = True
 
                 # Main processing loop
                 self._process_messages()
@@ -982,6 +996,9 @@ class BaseWatcher(ABC):
                 # Propagate KeyboardInterrupt so callers can handle it specifically
                 raise
             except Exception as e:
+                if established:
+                    streak_start = _monotonic()
+                    established = False
                 retry_count += 1
                 should_retry = self._handle_retry(e, retry_count, max_retries)
                 if retry_count >= max_retries:
