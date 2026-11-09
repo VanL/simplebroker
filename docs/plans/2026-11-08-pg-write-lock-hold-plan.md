@@ -3,7 +3,7 @@
 Class: 4 — changes the PostgreSQL execution path of every ordinary generated
 write, adds a second realization of the shared SQL write behavior behind an
 optional backend seam, and touches lock ordering that other mutations depend on.
-Status: active — implemented on branch `perf/sb-write-lock`; Codex round 1 (blocker F1, plus F2) and round 2 (F3) fixed; F3 verified PASS by Codex round 3 (2026-11-08); owner decision on the merged-statement exception row pending.
+Status: active — implemented on branch `perf/sb-write-lock`; Codex round 1 (blocker F1, plus F2) and round 2 (F3) fixed; F3 verified PASS by Codex round 3 (2026-11-08); owner accepted the merged-statement exception row (2026-11-09).
 Owner: SimpleBroker message-identity layer (`simplebroker/db.py`, `simplebroker/_timestamp.py`) and the PostgreSQL backend (`extensions/simplebroker_pg/`).
 Boundary: ordinary `write()` without `keep_newest` on PostgreSQL. SQLite, Redis, `keep_newest`, exact insert, broadcast, rename, standalone `generate_timestamp()`, and conflict repair keep their current realization.
 Verification: real-PostgreSQL concurrency, lock-order, exhaustion, atomicity and fallback tests; shared suites on SQLite and PostgreSQL; probe and repository benchmark against disposable `postgres:18`.
@@ -221,7 +221,7 @@ Comprehension questions (expected answers; a wrong answer blocks editing):
 
 | (Review F1) A non-contention failure while a PostgreSQL ordinary write waits for or takes the high-water row lock raises `TimestampError(outcome_ambiguous=True)` with the `OperationalError` as cause, as the shared transaction's compare-and-advance does; commit `7a14692` had let it escape as `OperationalError` | N — restores the base public behavior | [THEORY-4] explicit safety |
 | (Review F1) Retryable contention on the row lock (deadlock, `lock_timeout`, serialization failure) is retried for the timestamp budget and then raises `TimestampError(outcome_ambiguous=False)`, the `_store_if_greater` contract. On base PostgreSQL that retry re-ran the advance inside the already-aborted transaction and so reported `TimestampError(outcome_ambiguous=True)` immediately | C — the documented contention contract now holds on PostgreSQL; a known rollback is no longer reported as ambiguous | [THEORY-4] |
-| (Review F1) A server-side `OperationalError` raised inside the merged allocate-and-insert statement (after the row lock is held, for example a statement timeout or connection loss there) propagates as `OperationalError`, the shared transaction's insert-phase behavior; on base the advance `UPDATE` and the `INSERT` were separate, so such a failure inside the `UPDATE` (rare once the lock is held) was a `TimestampError` | A — pending owner decision; the merged statement cannot attribute the failure more finely, and the reachable failures there are insert-phase in kind | [THEORY-4] |
+| (Review F1) A server-side `OperationalError` raised inside the merged allocate-and-insert statement (after the row lock is held, for example a statement timeout or connection loss there) propagates as `OperationalError`, the shared transaction's insert-phase behavior; on base the advance `UPDATE` and the `INSERT` were separate, so such a failure inside the `UPDATE` (rare once the lock is held) was a `TimestampError` | A — owner accepted 2026-11-09 ("This is fine."); the merged statement cannot attribute the failure more finely, and the reachable failures there are insert-phase in kind | [THEORY-4] |
 
 No D (diminution) rows.
 
