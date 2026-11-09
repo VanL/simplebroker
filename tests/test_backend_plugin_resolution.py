@@ -8,6 +8,7 @@ import select
 import signal
 import sys
 import threading
+import weakref
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Self
@@ -459,6 +460,57 @@ def test_forked_child_queue_does_not_reuse_parent_plugin_state(
     try:
         assert held.wait(5.0)
         _assert_fork_child_succeeds(child_queue_creates_waiter)
+    finally:
+        release.set()
+        holder.join(timeout=5.0)
+    assert not holder.is_alive()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_forked_child_never_finalizes_inherited_plugins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dropping the memo in a fork child must not release inherited plugins.
+
+    The memo holds the plugin's only reference, and the plugin's finalizer
+    takes a lock that a parent thread holds at fork time. Releasing that
+    reference in the child's fork hook would run the finalizer there, before
+    ``os.fork()`` returns in the child, and block on the inherited lock.
+    """
+    finalizer_lock = threading.Lock()
+    finalized = threading.Event()
+
+    class FinalizingPlugin(ValidDummyPlugin):
+        name = "finalizing"
+
+        def __del__(self) -> None:
+            with finalizer_lock:
+                finalized.set()
+
+    _use_entry_points(
+        monkeypatch,
+        CountingEntryPoints(EntryPointStub("finalizing", FinalizingPlugin)),
+    )
+    retained = weakref.ref(get_backend_plugin("finalizing"))
+    # Only the memo keeps the plugin alive.
+    assert retained() is not None
+    assert not finalized.is_set()
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_finalizer_lock() -> None:
+        with finalizer_lock:
+            held.set()
+            release.wait(15.0)
+
+    holder = threading.Thread(target=hold_finalizer_lock)
+    holder.start()
+    try:
+        assert held.wait(5.0)
+        _assert_fork_child_succeeds(
+            lambda: get_backend_plugin("finalizing").name == "finalizing"
+        )
     finally:
         release.set()
         holder.join(timeout=5.0)

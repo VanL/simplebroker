@@ -612,17 +612,25 @@ def resolve_runner_backend_plugin(
 # (monkeypatch), or their stub plugins see and leak memoized resolutions.
 _RESOLVED_ENTRY_POINT_PLUGINS: dict[str, BackendPlugin] = {}
 
+# Memos inherited across fork, kept alive and never read or released. One
+# mapping per fork generation, each holding at most the few backend names its
+# parent resolved, so the retention is bounded by fork depth.
+_INHERITED_RESOLUTIONS: list[dict[str, BackendPlugin]] = []
+
 
 def _forget_resolutions_after_fork() -> None:
     """Give a fork child no retained resolutions [SB-API-11].
 
     A plugin object created by the parent's lookup may own locks or resources
     that parent threads hold at fork time; the child resolves afresh instead,
-    as it did before resolutions were retained. Rebinding never touches the
-    inherited mapping.
+    as it did before resolutions were retained. The inherited mapping is kept
+    alive, never released: dropping its last reference here would run a
+    plugin finalizer inside the fork hook, where a parent-held lock blocks the
+    child before ``os.fork()`` returns.
     """
     global _RESOLVED_ENTRY_POINT_PLUGINS
 
+    _INHERITED_RESOLUTIONS.append(_RESOLVED_ENTRY_POINT_PLUGINS)
     _RESOLVED_ENTRY_POINT_PLUGINS = {}
 
 
