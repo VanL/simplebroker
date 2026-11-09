@@ -1560,14 +1560,39 @@ def test_activity_listener_startup_error_raises_immediately(
 def test_activity_listener_startup_timeout_raises_immediately(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def never_ready(self: Any) -> None:
-        del self
+    # Hold the connection dependency, not _run: the real worker must own
+    # startup cancellation and close its wake sockets in its finally block.
+    release_connect = threading.Event()
+    workers: list[threading.Thread] = []
+    sockets: list[Any] = []
+    real_socketpair = pg_runner_module.socket.socketpair
 
-    monkeypatch.setattr(pg_runner_module._SharedActivityListener, "_run", never_ready)
+    def capture_socketpair() -> Any:
+        pair = real_socketpair()
+        sockets.extend(pair)
+        return pair
 
-    with pytest.raises(OperationalError, match="did not start"):
-        pg_runner_module._SharedActivityListener(
-            "dsn",
-            schema="schema",
-            startup_timeout=0.01,
-        )
+    def blocked_connect(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        workers.append(threading.current_thread())
+        assert release_connect.wait(5.0)
+        raise PsycopgOperationalError("cancelled connection")
+
+    monkeypatch.setattr(pg_runner_module.psycopg, "connect", blocked_connect)
+    monkeypatch.setattr(pg_runner_module.socket, "socketpair", capture_socketpair)
+
+    try:
+        with pytest.raises(OperationalError, match="did not start"):
+            pg_runner_module._SharedActivityListener(
+                "dsn",
+                schema="schema",
+                startup_timeout=0.01,
+            )
+    finally:
+        release_connect.set()
+        for worker in workers:
+            worker.join(timeout=5.0)
+            assert not worker.is_alive()
+    assert len(workers) == 1
+    assert len(sockets) == 2
+    assert all(sock.fileno() == -1 for sock in sockets)

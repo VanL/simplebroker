@@ -9,8 +9,8 @@ Required action: complete verification, commit integration, merge into main, rer
 
 ## Goal
 
-- [ ] Record accepted policy decisions and verify SB-4 [30,60) rechecks and idle/churn behavior.
-- [ ] Run baseline full benchmark at 5d29fbf, 36 combinations, three trials each, 100 operations/sample and 100-byte messages.
+- [x] Record accepted policy decisions and verify SB-4 [30,60) rechecks and idle/churn behavior.
+- [x] Run baseline full benchmark at 5d29fbf, 36 combinations, three trials each, 100 operations/sample and 100-byte messages.
 - [ ] Merge all eight feature tips, repair semantic conflicts, verify and land on main.
 - [ ] Run identical full benchmark on merged main, report changes and limitations.
 
@@ -50,3 +50,92 @@ Known hidden couplings are M1/M2, notification rollout and SB-7 recovery wording
 ## Deviation Log
 
 None at plan start.
+
+### Integration evidence, 2026-11-09
+
+Baseline at `5d29fbf`: `bin/benchmark.py --format json` exited 0, with
+36 cells and 108 raw trials (100 operations, 100-byte messages). Python
+3.14.9 and the same main checkout virtualenv are used for both runs;
+PYTHONPATH selects each checkout and both extension sources. A separate
+Weft benchmark was running on the shared host. It was left untouched;
+paired results are descriptive and cannot isolate code effects from host
+load. Raw reports, logs, metadata and execution scripts are retained at
+`/var/folders/m_/2tncpj593tj8s_jdbdhj8g5m0000gn/T/sb-land-9em_la24/`.
+
+Integrated feature tips: SB-1 `f9fab9b`, SB-2 `eb035ec`, SB-3 `8fcceb0`,
+SB-4 `6113bcf` (owner amendment), SB-5 `9071874`, SB-6 `52689b3`,
+SB-7 `128700a` (code unchanged from reviewed `79fa179`), SB-8 `33cfc12`.
+Every tip is an ancestor of the integration checkout. The benchmark-only
+`sb-all` branch was not merged.
+
+SB-4 amendment: four old-policy boundary failures became green; the
+140-test targeted selection passed. Real PostgreSQL 18, eight spawned
+watchers, three quiet cycles each, 146.21-second common window: each kept
+one LISTEN PID, held one or two sessions, and opened three replacement data
+connections after startup. Fully observed data residence was 10.90–18.96 s;
+24 fallback intervals were 31.69–59.59 s. Mean sessions/process was 1.42.
+Cold producer-write-to-handler latency was 20.8–46.6 ms; warm 14.0–28.6 ms.
+The SB-4 plan records rate accounting, sampling uncertainty and limitations.
+
+M1/M2: the uncorrected combination failed six existing tests (wrong notify
+channel, unrelated deliveries, and missing `listener` in constructor rollback
+masking ordinary errors and KeyboardInterrupt). The three-line production
+repair makes all 31 notification/lifecycle cases pass. No new feature or
+public contract was introduced.
+
+Full core plus PG/Redis extension run (`pytest -n4 tests
+extensions/simplebroker_pg/tests extensions/simplebroker_redis/tests`)
+initially yielded 4,971 passed, 25 skipped, two failures. One was an invalid
+ALT evidence provenance label in integration docs. The other was an old
+test replacing the listener worker itself, bypassing the newly owned socket
+cleanup. Its fault injection now blocks the connection dependency while
+real worker startup, timeout and finally cleanup execute; it joins the worker
+and verifies both sockets closed. After both documentation labels were
+corrected, all 84 tests in the two affected modules passed. No concurrency
+setting or timeout assertion was relaxed. Skips are platform-specific and
+explicitly opt-in/serial probes, not silently missing backend services.
+
+Ruff check and format check: 341 files clean. Mypy: 66 source files clean.
+After the test correction, its Ruff checks also passed. DOM-15 fixture,
+plan-context, doc-path and diff-whitespace gates passed.
+
+Tier-1 agy reviews used gemini-4-argon-medium with plan+sandbox and
+self-contained packets, exit 0 / SUCCESS / nonempty response / no denied
+actions. Integration review `f55a5b16-6f82-440a-8f7a-2b93e222e2b9`: no
+blocker, no P1/P2. Follow-up test/docs review
+`0a57a27f-d568-4473-8fbd-2b3c0427105e`: no blocker. Its claim that the
+`historical` provenance prefix was valid was not accepted: the executable
+doc contract required `contemporaneous`, which now passes. Reviewer output
+is evidence to assess, not a substitute for verification.
+
+Documentation integration also removes stale assumptions that Redis silently
+retries this Pub/Sub connection and that PostgreSQL reuses a failed listener.
+Detected failures now surface and obtain a replacement; silent half-open loss
+remains a backstop use case. SB-2 D3 is recorded accepted. Superseded
+listener-plan questions point to SB-7/SB-8; normative expansion and active
+probing remain explicit deferred follow-ups, not part of this landing.
+
+Owner amendment during verification: commit the two pre-existing cleanup
+edits separately. Main commit `4304873` contains only `simplebroker/_scripts.py`
+and `tests/test_dev_scripts.py`, adding anonymous-volume removal to disposable
+service cleanup. Its focused test passed (1 test, `-n4`). That commit is also
+merged into the integration candidate. This supersedes the original instruction
+to leave those edits uncommitted; it does not mix them into a performance commit.
+
+Shared backend verification: PostgreSQL passed 1,830 tests, 14 skipped. The
+initial direct marker selection omitted the runner's `not sqlite_only` clause
+(`simplebroker/_scripts.py::_SHARED_BACKEND_MARKER`). This ran a superset
+on PostgreSQL successfully, but on Redis four SQLite-specific fault-injection
+tests failed because they patch `BrokerCore`, not the Redis core. Redis's
+initial result was 1,820 passed, 20 skipped, four failures. The corrected
+run uses the repository's prescribed `shared and not sqlite_only` selection,
+with the same four workers; no code or test exclusions beyond that existing
+backend boundary were introduced.
+
+Skill evaluation: call-agent's contained self-contained-packet workflow worked;
+the final reviewer still misstated one document grammar detail, caught by the
+existing executable contract. The test-audit guidance to inject at dependency
+boundaries directly informed the listener test repair. Both corrections fit
+existing guidance; no new skill or parallel policy was needed.
+
+Corrected Redis shared suite: 1799 passed, 20 skipped in 127.33s (0:02:07). All selected tests pass.

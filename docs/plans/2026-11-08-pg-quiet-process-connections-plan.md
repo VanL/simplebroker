@@ -511,30 +511,30 @@ receive deadline (`AssertionError: silent: pid=…, exit=None, alive=True`;
 ## 2026-11-09 amendment verification and disposition
 
 The four boundary cases (start/replace × lower/upper draw) failed against
-R60 at the intended timing assertion: actual60.051/120.051 s versus required
-30/60 s. After changing only the PostgreSQL declaration to30.0, all six real
+R60 at the intended timing assertion: actual 60.051/120.051 s versus required
+30/60 s. After changing only the PostgreSQL declaration to 30.0, all six real
 PostgreSQL quiet-connection cases passed. The broader selection
-`pytest -n4 extensions/simplebroker_pg/tests/test_pg_quiet_connections.py
-tests/test_watcher.py tests/test_watcher_transition_tables.py` passed140 tests.
+`pytest -n 4 extensions/simplebroker_pg/tests/test_pg_quiet_connections.py
+tests/test_watcher.py tests/test_watcher_transition_tables.py` passed 140 tests.
 An initial selection named two nonexistent test files and collected nothing
-(exit5); the corrected selection above is the verification evidence. Ruff
+(exit 5); the corrected selection above is the verification evidence. Ruff
 check and format check passed for both changed Python files.
 
-Eight spawned watchers on disposable PostgreSQL18, real R30/max_idle10,
-were sampled every0.2 s over a146.21 s common quiet window. Each retained
+Eight spawned watchers on disposable PostgreSQL 18, real R=30/max_idle=10,
+were sampled every 0.2 s over a 146.21 s common quiet window. Each retained
 one unchanged LISTEN PID, reached listener-only state, and had no more than
-two simultaneous sessions. Across24 completed safety intervals, observed
-spacing was31.69–59.59 s (first entry-to-return, later return-to-return,
+two simultaneous sessions. Across 24 completed safety intervals, observed
+spacing was 31.69–59.59 s (first entry-to-return, later return-to-return,
 including the intervening pending query). Each process opened three replacement
-data connections after its startup connection:24 reconnects across about
-146.2 s per process, approximately1.23 reconnects/process/minute in this
+data connections after its startup connection: 24 reconnects across about
+146.2 s per process, approximately 1.23 reconnects/process/minute in this
 finite, censored observation window. This is not a long-run rate estimate;
-uniform[30,60) predicts about1.33/minute before overhead. Fully observed
-replacement data lifetimes were10.90–18.96 s, with roughly0.2 s sampling
-uncertainty. Mean sessions/process was1.42 (individual means1.34–1.51).
+uniform [30,60) predicts about 1.33/minute before overhead. Fully observed
+replacement data lifetimes were 10.90–18.96 s, with roughly 0.2 s sampling
+uncertainty. Mean sessions/process was 1.42 (individual means 1.34–1.51).
 
 After observing listener-only state, producer-write-to-handler latency was
-20.8–46.6 ms cold, and14.0–28.6 ms for the next write while warm. These
+20.8–46.6 ms cold, and 14.0–28.6 ms for the next write while warm. These
 include producer write and commit, reconnect and handling; they are not
 post-commit latency alone. No task-owned tests or benchmarks ran concurrently.
 The shared host had unrelated Weft workers; these are local measurements,
@@ -544,9 +544,18 @@ not capacity guarantees. Raw samples, events, script and logs are under
 `sb4-green.log`, `sb4-targeted-corrected.log`).
 
 Independent review: agy gemini-4-argon-medium, plan+sandbox, self-contained
-delta and measurement script, exit0/SUCCESS/nonempty response/no denied
+delta and measurement script, exit 0/SUCCESS/nonempty response/no denied
 actions, conversation e92e9bef-9066-4bb4-9ce6-0e9241bf1b17: **no blocker**.
 O1 reconnect accounting, O2 producer-write-to-handler definition and O3
 return-to-return interval definition were reporting observations; all are
 incorporated above. The call-agent procedure worked with a self-contained
 packet after earlier native reads were denied; no permission broadening.
+
+## Integration closure, 2026-11-09
+
+Completed under [the integration plan](2026-11-09-performance-branches-integration-plan.md).
+The owner accepted the recommendations; combined notification/lifecycle
+regressions, core and extension tests, PostgreSQL/Redis shared API tests,
+static/doc gates and independent agy reviews are recorded there. Semantic
+merge repairs preserve this plan's intended behavior. Post-merge benchmark
+reporting remains owned by that integration plan.

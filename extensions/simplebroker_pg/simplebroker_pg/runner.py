@@ -787,7 +787,7 @@ class PostgresActivityWaiter:
             )
         except BaseException:
             # Registration failed and rolled itself back; release our reference.
-            _activity_registry.release(dsn, schema=schema)
+            _activity_registry.release(dsn, schema=schema, listener=self._listener)
             raise
 
     def wait(self, timeout: float) -> bool:
@@ -867,7 +867,7 @@ class PostgresMultiQueueActivityWaiter:
             ) = self._listener.register_queue_set(queue_names)
         except BaseException:
             # Registration failed and rolled itself back; release our reference.
-            _activity_registry.release(dsn, schema=schema)
+            _activity_registry.release(dsn, schema=schema, listener=self._listener)
             raise
 
     def wait(self, timeout: float) -> bool:

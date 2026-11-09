@@ -5,7 +5,7 @@ NOTIFY channel and listener subscription lifecycle), adds rollout-order
 sensitivity for mixed client versions, and changes a background listener
 thread's state machine. No normative spec text changes (no channel layout is
 specified anywhere), so not class 5.
-Status: active — implemented, measured and documented on branch `perf/sb-notify-fanout`; cross-family review passed (round 2); rollout decided by the owner (clean break, 2026-11-08); PostgreSQL ≤ 18 value decided by the owner (accept the client-side gain now; revisit the server-side gain on PostgreSQL 19, 2026-11-08).
+Status: completed — implemented, measured and documented on branch `perf/sb-notify-fanout`; cross-family review passed (round 2); rollout decided by the owner (clean break, 2026-11-08); PostgreSQL ≤ 18 value decided by the owner (accept the client-side gain now; revisit the server-side gain on PostgreSQL 19, 2026-11-08).
 Owner: SimpleBroker product owner; implementation agent for track SB-3.
 Boundary: `extensions/simplebroker_pg` notification SQL, channel identifiers, and the process-local shared activity listener. Core, SQLite, Redis and every public signature are out of scope.
 Verification: real-PostgreSQL wire, wake, race and subscription tests; SM-PG-LISTENER transition table; full PostgreSQL extension suite; lint/format/types; before/after fan-out measurement on disposable `postgres:18`.
@@ -532,3 +532,12 @@ removes its fan-in entry while preserving other owners' references) and
 re-raise. `SUBSCRIBE-INTERRUPTED` is falsifiable: it failed with either
 8e2d7f24 method loaded. Extra public-constructor probes with
 `KeyboardInterrupt`, `SystemExit` and `RuntimeError` passed.
+
+## Integration closure, 2026-11-09
+
+Completed under [the integration plan](2026-11-09-performance-branches-integration-plan.md).
+The owner accepted the recommendations; combined notification/lifecycle
+regressions, core and extension tests, PostgreSQL/Redis shared API tests,
+static/doc gates and independent agy reviews are recorded there. Semantic
+merge repairs preserve this plan's intended behavior. Post-merge benchmark
+reporting remains owned by that integration plan.

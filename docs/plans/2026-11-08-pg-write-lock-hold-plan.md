@@ -3,7 +3,7 @@
 Class: 4 — changes the PostgreSQL execution path of every ordinary generated
 write, adds a second realization of the shared SQL write behavior behind an
 optional backend seam, and touches lock ordering that other mutations depend on.
-Status: active — implemented on branch `perf/sb-write-lock`; Codex round 1 (blocker F1, plus F2) and round 2 (F3) fixed; F3 verified PASS by Codex round 3 (2026-11-08); owner accepted the merged-statement exception row (2026-11-09).
+Status: completed — implemented on branch `perf/sb-write-lock`; Codex round 1 (blocker F1, plus F2) and round 2 (F3) fixed; F3 verified PASS by Codex round 3 (2026-11-08); owner accepted the merged-statement exception row (2026-11-09).
 Owner: SimpleBroker message-identity layer (`simplebroker/db.py`, `simplebroker/_timestamp.py`) and the PostgreSQL backend (`extensions/simplebroker_pg/`).
 Boundary: ordinary `write()` without `keep_newest` on PostgreSQL. SQLite, Redis, `keep_newest`, exact insert, broadcast, rename, standalone `generate_timestamp()`, and conflict repair keep their current realization.
 Verification: real-PostgreSQL concurrency, lock-order, exhaustion, atomicity and fallback tests; shared suites on SQLite and PostgreSQL; probe and repository benchmark against disposable `postgres:18`.
@@ -601,3 +601,12 @@ methods: `2607bf5` one attempt then `StopException`; `7cde031` two attempts
 then an ID. The PostgreSQL regression test was inspected, not rerun, by the
 reviewer (no DSN in its sandbox); the author ran it on postgres:18. Review loop
 closed.
+
+## Integration closure, 2026-11-09
+
+Completed under [the integration plan](2026-11-09-performance-branches-integration-plan.md).
+The owner accepted the recommendations; combined notification/lifecycle
+regressions, core and extension tests, PostgreSQL/Redis shared API tests,
+static/doc gates and independent agy reviews are recorded there. Semantic
+merge repairs preserve this plan's intended behavior. Post-merge benchmark
+reporting remains owned by that integration plan.

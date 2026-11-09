@@ -545,8 +545,11 @@ reopen around every recheck). The recheck exists to recover activity whose
 notification was lost. That loss model belongs to the backend: a live
 PostgreSQL LISTEN session receives every committed NOTIFY, so loss requires an
 undetected listener-session failure or a writer that bypasses SimpleBroker;
-Redis pub/sub resubscribes after a dropped connection and loses messages
-published in the gap. The waiter therefore declares the interval
+Redis Pub/Sub also has no replay for missed notifications. Both backends now
+surface detected listener failures and replace failed listeners when a new
+waiter is acquired; the watcher's restart drain covers that subscription gap.
+A silent half-open connection or a write that bypasses notification still needs
+the data recheck. The waiter therefore declares the interval
 (`safety_recheck_interval`, [SB-API-6]); PostgreSQL declares 30 s
 (`_ACTIVITY_SAFETY_RECHECK_SECONDS`) and Redis keeps the strategy default.
 The two PostgreSQL constants are coupled: the recheck interval must exceed two
@@ -580,13 +583,17 @@ Candidate: Replace `max(1, 10 × max_interval)` with one longer strategy-wide
 constant or configuration key.
 Why plausible: one value, no waiter-facing contract.
 Evidence:
-- contemporaneous: redis-py pub/sub reconnects and resubscribes without
-  replaying messages published while disconnected; SimpleBroker's Redis
-  listener surfaces only errors that escape that retry.
+- contemporaneous: integration correction: the original SB-4 rationale assumed redis-py
+  transparently retried Pub/Sub reads. SB-8's driver inspection established
+  that this listener's `Redis.from_url()` connections have no driver retry:
+  detected failures surface, and new waiters acquire replacement listeners.
+  Silent half-open connections and writes without notification remain loss
+  cases; Pub/Sub provides no replay.
 - contemporaneous: Weft installs waiters through `replace_activity_waiter()`
   on its own strategies, so a watcher-level parameter would not reach it.
-Reason: the recheck bound is the Redis backend's primary loss recovery, and
-the loss model is backend-owned ([THEORY-3]).
+Reason: the safety-recheck loss model is backend-owned ([THEORY-3]); measured
+PostgreSQL connection pressure does not justify changing Redis's existing
+fallback cadence.
 Current consequence: backends declare their interval on the waiter; the
 default stays for undeclared waiters.
 Reconsider when: every first-party backend can prove lossless delivery for a
@@ -605,16 +612,19 @@ be rare without lengthening recovery from listener loss.
 Why plausible: the listener connection is already held; probing it uses no
 pooled connection.
 Evidence:
-- contemporaneous: `_SharedActivityRegistry.acquire()` reuses a listener whose
-  thread already failed, so a detected failure would turn today's silent
-  degradation into repeated watcher retry failure.
+- contemporaneous: before SB-6, `_SharedActivityRegistry.acquire()` reused a
+  listener whose thread had already failed, so a detected failure caused
+  repeated watcher retry failure. SB-6 now replaces that listener; this
+  prerequisite is satisfied.
 - contemporaneous: a blocking probe on a black-holed socket waits for kernel
   TCP timeouts unless a client-side timeout is added.
-Reason: requires failed-listener replacement and a bounded probe; neither is
-needed to relieve the measured connection pressure.
+Reason: an active liveness probe still needs a bounded timeout and adds work
+that is not needed to relieve the measured connection pressure. With SB-6
+replacement included, the owner retained the no-active-probe policy on
+2026-11-09 and selected the 30–60 s backstop (SB-4 OD-1/OD-3).
 Current consequence: the PostgreSQL bound is the stated `2R′ + P` of [SB-API-6].
-Reconsider when: undetected listener loss is observed in a deployment, or the
-registry gains failed-listener replacement.
+Reconsider when: undetected listener loss is observed in a deployment and the
+accepted backstop does not meet its recovery needs.
 Promoted to: none
 
 ## Acquisition
@@ -813,14 +823,14 @@ real PostgreSQL in `extensions/simplebroker_pg/tests/test_pg_project_admission.p
 
 ## Related Plans
 
-- active: 2026-11-08-pg-notify-fanout-plan — PostgreSQL per-queue
+- completed: 2026-11-08-pg-notify-fanout-plan — PostgreSQL per-queue
   notification channels and listener subscription reconciliation.
-- active: [2026-11-08-target-validation-once-plan](../plans/2026-11-08-target-validation-once-plan.md)
+- completed: [2026-11-08-target-validation-once-plan](../plans/2026-11-08-target-validation-once-plan.md)
   — project-target admission recorded on the process session.
-- active: 2026-11-08-pg-listener-failure-recovery-plan — the PostgreSQL
+- completed: 2026-11-08-pg-listener-failure-recovery-plan — the PostgreSQL
   activity registry replaces a failed shared listener instead of handing it
   out again; release is identity-checked.
-- active: 2026-11-08-redis-listener-failure-recovery-plan — the Redis activity
+- completed: 2026-11-08-redis-listener-failure-recovery-plan — the Redis activity
   registry replaces a failed shared Pub/Sub listener instead of handing it out
   again.
 

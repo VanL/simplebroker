@@ -4,9 +4,10 @@ Class: 4 — risky: changes the cleanup and ownership lifecycle of the
 process-local shared Redis Pub/Sub listener (a failed listener leaves registry
 custody without a registry close) and the hand-out rule of the background
 listener thread's registry. No normative spec text changes, so not class 5.
-Status: active — implemented and verified on branch
+Status: completed — implemented and verified on branch
 `perf/sb-redis-listener-recovery` (base `perf/sb-base` = `5d29fbf`);
-cross-family review pending (coordinator).
+Tier-1 Codex round-2 review of `f7c0731..53895e3` passed on
+2026-11-09; integration gates passed.
 Owner: SimpleBroker product owner; implementation agent for the Redis sibling
 of the PostgreSQL listener fix.
 Boundary: `extensions/simplebroker_redis/simplebroker_redis/plugin.py`
@@ -17,8 +18,9 @@ Verification: real-Valkey watcher test that kills the listener's Pub/Sub
 connection; registry unit test; full Redis extension suite and shared watcher
 suite through `bin/pytest-redis`; ruff, format, mypy; fix-reverted sensitivity
 control.
-Required action: coordinator runs the cross-family review and records it
-below; owner answers "Owner questions".
+Required action: complete integration verification and landing under
+`2026-11-09-performance-branches-integration-plan.md`; review is complete,
+Q1 is delivered by SB-7, and Q2/Q3 are deferred outside this landing.
 
 ## Goal
 
@@ -92,7 +94,8 @@ No `MODULE-THEORY.md` exists under `extensions/simplebroker_redis/`.
   ordinary exception, `_handle_retry` sleeps `2**retry_count` s, then
   `_start_strategy()` creates a new waiter (acquire) **before**
   `PollingStrategy.start()` closes the old one (release), then runs an initial
-  drain. Three attempts per run, none after 300 s of run time.
+  drain. At the plan baseline, this allowed three attempts per run and none
+  after 300 s of run time. SB-7 now supplies per-streak limits; see Q1.
 - redis-py 8.1.0 (`uv.lock`; the extension requires `redis>=8.1.0`).
 
 ## Premise check: does the Redis listener self-heal? No.
@@ -217,7 +220,7 @@ or read-back is added.
 | A new waiter created after a failure opens a new Pub/Sub connection; the failed listener's thread closes its own in its `finally`, possibly after the replacement is handed out (listener-owned eventual cleanup) | N — steady-state budget unchanged (one live listener per key; at most one failed listener's connection transiently overlaps the replacement) | [REV-THEORY-004] substrate owned below handles |
 | Creating the replacement can fail (server still down): the waiter constructor raises the listener startup `OperationalError` and the watcher retry counts it | N — same as creating the first listener | [THEORY-4] |
 | A failed listener is no longer closed by the registry at its holders' last release (it was closed then before); its thread closes its own transports after publishing the failure | N — listener-owned eventual cleanup; holders already saw or will see the stored error | [THEORY-4]; [REV-THEORY-004] |
-| The watcher's retry limits are unchanged: at most two recoveries per run, none once the run is more than five minutes old | N — unchanged, stated in CHANGELOG so the fix is not over-claimed | [THEORY-4] guarantees named narrowly |
+| This listener fix does not change retry policy. At baseline, at most two recoveries per run and none after five minutes; integrated SB-7 supplies per-streak limits (Q1) | N — listener-fix scope unchanged; the integrated CHANGELOG refers to the current per-streak limits | [THEORY-4] guarantees named narrowly |
 
 ## Alternatives (plan-local unless the owner promotes them)
 
@@ -308,7 +311,8 @@ or read-back is added.
   process-local).
 - Rollout: none required. One-way doors: none.
 - Post-deploy signal: after a Redis restart, failover or `CLIENT KILL`, a
-  watcher logs one `Watcher error (retry 1/3)` at debug level and continues;
+  watcher logs a WARNING naming retry 1/3 and failure-streak age, then
+  continues within SB-7's per-streak limits;
   `CLIENT LIST TYPE pubsub` shows one new subscription per process and target
   and no `Watcher failed after 3 retries` error (subject to the retry limits
   above).
@@ -335,22 +339,29 @@ or read-back is added.
 
 ## Owner questions
 
-- Q1 (owned by `perf/sb-watcher-retry-budget`, core `simplebroker/watcher.py`
-  `_run_with_retries`): the retry budget counts from run start and retries are
-  never reset, so this fix recovers a watcher only on its first two failures
-  and only while its run is younger than 300 s. Same limit as the PostgreSQL
-  sibling's Q1.
-- Q2: should the Redis listener detect half-open connections (redis-py
-  `health_check_interval` on the Pub/Sub client), the analogue of the
-  PostgreSQL LISTEN liveness question (OD-3)? Not reproduced here.
-- Q3: should [SB-API-6] state that a backend-native waiter's listener failure
-  is terminal for that waiter and that a new waiter gets new substrate? That
-  would be a class-5 clarification covering both backends.
+- Q1 — delivered by SB-7 (`perf/sb-watcher-retry-budget`) in this
+  integration. Retry count and time budget now apply per failure streak.
+  After a restart, a processing wait that returns normally qualifies
+  recovery; startup and initial drain alone do not. The first streak starts
+  at run start, and later streaks start at the first failure after a healthy
+  wait. The original whole-run limits described here are historical.
+- Q2 — deferred follow-up, not a landing blocker: proactive half-open
+  detection through redis-py's `health_check_interval` would add a liveness
+  policy outside this listener-replacement fix. No deployment case was
+  reproduced here. The accepted integration retains Redis's existing safety
+  recheck and adds no active probe; revisit if observed silent loss makes
+  that recovery behavior insufficient. This does not claim half-open
+  detection was implemented.
+- Q3 — deferred follow-up, not a landing blocker: normative [SB-API-6]
+  wording for terminal listener failure and replacement substrate would be a
+  separate class-5 clarification covering both backends. On 2026-11-09 the
+  owner accepted the review recommendation to land without further contract
+  expansion.
 
 ## Independent Review Loop
 
 - Author family: Claude (implementation agent)
-- Reviewer family: pending — coordinator runs the cross-family review
+- Reviewer family: Codex (OpenAI), coordinator-run; round 2 passed
 - Review invocation: coordinator-owned per the track brief (`skills/call-agent/SKILL.md`)
 
 ## Review and execution record
@@ -401,3 +412,12 @@ second-listener witness occurs after recovery's initial drain and `"after"` is
 published only after it; the prose now describes listener-owned eventual
 cleanup. The reviewer did not rerun real Valkey integration or its negative
 control (recorded evidence, supported by inspection). Review loop closed.
+
+## Integration closure, 2026-11-09
+
+Completed under [the integration plan](2026-11-09-performance-branches-integration-plan.md).
+The owner accepted the recommendations; combined notification/lifecycle
+regressions, core and extension tests, PostgreSQL/Redis shared API tests,
+static/doc gates and independent agy reviews are recorded there. Semantic
+merge repairs preserve this plan's intended behavior. Post-merge benchmark
+reporting remains owned by that integration plan.

@@ -1478,7 +1478,7 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
   contract; no normative API change.
 - [Project-target validation once per process session](../plans/2026-11-08-target-validation-once-plan.md):
   [SB-API-11] project-target admission is recorded per process session
-  instead of per persistent Queue; active, owner accepted the behavior
+  instead of per persistent Queue; completed, owner accepted the behavior
   change 2026-11-08.
 
 - [PostgreSQL listener failure recovery](../plans/2026-11-08-pg-listener-failure-recovery-plan.md):
@@ -1486,7 +1486,7 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
   retry recovers under the existing [SB-API-6] waiter contract; no normative
   API change.
 
-- active: [Watcher retry limits per failure streak](../plans/2026-11-08-watcher-retry-streak-budget-plan.md):
+- completed: [Watcher retry limits per failure streak](../plans/2026-11-08-watcher-retry-streak-budget-plan.md):
   repairs `BaseWatcher` retry limits under [SB-API-6], which does not specify
   them; no normative API change.
 

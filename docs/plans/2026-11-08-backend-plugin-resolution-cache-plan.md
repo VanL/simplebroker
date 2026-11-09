@@ -5,16 +5,18 @@ resolution). A [DOM-5] risky trigger also fires: the public
 `simplebroker.ext.get_backend_plugin` changes observable behavior for
 third-party entry points and for installed-metadata changes after resolution.
 The hardening checklist applies.
-Status: active — implemented on `perf/sb-plugin-cache`; Codex findings F1-F4 dispositioned (F4 by owner decision F4-O2, 2026-11-08); owner decision D3 pending.
+Status: completed — implemented on `perf/sb-plugin-cache`; Codex findings F1-F4 dispositioned (F4 by owner decision F4-O2, 2026-11-08); owner accepted D3 on 2026-11-09; integration gates passed.
 Owner: implementation agent (performance track SB-2); the coordinator runs the
-cross-family review; the repository owner accepted D2 and chose F4-O2 (2026-11-08) and decides D3.
+cross-family review; the repository owner accepted D2 and chose F4-O2
+(2026-11-08), then accepted D3 (2026-11-09).
 Boundary: entry-point resolution in `simplebroker/_backend_plugins.py`, its
 tests and its documentation. Callers, extensions, backend API version and
 storage are unchanged.
 Verification: RED/GREEN unit tests with mutation checks, targeted core,
 process-session, PostgreSQL and Redis suites, static and documentation gates,
 and a PostgreSQL 18 microbenchmark.
-Required action: owner disposition of D3.
+Required action: complete integration verification and landing under
+`2026-11-09-performance-branches-integration-plan.md`.
 
 ## Goal
 
@@ -179,11 +181,11 @@ Comprehension questions (answers recorded in the Execution log before edits):
 |---|--------|-------|--------------|
 | D1 | Repeated successful lookups no longer rescan metadata or reload the entry point. First-party lookups return the same singleton as before. | C — no loss | [THEORY-4] concrete pressure justifies growth; [THEORY-3] resolution is a process-level fact beside the process session that owns reusable backend resources. |
 | D2 | A third-party entry point that returns a new object per call (a class or factory) yields one retained plugin per process, which every later lookup returns. Racing first lookups may still call it more than once; all of them return the retained result. Before, each lookup made a new object. | A — owner accepted 2026-11-08 (class/factory entry points are resolved once and the result reused per process) | [THEORY-3] the backend adapter owns substrate resources, and a plugin is the process's handle to that adapter. One Queue already performed several lookups, so per-instance plugin state was never shared even within one Queue; first-party plugins are singletons. |
-| D3 | After a name's first successful lookup, uninstalling it, adding a duplicate registration, or upgrading it in place is not seen by that process; new processes see it. The lost diagnostic: a duplicate registration added after a successful lookup raised `Ambiguous backend plugin` on later lookups at baseline and is silently ignored now. | D — diminution, explicit tradeoff; open for owner disposition (no invalidation mechanism requested) | [THEORY-4] concrete pressure justifies growth: the rescan that carried this diagnostic cost 0.75-1.66 ms per lookup on every Queue, waiter and session path (Measurements). Uniqueness is still enforced when a name is first resolved in each process. Other in-place changes lose little: the plugin module stays in `sys.modules` and live handles keep the old object, so a rescan could only fail new handles or import a moved plugin module beside the loaded one. |
+| D3 | After a name's first successful lookup, uninstalling it, adding a duplicate registration, or upgrading it in place is not seen by that process; new processes see it. The lost diagnostic: a duplicate registration added after a successful lookup raised `Ambiguous backend plugin` on later lookups at baseline and is silently ignored now. | D — diminution, explicit tradeoff accepted by owner 2026-11-09 (no invalidation mechanism requested) | [THEORY-4] concrete pressure justifies growth: the rescan that carried this diagnostic cost 0.75-1.66 ms per lookup on every Queue, waiter and session path (Measurements). Uniqueness is still enforced when a name is first resolved in each process. Other in-place changes lose little: the plugin module stays in `sys.modules` and live handles keep the old object, so a rescan could only fail new handles or import a moved plugin module beside the loaded one. |
 | D4 | Failed lookups rescan every time. | N — unchanged | — |
 | D5 | A forked child retains nothing: its first lookup of each name scans and loads the entry point again, exactly as at baseline, and never waits on a resolution in flight in the parent. The inherited plugin objects stay referenced by a never-read keep-alive list, so none is finalized because of the fork (the child's interpreter may still finalize them at exit; plugin finalizers must be fork-safe, owner decision F4-O2); the retention is bounded to one mapping per fork generation, each holding the few backends its parent resolved. | N — unchanged from baseline (revised after F1 and F4; the first version inherited the parent's retained plugins, which F1 showed could block a fresh child Queue, and the second released them in the fork hook, which F4 showed could run a blocking finalizer there) | [SB-API-11] fork recovery rule and fresh-child-Queue usability; [REV-THEORY-005] suspended or inherited ownership is not settled from an incompatible context, so the child abandons, rather than finalizes, parent-created plugins. |
 
-One D entry (D3), recorded for owner disposition.
+One D entry (D3), accepted by the owner on 2026-11-09.
 
 ## Design and Rejected Alternatives
 
@@ -377,7 +379,7 @@ Verdict: blocker: F1.
 |----|----------|---------|-------------|
 | F1 | P2 (blocker; RECONSIDERATION REQUESTED on D5) | Retaining factory-created plugins across fork carries parent-held plugin locks into new child Queues. The reviewer reproduced it with a subclass of the real SQLite plugin: warm resolution, a parent thread holds the plugin's lock, fork, then a fresh child Queue's waiter hook blocks on HEAD and completes on baseline. This contradicts [SB-API-11] fresh-child-Queue usability; the plan's fork test read only identity and name. | Accepted, fixed: `_forget_resolutions_after_fork`, registered with `os.register_at_fork(after_in_child=...)`, rebinds the memo to an empty dict in the child (still lock-free). New `test_forked_child_queue_does_not_reuse_parent_plugin_state` fails on `2ca51c53` and passes after; the identity-inheritance assertion was removed and the in-flight fork test kept. [SB-API-11] text, implementation doc 07, guide, CHANGELOG and D5 (now N) updated. |
 | F2 | P3 | "Called once per process" overstates `setdefault`: it shares one retained result but is not single-flight, so racing misses may call a class or factory more than once. | Accepted, fixed: guide, CHANGELOG, [SB-API-11] text and D2 now say one retained result per process, with racing first lookups possibly calling the entry point more than once. Implementation unchanged. |
-| F3 | P3 | D3 removes an observable diagnostic: a duplicate registration added after a successful lookup raised ambiguity at baseline and is silently ignored on HEAD, so "no loss" is wrong. | Accepted, fixed: D3 reclassified as an explicit D tradeoff, open for owner disposition, with [THEORY-4] measured-pressure basis; implementation doc 07 and CHANGELOG name the lost diagnostic. No invalidation mechanism added. |
+| F3 | P3 | D3 removes an observable diagnostic: a duplicate registration added after a successful lookup raised ambiguity at baseline and is silently ignored on HEAD, so "no loss" is wrong. | Accepted, fixed: D3 reclassified as an explicit D tradeoff, accepted by the owner on 2026-11-09, with [THEORY-4] measured-pressure basis; implementation doc 07 and CHANGELOG name the lost diagnostic. No invalidation mechanism added. |
 
 Round 2: Tier 1, Codex, 2026-11-08, verification of 2ca51c53..188e7d6b scoped
 to F1. Verdict: FAIL — F1's original case is fixed and both fork tests are
@@ -389,7 +391,8 @@ falsifiable, but the fix introduced F4.
 
 Owner decision: D2 accepted by the repository owner on 2026-11-08 (class or
 factory entry points are resolved once and the result reused per process). D3
-remains open for the owner. Round 3 (coordinator) is scoped to F4.
+was open at this review and was accepted on 2026-11-09 (record below).
+Round 3 (coordinator) was scoped to F4.
 
 ### Execution log
 
@@ -506,3 +509,22 @@ CPython-only `ctypes` reference leak; the first-party PostgreSQL finalizer and
 Redis `close()` already check the PID and abandon inherited resources
 (implementation doc 06, fork recovery), which is the obligation F4-O2 states.
 No code change; the F4 regression test keeps covering the fork-hook deadlock.
+
+## 2026-11-09 owner disposition of D3
+
+The owner accepted the recommendation to retain successful backend resolutions
+for the process lifetime: “Otherwise I accept the recommendations.” D3 is
+accepted with its documented loss of the later duplicate-registration
+diagnostic and visibility of in-place metadata changes. A new process observes
+those changes; failed lookups remain unretained. No invalidation mechanism or
+new public API is added. This closes the pending owner decision; the plan stays
+active until the integration verification and landing gates pass.
+
+## Integration closure, 2026-11-09
+
+Completed under [the integration plan](2026-11-09-performance-branches-integration-plan.md).
+The owner accepted the recommendations; combined notification/lifecycle
+regressions, core and extension tests, PostgreSQL/Redis shared API tests,
+static/doc gates and independent agy reviews are recorded there. Semantic
+merge repairs preserve this plan's intended behavior. Post-merge benchmark
+reporting remains owned by that integration plan.

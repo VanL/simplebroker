@@ -1,7 +1,7 @@
 # Project-target validation once per process session
 
 Class: 5 — [SB-API-11] normative text changes (project-target admission granularity); the [DOM-5] risky trigger "changes a public contract" also fires, so the hardening checklist applies.
-Status: active — implementation, spec promotion, and verification on branch `perf/sb-validate-once`; Tier-1 cross-family review returned no blocker and its two P3 findings are fixed; owner accepted D1 on 2026-11-08; awaiting owner landing.
+Status: completed — implementation, spec promotion, and verification on branch `perf/sb-validate-once`; Tier-1 cross-family review returned no blocker and its two P3 findings are fixed; owner accepted D1 on 2026-11-08; awaiting owner landing.
 Owner: SimpleBroker product owner decides; implementation agent authored the branch.
 Boundary: project-scoped service-target setup on the persistent (process-session) Queue path only. Ephemeral, injected-runner, `open_broker()`, explicit service targets, direct `_initialize_project_backend_target()` calls, and SQLite admission are unchanged.
 Verification: RED/GREEN real PostgreSQL connection-count proofs, counting-backend lifecycle proofs, targeted core and PostgreSQL suites, lint/format/type gates, before/after connection and catalog-statement measurement on disposable `postgres:18`.
@@ -380,3 +380,12 @@ validation connection exists there).
 - Admission still precedes core creation for every session (invariant 1); the
   record is read without a lock because it is a single monotonic bool and a
   stale `False` only repeats today's validation.
+
+## Integration closure, 2026-11-09
+
+Completed under [the integration plan](2026-11-09-performance-branches-integration-plan.md).
+The owner accepted the recommendations; combined notification/lifecycle
+regressions, core and extension tests, PostgreSQL/Redis shared API tests,
+static/doc gates and independent agy reviews are recorded there. Semantic
+merge repairs preserve this plan's intended behavior. Post-merge benchmark
+reporting remains owned by that integration plan.

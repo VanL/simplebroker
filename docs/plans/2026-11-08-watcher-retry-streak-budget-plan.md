@@ -16,11 +16,12 @@ spec text changes, so not class 5 (see Q2 for the class-5 follow-up).
 Hardening content: Hidden couplings; Rollback, Rollout and Success Signals;
 Testing Plan (what not to mock); Context and Key Files; Fresh-Eyes
 comprehension questions.
-Status: active — revision 2 implemented and verified on branch
+Status: completed — revision 2 implemented and verified on branch
 `perf/sb-watcher-retry-budget` (base `perf/sb-base` = `5d29fbf`). Revision 1
 (`2a732d8`) passed cross-family review SB-7 with no blocker (F1, F2 fixed in
 `9473af3`). The owner decided Q1 on 2026-11-09; revision 2 implements that
-decision and has not been re-reviewed. Q2 open.
+decision and passed Tier-1 Codex review of `9473af3..79fa179` on
+2026-11-09 (see Revision 2 verification). Q2 is deferred; integration gates passed.
 Owner: SimpleBroker product owner; implementation agent for this track.
 Boundary: `simplebroker/watcher.py` `BaseWatcher._run_with_retries`,
 `_record_healthy_wait`, `_check_retry_timeout`, and the two
@@ -33,8 +34,9 @@ Verification: shared watcher tests on SQLite and PostgreSQL that fail on
 two `SM-WATCHER-LIFECYCLE` transition rows; owning watcher test files; shared
 watcher suite on PostgreSQL; ruff, format, mypy; fix-reverted sensitivity and
 mutation controls.
-Required action: coordinator decides whether revision 2 needs another
-cross-family review; owner answers Q2.
+Required action: complete integration verification and landing under
+`2026-11-09-performance-branches-integration-plan.md`; review is complete
+and Q2 is deferred outside this landing.
 
 ## Goal
 
@@ -407,9 +409,11 @@ streak at 999–1001).
   options considered were ratifying revision 1's restart loop, a cap on short
   streaks, this witness, and WARNING logging alone (which would not bound the
   loop).
-- Q2: should `[SB-API-6]` state the per-streak retry contract (three
-  consecutive failures or 300 s per streak; the first streak timed from run
-  start)? That is a class-5 spec addition.
+- Q2 — deferred follow-up, not a landing blocker: stating the per-streak
+  retry contract in `[SB-API-6]` (three consecutive failures or 300 s per
+  streak; the first streak timed from run start) would be a separate class-5
+  spec addition. On 2026-11-09 the owner accepted the review recommendation
+  to land without further contract expansion.
 
 ## Independent Review Loop
 
@@ -433,8 +437,8 @@ changed.
 | F1 | P3 | The loss of the exception that public `run_forever()` callers used to see is a [DOM-5] compatibility surface; private names and silent spec text do not exclude it | Accepted, fixed: reclassified as class 4 in the plan header and the `docs/plans/README.md` index row; existing hardening content kept and listed in the header; Deviation Log records that review followed implementation |
 | F2 | P3 | Q1 presented a higher retry log level as a bound, but it only improves visibility and leaves the restart loop unbounded | Accepted, fixed: Q1 now separates bounded-policy options from the observability-only option, and records the reviewer's alternative (a successful processing wait qualifies recovery, reusing the existing limits with no new knob, at the cost of changing the health witness and both processing-loop implementations) as an owner option; the Alternatives entry is updated to match; the owner decision stays open |
 
-Revision 2 (owner decision on Q1, the commit after `9473af3`) has not been
-reviewed; the coordinator decides whether it needs another round.
+Revision 2 (owner decision on Q1, `9473af3..79fa179`) passed the
+coordinator review recorded below. The earlier pending-review status is closed.
 
 ## Fresh-Eyes Review
 
@@ -462,4 +466,14 @@ loops, witness-omission controls) confirmed: a recurring first-wait failure
 surfaces the original exception on failure three with backoffs `[2, 4]`; real
 recovery resets; the WARNING format matches. The database-backed suites were
 inspected, not rerun, by the reviewer. Review loop closed; Q2 (an [SB-API-6]
-per-streak contract) remains open.
+per-streak contract) is deferred outside this landing by the 2026-11-09
+owner disposition above.
+
+## Integration closure, 2026-11-09
+
+Completed under [the integration plan](2026-11-09-performance-branches-integration-plan.md).
+The owner accepted the recommendations; combined notification/lifecycle
+regressions, core and extension tests, PostgreSQL/Redis shared API tests,
+static/doc gates and independent agy reviews are recorded there. Semantic
+merge repairs preserve this plan's intended behavior. Post-merge benchmark
+reporting remains owned by that integration plan.

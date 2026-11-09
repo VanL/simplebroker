@@ -5,9 +5,9 @@ process-local shared LISTEN listener (a failed listener leaves registry
 custody without a registry close, and release becomes identity-checked) and
 the private waiter/registry protocol that a concurrent track (SB-3) also edits.
 No normative spec text changes, so not class 5.
-Status: active — implemented and verified on branch `perf/sb-listener-recovery`
+Status: completed — implemented and verified on branch `perf/sb-listener-recovery`
 (base `perf/sb-base` = `5d29fbf`); cross-family review SB-6: no blocker, F1 and F2
-fixed (see the review record).
+fixed (see the review record); integration gates passed.
 Owner: SimpleBroker product owner; implementation agent for the F-1 fix.
 Boundary: `extensions/simplebroker_pg/simplebroker_pg/runner.py`
 `_SharedActivityRegistry` and the two waiter `close()` call sites. The listener
@@ -16,9 +16,9 @@ Verification: real-PostgreSQL 18 watcher test that terminates the listener's
 backend; registry unit test; owning PostgreSQL test files; full PostgreSQL
 extension suite; shared watcher suite on PostgreSQL; ruff, format, mypy;
 fix-reverted sensitivity control.
-Required action: coordinator runs the cross-family review and records it below;
-owner answers the questions in "Owner questions" (Q1 is a second pre-existing
-bug that limits this fix for watchers older than five minutes).
+Required action: complete integration verification and landing under
+`2026-11-09-performance-branches-integration-plan.md`; Q1/Q2 are delivered by
+sibling tracks, and Q3 is deferred outside this landing.
 
 ## Goal
 
@@ -236,7 +236,8 @@ the registry lock at hand-out time. No probe, round trip, or read-back is added.
   process-local).
 - Rollout: none required. One-way doors: none.
 - Post-deploy signal: after a PostgreSQL restart or backend termination, a
-  watcher logs one `Watcher error (retry 1/3)` at debug level and continues;
+  watcher logs a WARNING naming retry 1/3 and failure-streak age, then
+  continues within SB-7's per-streak limits;
   `pg_stat_activity` shows one new LISTEN session per process and target and
   no `Watcher failed after 3 retries` error (subject to Q1's limits).
 
@@ -248,8 +249,9 @@ the registry lock at hand-out time. No probe, round trip, or read-back is added.
 - 2026-11-08: Premise partly falsified. The brief says holders "recover through
   the existing watcher retry". That holds only for a watcher whose run is less
   than five minutes old and has recovered fewer than twice; see Q1. The fix is
-  still necessary (without it even a fresh watcher dies) but not sufficient for
-  long-running watchers.
+  still necessary (without it even a fresh watcher dies) but was not sufficient
+  for long-running watchers at that baseline. SB-7 now supplies the retry-budget
+  fix in this integration; see the current Q1 disposition.
 
 ## Out of Scope
 
@@ -260,29 +262,27 @@ the registry lock at hand-out time. No probe, round trip, or read-back is added.
 
 ## Owner questions
 
-- Q1 (separate pre-existing bug, core `simplebroker/watcher.py`
-  `_run_with_retries`): `_check_retry_timeout(start_time, ...)` measures from
-  the start of the run, not from the start of the current failure streak, and
-  `retry_count` is never reset after a successful recovery. A watcher running
-  longer than `MAX_TOTAL_RETRY_TIME` (300 s) therefore dies on its first
-  ordinary error, and any watcher dies on its third. Probe with this fix
-  (clock moved 301 s forward, then backend terminated):
-  `TimeoutError: Watcher retry timeout exceeded (300s). Retries: 1, Time
-  elapsed: 303.1s`, later write not handled. Proposed fix: measure the budget
-  and count retries per failure streak, reset after a successful start and
-  drain. `tests/test_watcher_edge_cases.py::test_absolute_timeout_exceeded`
-  cannot distinguish the two readings. SB-4 also edits `watcher.py`.
-- Q2: the Redis registry (`_RedisActivityRegistry.listener`) has the same
-  shape (returns an existing listener without checking its failure). Not
-  reproduced here; fix in a Redis track?
-- Q3: should [SB-API-6] state that a backend-native waiter's listener failure
-  is terminal for that waiter and that a new waiter gets new substrate? That
-  would be a class-5 clarification.
+- Q1 — delivered by SB-7 (`perf/sb-watcher-retry-budget`) in this integration.
+  The baseline whole-run retry count and age caused an old watcher to stop
+  on its first transient error or its third lifetime error. Retry limits now
+  apply per failure streak; after a restart, only a processing wait that
+  returns normally qualifies recovery. Successful startup and initial drain
+  alone do not reset the streak. The first streak still starts at run start;
+  later streaks start at the first failure after a healthy wait. This
+  supersedes the original start-and-drain witness proposed here.
+- Q2 — delivered by SB-8 (`perf/sb-redis-listener-recovery`) in this
+  integration. The Redis registry also replaces failed shared listeners;
+  its real-Valkey failure/recovery proof is in that plan.
+- Q3 — deferred follow-up, not a landing blocker: adding normative
+  [SB-API-6] text for terminal listener failure and replacement substrate
+  would be a separate class-5 clarification covering both backends. On
+  2026-11-09 the owner accepted the review recommendation to land without
+  further contract expansion.
 
 ## Independent Review Loop
 
 - Author family: Claude (implementation agent)
-- Reviewer family: pending — coordinator runs the cross-family review
+- Reviewer family: Codex (OpenAI), coordinator-run; see the review record
 - Review invocation: coordinator-owned per the track brief (`skills/call-agent/SKILL.md`)
 
 ## Review and execution record
@@ -326,3 +326,12 @@ Execution evidence after the fixes (2026-11-09, foreground, PostgreSQL 18 via
   harm its holders? (b) which component covers writes made while no LISTEN
   session existed? (c) why does the watcher-level test need the large
   `BROKER_MAX_INTERVAL`?
+
+## Integration closure, 2026-11-09
+
+Completed under [the integration plan](2026-11-09-performance-branches-integration-plan.md).
+The owner accepted the recommendations; combined notification/lifecycle
+regressions, core and extension tests, PostgreSQL/Redis shared API tests,
+static/doc gates and independent agy reviews are recorded there. Semantic
+merge repairs preserve this plan's intended behavior. Post-merge benchmark
+reporting remains owned by that integration plan.

@@ -252,7 +252,7 @@ inserted AS (
     RETURNING queue, ts
 )
 SELECT inserted.ts, pg_notify(
-    'simplebroker_' || substr(md5(current_schema()), 1, 24),
+    {_queue_activity_channel_sql("inserted.queue")},
     inserted.queue
 )
 FROM inserted
