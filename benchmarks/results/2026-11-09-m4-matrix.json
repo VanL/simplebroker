@@ -1,0 +1,1727 @@
+{
+  "generated_at": "2026-11-09T15:59:05.727557+00:00",
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "python_version": "3.14.6",
+  "results": [
+    {
+      "access_type": "cli",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "cli",
+        "backend": "sqlite",
+        "elapsed_seconds": 5.32035499997437,
+        "operations": 100,
+        "operations_per_second": 18.795738254398763,
+        "sequence": 1,
+        "trial": 1,
+        "workload": "writes"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 5.32035499997437,
+          "operations": 100,
+          "operations_per_second": 18.795738254398763,
+          "sequence": 1,
+          "trial": 1,
+          "workload": "writes"
+        },
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 5.393920166883618,
+          "operations": 100,
+          "operations_per_second": 18.5393919275924,
+          "sequence": 21,
+          "trial": 2,
+          "workload": "writes"
+        },
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 5.416511749848723,
+          "operations": 100,
+          "operations_per_second": 18.462066477155318,
+          "sequence": 29,
+          "trial": 3,
+          "workload": "writes"
+        }
+      ],
+      "workload": "writes"
+    },
+    {
+      "access_type": "cli",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "cli",
+        "backend": "sqlite",
+        "elapsed_seconds": 6.028031957801431,
+        "operations": 100,
+        "operations_per_second": 16.589162217459844,
+        "sequence": 2,
+        "trial": 1,
+        "workload": "reads"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 6.028031957801431,
+          "operations": 100,
+          "operations_per_second": 16.589162217459844,
+          "sequence": 2,
+          "trial": 1,
+          "workload": "reads"
+        },
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 6.106015041936189,
+          "operations": 100,
+          "operations_per_second": 16.377293425122396,
+          "sequence": 22,
+          "trial": 2,
+          "workload": "reads"
+        },
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 6.152123791631311,
+          "operations": 100,
+          "operations_per_second": 16.25454938602329,
+          "sequence": 30,
+          "trial": 3,
+          "workload": "reads"
+        }
+      ],
+      "workload": "reads"
+    },
+    {
+      "access_type": "cli",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "cli",
+        "backend": "sqlite",
+        "elapsed_seconds": 6.071481666062027,
+        "operations": 100,
+        "operations_per_second": 16.47044420128508,
+        "sequence": 3,
+        "trial": 1,
+        "workload": "peeks"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 6.071481666062027,
+          "operations": 100,
+          "operations_per_second": 16.47044420128508,
+          "sequence": 3,
+          "trial": 1,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 6.07824616599828,
+          "operations": 100,
+          "operations_per_second": 16.452114190339998,
+          "sequence": 23,
+          "trial": 2,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 6.120945165865123,
+          "operations": 100,
+          "operations_per_second": 16.33734615981749,
+          "sequence": 31,
+          "trial": 3,
+          "workload": "peeks"
+        }
+      ],
+      "workload": "peeks"
+    },
+    {
+      "access_type": "cli",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "cli",
+        "backend": "sqlite",
+        "elapsed_seconds": 5.837976834271103,
+        "operations": 100,
+        "operations_per_second": 17.12922179015214,
+        "sequence": 4,
+        "trial": 1,
+        "workload": "mixed"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 5.837976834271103,
+          "operations": 100,
+          "operations_per_second": 17.12922179015214,
+          "sequence": 4,
+          "trial": 1,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 5.869531041942537,
+          "operations": 100,
+          "operations_per_second": 17.037136235487857,
+          "sequence": 24,
+          "trial": 2,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "cli",
+          "backend": "sqlite",
+          "elapsed_seconds": 5.951826999895275,
+          "operations": 100,
+          "operations_per_second": 16.80156362101243,
+          "sequence": 32,
+          "trial": 3,
+          "workload": "mixed"
+        }
+      ],
+      "workload": "mixed"
+    },
+    {
+      "access_type": "api",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "api",
+        "backend": "sqlite",
+        "elapsed_seconds": 0.10480620805174112,
+        "operations": 100,
+        "operations_per_second": 954.1419526468472,
+        "sequence": 33,
+        "trial": 3,
+        "workload": "writes"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.10598416673019528,
+          "operations": 100,
+          "operations_per_second": 943.5371630044588,
+          "sequence": 5,
+          "trial": 1,
+          "workload": "writes"
+        },
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.1084588747471571,
+          "operations": 100,
+          "operations_per_second": 922.0084592719894,
+          "sequence": 13,
+          "trial": 2,
+          "workload": "writes"
+        },
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.10480620805174112,
+          "operations": 100,
+          "operations_per_second": 954.1419526468472,
+          "sequence": 33,
+          "trial": 3,
+          "workload": "writes"
+        }
+      ],
+      "workload": "writes"
+    },
+    {
+      "access_type": "api",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "api",
+        "backend": "sqlite",
+        "elapsed_seconds": 0.0979152088984847,
+        "operations": 100,
+        "operations_per_second": 1021.2918005789758,
+        "sequence": 6,
+        "trial": 1,
+        "workload": "reads"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.0979152088984847,
+          "operations": 100,
+          "operations_per_second": 1021.2918005789758,
+          "sequence": 6,
+          "trial": 1,
+          "workload": "reads"
+        },
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.13912104209885,
+          "operations": 100,
+          "operations_per_second": 718.798526027046,
+          "sequence": 14,
+          "trial": 2,
+          "workload": "reads"
+        },
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.12602295819669962,
+          "operations": 100,
+          "operations_per_second": 793.5062105423492,
+          "sequence": 34,
+          "trial": 3,
+          "workload": "reads"
+        }
+      ],
+      "workload": "reads"
+    },
+    {
+      "access_type": "api",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "api",
+        "backend": "sqlite",
+        "elapsed_seconds": 0.07875016611069441,
+        "operations": 100,
+        "operations_per_second": 1269.838591317204,
+        "sequence": 7,
+        "trial": 1,
+        "workload": "peeks"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.07875016611069441,
+          "operations": 100,
+          "operations_per_second": 1269.838591317204,
+          "sequence": 7,
+          "trial": 1,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.08082195790484548,
+          "operations": 100,
+          "operations_per_second": 1237.287521761518,
+          "sequence": 15,
+          "trial": 2,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.09599245898425579,
+          "operations": 100,
+          "operations_per_second": 1041.7484983523707,
+          "sequence": 35,
+          "trial": 3,
+          "workload": "peeks"
+        }
+      ],
+      "workload": "peeks"
+    },
+    {
+      "access_type": "api",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "api",
+        "backend": "sqlite",
+        "elapsed_seconds": 0.09901675023138523,
+        "operations": 100,
+        "operations_per_second": 1009.9301357226639,
+        "sequence": 8,
+        "trial": 1,
+        "workload": "mixed"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.09901675023138523,
+          "operations": 100,
+          "operations_per_second": 1009.9301357226639,
+          "sequence": 8,
+          "trial": 1,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.10957733308896422,
+          "operations": 100,
+          "operations_per_second": 912.5974978676609,
+          "sequence": 16,
+          "trial": 2,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.11806254088878632,
+          "operations": 100,
+          "operations_per_second": 847.0087061246544,
+          "sequence": 36,
+          "trial": 3,
+          "workload": "mixed"
+        }
+      ],
+      "workload": "mixed"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "sqlite",
+        "elapsed_seconds": 0.013064584229141474,
+        "operations": 100,
+        "operations_per_second": 7654.281088941428,
+        "sequence": 9,
+        "trial": 1,
+        "workload": "writes"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.013064584229141474,
+          "operations": 100,
+          "operations_per_second": 7654.281088941428,
+          "sequence": 9,
+          "trial": 1,
+          "workload": "writes"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.01403837464749813,
+          "operations": 100,
+          "operations_per_second": 7123.33176104697,
+          "sequence": 17,
+          "trial": 2,
+          "workload": "writes"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.015521416906267405,
+          "operations": 100,
+          "operations_per_second": 6442.710778525698,
+          "sequence": 25,
+          "trial": 3,
+          "workload": "writes"
+        }
+      ],
+      "workload": "writes"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "sqlite",
+        "elapsed_seconds": 0.010505834128707647,
+        "operations": 100,
+        "operations_per_second": 9518.520735706807,
+        "sequence": 10,
+        "trial": 1,
+        "workload": "reads"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.010505834128707647,
+          "operations": 100,
+          "operations_per_second": 9518.520735706807,
+          "sequence": 10,
+          "trial": 1,
+          "workload": "reads"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.012510166969150305,
+          "operations": 100,
+          "operations_per_second": 7993.498427846486,
+          "sequence": 18,
+          "trial": 2,
+          "workload": "reads"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.012674750294536352,
+          "operations": 100,
+          "operations_per_second": 7889.701783167006,
+          "sequence": 26,
+          "trial": 3,
+          "workload": "reads"
+        }
+      ],
+      "workload": "reads"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "sqlite",
+        "elapsed_seconds": 0.0027063749730587006,
+        "operations": 100,
+        "operations_per_second": 36949.794834594424,
+        "sequence": 27,
+        "trial": 3,
+        "workload": "peeks"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.0028147082775831223,
+          "operations": 100,
+          "operations_per_second": 35527.66046713232,
+          "sequence": 11,
+          "trial": 1,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.003130708821117878,
+          "operations": 100,
+          "operations_per_second": 31941.648270021207,
+          "sequence": 19,
+          "trial": 2,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.0027063749730587006,
+          "operations": 100,
+          "operations_per_second": 36949.794834594424,
+          "sequence": 27,
+          "trial": 3,
+          "workload": "peeks"
+        }
+      ],
+      "workload": "peeks"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "sqlite",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "sqlite",
+        "elapsed_seconds": 0.008281124755740166,
+        "operations": 100,
+        "operations_per_second": 12075.654328318595,
+        "sequence": 28,
+        "trial": 3,
+        "workload": "mixed"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.010691833682358265,
+          "operations": 100,
+          "operations_per_second": 9352.932618564948,
+          "sequence": 12,
+          "trial": 1,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.020630875136703253,
+          "operations": 100,
+          "operations_per_second": 4847.1041260918455,
+          "sequence": 20,
+          "trial": 2,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "sqlite",
+          "elapsed_seconds": 0.008281124755740166,
+          "operations": 100,
+          "operations_per_second": 12075.654328318595,
+          "sequence": 28,
+          "trial": 3,
+          "workload": "mixed"
+        }
+      ],
+      "workload": "mixed"
+    },
+    {
+      "access_type": "cli",
+      "backend": "pg",
+      "best": {
+        "access_type": "cli",
+        "backend": "pg",
+        "elapsed_seconds": 12.548687709029764,
+        "operations": 100,
+        "operations_per_second": 7.9689607645620315,
+        "sequence": 57,
+        "trial": 2,
+        "workload": "writes"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 12.67854837467894,
+          "operations": 100,
+          "operations_per_second": 7.8873382854866705,
+          "sequence": 37,
+          "trial": 1,
+          "workload": "writes"
+        },
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 12.548687709029764,
+          "operations": 100,
+          "operations_per_second": 7.9689607645620315,
+          "sequence": 57,
+          "trial": 2,
+          "workload": "writes"
+        },
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 12.551551499869674,
+          "operations": 100,
+          "operations_per_second": 7.9671425481573594,
+          "sequence": 65,
+          "trial": 3,
+          "workload": "writes"
+        }
+      ],
+      "workload": "writes"
+    },
+    {
+      "access_type": "cli",
+      "backend": "pg",
+      "best": {
+        "access_type": "cli",
+        "backend": "pg",
+        "elapsed_seconds": 14.120155790820718,
+        "operations": 100,
+        "operations_per_second": 7.082074835534631,
+        "sequence": 58,
+        "trial": 2,
+        "workload": "reads"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 14.18498145788908,
+          "operations": 100,
+          "operations_per_second": 7.049709602854946,
+          "sequence": 38,
+          "trial": 1,
+          "workload": "reads"
+        },
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 14.120155790820718,
+          "operations": 100,
+          "operations_per_second": 7.082074835534631,
+          "sequence": 58,
+          "trial": 2,
+          "workload": "reads"
+        },
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 14.185968334320933,
+          "operations": 100,
+          "operations_per_second": 7.049219175124212,
+          "sequence": 66,
+          "trial": 3,
+          "workload": "reads"
+        }
+      ],
+      "workload": "reads"
+    },
+    {
+      "access_type": "cli",
+      "backend": "pg",
+      "best": {
+        "access_type": "cli",
+        "backend": "pg",
+        "elapsed_seconds": 13.562450499739498,
+        "operations": 100,
+        "operations_per_second": 7.373298800384249,
+        "sequence": 39,
+        "trial": 1,
+        "workload": "peeks"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 13.562450499739498,
+          "operations": 100,
+          "operations_per_second": 7.373298800384249,
+          "sequence": 39,
+          "trial": 1,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 13.73762229224667,
+          "operations": 100,
+          "operations_per_second": 7.279280058270248,
+          "sequence": 59,
+          "trial": 2,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 13.700163083150983,
+          "operations": 100,
+          "operations_per_second": 7.299183184394649,
+          "sequence": 67,
+          "trial": 3,
+          "workload": "peeks"
+        }
+      ],
+      "workload": "peeks"
+    },
+    {
+      "access_type": "cli",
+      "backend": "pg",
+      "best": {
+        "access_type": "cli",
+        "backend": "pg",
+        "elapsed_seconds": 13.486390999983996,
+        "operations": 100,
+        "operations_per_second": 7.414882157881872,
+        "sequence": 68,
+        "trial": 3,
+        "workload": "mixed"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 13.52413725014776,
+          "operations": 100,
+          "operations_per_second": 7.394187011737657,
+          "sequence": 40,
+          "trial": 1,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 13.740083208773285,
+          "operations": 100,
+          "operations_per_second": 7.27797630338572,
+          "sequence": 60,
+          "trial": 2,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "cli",
+          "backend": "pg",
+          "elapsed_seconds": 13.486390999983996,
+          "operations": 100,
+          "operations_per_second": 7.414882157881872,
+          "sequence": 68,
+          "trial": 3,
+          "workload": "mixed"
+        }
+      ],
+      "workload": "mixed"
+    },
+    {
+      "access_type": "api",
+      "backend": "pg",
+      "best": {
+        "access_type": "api",
+        "backend": "pg",
+        "elapsed_seconds": 0.678971332963556,
+        "operations": 100,
+        "operations_per_second": 147.2816231629731,
+        "sequence": 49,
+        "trial": 2,
+        "workload": "writes"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 0.917599624954164,
+          "operations": 100,
+          "operations_per_second": 108.97999223244582,
+          "sequence": 41,
+          "trial": 1,
+          "workload": "writes"
+        },
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 0.678971332963556,
+          "operations": 100,
+          "operations_per_second": 147.2816231629731,
+          "sequence": 49,
+          "trial": 2,
+          "workload": "writes"
+        },
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 1.0902725420892239,
+          "operations": 100,
+          "operations_per_second": 91.72018567795534,
+          "sequence": 69,
+          "trial": 3,
+          "workload": "writes"
+        }
+      ],
+      "workload": "writes"
+    },
+    {
+      "access_type": "api",
+      "backend": "pg",
+      "best": {
+        "access_type": "api",
+        "backend": "pg",
+        "elapsed_seconds": 1.0140697499737144,
+        "operations": 100,
+        "operations_per_second": 98.61254613165623,
+        "sequence": 70,
+        "trial": 3,
+        "workload": "reads"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 1.0638413331471384,
+          "operations": 100,
+          "operations_per_second": 93.99897981419109,
+          "sequence": 42,
+          "trial": 1,
+          "workload": "reads"
+        },
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 1.1763655417598784,
+          "operations": 100,
+          "operations_per_second": 85.00759028558163,
+          "sequence": 50,
+          "trial": 2,
+          "workload": "reads"
+        },
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 1.0140697499737144,
+          "operations": 100,
+          "operations_per_second": 98.61254613165623,
+          "sequence": 70,
+          "trial": 3,
+          "workload": "reads"
+        }
+      ],
+      "workload": "reads"
+    },
+    {
+      "access_type": "api",
+      "backend": "pg",
+      "best": {
+        "access_type": "api",
+        "backend": "pg",
+        "elapsed_seconds": 0.5334606673568487,
+        "operations": 100,
+        "operations_per_second": 187.45524481771557,
+        "sequence": 51,
+        "trial": 2,
+        "workload": "peeks"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 0.7941824998706579,
+          "operations": 100,
+          "operations_per_second": 125.9156428356029,
+          "sequence": 43,
+          "trial": 1,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 0.5334606673568487,
+          "operations": 100,
+          "operations_per_second": 187.45524481771557,
+          "sequence": 51,
+          "trial": 2,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 0.5990714579820633,
+          "operations": 100,
+          "operations_per_second": 166.92499478583753,
+          "sequence": 71,
+          "trial": 3,
+          "workload": "peeks"
+        }
+      ],
+      "workload": "peeks"
+    },
+    {
+      "access_type": "api",
+      "backend": "pg",
+      "best": {
+        "access_type": "api",
+        "backend": "pg",
+        "elapsed_seconds": 0.8600488747470081,
+        "operations": 100,
+        "operations_per_second": 116.27246187539748,
+        "sequence": 52,
+        "trial": 2,
+        "workload": "mixed"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 0.9937932919710875,
+          "operations": 100,
+          "operations_per_second": 100.62454718491833,
+          "sequence": 44,
+          "trial": 1,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 0.8600488747470081,
+          "operations": 100,
+          "operations_per_second": 116.27246187539748,
+          "sequence": 52,
+          "trial": 2,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "api",
+          "backend": "pg",
+          "elapsed_seconds": 0.9685737080872059,
+          "operations": 100,
+          "operations_per_second": 103.24459477377891,
+          "sequence": 72,
+          "trial": 3,
+          "workload": "mixed"
+        }
+      ],
+      "workload": "mixed"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "pg",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "pg",
+        "elapsed_seconds": 0.10853079194203019,
+        "operations": 100,
+        "operations_per_second": 921.3974966055093,
+        "sequence": 61,
+        "trial": 3,
+        "workload": "writes"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.11740104109048843,
+          "operations": 100,
+          "operations_per_second": 851.7812028849357,
+          "sequence": 45,
+          "trial": 1,
+          "workload": "writes"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.11450058314949274,
+          "operations": 100,
+          "operations_per_second": 873.3579973949942,
+          "sequence": 53,
+          "trial": 2,
+          "workload": "writes"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.10853079194203019,
+          "operations": 100,
+          "operations_per_second": 921.3974966055093,
+          "sequence": 61,
+          "trial": 3,
+          "workload": "writes"
+        }
+      ],
+      "workload": "writes"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "pg",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "pg",
+        "elapsed_seconds": 0.0798559170216322,
+        "operations": 100,
+        "operations_per_second": 1252.2553585216606,
+        "sequence": 62,
+        "trial": 3,
+        "workload": "reads"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.1383642079308629,
+          "operations": 100,
+          "operations_per_second": 722.7302601982694,
+          "sequence": 46,
+          "trial": 1,
+          "workload": "reads"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.09358616638928652,
+          "operations": 100,
+          "operations_per_second": 1068.5339923427798,
+          "sequence": 54,
+          "trial": 2,
+          "workload": "reads"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.0798559170216322,
+          "operations": 100,
+          "operations_per_second": 1252.2553585216606,
+          "sequence": 62,
+          "trial": 3,
+          "workload": "reads"
+        }
+      ],
+      "workload": "reads"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "pg",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "pg",
+        "elapsed_seconds": 0.017517915926873684,
+        "operations": 100,
+        "operations_per_second": 5708.441598728828,
+        "sequence": 47,
+        "trial": 1,
+        "workload": "peeks"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.017517915926873684,
+          "operations": 100,
+          "operations_per_second": 5708.441598728828,
+          "sequence": 47,
+          "trial": 1,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.018267250154167414,
+          "operations": 100,
+          "operations_per_second": 5474.2776912805575,
+          "sequence": 55,
+          "trial": 2,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.018156874924898148,
+          "operations": 100,
+          "operations_per_second": 5507.555700726454,
+          "sequence": 63,
+          "trial": 3,
+          "workload": "peeks"
+        }
+      ],
+      "workload": "peeks"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "pg",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "pg",
+        "elapsed_seconds": 0.054302250035107136,
+        "operations": 100,
+        "operations_per_second": 1841.5443178753856,
+        "sequence": 48,
+        "trial": 1,
+        "workload": "mixed"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.054302250035107136,
+          "operations": 100,
+          "operations_per_second": 1841.5443178753856,
+          "sequence": 48,
+          "trial": 1,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.054879290983080864,
+          "operations": 100,
+          "operations_per_second": 1822.180975895438,
+          "sequence": 56,
+          "trial": 2,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "pg",
+          "elapsed_seconds": 0.05687479209154844,
+          "operations": 100,
+          "operations_per_second": 1758.2481855763995,
+          "sequence": 64,
+          "trial": 3,
+          "workload": "mixed"
+        }
+      ],
+      "workload": "mixed"
+    },
+    {
+      "access_type": "cli",
+      "backend": "redis",
+      "best": {
+        "access_type": "cli",
+        "backend": "redis",
+        "elapsed_seconds": 9.716768166981637,
+        "operations": 100,
+        "operations_per_second": 10.291487692359285,
+        "sequence": 93,
+        "trial": 2,
+        "workload": "writes"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 9.842092833016068,
+          "operations": 100,
+          "operations_per_second": 10.1604406396719,
+          "sequence": 73,
+          "trial": 1,
+          "workload": "writes"
+        },
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 9.716768166981637,
+          "operations": 100,
+          "operations_per_second": 10.291487692359285,
+          "sequence": 93,
+          "trial": 2,
+          "workload": "writes"
+        },
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 9.890810333192348,
+          "operations": 100,
+          "operations_per_second": 10.110395066864465,
+          "sequence": 101,
+          "trial": 3,
+          "workload": "writes"
+        }
+      ],
+      "workload": "writes"
+    },
+    {
+      "access_type": "cli",
+      "backend": "redis",
+      "best": {
+        "access_type": "cli",
+        "backend": "redis",
+        "elapsed_seconds": 9.970340457744896,
+        "operations": 100,
+        "operations_per_second": 10.029747772787502,
+        "sequence": 74,
+        "trial": 1,
+        "workload": "reads"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 9.970340457744896,
+          "operations": 100,
+          "operations_per_second": 10.029747772787502,
+          "sequence": 74,
+          "trial": 1,
+          "workload": "reads"
+        },
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 10.067666665650904,
+          "operations": 100,
+          "operations_per_second": 9.932788134631263,
+          "sequence": 94,
+          "trial": 2,
+          "workload": "reads"
+        },
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 10.390658082906157,
+          "operations": 100,
+          "operations_per_second": 9.624029508247572,
+          "sequence": 102,
+          "trial": 3,
+          "workload": "reads"
+        }
+      ],
+      "workload": "reads"
+    },
+    {
+      "access_type": "cli",
+      "backend": "redis",
+      "best": {
+        "access_type": "cli",
+        "backend": "redis",
+        "elapsed_seconds": 9.949222167022526,
+        "operations": 100,
+        "operations_per_second": 10.051036987741394,
+        "sequence": 75,
+        "trial": 1,
+        "workload": "peeks"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 9.949222167022526,
+          "operations": 100,
+          "operations_per_second": 10.051036987741394,
+          "sequence": 75,
+          "trial": 1,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 10.080788708291948,
+          "operations": 100,
+          "operations_per_second": 9.91985874257488,
+          "sequence": 95,
+          "trial": 2,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 10.144132209010422,
+          "operations": 100,
+          "operations_per_second": 9.85791568362802,
+          "sequence": 103,
+          "trial": 3,
+          "workload": "peeks"
+        }
+      ],
+      "workload": "peeks"
+    },
+    {
+      "access_type": "cli",
+      "backend": "redis",
+      "best": {
+        "access_type": "cli",
+        "backend": "redis",
+        "elapsed_seconds": 9.884711625054479,
+        "operations": 100,
+        "operations_per_second": 10.116633018057202,
+        "sequence": 76,
+        "trial": 1,
+        "workload": "mixed"
+      },
+      "trials": [
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 9.884711625054479,
+          "operations": 100,
+          "operations_per_second": 10.116633018057202,
+          "sequence": 76,
+          "trial": 1,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 10.041068791877478,
+          "operations": 100,
+          "operations_per_second": 9.959099182837289,
+          "sequence": 96,
+          "trial": 2,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "cli",
+          "backend": "redis",
+          "elapsed_seconds": 10.136778459418565,
+          "operations": 100,
+          "operations_per_second": 9.865067131568336,
+          "sequence": 104,
+          "trial": 3,
+          "workload": "mixed"
+        }
+      ],
+      "workload": "mixed"
+    },
+    {
+      "access_type": "api",
+      "backend": "redis",
+      "best": {
+        "access_type": "api",
+        "backend": "redis",
+        "elapsed_seconds": 0.2867152080871165,
+        "operations": 100,
+        "operations_per_second": 348.7781505109965,
+        "sequence": 85,
+        "trial": 2,
+        "workload": "writes"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.4063100409694016,
+          "operations": 100,
+          "operations_per_second": 246.11747167609573,
+          "sequence": 77,
+          "trial": 1,
+          "workload": "writes"
+        },
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.2867152080871165,
+          "operations": 100,
+          "operations_per_second": 348.7781505109965,
+          "sequence": 85,
+          "trial": 2,
+          "workload": "writes"
+        },
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.3259765421971679,
+          "operations": 100,
+          "operations_per_second": 306.77054037684314,
+          "sequence": 105,
+          "trial": 3,
+          "workload": "writes"
+        }
+      ],
+      "workload": "writes"
+    },
+    {
+      "access_type": "api",
+      "backend": "redis",
+      "best": {
+        "access_type": "api",
+        "backend": "redis",
+        "elapsed_seconds": 0.23059783410280943,
+        "operations": 100,
+        "operations_per_second": 433.65541740264626,
+        "sequence": 106,
+        "trial": 3,
+        "workload": "reads"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.25376712484285235,
+          "operations": 100,
+          "operations_per_second": 394.0620758576428,
+          "sequence": 78,
+          "trial": 1,
+          "workload": "reads"
+        },
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.2556677917018533,
+          "operations": 100,
+          "operations_per_second": 391.13256830025307,
+          "sequence": 86,
+          "trial": 2,
+          "workload": "reads"
+        },
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.23059783410280943,
+          "operations": 100,
+          "operations_per_second": 433.65541740264626,
+          "sequence": 106,
+          "trial": 3,
+          "workload": "reads"
+        }
+      ],
+      "workload": "reads"
+    },
+    {
+      "access_type": "api",
+      "backend": "redis",
+      "best": {
+        "access_type": "api",
+        "backend": "redis",
+        "elapsed_seconds": 0.2309170002117753,
+        "operations": 100,
+        "operations_per_second": 433.05603272296725,
+        "sequence": 87,
+        "trial": 2,
+        "workload": "peeks"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.3078794158063829,
+          "operations": 100,
+          "operations_per_second": 324.8024871623354,
+          "sequence": 79,
+          "trial": 1,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.2309170002117753,
+          "operations": 100,
+          "operations_per_second": 433.05603272296725,
+          "sequence": 87,
+          "trial": 2,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.28967208368703723,
+          "operations": 100,
+          "operations_per_second": 345.2179399794713,
+          "sequence": 107,
+          "trial": 3,
+          "workload": "peeks"
+        }
+      ],
+      "workload": "peeks"
+    },
+    {
+      "access_type": "api",
+      "backend": "redis",
+      "best": {
+        "access_type": "api",
+        "backend": "redis",
+        "elapsed_seconds": 0.22472291719168425,
+        "operations": 100,
+        "operations_per_second": 444.9924433594904,
+        "sequence": 88,
+        "trial": 2,
+        "workload": "mixed"
+      },
+      "trials": [
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.3669634577818215,
+          "operations": 100,
+          "operations_per_second": 272.5066975454954,
+          "sequence": 80,
+          "trial": 1,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.22472291719168425,
+          "operations": 100,
+          "operations_per_second": 444.9924433594904,
+          "sequence": 88,
+          "trial": 2,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "api",
+          "backend": "redis",
+          "elapsed_seconds": 0.3001690832898021,
+          "operations": 100,
+          "operations_per_second": 333.1455688374599,
+          "sequence": 108,
+          "trial": 3,
+          "workload": "mixed"
+        }
+      ],
+      "workload": "mixed"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "redis",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "redis",
+        "elapsed_seconds": 0.032670042011886835,
+        "operations": 100,
+        "operations_per_second": 3060.9082156556606,
+        "sequence": 89,
+        "trial": 2,
+        "workload": "writes"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.044775084126740694,
+          "operations": 100,
+          "operations_per_second": 2233.384971805731,
+          "sequence": 81,
+          "trial": 1,
+          "workload": "writes"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.032670042011886835,
+          "operations": 100,
+          "operations_per_second": 3060.9082156556606,
+          "sequence": 89,
+          "trial": 2,
+          "workload": "writes"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.04648483311757445,
+          "operations": 100,
+          "operations_per_second": 2151.239303087724,
+          "sequence": 97,
+          "trial": 3,
+          "workload": "writes"
+        }
+      ],
+      "workload": "writes"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "redis",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "redis",
+        "elapsed_seconds": 0.015336166135966778,
+        "operations": 100,
+        "operations_per_second": 6520.53447474577,
+        "sequence": 90,
+        "trial": 2,
+        "workload": "reads"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.018677958752959967,
+          "operations": 100,
+          "operations_per_second": 5353.904102832041,
+          "sequence": 82,
+          "trial": 1,
+          "workload": "reads"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.015336166135966778,
+          "operations": 100,
+          "operations_per_second": 6520.53447474577,
+          "sequence": 90,
+          "trial": 2,
+          "workload": "reads"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.015919542405754328,
+          "operations": 100,
+          "operations_per_second": 6281.58758909136,
+          "sequence": 98,
+          "trial": 3,
+          "workload": "reads"
+        }
+      ],
+      "workload": "reads"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "redis",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "redis",
+        "elapsed_seconds": 0.020814833231270313,
+        "operations": 100,
+        "operations_per_second": 4804.266211932416,
+        "sequence": 91,
+        "trial": 2,
+        "workload": "peeks"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.025097582954913378,
+          "operations": 100,
+          "operations_per_second": 3984.4474338284,
+          "sequence": 83,
+          "trial": 1,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.020814833231270313,
+          "operations": 100,
+          "operations_per_second": 4804.266211932416,
+          "sequence": 91,
+          "trial": 2,
+          "workload": "peeks"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.021153959445655346,
+          "operations": 100,
+          "operations_per_second": 4727.2474099659985,
+          "sequence": 99,
+          "trial": 3,
+          "workload": "peeks"
+        }
+      ],
+      "workload": "peeks"
+    },
+    {
+      "access_type": "optimized-api",
+      "backend": "redis",
+      "best": {
+        "access_type": "optimized-api",
+        "backend": "redis",
+        "elapsed_seconds": 0.023664250038564205,
+        "operations": 100,
+        "operations_per_second": 4225.783611863297,
+        "sequence": 92,
+        "trial": 2,
+        "workload": "mixed"
+      },
+      "trials": [
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.026012334041297436,
+          "operations": 100,
+          "operations_per_second": 3844.330148968525,
+          "sequence": 84,
+          "trial": 1,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.023664250038564205,
+          "operations": 100,
+          "operations_per_second": 4225.783611863297,
+          "sequence": 92,
+          "trial": 2,
+          "workload": "mixed"
+        },
+        {
+          "access_type": "optimized-api",
+          "backend": "redis",
+          "elapsed_seconds": 0.025471624918282032,
+          "operations": 100,
+          "operations_per_second": 3925.9372074149023,
+          "sequence": 100,
+          "trial": 3,
+          "workload": "mixed"
+        }
+      ],
+      "workload": "mixed"
+    }
+  ],
+  "schema_version": 1,
+  "settings": {
+    "access_types": [
+      "cli",
+      "api",
+      "optimized-api"
+    ],
+    "auto_vacuum": false,
+    "backends": [
+      "sqlite",
+      "pg",
+      "redis"
+    ],
+    "best_of": 3,
+    "command_timeout": 30.0,
+    "message_size": 100,
+    "operations": 100,
+    "workloads": [
+      "writes",
+      "reads",
+      "peeks",
+      "mixed"
+    ]
+  },
+  "simplebroker_version": "8.7.2",
+  "command": "python bin/benchmark.py --operations 100 --format json",
+  "host_cpu": "Apple M4 Max",
+  "git_revision": "eeb24cd"
+}

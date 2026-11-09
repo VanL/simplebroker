@@ -29,8 +29,8 @@ dependencies and stores its state in one SQLite database.
   not have to set up a queue server. Zero configuration: no servers, no
   daemons; each directory gets its own isolated `.broker.db` with ACID
   durability and safe concurrent access. On an M4 MacBook Pro,
-  [`bin/benchmark.py`](bin/benchmark.py) measured 962.8 mixed ops/second
-  through the default API and 7,879.6 through the persistent optimized API.
+  [`bin/benchmark.py`](bin/benchmark.py) measured 1,009.9 mixed ops/second
+  through the default API and 12,075.7 through the persistent optimized API.
 - **Shell scripts, cron jobs, and CI/CD pipelines.** `broker write tasks
   "build #123"` composes with pipes, exit codes, and `--json` like a Unix
   tool — decouple script stages, coordinate build steps, buffer logs, or
@@ -963,28 +963,29 @@ programmatic CLI equivalent) — is in the
 ## Performance & Tuning
 
 [`bin/benchmark.py`](bin/benchmark.py) records a best-of-three
-operations/second matrix across workload, access type, and backend. This M4
-MacBook Pro run used 100 operations per sample, 100-byte messages, automatic
-vacuum disabled, and all other SimpleBroker settings at their defaults:
+operations/second matrix across workload, access type, and backend. The
+November 9, 2026 run on an M4 MacBook Pro used 100 operations per sample,
+100-byte messages, automatic vacuum disabled, and all other SimpleBroker
+settings at their defaults.
 
 | Backend | Access | Writes | Reads | Peeks | Mixed |
 |---------|--------|-------:|------:|------:|------:|
-| `sqlite` | `cli` | 14.7 | 12.4 | 12.5 | 13.1 |
-| `sqlite` | `api` | 909.1 | 898.2 | 1,139.8 | 962.8 |
-| `sqlite` | `optimized-api` | 7,125.2 | 5,945.4 | 22,314.6 | 7,879.6 |
-| `pg` | `cli` | 6.3 | 5.8 | 5.9 | 6.1 |
-| `pg` | `api` | 105.7 | 113.1 | 130.9 | 102.5 |
-| `pg` | `optimized-api` | 767.5 | 1,039.8 | 4,423.3 | 1,402.0 |
-| `redis` | `cli` | 8.0 | 7.9 | 8.0 | 8.0 |
-| `redis` | `api` | 250.2 | 263.0 | 205.7 | 145.8 |
-| `redis` | `optimized-api` | 2,145.0 | 5,252.6 | 3,934.5 | 3,700.5 |
+| `sqlite` | `cli` | 18.8 | 16.6 | 16.5 | 17.1 |
+| `sqlite` | `api` | 954.1 | 1,021.3 | 1,269.8 | 1,009.9 |
+| `sqlite` | `optimized-api` | 7,654.3 | 9,518.5 | 36,949.8 | 12,075.7 |
+| `pg` | `cli` | 8.0 | 7.1 | 7.4 | 7.4 |
+| `pg` | `api` | 147.3 | 98.6 | 187.5 | 116.3 |
+| `pg` | `optimized-api` | 921.4 | 1,252.3 | 5,708.4 | 1,841.5 |
+| `redis` | `cli` | 10.3 | 10.0 | 10.1 | 10.1 |
+| `redis` | `api` | 348.8 | 433.7 | 433.1 | 445.0 |
+| `redis` | `optimized-api` | 3,060.9 | 6,520.5 | 4,804.3 | 4,225.8 |
 
 `cli` includes a fresh Python process for every operation. `api` uses the
 default ephemeral connection behavior. `optimized-api` runs the same calls
 with `persistent=True`. These are point-in-time measurements from a short
 local run, not performance guarantees; topology, hardware, load, and software
 versions will change the result. The attributable raw measurements are in the
-[result artifact](benchmarks/results/2026-08-10-m4-matrix.json). Use `--all`
+[result artifact](benchmarks/results/2026-11-09-m4-matrix.json). Use `--all`
 for bulk operations where its
 delivery semantics fit the workload.
 

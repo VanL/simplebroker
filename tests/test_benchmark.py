@@ -18,7 +18,7 @@ from simplebroker._targets import BrokerTarget
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin" / "benchmark.py"
 README = ROOT / "README.md"
-RESULT_ARTIFACT = ROOT / "benchmarks" / "results" / "2026-08-10-m4-matrix.json"
+RESULT_ARTIFACT = ROOT / "benchmarks" / "results" / "2026-11-09-m4-matrix.json"
 
 
 def test_matrix_vocabulary_is_complete() -> None:
@@ -31,12 +31,9 @@ def test_matrix_vocabulary_is_complete() -> None:
 
 def test_published_benchmark_catalog_matches_result_artifact() -> None:
     report = json.loads(RESULT_ARTIFACT.read_text(encoding="utf-8"))
-    assert report["command"] == (
-        "uv run --locked --extra pg --extra redis python bin/benchmark.py "
-        "--operations 100 --format json"
-    )
+    assert report["command"] == "python bin/benchmark.py --operations 100 --format json"
     assert report["host_cpu"]
-    assert report["generated_at"].startswith("2026-08-10T")
+    assert report["generated_at"].startswith("2026-11-09T")
     assert report["simplebroker_version"]
     assert report["settings"] == {
         "backends": ["sqlite", "pg", "redis"],
@@ -87,7 +84,7 @@ def test_published_benchmark_catalog_matches_result_artifact() -> None:
     assert catalog_rows == expected_rows
     assert "[`bin/benchmark.py`](bin/benchmark.py)" in performance
     assert (
-        "[result artifact](benchmarks/results/2026-08-10-m4-matrix.json)" in performance
+        "[result artifact](benchmarks/results/2026-11-09-m4-matrix.json)" in performance
     )
     assert "operations/second" in performance
     assert "M4 MacBook Pro" in normalized_performance
