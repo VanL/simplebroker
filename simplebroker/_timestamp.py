@@ -11,9 +11,10 @@ import re
 import threading
 import time
 import unicodedata
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from datetime import time as datetime_time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from ._backend_plugins import BackendPlugin, resolve_runner_backend_plugin
 from ._constants import (
@@ -64,6 +65,50 @@ _BOUND_PARSE_GUIDANCE = (
     "timestamp bounds require integral seconds. For finer granularity, use integer "
     "ms, integer ns, or a native hybrid message ID."
 )
+
+
+_T = TypeVar("_T")
+
+
+def _run_durable_advance(
+    operation: Callable[[], _T],
+    *,
+    marked_failures_only: bool = False,
+) -> _T:
+    """Run a durable high-water advance with the generator's failure contract.
+
+    Lock or busy contention is retried for ``TS_RETRY_MAX_ELAPSED``; exhausted
+    contention raises ``TimestampError`` (known failure, nothing committed).
+    Any other ``OperationalError`` raised by the advance raises
+    ``TimestampError(outcome_ambiguous=True)``: the advance may already have
+    committed. ``generate()`` and ``advance_to_at_least()`` classify every
+    failure this way.
+
+    With ``marked_failures_only`` (a server-allocated write, whose operation
+    also inserts and commits the row), only failures the backend marked
+    ``OperationalError._high_water_phase`` are advance failures; any other
+    error propagates unchanged, exactly as an insert or commit failure does on
+    the shared SQL transaction.
+
+    Spec: [SB-ID-2], [SB-ID-3]
+    """
+    try:
+        return _execute_with_retry(
+            operation,
+            max_retries=None,
+            retry_delay=0.002,
+            max_elapsed=TS_RETRY_MAX_ELAPSED,
+            max_retry_delay=TS_RETRY_MAX_DELAY,
+        )
+    except OperationalError as e:  # pragma busy_timeout etc.
+        if marked_failures_only and not e._high_water_phase:
+            raise
+        if _is_locked_operational_error(e):
+            raise TimestampError(f"database busy while writing timestamp: {e}") from e
+        raise TimestampError(
+            f"database error while writing timestamp; durable outcome is unknown: {e}",
+            outcome_ambiguous=True,
+        ) from e
 
 
 def decode_hybrid_timestamp(ts: int) -> tuple[int, int]:
@@ -360,24 +405,7 @@ class TimestampGenerator:
                 new_ts=new_ts,
             )
 
-        try:
-            return _execute_with_retry(
-                _op,
-                max_retries=None,
-                retry_delay=0.002,
-                max_elapsed=TS_RETRY_MAX_ELAPSED,
-                max_retry_delay=TS_RETRY_MAX_DELAY,
-            )
-        except OperationalError as e:  # pragma busy_timeout etc.
-            if _is_locked_operational_error(e):
-                raise TimestampError(
-                    f"database busy while writing timestamp: {e}"
-                ) from e
-            raise TimestampError(
-                "database error while writing timestamp; durable outcome is unknown: "
-                f"{e}",
-                outcome_ambiguous=True,
-            ) from e
+        return _run_durable_advance(_op)
 
     # -----------------------------------------------------------------
     # 3. lightweight read helper when we lost the race

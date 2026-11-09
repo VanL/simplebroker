@@ -52,8 +52,14 @@ class BackendPlugin(Protocol):
       high-water serialization must be held from allocation through commit
       (generated rows commit in ID order), and it must be acquired before any
       lock on the messages storage. Raises IntegrityError, with nothing
-      committed, when the chosen ID is already stored. Postgres implements it
-      as one pipelined transaction; absent, the shared SQL transaction runs.
+      committed, when the chosen ID is already stored. An OperationalError
+      raised while acquiring or advancing the high-water serialization must
+      set ``_high_water_phase = True``: core then reports it exactly like a
+      failed compare-and-advance (contention retried for the timestamp
+      budget, then TimestampError; otherwise TimestampError with
+      outcome_ambiguous=True). Insert, parameter, and commit failures stay
+      unmarked and propagate unchanged. Postgres implements it as one
+      pipelined transaction; absent, the shared SQL transaction runs.
     """
 
     name: str

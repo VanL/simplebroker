@@ -42,6 +42,11 @@ class OperationalError(DatabaseError, sqlite3.OperationalError):
     retryable: bool | None = None
     # Connection admission is distinct from statement lock/busy contention.
     _connection_capacity: bool = False
+    # Set by a backend's server-allocated write (write_generated_message) when
+    # the failure happened while acquiring or advancing durable high-water.
+    # Core then reports it like any failed high-water advance: TimestampError,
+    # outcome_ambiguous unless it was exhausted contention ([SB-ID-3]).
+    _high_water_phase: bool = False
 
 
 class StopException(OperationalError):

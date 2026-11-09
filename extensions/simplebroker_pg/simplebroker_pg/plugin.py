@@ -12,7 +12,7 @@ from psycopg import ProgrammingError, conninfo
 
 from simplebroker import Config, resolve_config
 from simplebroker._backend_plugins import ActivityWaiter, BackendPlugin
-from simplebroker._exceptions import DatabaseError
+from simplebroker._exceptions import DatabaseError, OperationalError
 from simplebroker._runner import (
     SQLRunner,
     lease_runner_thread_connection,
@@ -35,6 +35,7 @@ from .runner import (
     PostgresMultiQueueActivityWaiter,
     PostgresRunner,
     RunnerMetaState,
+    failed_statement,
 )
 from .schema import initialize_database, meta_table_exists, migrate_schema
 from .validation import (
@@ -836,17 +837,29 @@ class PostgresBackendPlugin:
         ``None`` without mutation when the stored high-water's logical counter
         is exhausted at or above ``candidate``.
 
-        Spec: [SB-ID-1], [SB-ID-2], [SB-ID-4]
+        A failure of the first statement, which waits for and takes the
+        high-water row lock, is marked ``_high_water_phase``: it is the failure
+        class the shared transaction's compare-and-advance reports as
+        ``TimestampError``. Failures of the allocate-and-insert statement
+        (including parameter adaptation) and of the commit propagate unmarked,
+        like the shared transaction's insert and commit failures.
+
+        Spec: [SB-ID-1], [SB-ID-2], [SB-ID-3], [SB-ID-4]
         """
-        results = cast("_TransactionRunner", runner).run_transaction(
-            (
-                (pg_sql.LOCK_LAST_TS_ROW, ()),
+        try:
+            results = cast("_TransactionRunner", runner).run_transaction(
                 (
-                    pg_sql.WRITE_GENERATED_MESSAGE,
-                    (candidate, candidate, candidate, queue, message),
-                ),
+                    (pg_sql.LOCK_LAST_TS_ROW, ()),
+                    (
+                        pg_sql.WRITE_GENERATED_MESSAGE,
+                        (candidate, candidate, candidate, queue, message),
+                    ),
+                )
             )
-        )
+        except OperationalError as exc:
+            if failed_statement(exc) == 0:
+                exc._high_water_phase = True
+            raise
         rows = results[-1]
         return int(rows[0][0]) if rows else None
 

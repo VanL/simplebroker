@@ -126,6 +126,20 @@ What the row lock still guarantees, and why each piece of the shape exists:
   rolls back the allocation too, and `write()`'s existing ladder resynchronizes
   and retries. After resync the server allocates above the repaired high-water,
   so a persistent candidate conflict self-heals on PostgreSQL.
+- **Failure reporting.** The shared transaction reports a failed
+  compare-and-advance as `TimestampError` (contention retried for the
+  timestamp budget, then a known failure; anything else
+  `outcome_ambiguous=True`) and insert or commit failures as the native
+  database error. The pipelined write keeps that split by phase:
+  `run_transaction` reports which statement a failure reached, the plugin
+  marks a failure of the row-lock statement (where the write waits for and
+  takes high-water) `OperationalError._high_water_phase`, and core runs the
+  whole exchange through `simplebroker/_timestamp.py::_run_durable_advance`,
+  the classifier `_store_if_greater` also uses. Allocate-and-insert failures
+  (including parameter adaptation, such as a NUL body) and commit failures
+  stay native. Retryable contention on the row lock now gets the documented
+  contention retry; on the shared transaction PostgreSQL could not retry
+  inside the aborted transaction.
 - **Transport.** psycopg flushes each pipelined statement as it is queued, so
   the residual client exposure inside the lock is the non-blocking gap between
   the client's sends, not a round trip. Without libpq pipeline support
@@ -139,8 +153,10 @@ on statement errors by default. Moving every `messages`-locking path to
 the plan, not current behavior.
 
 `tests/test_write_visibility.py` records the PostgreSQL write as one
-`run_transaction` exchange; real-PostgreSQL proofs live in
-`extensions/simplebroker_pg/tests/test_pg_write_allocation.py`.
+`run_transaction` call; real-PostgreSQL proofs live in
+`extensions/simplebroker_pg/tests/test_pg_write_allocation.py`, including a
+TCP relay that checks on the wire that both statements and the single Sync
+are sent while the row lock is still being waited for.
 
 When `keep_newest` is present, shared SQL extends the same transaction:
 

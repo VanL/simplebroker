@@ -14,6 +14,7 @@ docs/plans/2026-11-08-pg-write-lock-hold-plan.md.
 
 from __future__ import annotations
 
+import socket
 import threading
 import time
 import warnings
@@ -21,7 +22,9 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
+import psycopg
 import pytest
+from psycopg import conninfo
 from simplebroker_pg import PostgresRunner
 from simplebroker_pg import _sql as pg_sql
 from simplebroker_pg import runner as runner_module
@@ -33,7 +36,7 @@ from simplebroker._constants import (
     MAX_LOGICAL_COUNTER,
     NS_PER_SECOND,
 )
-from simplebroker._exceptions import TimestampError
+from simplebroker._exceptions import OperationalError, TimestampError
 from simplebroker.db import BrokerCore
 from simplebroker.ext import IntegrityError
 
@@ -56,11 +59,12 @@ def _classify(sql: str) -> str:
 
 
 class _ExchangeRecorder:
-    """Pass-through spy that records each client exchange with PostgreSQL.
+    """Pass-through spy that records each runner call a write makes.
 
     Every call is delegated to the real runner; nothing is faked. A
-    ``run_transaction`` call is one pipelined exchange and is recorded with the
-    classified statements it carries.
+    ``run_transaction`` call is recorded with the classified statements it
+    carries. This shows how core uses the runner, not how the runner talks to
+    PostgreSQL; ``_ClientStreamRelay`` below observes the wire.
     """
 
     def __init__(self, inner: PostgresRunner) -> None:
@@ -97,6 +101,103 @@ class _ExchangeRecorder:
         return getattr(self._inner, name)
 
 
+class _ClientStreamRelay:
+    """TCP relay that records the protocol bytes a client sends to PostgreSQL.
+
+    Only the client-to-server direction is recorded, per accepted connection.
+    Connect with ``sslmode=disable`` so the frontend messages stay readable.
+    """
+
+    def __init__(self, host: str, port: int) -> None:
+        self._upstream = (host, port)
+        self._listener = socket.create_server(("127.0.0.1", 0))
+        self.port: int = self._listener.getsockname()[1]
+        self._lock = threading.Lock()
+        self._streams: list[bytearray] = []
+        self._sockets: list[socket.socket] = []
+        self._threads: list[threading.Thread] = []
+        self._start(self._accept)
+
+    def _start(self, target: Callable[..., None], *args: Any) -> None:
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        self._threads.append(thread)
+        thread.start()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                client, _ = self._listener.accept()
+            except OSError:
+                return
+            upstream = socket.create_connection(self._upstream)
+            stream = bytearray()
+            with self._lock:
+                self._streams.append(stream)
+                self._sockets.extend((client, upstream))
+            self._start(self._pump, client, upstream, stream)
+            self._start(self._pump, upstream, client, None)
+
+    def _pump(
+        self, source: socket.socket, sink: socket.socket, stream: bytearray | None
+    ) -> None:
+        try:
+            while data := source.recv(65536):
+                if stream is not None:
+                    with self._lock:
+                        stream += data
+                sink.sendall(data)
+        except OSError:
+            pass
+        finally:
+            try:
+                sink.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+
+    def sent_offset(self) -> int:
+        """Return the recorded length of the single relayed connection."""
+        with self._lock:
+            assert len(self._streams) == 1, "expected exactly one relayed connection"
+            return len(self._streams[0])
+
+    def message_types_since(self, offset: int) -> list[str]:
+        """Return the frontend message type bytes sent after ``offset``.
+
+        ``offset`` must be a message boundary (taken while the connection was
+        idle). Typed frontend messages are one type byte and a 4-byte length.
+        """
+        with self._lock:
+            data = bytes(self._streams[0][offset:])
+        types: list[str] = []
+        position = 0
+        while position + 5 <= len(data):
+            length = int.from_bytes(data[position + 1 : position + 5], "big")
+            if position + 1 + length > len(data):
+                break
+            types.append(chr(data[position]))
+            position += 1 + length
+        return types
+
+    def close(self) -> None:
+        self._listener.close()
+        with self._lock:
+            sockets = list(self._sockets)
+        for sock in sockets:
+            sock.close()
+        for thread in self._threads:
+            thread.join(timeout=5)
+
+
+def _relayed_dsn(pg_dsn: str, relay: _ClientStreamRelay) -> str:
+    return conninfo.make_conninfo(
+        pg_dsn,
+        host="127.0.0.1",
+        port=str(relay.port),
+        sslmode="disable",
+        gssencmode="disable",
+    )
+
+
 @pytest.fixture
 def second_core(
     pg_dsn: str,
@@ -128,12 +229,15 @@ def test_stale_candidate_write_is_one_exchange_allocating_above_high_water(
     pg_plugin: BackendPlugin,
     second_core: Callable[[], BrokerCore],
 ) -> None:
-    """A writer whose candidate is behind durable high-water neither retries nor
-    holds the row lock across client round trips.
+    """A writer whose candidate is behind durable high-water does not retry: core
+    makes one ``run_transaction`` call that locks the row, then allocates and
+    inserts.
 
     Before this change the write was BEGIN, a failed compare-and-advance, a
     ``meta`` re-read, a second compare-and-advance, INSERT, and COMMIT: six
-    exchanges, three of them while holding the high-water row lock.
+    runner calls, three of them while holding the high-water row lock. That
+    the one call is also one exchange on the wire is proven by
+    ``test_generated_write_sends_whole_transaction_while_row_lock_waits``.
     """
     recorder = _ExchangeRecorder(pg_runner)
     writer = BrokerCore(recorder, backend_plugin=pg_plugin)
@@ -271,6 +375,132 @@ def test_queued_writer_does_not_deadlock_broadcast_lock_order(
         executor.shutdown(wait=True)
         broadcast_runner.shutdown()
         writer_runner.shutdown()
+
+
+def test_generated_write_sends_whole_transaction_while_row_lock_waits(
+    pg_core: BrokerCore,
+    pg_plugin: BackendPlugin,
+    pg_dsn: str,
+    pg_schema: str,
+    pg_wait_for_blocked: Callable[[list[int], int, threading.Event, float], None],
+) -> None:
+    """The client never waits on PostgreSQL inside the high-water row lock.
+
+    Another session holds the row, so the writer's first statement waits in
+    PostgreSQL. By then the client must already have sent both statements and
+    exactly one Sync, which commits them together. The sequential transport
+    (BEGIN, lock, allocate, COMMIT: one Sync per statement, each awaited) or a
+    synchronization between the statements would fail this observation of
+    the bytes on the wire.
+    """
+    if not psycopg.Pipeline.is_supported():
+        pytest.skip("libpq without pipeline mode uses the sequential transport")
+    pg_core.write("alpha", "seed")
+    params = conninfo.conninfo_to_dict(pg_dsn)
+    relay = _ClientStreamRelay(str(params["host"]), int(str(params["port"])))
+    writer_runner = PostgresRunner(_relayed_dsn(pg_dsn, relay), schema=pg_schema)
+    blocker = PostgresRunner(pg_dsn, schema=pg_schema)
+    write_generated = pg_plugin.write_generated_message  # type: ignore[attr-defined]
+    candidate = time.time_ns() & ~LOGICAL_COUNTER_MASK
+    finished = threading.Event()
+    contender_pids: list[int] = []
+    start: list[int] = []
+
+    def write_queued() -> int | None:
+        try:
+            contender_pids.append(writer_runner._get_thread_conn().info.backend_pid)
+            start.append(relay.sent_offset())
+            return cast(
+                "int | None",
+                write_generated(
+                    writer_runner, queue="alpha", message="queued", candidate=candidate
+                ),
+            )
+        finally:
+            finished.set()
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        blocker.begin_immediate()
+        blocker.run(pg_sql.LOCK_LAST_TS_ROW, fetch=True)
+        queued = executor.submit(write_queued)
+        pg_wait_for_blocked(
+            contender_pids, blocker._get_thread_conn().info.backend_pid, finished, 5.0
+        )
+        deadline = time.monotonic() + 3.0
+        sent = relay.message_types_since(start[0])
+        while (sent.count("E") < 2 or "S" not in sent) and time.monotonic() < deadline:
+            finished.wait(0.01)
+            sent = relay.message_types_since(start[0])
+        assert not finished.is_set()
+        assert sent.count("E") == 2, sent
+        assert sent.count("S") == 1, sent
+        assert "Q" not in sent, sent
+
+        blocker.commit()
+        assert queued.result(timeout=5.0) == candidate
+        total = relay.message_types_since(start[0])
+        assert total.count("E") == 2 and total.count("S") == 1, total
+    finally:
+        if blocker._in_transaction():
+            blocker.rollback()
+        executor.shutdown(wait=True)
+        blocker.shutdown()
+        writer_runner.shutdown()
+        relay.close()
+
+
+@pytest.mark.parametrize(
+    "keep_newest",
+    [None, 5],
+    ids=["server-allocated-write", "shared-transaction-write"],
+)
+def test_high_water_wait_failure_is_an_ambiguous_timestamp_error(
+    pg_core: BrokerCore,
+    pg_runner: PostgresRunner,
+    pg_plugin: BackendPlugin,
+    pg_dsn: str,
+    pg_schema: str,
+    keep_newest: int | None,
+) -> None:
+    """A non-contention database failure while a write waits for the high-water
+    row is a failed durable high-water advance on both write paths:
+    ``TimestampError`` with ``outcome_ambiguous=True`` (the
+    ``TimestampGenerator`` contract), not a bare ``OperationalError``.
+
+    The failure is real: the writer's sessions use ``statement_timeout`` and
+    another session holds the high-water row. ``keep_newest`` writes still take
+    the shared transaction, whose compare-and-advance produced this exception
+    before the server-allocated path existed.
+    """
+    pg_core.write("jobs", "seed")
+    high_water = pg_plugin.read_last_ts(pg_runner)
+    timed_runner = PostgresRunner(
+        conninfo.make_conninfo(pg_dsn, options="-c statement_timeout=300"),
+        schema=pg_schema,
+    )
+    writer = BrokerCore(timed_runner, backend_plugin=pg_plugin)
+    blocker = PostgresRunner(pg_dsn, schema=pg_schema)
+    try:
+        assert writer.get_cached_last_timestamp() == high_water
+        blocker.begin_immediate()
+        blocker.run(pg_sql.LOCK_LAST_TS_ROW, fetch=True)
+
+        with pytest.raises(TimestampError) as raised:
+            writer.write("jobs", "timed out", keep_newest=keep_newest)
+
+        assert raised.value.outcome_ambiguous is True
+        assert isinstance(raised.value.__cause__, OperationalError)
+        assert "statement timeout" in str(raised.value)
+    finally:
+        if blocker._in_transaction():
+            blocker.rollback()
+        blocker.shutdown()
+        writer.close()
+        timed_runner.shutdown()
+
+    assert pg_plugin.read_last_ts(pg_runner) == high_water
+    assert pg_core.peek_many("jobs", with_timestamps=False) == ["seed"]
 
 
 def test_generated_write_conflict_rolls_back_allocation(

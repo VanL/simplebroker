@@ -3,7 +3,7 @@
 Class: 4 — changes the PostgreSQL execution path of every ordinary generated
 write, adds a second realization of the shared SQL write behavior behind an
 optional backend seam, and touches lock ordering that other mutations depend on.
-Status: active — implemented on branch `perf/sb-write-lock`; cross-family review pending (coordinator-owned).
+Status: active — implemented on branch `perf/sb-write-lock`; Codex round 1 (blocker F1, plus F2) fixed; round-2 verification pending (coordinator-owned).
 Owner: SimpleBroker message-identity layer (`simplebroker/db.py`, `simplebroker/_timestamp.py`) and the PostgreSQL backend (`extensions/simplebroker_pg/`).
 Boundary: ordinary `write()` without `keep_newest` on PostgreSQL. SQLite, Redis, `keep_newest`, exact insert, broadcast, rename, standalone `generate_timestamp()`, and conflict repair keep their current realization.
 Verification: real-PostgreSQL concurrency, lock-order, exhaustion, atomicity and fallback tests; shared suites on SQLite and PostgreSQL; probe and repository benchmark against disposable `postgres:18`.
@@ -193,7 +193,15 @@ Comprehension questions (expected answers; a wrong answer blocks editing):
   of durable state (harmless gap, already documented for direct backends).
 - `write()` retry ladder, metrics, and exception types are unchanged; an
   `IntegrityError` from the backend still means "allocated ID already stored,
-  nothing committed".
+  nothing committed". Failure phases keep their public exceptions (amended
+  after review F1): a failure while the write waits for or takes the
+  high-water row lock — the shared transaction's compare-and-advance phase —
+  goes through the same `_run_durable_advance` classification as
+  `TimestampGenerator._store_if_greater` (`TimestampError`, with
+  `outcome_ambiguous=True` unless it is exhausted contention); allocate-and-insert
+  statement failures (including parameter adaptation such as a NUL body) and
+  commit failures propagate unchanged, like the shared transaction's insert and
+  commit phases.
 - Lock-contention retry (`_run_with_retry`) still wraps the whole operation;
   non-retryable transport failures stay outcome-ambiguous and are not retried.
 - No backend API version bump: the hook is optional and additive in both
@@ -210,6 +218,10 @@ Comprehension questions (expected answers; a wrong answer blocks editing):
 | Under forced fault injection, a PostgreSQL write whose candidate collides with a row above a corrupted high-water now self-heals after the resync rung instead of exhausting retries | C — strictly more recovery; the exhausting path was only reachable through test fault injection | [THEORY-4] explicit safety over magical recovery: recovery uses the existing guarded resync, no new mechanism |
 | Shared conflict tests use `_reserve_candidates` as the PostgreSQL fault seam (as Redis does) and skip the "unresolvable after resync" case where the server allocates above the resynchronized high-water | N — test realization; production contract unchanged | — |
 | `TimestampGenerator` gains monotone publication of a server-chosen ID | N — internal; new `SM-TIMESTAMP-GENERATOR` transition row | engineering principle §14 floor 2 |
+
+| (Review F1) A non-contention failure while a PostgreSQL ordinary write waits for or takes the high-water row lock raises `TimestampError(outcome_ambiguous=True)` with the `OperationalError` as cause, as the shared transaction's compare-and-advance does; commit `7a14692` had let it escape as `OperationalError` | N — restores the base public behavior | [THEORY-4] explicit safety |
+| (Review F1) Retryable contention on the row lock (deadlock, `lock_timeout`, serialization failure) is retried for the timestamp budget and then raises `TimestampError(outcome_ambiguous=False)`, the `_store_if_greater` contract. On base PostgreSQL that retry re-ran the advance inside the already-aborted transaction and so reported `TimestampError(outcome_ambiguous=True)` immediately | C — the documented contention contract now holds on PostgreSQL; a known rollback is no longer reported as ambiguous | [THEORY-4] |
+| (Review F1) A server-side `OperationalError` raised inside the merged allocate-and-insert statement (after the row lock is held, for example a statement timeout or connection loss there) propagates as `OperationalError`, the shared transaction's insert-phase behavior; on base the advance `UPDATE` and the `INSERT` were separate, so such a failure inside the `UPDATE` (rare once the lock is held) was a `TimestampError` | A — pending owner decision; the merged statement cannot attribute the failure more finely, and the reachable failures there are insert-phase in kind | [THEORY-4] |
 
 No D (diminution) rows.
 
@@ -319,9 +331,14 @@ and confirm the RED tests fail on base for the stated reason.
 
 ## Review and execution record
 
-Cross-family review: pending; the coordinator records reviewer, invocation,
-findings, and dispositions here. No external reviewer was called by the
-implementer.
+Tier 1, Codex (codex exec -s read-only, reasoning effort high), 2026-11-08,
+scoped-change review of plan+implementation at 7a146923 against 5d29fbf.
+Verdict: blocker: F1.
+
+| Finding | Severity | Finding | Disposition |
+|---------|----------|---------|-------------|
+| F1 | P2 | `simplebroker/db.py` `_do_server_allocated_write`; plan invariants. A nonretryable `OperationalError` during high-water advancement became `TimestampError(outcome_ambiguous=True)` through `_store_if_greater()` on base, but the hook let `OperationalError` escape, breaking existing catches and ambiguity inspection; the plan claimed exception types were unchanged and the register omitted it. | Accepted, fixed: `_store_if_greater`'s retry and classification moved unchanged into `simplebroker/_timestamp.py::_run_durable_advance`, which the server-allocated write now also uses (`marked_failures_only=True`). `PostgresRunner.run_transaction` reports which statement a failure reached (`failed_statement`); the PostgreSQL hook marks first-statement failures (waiting for or taking the high-water row lock) `OperationalError._high_water_phase`, so they become `TimestampError` with the base retry and ambiguity semantics, while allocate-and-insert and commit failures stay native. New test `test_high_water_wait_failure_is_an_ambiguous_timestamp_error` (real `statement_timeout` while another session holds the row, both write paths) failed on 7a146923 for the server-allocated case and passes now. Register rows and invariants amended. |
+| F2 | P3 | `extensions/simplebroker_pg/tests/test_pg_write_allocation.py`. The "one exchange" assertion counted `run_transaction()` calls, not protocol exchanges, and would also pass with the sequential transport that holds the lock across round trips. | Accepted, fixed: new `test_generated_write_sends_whole_transaction_while_row_lock_waits` relays the writer's connection through a recording TCP relay and checks the frontend protocol bytes while the first statement waits for the row lock: both `Execute` messages and exactly one `Sync` must already be sent, with no simple `Query`. Forcing the sequential transport or adding a `Sync` between the statements fails it. The runner-call test's docstring now says what it counts. |
 
 ### Comprehension answers (implementer, before editing)
 
@@ -398,7 +415,30 @@ before any production edit: 5 failed, 2 passed.
   replaced by `ThreadPoolExecutor` futures so no new `BLE001` suppression is
   needed): M2 still fails the lock-order test with `deadlock detected`.
 
-### Verification runs
+### Round-2 fixes (review F1, F2)
+
+- RED on 7a146923 (tests added before the fix):
+  `test_high_water_wait_failure_is_an_ambiguous_timestamp_error[server-allocated-write]`
+  failed with `simplebroker._exceptions.OperationalError: canceling statement
+  due to statement timeout` (`CONTEXT: while locking tuple (0,2) in relation
+  "meta"`); the `[shared-transaction-write]` case (base classification) passed.
+  The new wire-level test passed on 7a146923, as it should for a correct
+  transport.
+- Sensitivity controls after the fix (each restored, `shasum` verified):
+  removing the hook's `_high_water_phase` marking fails the F1 server-allocated
+  case with the same `OperationalError`; forcing `_pipeline_supported` to
+  `False` on a pipeline-capable install fails the F2 test (frontend messages
+  `['Q', 'P', 'S', 'B', 'D', 'E', ...]`, one `Execute` sent while waiting);
+  adding `pipeline.sync()` after each statement fails it (`['P', 'B', 'D',
+  'E', 'S']`: the allocating statement is not sent until the lock is granted).
+- Runs on the round-2 tree: `test_pg_write_allocation.py` 10 passed (twice);
+  shared timestamp/write/identity/delivery/dump/keep/broadcast modules on
+  SQLite 337 passed and on PostgreSQL 189 passed, 3 skipped (the two
+  applicability skips and the existing `get_data_version` skip); extension
+  suite once, 437 passed, 7 skipped; ruff check and format, mypy (core plus
+  both extensions, PostgreSQL tests, all core tests), plan and doc gates OK.
+
+### Verification runs (round 1, commit 7a14692)
 
 All on the final tree unless noted; PostgreSQL runs use a disposable
 `postgres:18` container.

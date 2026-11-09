@@ -234,6 +234,30 @@ def _translate_error(exc: psycopg.Error) -> Exception:
     return err
 
 
+_FAILED_STATEMENT_ATTRIBUTE = "_failed_statement"
+
+
+class _TransactionFailure(Exception):
+    """A driver failure inside ``run_transaction`` and the statement it reached."""
+
+    def __init__(self, cause: psycopg.Error, statement: int | None) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.statement = statement
+
+
+def failed_statement(error: BaseException) -> int | None:
+    """Return the ``run_transaction`` statement index a failure reached.
+
+    The index names the first statement that did not complete (it failed, was
+    aborted with the transaction, or was never sent). ``None`` means the
+    failure was outside every statement: the commit, or ``BEGIN`` on the
+    sequential transport, or the error did not come from ``run_transaction``.
+    """
+    value = getattr(error, _FAILED_STATEMENT_ATTRIBUTE, None)
+    return value if isinstance(value, int) else None
+
+
 def _connection_idle(conn: psycopg.Connection[Any]) -> bool:
     """Return whether a checkout is open, out of any transaction, and reusable."""
     return not conn.closed and conn.info.transaction_status == TransactionStatus.IDLE
@@ -1006,7 +1030,10 @@ class PostgresRunner:
         empty list for a statement that returns none.
 
         Callers own statement order: a statement's relation locks are taken
-        when the server reaches it, so order expresses lock order.
+        when the server reaches it, so order expresses lock order. A raised
+        error reports, through :func:`failed_statement`, which statement the
+        failure reached, so a caller can tell a lock-acquisition failure from
+        a later one.
 
         Must not be called while this runner has an open transaction.
         """
@@ -1022,10 +1049,11 @@ class PostgresRunner:
             if _pipeline_supported():
                 return self._run_pipelined_transaction(conn, statements)
             return self._run_explicit_transaction(conn, statements)
-        except psycopg.Error as exc:
-            failure = _translate_error(exc)
-            cause = exc
-            invalidate_bootstrap = _invalidates_bootstrap(exc)
+        except _TransactionFailure as exc:
+            failure = _translate_error(exc.cause)
+            setattr(failure, _FAILED_STATEMENT_ATTRIBUTE, exc.statement)
+            cause = exc.cause
+            invalidate_bootstrap = _invalidates_bootstrap(exc.cause)
         except BaseException as exc:
             if leased and not _connection_idle(conn):
                 self._discard_thread_connection_after_failure(exc)
@@ -1062,6 +1090,17 @@ class PostgresRunner:
                 cursor.fetchall() if cursor.description is not None else []
                 for cursor in cursors
             ]
+        except psycopg.Error as exc:
+            # A statement that failed, was aborted with the pipeline, or was
+            # never sent has no result; when every statement returned one, the
+            # failure came at the Sync (the commit).
+            missing = (
+                index for index, cursor in enumerate(cursors) if cursor.pgresult is None
+            )
+            reached = next(
+                missing, len(cursors) if len(cursors) < len(statements) else None
+            )
+            raise _TransactionFailure(exc, reached) from exc
         finally:
             for cursor in cursors:
                 cursor.close()
@@ -1072,10 +1111,12 @@ class PostgresRunner:
         statements: Sequence[tuple[str, tuple[Any, ...]]],
     ) -> list[list[tuple[Any, ...]]]:
         results: list[list[tuple[Any, ...]]] = []
+        reached: int | None = None
         try:
             with conn.cursor() as cursor:
                 cursor.execute("BEGIN")
-                for sql, params in statements:
+                for index, (sql, params) in enumerate(statements):
+                    reached = index
                     adapted_sql = _adapt_sql(sql) if params else sql
                     cursor.execute(
                         adapted_sql, params, prepare=_should_prepare(adapted_sql)
@@ -1083,11 +1124,14 @@ class PostgresRunner:
                     results.append(
                         cursor.fetchall() if cursor.description is not None else []
                     )
+                reached = None
                 cursor.execute("COMMIT")
-        except BaseException:
+        except BaseException as exc:
             if not _connection_idle(conn):
                 with contextlib.suppress(psycopg.Error):
                     conn.rollback()
+            if isinstance(exc, psycopg.Error):
+                raise _TransactionFailure(exc, reached) from exc
             raise
         return results
 

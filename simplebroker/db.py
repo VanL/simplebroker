@@ -114,6 +114,7 @@ from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import BrokerTarget, normalize_sqlite_target
 from ._timestamp import (
     TimestampGenerator,
+    _run_durable_advance,
     decode_hybrid_timestamp,
     validate_timestamp_bound,
 )
@@ -2263,18 +2264,30 @@ class BrokerCore:
         An ``IntegrityError`` (allocated ID already stored above a corrupted
         high-water) propagates to ``write()``'s existing conflict ladder.
 
-        Spec: [SB-ID-1], [SB-ID-2], [SB-ID-4]
+        Failures the backend marks as high-water-phase (acquiring or advancing
+        the high-water serialization) keep the generator's contract through
+        ``_run_durable_advance``: contention is retried for the timestamp
+        budget, then ``TimestampError``; any other database failure is
+        ``TimestampError(outcome_ambiguous=True)``, as on the shared
+        transaction's compare-and-advance. Unmarked failures (insert, commit,
+        parameter adaptation) propagate unchanged.
+
+        Spec: [SB-ID-1], [SB-ID-2], [SB-ID-3], [SB-ID-4]
         """
         with self._lock:
             for _ in range(6):  # same hard bound as TimestampGenerator.generate()
                 candidate = self._checked_generated_message_id(
                     self._timestamp_gen._reserve_candidates(1)[0]
                 )
-                committed = write_generated(
-                    self._runner,
-                    queue=queue,
-                    message=message,
-                    candidate=candidate,
+                committed = _run_durable_advance(
+                    partial(
+                        write_generated,
+                        self._runner,
+                        queue=queue,
+                        message=message,
+                        candidate=candidate,
+                    ),
+                    marked_failures_only=True,
                 )
                 if committed is not None:
                     committed = self._checked_generated_message_id(committed)

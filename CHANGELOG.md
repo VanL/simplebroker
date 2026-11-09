@@ -16,8 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so concurrent writers stop serializing on network and client scheduling
   latency and stale candidates no longer retry. Message-ID uniqueness,
   monotonic high-water, ID-ordered commit visibility for `after_timestamp`
-  readers, atomic allocation with the row, and logical-counter exhaustion
-  behavior are unchanged. Core probes a new optional `write_generated_message`
+  readers, atomic allocation with the row, logical-counter exhaustion, and
+  failure reporting are unchanged: a database failure while waiting for the
+  high-water row still raises `TimestampError` (`outcome_ambiguous=True`
+  unless it is exhausted lock contention). Core probes a new optional `write_generated_message`
   backend hook; backends without it, `keep_newest` writes, SQLite, and Redis
   keep their existing write path. No backend API version change.
 
