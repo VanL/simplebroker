@@ -437,7 +437,7 @@ process whose operations stop therefore keeps its last pooled connection for
 10 to 20 seconds after its last operation and drains a three-connection pool
 within 40 seconds; its next operation opens a new connection. The activity
 listener's connection is separate and is not closed by this policy. With
-PostgreSQL waiters' 60-second safety recheck ([SB-API-6]), a process that is
+PostgreSQL waiters' 30-second safety recheck ([SB-API-6]), a process that is
 only waiting on healthy activity waiters holds its listener connection plus,
 after each recheck, one data connection for 10 to 20 seconds.
 Pool exhaustion is backpressure: an operation waits for a checkout and should
@@ -768,8 +768,8 @@ any waiter is detached or closed. A committed write whose notification never
 arrives is therefore seen by the owner's check after the next strategy return,
 less than `2R′ + P` after the write (plus scheduler delay and the check
 itself), where `R′` is `R₀` until the first recheck or consumed local activity
-after installation and `R` afterward. PostgreSQL waiters declare `R = 60`
-seconds: with the default polling configuration the bound is under 120.115
+after installation and `R` afterward. PostgreSQL waiters declare `R = 30`
+seconds: with the default polling configuration the bound is under 60.115
 seconds. Redis/Valkey waiters declare none and keep the default: under 2.115
 seconds with the default configuration.
 

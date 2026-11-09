@@ -30,6 +30,8 @@ from simplebroker import (
     QueueWatcher,
     create_activity_waiter_for_queues,
 )
+from simplebroker import watcher as watcher_module
+from simplebroker.watcher import PollingStrategy
 from tests.helper_scripts import scale_timeout_for_ci
 
 pytestmark = [pytest.mark.pg_only]
@@ -210,10 +212,34 @@ def _handled_after(
     return time.monotonic() - started
 
 
+@pytest.mark.parametrize("install", ["start", "replace"])
+@pytest.mark.parametrize("upper", [False, True], ids=["earliest", "latest"])
 def test_pg_waiters_declare_recheck_longer_than_two_pool_idle_checks(
     pg_runner: PostgresRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    install: str,
+    upper: bool,
 ) -> None:
-    """Coupling: the pool must reap a recheck's connection before the next one."""
+    """Real PG waiters schedule the owner-selected 30-60 s backstop.
+
+    Exercise declaration-to-strategy wiring for both waiter kinds and install
+    paths. A stale 60 s default or ignored declaration must fail. Only the
+    clock/random dependencies and quiet transport wait are controlled; the
+    strategy's deadline/return path stays real. The separate live tests own
+    notification transport and pool reclamation.
+    """
+
+    now = [100.0]
+    monkeypatch.setattr(watcher_module, "_monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        watcher_module,
+        "_uniform",
+        lambda low, high: (high if upper else low) if low > 0 else 0.0,
+    )
+
+    def quiet_wait(timeout: float) -> bool:
+        now[0] += timeout
+        return False
 
     stop = threading.Event()
     jobs = Queue("jobs", runner=pg_runner, persistent=True)
@@ -227,6 +253,21 @@ def test_pg_waiters_declare_recheck_longer_than_two_pool_idle_checks(
             assert waiter is not None
             interval = waiter.safety_recheck_interval  # type: ignore[attr-defined]
             assert interval > 2 * runner_module._POOL_MAX_IDLE_SECONDS
+            monkeypatch.setattr(waiter, "wait", quiet_wait)
+            strategy = PollingStrategy(stop, initial_checks=0, jitter_factor=0)
+            try:
+                if install == "start":
+                    strategy.start(activity_waiter=waiter)
+                else:
+                    strategy.start()
+                    strategy.replace_activity_waiter(waiter)
+                started = now[0]
+                strategy.wait_for_activity()
+                expected = 60.0 if upper else 30.0
+                assert expected <= now[0] - started < expected + 0.1 + 1e-9
+                assert not strategy.consume_native_activity_hint()
+            finally:
+                strategy.close()
     finally:
         for waiter in waiters:
             if waiter is not None:
@@ -269,7 +310,7 @@ def test_quiet_watcher_holds_only_listener_and_still_wakes_promptly(
                 time.sleep(0.05)
 
             # Notification still wakes the quiet watcher, far inside the
-            # 60-120 s safety recheck; the data connection is reopened on use.
+            # 30-60 s safety recheck; the data connection is reopened on use.
             started = time.monotonic()
             writer.write("second")
             assert _handled_after(pipe, process, "second", started, 30.0) < (
@@ -289,7 +330,7 @@ def test_safety_recheck_recovers_write_without_notification(
 ) -> None:
     """A committed row whose NOTIFY never arrives is found by the recheck.
 
-    The waiter declares R = 1 s here (the default is 60 s). Nothing ever
+    The waiter declares R = 1 s here (the default is 30 s). Nothing ever
     notifies the watched queue, and the row is committed only after the
     watcher's startup drain found the queue empty and its loop entered a wait
     backed by the native waiter. No notification, local follow-up or drain can

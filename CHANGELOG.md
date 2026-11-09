@@ -12,13 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Quiet PostgreSQL processes no longer hold a pooled data connection while
   they wait on a LISTEN activity waiter. The `simplebroker-pg` command pool now
   closes a connection that stayed idle for a full 10-second check (one per
-  check), and PostgreSQL waiters declare a 60-second safety recheck, so a
+  check), and PostgreSQL waiters declare a 30-second safety recheck, so a
   waiting process keeps its listener connection plus, briefly after each
-  60-120 second recheck, one data connection. NOTIFY wakeups are unchanged; the
+  30-60 second recheck, one data connection. NOTIFY wakeups are unchanged; the
   first operation after a quiet gap opens a new connection. With the default
   polling settings, recovery from a lost notification is now bounded by about
-  120.1 seconds (twice the recheck interval plus one polling pass) instead of
-  about 2.1 seconds.
+  60.1 seconds (twice the recheck interval plus one polling pass) instead of
+  about 2.1 seconds, plus scheduler delay and the queue check itself. This is
+  a scheduling bound, not a delivery deadline during connection or query stalls.
 - `PollingStrategy` honors an optional `safety_recheck_interval` declared by
   the installed activity waiter and rejects invalid declarations at
   `start()`/`replace_activity_waiter()` before changing state, including a

@@ -43,7 +43,7 @@ _POOL_MAX_IDLE_SECONDS = 10.0
 # bounds recovery from an undetected listener-session loss (or a writer that
 # bypasses SimpleBroker and skips pg_notify). Must stay above
 # 2 x _POOL_MAX_IDLE_SECONDS (see above).
-_ACTIVITY_SAFETY_RECHECK_SECONDS = 60.0
+_ACTIVITY_SAFETY_RECHECK_SECONDS = 30.0
 
 # A forked child must not finalize a pool whose locks belong to parent threads.
 _ABANDONED_FORK_POSTGRES_POOLS: list[Any] = []

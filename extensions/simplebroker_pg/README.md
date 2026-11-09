@@ -63,7 +63,7 @@ held forever: every 10 seconds the pool closes one connection that stayed idle
 for the whole interval, so a quiet process returns its last data connection
 10-20 seconds after its last operation, and the next operation reconnects.
 PostgreSQL activity waiters ask watchers for a quiet safety recheck every
-60-120 seconds instead of every 1-2 seconds, so a process that is only waiting
+30-60 seconds instead of every 1-2 seconds, so a process that is only waiting
 on a healthy waiter holds its listener connection plus, briefly after each
 recheck, one data connection. Size a deployment from
 its database-wide connection budget and maximum broker process count, with
@@ -238,10 +238,12 @@ API.
 
 Wakeups are hints. After `wait(timeout)` returns `True`, callers should still
 drain queues through normal SimpleBroker reads or moves. Both waiter types
-declare `safety_recheck_interval = 60.0`: `PollingStrategy` still returns for
-a quiet recheck within 60-120 seconds plus one polling pass (about 0.115
-seconds by default), which bounds recovery when a notification is lost (an undetected listener-session failure, or a writer that
-bypasses SimpleBroker). Normal wakeups arrive through NOTIFY and do not wait
+declare `safety_recheck_interval = 30.0`: `PollingStrategy` still returns for
+a quiet recheck within 30-60 seconds plus one polling pass (about 0.115
+seconds by default), plus scheduler delay and the queue check itself. This
+bounds check scheduling when a notification is lost (an undetected
+listener-session failure, or a writer that bypasses SimpleBroker), not delivery
+when reconnecting or querying stalls. Normal wakeups arrive through NOTIFY and do not wait
 for the recheck; see [SB-API-6](../../docs/specs/16-python-library-api.md#watchers-and-activity-waiters-sb-api-6). Close the multi-queue
 waiter explicitly when the watcher lifecycle ends. Its first `close()` is
 terminal before cleanup; every later call is a no-op, including when the first

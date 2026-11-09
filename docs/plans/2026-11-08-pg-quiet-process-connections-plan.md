@@ -1,11 +1,34 @@
 # PostgreSQL quiet-process connections
 
 Class: 5 — normative text changes in [SB-API-3] and [SB-API-6]; a [DOM-5] risky trigger also fires (new connection cleanup lifecycle for pooled PostgreSQL connections, and an additive waiter contract), so the hardening checklist applies.
-Status: active — implemented on branch `perf/sb-idle-connections`; cross-family review and owner decisions pending.
+Status: completed — owner-approved 30–60 s revision verified on 2026-11-09; agy review found no blocker; integration-wide gates tracked in 2026-11-09-performance-branches-integration-plan.md.
 Owner: SimpleBroker product owner; implementation agent for SB-4 of the 2026-11-08 performance tracks.
 Boundary: `PollingStrategy` native safety-recheck scheduling (core) and the PostgreSQL runner pool and activity waiters (extension). No change to the LISTEN listener, NOTIFY emission, Redis, SQLite, or session/lease ownership.
 Verification: deterministic core strategy tests and transition table; real PostgreSQL 18 tests for quiet session count, NOTIFY wake and lost-notification recovery; full PostgreSQL extension suite; PostgreSQL-backed shared watcher suites; disposable postgres:18 measurement of sessions held by N quiet processes and wake latency, before and after.
-Required action: review the proposed bound change (owner decision OD-1) and the default constants (OD-2) before landing.
+Required action: retain the timing and real-connection regressions; integrate with the other reviewed performance branches.
+
+## 2026-11-09 owner-authorized amendment
+
+Baseline: `7a29f90` on `perf/sb-idle-connections`; the prior implementation
+uses `R = 60 s`. Class 5 and hardening remain in force. Promotion strategy B
+is retained: the normative delta, code and tests change together on this
+branch. The user explicitly requested `rand(30,60)`, verification of idle
+reclamation and reconnect churn, and otherwise accepted the review
+recommendations. The current design sections and proposed spec delta below
+therefore describe `R = 30 s`; historical verification and measurements retain
+the original `R = 60 s` conditions and do not establish the new policy's cost.
+
+The mechanism, ten-second idle check, public waiter shape, backend ownership,
+normal NOTIFY path, and rollback stay unchanged. Only PostgreSQL's default
+recheck declaration changes. The 30-second lower bound exceeds two idle
+checks, leaving a nominal ten-second margin; the upper bound halves the old
+missed-wakeup check delay. Faster checks can establish data connections more
+often. Measurements must disclose that tradeoff rather than reuse the old
+1.16-session-per-process result as a claim for this revision.
+
+Verification and independent review evidence for this amendment will be
+recorded after execution. The plan remains active until that work is verified
+and committed.
 
 ## Goal
 
@@ -31,7 +54,7 @@ Outcomes:
 - [x] A backend-native waiter can declare its own safety-recheck interval;
       the strategy default (and therefore Redis/Valkey and third-party
       waiters) is unchanged.
-- [x] PostgreSQL waiters declare a 60-second recheck; NOTIFY wake latency is
+- [x] PostgreSQL waiters declare a 30-second recheck; NOTIFY wake latency is
       unchanged in kind (notification-driven).
 - [x] The PostgreSQL pool returns idle data connections to the server after a
       bounded idle period (10 s idle checks).
@@ -85,7 +108,7 @@ reduction from per-pass checks).
 | `simplebroker/watcher.py::PollingStrategy` | `_native_idle_poll_interval = max(1, 10 × max_interval)`; `_next_native_idle_poll_deadline()` draws `uniform(R, 2R)`; scheduled on `start()`, `replace_activity_waiter()` (initial, ≥1 s), local-activity consumption, and each quiet recheck return. Native wake (`waiter.wait()` true) does not reschedule. | Read and validate an optional `safety_recheck_interval` from the waiter being installed (before any mutation); cache it in `_waiter_safety_recheck_interval`; use it in place of the default when set; clear it on detach. |
 | `simplebroker/watcher.py::BaseWatcher._process_messages` / `QueueWatcher._has_pending_messages` | Every strategy return without stop runs `queue.has_pending()` — on PostgreSQL a pooled checkout. | Unchanged. |
 | `extensions/simplebroker_pg/simplebroker_pg/runner.py::PostgresRunner._create_pool` | `ConnectionPool(min_size=0, max_size=3, timeout=30)`; psycopg-pool `max_idle` default 600 s. Each operation checks out and returns (`lease_session_core_connection()` is `False`). | Pass `max_idle=_POOL_MAX_IDLE_SECONDS` (10 s). |
-| `extensions/simplebroker_pg/simplebroker_pg/runner.py::PostgresActivityWaiter`, `PostgresMultiQueueActivityWaiter` | Register with the shared listener; `wait()` blocks on a condition; no recheck declaration. | Set `safety_recheck_interval = _ACTIVITY_SAFETY_RECHECK_SECONDS` (60 s). |
+| `extensions/simplebroker_pg/simplebroker_pg/runner.py::PostgresActivityWaiter`, `PostgresMultiQueueActivityWaiter` | Register with the shared listener; `wait()` blocks on a condition; no recheck declaration. | Set `safety_recheck_interval = _ACTIVITY_SAFETY_RECHECK_SECONDS` (30 s). |
 | `_SharedActivityListener` | One LISTEN connection per process, DSN and schema. | Unchanged. |
 | `simplebroker/_broker_session.py`, `simplebroker/session.py` | Process session owns the runner/pool; `recycle_thread()` and `cleanup_connections()` release thread cores; on PostgreSQL they are not needed to return completed checkouts. | Unchanged; the pool, not the session, owns idle reaping. No new public release API. |
 
@@ -164,8 +187,8 @@ editing):
 > arrives is therefore seen by the owner's check after the next strategy return,
 > less than `2R′ + P` after the write (plus scheduler delay and the check
 > itself), where `R′` is `R₀` until the first recheck or consumed local activity
-> after installation and `R` afterward. PostgreSQL waiters declare `R = 60`
-> seconds: with the default polling configuration the bound is under 120.115
+> after installation and `R` afterward. PostgreSQL waiters declare `R = 30`
+> seconds: with the default polling configuration the bound is under 60.115
 > seconds. Redis/Valkey waiters declare none and keep the default: under 2.115
 > seconds with the default configuration.
 
@@ -178,7 +201,7 @@ editing):
 > 10 to 20 seconds after its last operation and drains a three-connection pool
 > within 40 seconds; its next operation opens a new connection. The activity
 > listener's connection is separate and is not closed by this policy. With
-> PostgreSQL waiters' 60-second safety recheck ([SB-API-6]), a process that is
+> PostgreSQL waiters' 30-second safety recheck ([SB-API-6]), a process that is
 > only waiting on healthy activity waiters holds its listener connection plus,
 > after each recheck, one data connection for 10 to 20 seconds.
 
@@ -186,10 +209,10 @@ editing):
 
 | Change | Class | Theory basis |
 |--------|-------|--------------|
-| Quiet PostgreSQL watcher processes return their data connection to the server (steady sessions per quiet process ≈ 1.1–1.2 instead of 2). | N (no loss; resource relief) | [REV-THEORY-004] (resource count must not scale with idle handles against server connection limits); [THEORY-3] process session / backend runner own reusable resources |
-| PostgreSQL lost-notification recovery bound rises from `2R′ + P` ≈ 2.115 s to ≈ 120.115 s with default polling settings ([SB-API-6]); wake on delivered NOTIFY unchanged. | D (diminution in a failure mode) — owner decision OD-1 | [THEORY-4] explicit safety over magical recovery: the bound is now stated; the recheck covers only undetected listener-session loss or writers that bypass SimpleBroker; [THEORY-3] backend owns its loss model. Not on any `[ALT-*]` rejected path. |
-| First operation after ≥ 10–20 s of quiet on PostgreSQL pays a new connection setup (measured below); applies to the first wake after quiet too. | D (latency for first operation after quiet) — owner decision OD-2 | [THEORY-1]/[THEORY-4]: operationally small, predictable default for many cooperating processes; tunable constants named at the edit point |
-| More connection establishments for intermittently active PostgreSQL processes (one per quiet gap > ~20 s; one per recheck for fully quiet processes, i.e. every 60–120 s). | C (cost moved, no capability lost) | same as above |
+| Quiet PostgreSQL watcher processes return their data connection to the server between rechecks; the 30–60 s policy's steady session count must be measured rather than inferred from the old 60–120 s results. | N (no loss; resource relief) | [REV-THEORY-004] (resource count must not scale with idle handles against server connection limits); [THEORY-3] process session / backend runner own reusable resources |
+| PostgreSQL lost-notification recovery bound rises from `2R′ + P` ≈ 2.115 s to ≈ 60.115 s with default polling settings ([SB-API-6]); wake on delivered NOTIFY unchanged. | A — owner accepted OD-1 on 2026-11-09 | [THEORY-4] explicit safety over magical recovery: the bound is now stated; the recheck covers only undetected listener-session loss or writers that bypass SimpleBroker; [THEORY-3] backend owns its loss model. Not on any `[ALT-*]` rejected path. |
+| First operation after ≥ 10–20 s of quiet on PostgreSQL pays a new connection setup (measured below); applies to the first wake after quiet too. | A — owner accepted OD-2 on 2026-11-09 | [THEORY-1]/[THEORY-4]: operationally small, predictable default for many cooperating processes; tunable constants named at the edit point |
+| More connection establishments for intermittently active PostgreSQL processes (one per quiet gap > ~20 s; one per recheck for fully quiet processes, i.e. every 30–60 s). | C (cost moved, no capability lost) | same as above |
 | Optional `safety_recheck_interval` waiter declaration; invalid declarations raise `TypeError`/`ValueError` at `start()`/`replace_activity_waiter()`. | A (additive contract; owner-decided via this plan) | [THEORY-3] backend adapter owns substrate behavior; matches existing optional-hook pattern |
 | Redis/Valkey, SQLite, third-party waiters: no change. | N | — |
 
@@ -200,7 +223,7 @@ editing):
   constants and enforced by `test_pg_waiters_declare_recheck_longer_than_two_pool_idle_checks`.
 - Hidden coupling: Weft's reactor treats every native-waiter return, including
   the safety recheck, as evidence and reads (`weft/core/tasks/multiqueue_watcher.py`
-  `_activity_hint_action`). Its reads now follow the declared 60–120 s
+  `_activity_hint_action`). Its reads now follow the declared 30–60 s
   cadence. Caller deadlines still return earlier and are Weft's own cadence.
 - Error priorities: an invalid declaration is a backend bug and is fatal at
   installation (no silent fallback). Pool shrink failures are psycopg-pool
@@ -243,6 +266,15 @@ editing):
    `docs/guides/python.md`, implementation docs 06 and 07, `CHANGELOG.md`,
    plan index row.
 6. Verification and measurement (below); commit on the task branch.
+7. 2026-11-09 amendment: test actual PostgreSQL waiter scheduling at the
+   `[30, 60)` boundaries, record RED against the former `R = 60` policy and
+   GREEN with `R = 30`, and rerun the existing notification/reclamation proofs.
+8. Measure real idle reclamation and reconnect churn with unshortened
+   10-second idle checks and 30–60-second safety checks; record process count,
+   duration, data/LISTEN sessions, reconnect rate, and cold/warm wake latency.
+9. Obtain agy cross-family review of the amendment and verification evidence;
+   disposition its findings, run documentation gates, commit, and close the
+   Status Index row only when the required work is verified.
 
 ## Testing Plan
 
@@ -295,17 +327,19 @@ watcher retry after a listener error (server restart, `pg_terminate_backend`)
 re-acquires the same failed listener while the old waiter still holds a
 reference, so the retry fails again. See the execution record for evidence.
 
-## Owner Decisions Needed
+## Owner decisions (2026-11-09)
 
-- OD-1: accept the PostgreSQL lost-notification recovery bound `2R′ + P`
-  with `R = 60 s` (under 120.115 s with default polling settings; was under
-  2.115 s), or choose a different `R`. Pending.
-- OD-2: accept the 10-second pool idle check (first operation after ~10–20 s
-  of quiet reconnects), or choose a different value; `R > 2 × max_idle` must
-  hold. Pending.
-- OD-3: whether to pursue F-1 (listener replacement) and, with it, a LISTEN
-  liveness probe that would allow a short bound again without a data
-  connection. Pending.
+- OD-1 — accepted with revision: the owner selected a uniformly randomized
+  `[30, 60)` second safety backstop (`R = 30 s`), replacing the proposed
+  `[60, 120)` seconds. The check-scheduling bound with default polling settings
+  is under 60.115 s, plus scheduler delay and the queue check itself. This is
+  not an end-to-end delivery deadline if connecting or querying stalls.
+- OD-2 — accepted: retain the ten-second pool idle check and its cold-operation
+  reconnect cost. The required coupling remains `R > 2 × max_idle`.
+- OD-3 — listener replacement is pursued separately in SB-6; the owner accepted
+  that review recommendation. No LISTEN liveness probe is added in SB-4. Such a
+  probe would be reconsidered if deployment evidence shows silent listener
+  failures need faster detection than the accepted backstop provides.
 
 ## Independent Review Loop
 
@@ -377,7 +411,7 @@ closed the connection unexpectedly`; a later write is not handled. Probe:
 `listener_failure_probe.py` (coordinator scratchpad `sb4/`). Not changed by
 this plan.
 
-### Verification results (current tree)
+### Historical verification results (R = 60 s, before the 2026-11-09 amendment)
 
 | Command | Result |
 |---------|--------|
@@ -406,7 +440,7 @@ After the round-2 test fixes: `test_pg_quiet_connections.py` 3 passed ×5;
 skipped; ruff check, ruff format --check, mypy (core + extensions,
 PostgreSQL extension tests) clean.
 
-### Measurement (disposable postgres:18, same machine, other agents running)
+### Historical measurement (R = 60 s; disposable postgres:18, same machine, other agents running)
 
 Script: N child processes, each one consuming `QueueWatcher` on its own
 queue, connections labeled with `bind_connection_owner`; `pg_stat_activity`
@@ -442,7 +476,8 @@ Verdict: blocker: F1, F3.
 
 The reviewer judged the intended differences registered, both D rows
 consistent with the theory, and backend-owned cadence plus pool-owned reaping
-a good fit. Owner decisions OD-1, OD-2 and OD-3 remain pending.
+a good fit. At that review, owner decisions OD-1, OD-2 and OD-3 remained
+pending; the 2026-11-09 decisions above supersede that historical status.
 
 | ID | Severity | Finding | Disposition |
 |----|----------|---------|-------------|
@@ -472,3 +507,46 @@ recheck return disabled the round-2 test failed in 3 of 3 runs, each at its
 receive deadline (`AssertionError: silent: pid=…, exit=None, alive=True`;
 30.88 s, 31.04 s, 31.03 s). Restored: the test passed in 3 of 3 runs (2.83 s,
 2.40 s, 2.65 s), and the whole file passed in 5 of 5 runs.
+
+## 2026-11-09 amendment verification and disposition
+
+The four boundary cases (start/replace × lower/upper draw) failed against
+R60 at the intended timing assertion: actual60.051/120.051 s versus required
+30/60 s. After changing only the PostgreSQL declaration to30.0, all six real
+PostgreSQL quiet-connection cases passed. The broader selection
+`pytest -n4 extensions/simplebroker_pg/tests/test_pg_quiet_connections.py
+tests/test_watcher.py tests/test_watcher_transition_tables.py` passed140 tests.
+An initial selection named two nonexistent test files and collected nothing
+(exit5); the corrected selection above is the verification evidence. Ruff
+check and format check passed for both changed Python files.
+
+Eight spawned watchers on disposable PostgreSQL18, real R30/max_idle10,
+were sampled every0.2 s over a146.21 s common quiet window. Each retained
+one unchanged LISTEN PID, reached listener-only state, and had no more than
+two simultaneous sessions. Across24 completed safety intervals, observed
+spacing was31.69–59.59 s (first entry-to-return, later return-to-return,
+including the intervening pending query). Each process opened three replacement
+data connections after its startup connection:24 reconnects across about
+146.2 s per process, approximately1.23 reconnects/process/minute in this
+finite, censored observation window. This is not a long-run rate estimate;
+uniform[30,60) predicts about1.33/minute before overhead. Fully observed
+replacement data lifetimes were10.90–18.96 s, with roughly0.2 s sampling
+uncertainty. Mean sessions/process was1.42 (individual means1.34–1.51).
+
+After observing listener-only state, producer-write-to-handler latency was
+20.8–46.6 ms cold, and14.0–28.6 ms for the next write while warm. These
+include producer write and commit, reconnect and handling; they are not
+post-commit latency alone. No task-owned tests or benchmarks ran concurrently.
+The shared host had unrelated Weft workers; these are local measurements,
+not capacity guarantees. Raw samples, events, script and logs are under
+`/var/folders/m_/2tncpj593tj8s_jdbdhj8g5m0000gn/T/sb-land-9em_la24/`
+(`churn.py`, `sb4-churn.json`, `sb4-churn.log`, `sb4-red.log`,
+`sb4-green.log`, `sb4-targeted-corrected.log`).
+
+Independent review: agy gemini-4-argon-medium, plan+sandbox, self-contained
+delta and measurement script, exit0/SUCCESS/nonempty response/no denied
+actions, conversation e92e9bef-9066-4bb4-9ce6-0e9241bf1b17: **no blocker**.
+O1 reconnect accounting, O2 producer-write-to-handler definition and O3
+return-to-return interval definition were reporting observations; all are
+incorporated above. The call-agent procedure worked with a self-contained
+packet after earlier native reads were denied; no permission broadening.

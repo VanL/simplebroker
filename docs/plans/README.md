@@ -29,7 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-11-08-pg-quiet-process-connections-plan.md | active — class 5 (hardening applies); implemented on `perf/sb-idle-connections`: PostgreSQL pool idle closing plus waiter-declared 60 s safety recheck; cross-family review and owner decisions OD-1..OD-3 pending |
+| 2026-11-08-pg-quiet-process-connections-plan.md | completed — class 5 (hardening applies); implemented on `perf/sb-idle-connections`: PostgreSQL pool idle closing plus owner-accepted 30–60 s safety recheck and ten-second idle check (2026-11-09); amended verified; agy no blocker; listener replacement is separate SB-6 work |
 | 2026-10-14-agent-theory-delta-wave-plan.md | completed — class 5+P propagation of agent-theory 8f41a9d delta wave across DOM specs, AT-REF primer, shared agent-context, skills, and doc/coalescing gates |
 | 2026-10-14-create-parent-adoption-plan.md | completed — vendorable optional parent creation shipped in coordinated 8.7.2/4.7.2 releases with exact-SHA CI and artifact verification |
 | 2026-10-14-core-finalizer-ownership-plan.md | completed — borrowed SQL GC ownership repaired; native backend proofs and single-file acquire refactor verified |

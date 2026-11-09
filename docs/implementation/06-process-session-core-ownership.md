@@ -463,19 +463,28 @@ PostgreSQL LISTEN session receives every committed NOTIFY, so loss requires an
 undetected listener-session failure or a writer that bypasses SimpleBroker;
 Redis pub/sub resubscribes after a dropped connection and loses messages
 published in the gap. The waiter therefore declares the interval
-(`safety_recheck_interval`, [SB-API-6]); PostgreSQL declares 60 s
+(`safety_recheck_interval`, [SB-API-6]); PostgreSQL declares 30 s
 (`_ACTIVITY_SAFETY_RECHECK_SECONDS`) and Redis keeps the strategy default.
 The two PostgreSQL constants are coupled: the recheck interval must exceed two
 idle checks, enforced by
 `extensions/simplebroker_pg/tests/test_pg_quiet_connections.py`.
 
 Result: a process waiting only on healthy PostgreSQL waiters holds its LISTEN
-connection, plus one data connection for 10–20 s after each 60–120 s recheck.
+connection, plus one data connection for 10–20 s after each 30–60 s recheck.
 The first operation after a quiet gap pays connection setup. A lost
 notification is recovered within `2R` plus one native wait pass (under
-120.115 s with the default polling settings). The pass term includes positive
+60.115 s with the default polling settings). The pass term includes positive
 jitter, and an installation uses `max(R, 1)` for its first recheck, so the
-exact bound in [SB-API-6] is `2R′ + P`.
+exact bound in [SB-API-6] is `2R′ + P`, plus scheduler delay and the
+queue check itself. This is a check-scheduling bound, not a delivery deadline
+when connection establishment or queries stall. The owner selected `[30, 60)`
+on 2026-11-09 to shorten the proposed `[60, 120)` backstop while preserving
+at least a nominal ten-second gap after the last data connection is reaped.
+The shorter interval trades more reconnects for faster missed-wakeup discovery: a
+continuously quiet watcher schedules one check every 45 seconds on average
+(about 1.33 per minute), before scheduling and query overhead. This is an
+analytic cadence, not a measured connection rate; explicit caller deadlines or
+other activity can cause additional data checkouts.
 
 ### [ALT-IMPL06-001] Lengthen the safety recheck for every native waiter
 

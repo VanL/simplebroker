@@ -788,10 +788,12 @@ recheck or consumed local activity the next one is due within `[R, 2R)`; the
 first one after installing a waiter is due within `[max(R, 1), 2 * max(R, 1))`.
 The strategy notices a due recheck when its current native pass ends, which
 can add up to `max((1 + jitter_factor) * max_interval, burst_sleep)`, about
-0.115 seconds by default. PostgreSQL waiters declare 60 seconds, so a quiet
+0.115 seconds by default. PostgreSQL waiters declare 30 seconds, so a quiet
 PostgreSQL watcher does not keep a pooled data connection open and recovers a
-lost notification in under about 120.1 seconds; Redis/Valkey waiters keep the
-default (under about 2.1 seconds). A custom waiter that declares an invalid
+lost notification in under about 60.1 seconds; Redis/Valkey waiters keep the
+default (under about 2.1 seconds). These scheduling bounds additionally allow
+for scheduler delay and the queue check itself; they do not bound delivery
+when reconnecting or querying stalls. A custom waiter that declares an invalid
 value, including one whose `2R` overflows, is rejected by `start()` or
 `replace_activity_waiter()` before anything changes.
 
