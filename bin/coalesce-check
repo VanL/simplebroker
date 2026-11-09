@@ -6,8 +6,8 @@ until this gate they were unchecked prose — agent-guidance's 2026-07-28
 field audit found cues that resolve locally but not in published
 history. This tool:
 
-  1. verifies every `<sha>` cited in docs/coalescing.md resolves
-     (`git cat-file -e`);
+  1. verifies every `<sha>` cited in docs/coalescing.md resolves through one
+     `git cat-file --batch-check` process;
   2. verifies every `git show <sha>:<path>` cue's path exists at that
      SHA;
   3. checks each SHA against the published remote (origin), reporting
@@ -38,7 +38,7 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATE = REPO_ROOT / "docs" / "coalescing.md"
@@ -69,11 +69,16 @@ FOREIGN_MARKER_RE = re.compile(
 SIBLING_ROOT = os.environ.get("COALESCE_SIBLING_ROOT")
 
 
-def git(*args: str, repo: Path | None = None) -> subprocess.CompletedProcess:
+def git(
+    *args: str,
+    repo: Path | None = None,
+    stdin: str | None = None,
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo or REPO_ROOT), *args],
         capture_output=True,
         text=True,
+        input=stdin,
         check=False,
     )
 
@@ -85,8 +90,41 @@ def attributed_repo(text: str, pos: int) -> str | None:
     return hits[-1].group(1) if hits else None
 
 
-def resolves_locally(sha: str) -> bool:
-    return git("cat-file", "-e", f"{sha}^{{commit}}").returncode == 0
+def batch_object_info(expressions: set[str]) -> dict[str, tuple[str, str] | None]:
+    """Resolve every object expression through one long-lived Git process."""
+    ordered = sorted(expressions)
+    if not ordered:
+        return {}
+    result = git(
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype)",
+        stdin="\n".join(ordered) + "\n",
+    )
+    if result.returncode != 0:
+        return dict.fromkeys(ordered)
+    lines = result.stdout.splitlines()
+    if len(lines) != len(ordered):
+        return dict.fromkeys(ordered)
+    info: dict[str, tuple[str, str] | None] = {}
+    for index, expression in enumerate(ordered):
+        line = lines[index]
+        parts = line.rsplit(" ", 1)
+        info[expression] = (
+            (parts[0], parts[1])
+            if len(parts) == 2 and parts[1] in {"blob", "commit", "tag", "tree"}
+            else None
+        )
+    return info
+
+
+def reachable_commits(remote_ref: str | None) -> set[str]:
+    """Return the commits published through the default remote branch."""
+    if remote_ref is None:
+        return set()
+    result = git("rev-list", remote_ref)
+    if result.returncode != 0:
+        return set()
+    return set(result.stdout.splitlines())
 
 
 def in_local_checkout(sha: str) -> str | None:
@@ -161,6 +199,8 @@ def classify_sha_claims(
     text: str,
     *,
     remote_ref: str | None,
+    object_info: dict[str, tuple[str, str] | None],
+    remote_commits: set[str],
 ) -> tuple[set[str], list[str], list[str], list[str]]:
     """Classify each distinct cited commit without changing retrieval truth."""
 
@@ -171,11 +211,9 @@ def classify_sha_claims(
         if sha in seen:
             continue
         seen.add(sha)
-        if resolves_locally(sha):
-            if (
-                remote_ref
-                and git("merge-base", "--is-ancestor", sha, remote_ref).returncode != 0
-            ):
+        commit = object_info.get(f"{sha}^{{commit}}")
+        if commit is not None and commit[1] == "commit":
+            if remote_ref and commit[0] not in remote_commits:
                 local_only.append(sha)
             continue
         who = attributed_repo(text, pos)
@@ -199,22 +237,20 @@ def broken_retrieval_cues(
     seen: set[str],
     local_only: list[str],
     remote_ref: str | None,
+    object_info: dict[str, tuple[str, str] | None],
+    remote_commits: set[str],
 ) -> list[str]:
     """Return every explicit git-show or retired-plan cue that cannot be retrieved locally."""
 
     broken = []
     for sha, path in cues:
-        if not (
-            resolves_locally(sha)
-            and git("cat-file", "-e", f"{sha}:{path}").returncode == 0
-        ):
+        commit = object_info.get(f"{sha}^{{commit}}")
+        target = object_info.get(f"{sha}:{path}")
+        if commit is None or commit[1] != "commit" or target is None:
             broken.append(f"cue `git show {sha}:{path}` does not resolve here")
         elif sha not in seen:
             seen.add(sha)
-            if (
-                remote_ref
-                and git("merge-base", "--is-ancestor", sha, remote_ref).returncode != 0
-            ):
+            if remote_ref and commit[0] not in remote_commits:
                 local_only.append(sha)
     return broken
 
@@ -303,9 +339,21 @@ def main() -> int:
     retired_cues = retired_plan_cues()
     cues = sorted(set(CUE_RE.findall(text)) | set(retired_cues))
     remote_ref = resolve_remote_ref()
+    shas = set(SHA_RE.findall(text)) | {sha for sha, _ in cues}
+    object_info = batch_object_info(
+        {f"{sha}^{{commit}}" for sha in shas}
+        | {
+            f"{sha}:{path}"
+            for sha, path in cues
+            if ".." not in PurePosixPath(path).parts
+        }
+    )
+    remote_commits = reachable_commits(remote_ref)
     seen, broken, local_only, foreign = classify_sha_claims(
         text,
         remote_ref=remote_ref,
+        object_info=object_info,
+        remote_commits=remote_commits,
     )
     broken.extend(
         broken_retrieval_cues(
@@ -313,6 +361,8 @@ def main() -> int:
             seen=seen,
             local_only=local_only,
             remote_ref=remote_ref,
+            object_info=object_info,
+            remote_commits=remote_commits,
         )
     )
     return report_results(
