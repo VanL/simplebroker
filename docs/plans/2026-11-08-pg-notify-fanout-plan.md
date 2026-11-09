@@ -518,3 +518,14 @@ Review round 1 fixes (F1–F3, see the review table above):
   suppression index, `check-dom15-fixtures`, `check-plan-context`,
   `check-doc-paths` clean.
 
+
+### Cross-family review, round 2
+
+Tier 1, Codex (codex exec -s read-only, reasoning effort high), 2026-11-08,
+round-2 verification scoped to F1 over `8e2d7f24..f7d12270`. Verdict: PASS,
+no new defect in scope. Both registration methods catch `BaseException` from
+the subscription wait, release their registration (the multi-queue path also
+removes its fan-in entry while preserving other owners' references) and
+re-raise. `SUBSCRIBE-INTERRUPTED` is falsifiable: it failed with either
+8e2d7f24 method loaded. Extra public-constructor probes with
+`KeyboardInterrupt`, `SystemExit` and `RuntimeError` passed.
