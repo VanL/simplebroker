@@ -40,7 +40,7 @@ simplebroker/db.py -> simplebroker/_broker_session.py
 
 | Owner | Responsibilities | Must not own |
 |-------|------------------|--------------|
-| `simplebroker/_broker_session.py` | Canonical session spec/key, registry identity and refcount, admission state, active-operation and active-core-creation drains, per-thread core cache | Concrete core classes, backend dispatch, runner state |
+| `simplebroker/_broker_session.py` | Canonical session spec/key, registry identity and refcount, admission state, project-target admission record, active-operation and active-core-creation drains, per-thread core cache | Concrete core classes, backend dispatch, runner state, project setup itself |
 | Private adapter in `simplebroker/db.py` | SQLite/direct/SQL core construction, runner publication, thread-checkout lease rollback, concrete core close, final runner close | Registry identity, refcounts, operation depth, thread-local session cache |
 | Backend plugin and runner | Concrete backend operations, connection/pool implementation, backend cleanup hooks | Process-session sharing policy |
 
@@ -264,6 +264,30 @@ distinguishes `verify_initialized=True` (current version and shape) from the
 must still let an older owned schema reach migration. A restored older schema
 cannot borrow the config file's newer marker.
 
+Admission is recorded on the process session, not on each Queue's connection
+manager. `DBConnection._ensure_project_target_initialized()` still owns the
+work (per-manager lock, phase lock, live validation, setup); on the persistent
+path it reads and writes `_ProcessBrokerSession.project_target_admitted()`
+instead of a per-manager flag, so only the first manager on a session key pays
+for the dedicated inspection connection and catalog reads. The record is set
+only after admission returns, is never cleared, and dies with the session
+object. That gives the invalidation rules without new machinery: a different
+target, backend options, or configuration snapshot is a different session; the
+last lease release, `BrokerSession` close, and `close_process_broker_sessions()`
+end the session; a forked child never reaches the parent's session (SQL
+managers reject inheritance, direct backends acquire a child session). No new
+lock is introduced: racing first users on different managers may each
+validate, exactly as before, and stop events keep their reach because waiting
+still happens only in the phase lock. A session's runner already caches its
+own schema setup for the same lifetime, so the record adds no staleness window
+beyond the resource it describes. The trade is deliberate: a target dropped,
+replaced, or migrated by another process after admission is detected by the
+next session, not by a new handle on the live one (plan
+`docs/plans/2026-11-08-target-validation-once-plan.md`, difference row D1).
+Ephemeral managers, injected runners, and `open_broker()` keep the per-manager
+flag, and `_initialize_project_backend_target()` validates on every direct
+call.
+
 PostgreSQL target-inspection connection failures retain their driver cause and
 use `OperationalError` when psycopg reports an operational failure. Project
 completion validation propagates that type rather than treating it as stale
@@ -352,7 +376,8 @@ before project setup or session admission. It reads the registry's `_getpid`
 seam, so the ownership fact and current-process comparison cannot diverge.
 SQL acquisition rejects the inherited manager before retry or lock acquisition.
 Direct backends such as Redis acquire child-owned state through the registry,
-then reset manager-local project setup and operation bookkeeping. Cleanup and
+then reset manager-local setup locks and operation bookkeeping; the child
+session starts with no project-target admission record. Cleanup and
 release ignore inherited operation leases; close uses the registry's stale-PID
 release path. The registry retains old graphs without finalization. This does
 not transfer parent generators or change injected runners' backend fork policy.
@@ -626,8 +651,14 @@ First-party service-backed allocation proof is in:
 
 The core suite also includes an AST gate for the one-way import rule and
 subprocess tests for both module import orders plus registry atexit shutdown.
+Project-target admission per session is proved through the counting backend
+in `tests/test_process_broker_session.py` (`project_admission` tests) and on
+real PostgreSQL in `extensions/simplebroker_pg/tests/test_pg_project_admission.py`.
 
 ## Related Plans
+
+- active: [2026-11-08-target-validation-once-plan](../plans/2026-11-08-target-validation-once-plan.md)
+  — project-target admission recorded on the process session.
 
 - retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`; SQL
   alias/meta fork rejection before operation and poison mutexes; see the

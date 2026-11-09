@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Project-scoped PostgreSQL and Redis targets are validated once per process
+  session instead of once per persistent Queue. Later persistent Queues and
+  `BrokerSession` handles on the same target, backend options, and
+  configuration reuse the session's successful admission, so they no longer
+  open a dedicated inspection connection (on PostgreSQL, one connection and
+  five catalog statements each). The first use in every new session still
+  validates, a failed admission is retried on the next use, and a target
+  changed by another process after admission is detected when the next session
+  starts. Ephemeral operations, injected runners, `open_broker()`, and SQLite
+  are unchanged.
+
 ## [8.7.2] - 2026-10-14
 
 SimpleBroker 8.7.2, `simplebroker-pg` 4.7.2, and `simplebroker-redis` 4.7.2

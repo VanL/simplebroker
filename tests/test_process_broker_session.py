@@ -38,7 +38,7 @@ from simplebroker._broker_session import (
     _session_spec,
     close_process_broker_sessions,
 )
-from simplebroker._exceptions import StopException
+from simplebroker._exceptions import OperationalError, StopException
 from simplebroker._runner import SQLiteRunner
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import (
@@ -3394,3 +3394,175 @@ def test_derived_config_with_same_metadata_shares_session(
         left.write("one")
         right.write("two")
         assert counting_backend.create_runner_calls == 1
+
+
+# --- Project-target admission per process session ([SB-API-11]) ---
+
+
+@pytest.fixture
+def project_admissions(
+    counting_backend: CountingBackendPlugin,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[str]:
+    """Record live project-target validation and setup calls on the real path.
+
+    The counting backend delegates both calls to the real SQLite plugin, so the
+    real phase lock, markers and database admission still decide the outcome.
+    Setting ``project_admissions.failure`` makes every call raise it instead.
+    """
+
+    class AdmissionLog(list[str]):
+        failure: Exception | None = None
+
+    admissions = AdmissionLog()
+
+    def validate_target(
+        target: str,
+        *,
+        backend_options: dict[str, Any] | None = None,
+        verify_initialized: bool = True,
+        config: Config | None = None,
+    ) -> None:
+        del config
+        admissions.append(f"validate:{dict(backend_options or {})}")
+        if admissions.failure is not None:
+            raise admissions.failure
+        sqlite_backend_plugin.validate_target(
+            target, verify_initialized=verify_initialized
+        )
+
+    def initialize_target(
+        target: str,
+        *,
+        backend_options: dict[str, Any] | None = None,
+        config: Config | None = None,
+    ) -> None:
+        admissions.append(f"initialize:{dict(backend_options or {})}")
+        if admissions.failure is not None:
+            raise admissions.failure
+        sqlite_backend_plugin.initialize_target(target, config=config)
+
+    monkeypatch.setattr(counting_backend, "validate_target", validate_target)
+    monkeypatch.setattr(counting_backend, "initialize_target", initialize_target)
+    return admissions
+
+
+def counting_project_target(tmp_path: Path, **options: Any) -> BrokerTarget:
+    config_path = tmp_path / ".broker.toml"
+    if not config_path.exists():
+        config_path.write_text("version = 1\n", encoding="utf-8")
+    return BrokerTarget(
+        backend_name="counting",
+        target=str(tmp_path / "broker.db"),
+        backend_options=dict(options),
+        project_root=tmp_path,
+        config_path=config_path,
+        used_project_scope=True,
+    )
+
+
+def test_project_admission_runs_once_per_session_key(
+    tmp_path: Path,
+    project_admissions: list[str],
+) -> None:
+    target = counting_project_target(tmp_path, schema="one")
+    other_options = counting_project_target(tmp_path, schema="two")
+    other_config = resolve_config(override={"BROKER_BUSY_TIMEOUT": 1234})
+
+    with contextlib.ExitStack() as stack:
+        queues = [
+            stack.enter_context(Queue(name, db_path=target, persistent=True))
+            for name in ("a", "b", "c")
+        ]
+        session = stack.enter_context(BrokerSession.connect(target))
+        queues.append(session.queue("minted"))
+        for queue in queues:
+            queue.write("payload")
+        # First use has no marker yet, so setup runs once; nothing repeats.
+        assert project_admissions == ["initialize:{'schema': 'one'}"]
+
+        stack.enter_context(Queue("a", db_path=other_options, persistent=True)).write(
+            "x"
+        )
+        stack.enter_context(
+            Queue("a", db_path=target, persistent=True, config=other_config)
+        ).write("y")
+        stack.enter_context(Queue("d", db_path=other_options, persistent=True)).write(
+            "z"
+        )
+        assert project_admissions == [
+            "initialize:{'schema': 'one'}",
+            "validate:{'schema': 'two'}",
+            "validate:{'schema': 'one'}",
+        ]
+
+
+def test_failed_project_admission_is_not_recorded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    project_admissions: Any,
+) -> None:
+    monkeypatch.setattr(
+        "simplebroker._retry_policy.interruptible_sleep",
+        lambda _wait, _stop_event=None: True,
+    )
+    target = counting_project_target(tmp_path, schema="one")
+    project_admissions.failure = OperationalError("target inspection unavailable")
+
+    with contextlib.ExitStack() as stack:
+        holder = stack.enter_context(Queue("holder", db_path=target, persistent=True))
+        with pytest.raises(RuntimeError, match="target inspection unavailable"):
+            holder.write("refused")
+        failed_attempts = len(project_admissions)
+        assert failed_attempts >= 1
+        with pytest.raises(RuntimeError, match="target inspection unavailable"):
+            stack.enter_context(Queue("other", db_path=target, persistent=True)).write(
+                "refused again"
+            )
+        assert len(project_admissions) > failed_attempts
+
+        project_admissions.failure = None
+        project_admissions.clear()
+        holder.write("admitted")
+        stack.enter_context(Queue("later", db_path=target, persistent=True)).write(
+            "reused"
+        )
+        assert project_admissions == ["initialize:{'schema': 'one'}"]
+        assert holder.read() == "admitted"
+
+
+def test_project_admission_ends_with_its_session_and_is_not_inherited(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    project_admissions: list[str],
+) -> None:
+    target = counting_project_target(tmp_path, schema="one")
+
+    with Queue("a", db_path=target, persistent=True) as first:
+        first.write("one")
+    with Queue("a", db_path=target, persistent=True) as second:
+        second.write("two")  # new session after the last lease ended
+    assert project_admissions == [
+        "initialize:{'schema': 'one'}",
+        "validate:{'schema': 'one'}",
+    ]
+
+    parent = Queue("a", db_path=target, persistent=True)
+    parent.write("three")
+    assert len(project_admissions) == 3
+    abandoned_before = len(broker_session_module._ABANDONED_FORK_SESSION_ENTRIES)
+    child_pid = broker_session_module._getpid() + 1
+    try:
+        # Simulated fork through the registry's module-owned pid seam: the
+        # parent's admitted session stays alive but belongs to another pid.
+        with monkeypatch.context() as child_process:
+            child_process.setattr(broker_session_module, "_getpid", lambda: child_pid)
+            with Queue("a", db_path=target, persistent=True) as child:
+                child.write("four")
+        assert len(project_admissions) == 4
+    finally:
+        parent.close()
+        abandoned = broker_session_module._ABANDONED_FORK_SESSION_ENTRIES
+        while len(abandoned) > abandoned_before:
+            for entry in abandoned.pop().values():
+                entry.session.close_all()
