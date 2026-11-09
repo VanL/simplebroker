@@ -392,3 +392,12 @@ commit):
   callback not save the listener? (b) why does the watcher-level test need a
   per-test `client_name` instead of `CLIENT KILL TYPE pubsub`? (c) which
   component covers writes made while no subscription existed?
+
+### Round 2 verification (coordinator)
+
+Tier 1, Codex (`codex exec -s read-only`, reasoning effort high), 2026-11-09,
+scoped to F1/F2 over `f7c0731..53895e3`. Verdict: PASS, no new defects. The
+second-listener witness occurs after recovery's initial drain and `"after"` is
+published only after it; the prose now describes listener-owned eventual
+cleanup. The reviewer did not rerun real Valkey integration or its negative
+control (recorded evidence, supported by inspection). Review loop closed.
