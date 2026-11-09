@@ -486,3 +486,15 @@ Dated moment-tier entries (foldable after age floor and distillation).
   driver handles; a later reconnect can hide premature disposal. Evidence:
   core-finalizer ownership plan, native PostgreSQL ACTIVE-checkout regression,
   SQLite owned/borrowed controls and Redis/Valkey checkout identity control.
+
+- 2026-11-08: Collapsing a multi-statement PostgreSQL transaction into one
+  CTE statement can invert lock order. PostgreSQL acquires every relation lock
+  of a statement when it analyzes the statement, before any row lock inside it
+  waits; a single `UPDATE meta ... INSERT INTO messages` statement therefore
+  holds `ROW EXCLUSIVE` on `messages` while queued on the `meta` row, the
+  inverse of broadcast's row-then-`SHARE ROW EXCLUSIVE` order, and deadlocks.
+  Keep the row-lock statement first (pipelining it with the combined statement
+  removes the round trip without changing order) and prove order at the
+  backend hook, not through `write()`: the lock-contention retry silently
+  absorbs `deadlock detected`. Evidence: PostgreSQL write-lock-hold plan,
+  prototype deadlock and mutation of the pipelined write.

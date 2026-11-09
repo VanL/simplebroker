@@ -12,7 +12,7 @@ from psycopg import ProgrammingError, conninfo
 
 from simplebroker import Config, resolve_config
 from simplebroker._backend_plugins import ActivityWaiter, BackendPlugin
-from simplebroker._exceptions import DatabaseError
+from simplebroker._exceptions import DatabaseError, OperationalError
 from simplebroker._runner import (
     SQLRunner,
     lease_runner_thread_connection,
@@ -35,6 +35,7 @@ from .runner import (
     PostgresMultiQueueActivityWaiter,
     PostgresRunner,
     RunnerMetaState,
+    failed_statement,
 )
 from .schema import initialize_database, meta_table_exists, migrate_schema
 from .validation import (
@@ -84,6 +85,12 @@ if TYPE_CHECKING:
         def invalidate_meta_cache(self) -> None: ...
 
         def is_schema_bootstrapped(self) -> bool: ...
+
+    class _TransactionRunner(SQLRunner, Protocol):
+        def run_transaction(
+            self,
+            statements: Sequence[tuple[str, tuple[Any, ...]]],
+        ) -> list[list[tuple[Any, ...]]]: ...
 
     class _VacuumRunner(_SchemaAwareRunner, Protocol):
         """First-party runner operations used by PostgreSQL vacuum recovery."""
@@ -812,6 +819,50 @@ class PostgresBackendPlugin:
     def write_last_ts(self, runner: SQLRunner, ts: int) -> None:
         runner.run("UPDATE meta SET last_ts = ? WHERE singleton = TRUE", (ts,))
 
+    def write_generated_message(
+        self,
+        runner: SQLRunner,
+        *,
+        queue: str,
+        message: str,
+        candidate: int,
+    ) -> int | None:
+        """Allocate, insert, notify, and commit one ordinary generated write.
+
+        One pipelined transaction: lock the high-water row first (the order
+        broadcast, rename, and keep_newest also use), then allocate
+        ``max(candidate, last_ts + 1)`` and insert in one statement. The row
+        lock is held only while the server executes and commits, never across
+        a client round trip, and commit order still equals ID order. Returns
+        ``None`` without mutation when the stored high-water's logical counter
+        is exhausted at or above ``candidate``.
+
+        A failure of the first statement, which waits for and takes the
+        high-water row lock, is marked ``_high_water_phase``: it is the failure
+        class the shared transaction's compare-and-advance reports as
+        ``TimestampError``. Failures of the allocate-and-insert statement
+        (including parameter adaptation) and of the commit propagate unmarked,
+        like the shared transaction's insert and commit failures.
+
+        Spec: [SB-ID-1], [SB-ID-2], [SB-ID-3], [SB-ID-4]
+        """
+        try:
+            results = cast("_TransactionRunner", runner).run_transaction(
+                (
+                    (pg_sql.LOCK_LAST_TS_ROW, ()),
+                    (
+                        pg_sql.WRITE_GENERATED_MESSAGE,
+                        (candidate, candidate, candidate, queue, message),
+                    ),
+                )
+            )
+        except OperationalError as exc:
+            if failed_statement(exc) == 0:
+                exc._high_water_phase = True
+            raise
+        rows = results[-1]
+        return int(rows[0][0]) if rows else None
+
     def read_alias_version(self, runner: SQLRunner) -> int:
         state = _load_live_meta_state(runner)
         return state.alias_version if state is not None else 0
@@ -879,7 +930,8 @@ class PostgresBackendPlugin:
 
     def prepare_broadcast(self, runner: SQLRunner) -> None:
         # Lock order must match writers: meta last_ts row first, then the
-        # messages table.  Writers hold the meta row lock (timestamp CAS)
+        # messages table.  Writers hold the meta row lock (LOCK_LAST_TS_ROW in
+        # write_generated_message, or the timestamp CAS on the shared path)
         # when they request the messages RowExclusiveLock; taking the
         # broadcast table lock first inverts the order and deadlocks.
         runner.run(pg_sql.LOCK_LAST_TS_ROW, fetch=True)

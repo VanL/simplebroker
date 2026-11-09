@@ -672,6 +672,14 @@ TIMESTAMP_GENERATOR_TRANSITIONS = (
         "reservation is ordered and refresh discards the local gap",
     ),
     _case(
+        "RESERVE_PUBLISH",
+        "candidate reserved in the local cache",
+        "backend commits a server-allocated ID at or above the candidate",
+        "cache at the committed maximum",
+        "publish the committed ID as a monotone maximum",
+        "a later or lower publication never regresses the cache",
+    ),
+    _case(
         "CONCURRENT_CAS",
         "two initialized generators",
         "generate concurrently",
@@ -849,6 +857,29 @@ def _fire_timestamp_shared_instance_serialization(
     assert generator.get_cached_last_ts() == durable == second_value
 
 
+def _fire_timestamp_reservation_transition(
+    payload: str,
+    core: BrokerDB,
+) -> None:
+    generator = core._timestamp_gen
+    durable = generator.refresh_last_ts()
+    if payload == "RESERVE_REFRESH":
+        candidates = generator._reserve_candidates(3)
+        assert candidates == sorted(candidates)
+        assert len(set(candidates)) == 3
+        assert candidates[0] > durable
+        assert generator.refresh_last_ts() == durable
+    else:
+        (candidate,) = generator._reserve_candidates(1)
+        assert candidate > durable
+        committed = candidate + 7
+        generator._publish_allocated(committed)
+        assert generator.get_cached_last_ts() == committed
+        generator._publish_allocated(candidate)
+        assert generator.get_cached_last_ts() == committed
+        assert generator._reserve_candidates(1)[0] > committed
+
+
 def _fire_timestamp_coordination_transition(
     payload: str,
     core: BrokerDB,
@@ -880,13 +911,6 @@ def _fire_timestamp_coordination_transition(
         )
         assert generator.generate() > competing
         assert not first_attempt
-    elif payload == "RESERVE_REFRESH":
-        durable = generator.refresh_last_ts()
-        candidates = generator._reserve_candidates(3)
-        assert candidates == sorted(candidates)
-        assert len(set(candidates)) == 3
-        assert candidates[0] > durable
-        assert generator.refresh_last_ts() == durable
     elif payload == "CONCURRENT_CAS":
         other = BrokerDB(str(tmp_path / f"{payload}.db"))
         barrier = threading.Barrier(2)
@@ -944,6 +968,8 @@ def test_timestamp_generator_fires_transition_table(
             "LOGICAL_OVERFLOW_WAIT_SUCCESS",
         }:
             _fire_timestamp_clock_transition(payload, core, first, monkeypatch)
+        elif payload in {"RESERVE_REFRESH", "RESERVE_PUBLISH"}:
+            _fire_timestamp_reservation_transition(payload, core)
         else:
             _fire_timestamp_coordination_transition(
                 payload,

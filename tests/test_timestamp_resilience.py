@@ -32,6 +32,16 @@ def _requires_sql_runner(broker) -> None:
         pytest.skip("SQL-runner timestamp fault injection is not supported here")
 
 
+def _allocates_server_side(broker) -> bool:
+    """Whether ordinary writes allocate the committed ID inside the backend.
+
+    Such a backend (PostgreSQL) commits ``max(candidate, last_ts + 1)``; the
+    fault seam is the reserved candidate, not ``generate()``.
+    """
+    plugin = getattr(broker, "_backend_plugin", None)
+    return callable(getattr(plugin, "write_generated_message", None))
+
+
 @pytest.mark.sqlite_only
 def test_conflict_metrics_exist_before_first_write(broker):
     """A fresh SQL core has stable metric state before concurrent writes begin."""
@@ -68,17 +78,21 @@ def test_forced_conflict_handled(broker):
         )
         broker._runner.commit()
 
-    original = broker._timestamp_gen.generate
+    server_side = _allocates_server_side(broker)
+    seam = "_reserve_candidates" if server_side else "generate"
+    original = getattr(broker._timestamp_gen, seam)
     call_count = 0
 
-    def mock_generate():
+    def mock_generate(*args):
         nonlocal call_count
         call_count += 1
         if call_count <= 2:
-            return 12345
-        return original()
+            # The raw insert left durable high-water below 12345, so a
+            # server-allocating backend also uses this colliding candidate.
+            return [12345] if server_side else 12345
+        return original(*args)
 
-    broker._timestamp_gen.generate = mock_generate
+    setattr(broker._timestamp_gen, seam, mock_generate)
 
     try:
         with warnings.catch_warnings():
@@ -100,7 +114,7 @@ def test_forced_conflict_handled(broker):
         assert broker.get_conflict_metrics()["ts_conflict_count"] > 0
         assert broker.get_conflict_metrics()["ts_resync_count"] > 0
     finally:
-        broker._timestamp_gen.generate = original
+        setattr(broker._timestamp_gen, seam, original)
 
 
 @pytest.mark.shared
@@ -155,6 +169,14 @@ def test_state_inconsistency_direct_fix(broker):
 def test_unresolvable_conflict(broker):
     """Test handling of truly unresolvable conflicts."""
     _requires_sql_runner(broker)
+    if _allocates_server_side(broker):
+        pytest.skip(
+            "unreachable with server-side allocation: after the resync rung the "
+            "backend allocates above the repaired high-water; the self-healing "
+            "replacement proof is extensions/simplebroker_pg/tests/"
+            "test_pg_write_allocation.py::"
+            "test_persistently_conflicting_candidate_self_heals_after_resync"
+        )
     with broker._lock:
         broker._runner.begin_immediate()
         broker._runner.run(

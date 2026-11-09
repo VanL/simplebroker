@@ -6,12 +6,13 @@ import contextlib
 import os
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import psycopg
 from psycopg import conninfo
+from psycopg.pq import TransactionStatus
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from simplebroker._backend_plugins import BackendPlugin
@@ -30,6 +31,10 @@ _DEFAULT_MAX_SIZE = 3
 
 # A forked child must not finalize a pool whose locks belong to parent threads.
 _ABANDONED_FORK_POSTGRES_POOLS: list[Any] = []
+
+# Module-owned capability seam for PostgresRunner.run_transaction(): libpq
+# pipeline mode needs libpq 14 or newer. Tests patch this alias, not psycopg.
+_pipeline_supported = psycopg.Pipeline.is_supported
 
 
 def _abandon_inherited_pool(pool: Any) -> None:
@@ -189,6 +194,10 @@ def _should_prepare(sql: str) -> bool:
         return True
     if normalized.startswith("WITH inserted AS ( INSERT INTO messages"):
         return True
+    if normalized.startswith("WITH allocated AS ( UPDATE meta"):
+        return True
+    if normalized == "SELECT last_ts FROM meta WHERE singleton = TRUE FOR UPDATE":
+        return True
     if (
         normalized.startswith("WITH selected AS MATERIALIZED ( SELECT ts")
         and "UPDATE messages AS m SET claimed = TRUE" in normalized
@@ -223,6 +232,35 @@ def _translate_error(exc: psycopg.Error) -> Exception:
     if sqlstate in _RETRYABLE_SQLSTATES:
         err.retryable = True
     return err
+
+
+_FAILED_STATEMENT_ATTRIBUTE = "_failed_statement"
+
+
+class _TransactionFailure(Exception):
+    """A driver failure inside ``run_transaction`` and the statement it reached."""
+
+    def __init__(self, cause: psycopg.Error, statement: int | None) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.statement = statement
+
+
+def failed_statement(error: BaseException) -> int | None:
+    """Return the ``run_transaction`` statement index a failure reached.
+
+    The index names the first statement that did not complete (it failed, was
+    aborted with the transaction, or was never sent). ``None`` means the
+    failure was outside every statement: the commit, or ``BEGIN`` on the
+    sequential transport, or the error did not come from ``run_transaction``.
+    """
+    value = getattr(error, _FAILED_STATEMENT_ATTRIBUTE, None)
+    return value if isinstance(value, int) else None
+
+
+def _connection_idle(conn: psycopg.Connection[Any]) -> bool:
+    """Return whether a checkout is open, out of any transaction, and reusable."""
+    return not conn.closed and conn.info.transaction_status == TransactionStatus.IDLE
 
 
 def _invalidates_bootstrap(exc: psycopg.Error) -> bool:
@@ -975,6 +1013,127 @@ class PostgresRunner:
             self.invalidate_bootstrap_state()
         assert failure is not None
         raise failure from cause
+
+    def run_transaction(
+        self,
+        statements: Sequence[tuple[str, tuple[Any, ...]]],
+    ) -> list[list[tuple[Any, ...]]]:
+        """Run statements as one transaction without a client round trip inside it.
+
+        With libpq pipeline mode every statement and one closing Sync are sent
+        without waiting for a result; the server executes them as one implicit
+        transaction and commits at the Sync, so locks taken by an earlier
+        statement are never held while the server waits for this client to
+        read a result. Without pipeline support the same statements run inside
+        an explicit BEGIN/COMMIT (same atomicity, more round trips). Any error
+        rolls the whole transaction back. Returns each statement's rows, or an
+        empty list for a statement that returns none.
+
+        Callers own statement order: a statement's relation locks are taken
+        when the server reaches it, so order expresses lock order. A raised
+        error reports, through :func:`failed_statement`, which statement the
+        failure reached, so a caller can tell a lock-acquisition failure from
+        a later one.
+
+        Must not be called while this runner has an open transaction.
+        """
+        self._check_fork()
+        if self._in_transaction():
+            raise RuntimeError("run_transaction cannot join an open runner transaction")
+        conn = self._get_thread_conn()
+        leased = self._uses_leased_connection(conn)
+        failure: Exception | None = None
+        cause: psycopg.Error | None = None
+        invalidate_bootstrap = False
+        try:
+            if _pipeline_supported():
+                return self._run_pipelined_transaction(conn, statements)
+            return self._run_explicit_transaction(conn, statements)
+        except _TransactionFailure as exc:
+            failure = _translate_error(exc.cause)
+            setattr(failure, _FAILED_STATEMENT_ATTRIBUTE, exc.statement)
+            cause = exc.cause
+            invalidate_bootstrap = _invalidates_bootstrap(exc.cause)
+        except BaseException as exc:
+            if leased and not _connection_idle(conn):
+                self._discard_thread_connection_after_failure(exc)
+            raise
+        finally:
+            if not leased:
+                self._return_thread_conn_after_operation()
+
+        assert failure is not None
+        if leased and not _connection_idle(conn):
+            self._discard_thread_connection_after_failure(failure)
+        if invalidate_bootstrap:
+            self.invalidate_bootstrap_state()
+        raise failure from cause
+
+    @staticmethod
+    def _run_pipelined_transaction(
+        conn: psycopg.Connection[Any],
+        statements: Sequence[tuple[str, tuple[Any, ...]]],
+    ) -> list[list[tuple[Any, ...]]]:
+        cursors: list[psycopg.Cursor[Any]] = []
+        try:
+            # Autocommit connection, no BEGIN: everything up to the Sync sent
+            # when the block exits is one implicit transaction.
+            with conn.pipeline():
+                for sql, params in statements:
+                    cursor = conn.cursor()
+                    cursors.append(cursor)
+                    adapted_sql = _adapt_sql(sql) if params else sql
+                    cursor.execute(
+                        adapted_sql, params, prepare=_should_prepare(adapted_sql)
+                    )
+            return [
+                cursor.fetchall() if cursor.description is not None else []
+                for cursor in cursors
+            ]
+        except psycopg.Error as exc:
+            # A statement that failed, was aborted with the pipeline, or was
+            # never sent has no result; when every statement returned one, the
+            # failure came at the Sync (the commit).
+            missing = (
+                index for index, cursor in enumerate(cursors) if cursor.pgresult is None
+            )
+            reached = next(
+                missing, len(cursors) if len(cursors) < len(statements) else None
+            )
+            raise _TransactionFailure(exc, reached) from exc
+        finally:
+            for cursor in cursors:
+                cursor.close()
+
+    @staticmethod
+    def _run_explicit_transaction(
+        conn: psycopg.Connection[Any],
+        statements: Sequence[tuple[str, tuple[Any, ...]]],
+    ) -> list[list[tuple[Any, ...]]]:
+        results: list[list[tuple[Any, ...]]] = []
+        reached: int | None = None
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("BEGIN")
+                for index, (sql, params) in enumerate(statements):
+                    reached = index
+                    adapted_sql = _adapt_sql(sql) if params else sql
+                    cursor.execute(
+                        adapted_sql, params, prepare=_should_prepare(adapted_sql)
+                    )
+                    results.append(
+                        cursor.fetchall() if cursor.description is not None else []
+                    )
+                reached = None
+                cursor.execute("COMMIT")
+        except BaseException as exc:
+            if not _connection_idle(conn):
+                with contextlib.suppress(psycopg.Error):
+                    conn.rollback()
+            if isinstance(exc, psycopg.Error):
+                raise _TransactionFailure(exc, reached) from exc
+            raise
+        return results
 
     def _checkout_begin_connection(
         self,

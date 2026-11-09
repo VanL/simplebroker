@@ -11,9 +11,10 @@ import re
 import threading
 import time
 import unicodedata
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from datetime import time as datetime_time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from ._backend_plugins import BackendPlugin, resolve_runner_backend_plugin
 from ._constants import (
@@ -64,6 +65,57 @@ _BOUND_PARSE_GUIDANCE = (
     "timestamp bounds require integral seconds. For finer granularity, use integer "
     "ms, integer ns, or a native hybrid message ID."
 )
+
+
+_T = TypeVar("_T")
+
+
+def _run_durable_advance(
+    operation: Callable[[], _T],
+    *,
+    marked_failures_only: bool = False,
+) -> _T:
+    """Run a durable high-water advance with the generator's failure contract.
+
+    Lock or busy contention is retried for ``TS_RETRY_MAX_ELAPSED``; exhausted
+    contention raises ``TimestampError`` (known failure, nothing committed).
+    Any other ``OperationalError`` raised by the advance raises
+    ``TimestampError(outcome_ambiguous=True)``: the advance may already have
+    committed. ``generate()`` and ``advance_to_at_least()`` classify every
+    failure this way.
+
+    With ``marked_failures_only`` (a server-allocated write, whose operation
+    also inserts and commits the row), only failures the backend marked
+    ``OperationalError._high_water_phase`` are advance failures. Any other
+    error propagates unchanged and at once, without a timestamp-budget retry,
+    exactly as an insert or commit failure does on the shared SQL
+    transaction: its contention belongs to the caller's stop-aware operation
+    retry.
+
+    Spec: [SB-ID-2], [SB-ID-3]
+    """
+
+    def retry_if(error: OperationalError) -> bool:
+        return error._high_water_phase or not marked_failures_only
+
+    try:
+        return _execute_with_retry(
+            operation,
+            max_retries=None,
+            retry_delay=0.002,
+            max_elapsed=TS_RETRY_MAX_ELAPSED,
+            max_retry_delay=TS_RETRY_MAX_DELAY,
+            retry_if=retry_if,
+        )
+    except OperationalError as e:  # pragma busy_timeout etc.
+        if marked_failures_only and not e._high_water_phase:
+            raise
+        if _is_locked_operational_error(e):
+            raise TimestampError(f"database busy while writing timestamp: {e}") from e
+        raise TimestampError(
+            f"database error while writing timestamp; durable outcome is unknown: {e}",
+            outcome_ambiguous=True,
+        ) from e
 
 
 def decode_hybrid_timestamp(ts: int) -> tuple[int, int]:
@@ -184,10 +236,12 @@ class TimestampGenerator:
         """Reserve unique local timestamp candidates without persisting them.
 
         Direct backends use this when target selection and insertion happen in
-        one atomic server-side operation. The server-side operation remains
-        responsible for advancing persisted ``last_ts`` if it commits at least
-        one candidate. An empty target set may therefore leave a harmless gap
-        in this process-local cache without changing broker state.
+        one atomic server-side operation, and SQL backends use it for a
+        server-allocated generated write (``write_generated_message``). The
+        server-side operation remains responsible for advancing persisted
+        ``last_ts`` if it commits at least one candidate. An empty target set or
+        a failed operation may therefore leave a harmless gap in this
+        process-local cache without changing broker state.
         """
 
         if isinstance(count, bool) or not isinstance(count, int):
@@ -208,6 +262,22 @@ class TimestampGenerator:
                 self._last_ts = candidate
                 candidates.append(candidate)
             return candidates
+
+    def _publish_allocated(self, timestamp: int) -> None:
+        """Publish a committed, server-allocated ID into the local cache.
+
+        A server-allocated write commits ``max(candidate, last_ts + 1)`` for a
+        candidate from :meth:`_reserve_candidates`, so the committed ID can
+        exceed the reservation. The durable advance happens on the server,
+        outside this lock; publication is therefore a monotone maximum under
+        the lock, which keeps a slower caller from regressing ``_last_ts``
+        below a later caller's value (the same hazard ``generate()`` closes by
+        holding the lock across its durable compare-and-advance).
+        """
+
+        self._ensure_pid()
+        with self._lock:
+            self._last_ts = max(self._last_ts, timestamp)
 
     # -- internal helpers -------------------------------------
 
@@ -342,24 +412,7 @@ class TimestampGenerator:
                 new_ts=new_ts,
             )
 
-        try:
-            return _execute_with_retry(
-                _op,
-                max_retries=None,
-                retry_delay=0.002,
-                max_elapsed=TS_RETRY_MAX_ELAPSED,
-                max_retry_delay=TS_RETRY_MAX_DELAY,
-            )
-        except OperationalError as e:  # pragma busy_timeout etc.
-            if _is_locked_operational_error(e):
-                raise TimestampError(
-                    f"database busy while writing timestamp: {e}"
-                ) from e
-            raise TimestampError(
-                "database error while writing timestamp; durable outcome is unknown: "
-                f"{e}",
-                outcome_ambiguous=True,
-            ) from e
+        return _run_durable_advance(_op)
 
     # -----------------------------------------------------------------
     # 3. lightweight read helper when we lost the race

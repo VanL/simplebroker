@@ -13,6 +13,10 @@ Two tests pin the fix from opposite directions:
 - a deterministic statement-ordering test using a pass-through spy over
   each SQL backend's real runner (no behavior is faked; only ordering is
   recorded). Redis owns a separate real-Valkey Lua visibility proof.
+  PostgreSQL allocates the ID server-side inside one pipelined transaction
+  (``write_generated_message``); its real-PostgreSQL concurrency and
+  checkpoint-reader proof lives in
+  extensions/simplebroker_pg/tests/test_pg_write_allocation.py.
 """
 
 import multiprocessing
@@ -171,22 +175,42 @@ class _RecordingRunner:
     Delegates every call to the real runner (nothing is faked) and records
     the order of transaction boundaries, the last_ts CAS, and the message
     insert.  Ordering IS the invariant under test: the CAS must execute
-    between BEGIN IMMEDIATE and the COMMIT that publishes the insert.
+    between BEGIN IMMEDIATE and the COMMIT that publishes the insert.  A
+    backend-owned one-exchange transaction (``run_transaction``) is recorded
+    as one event listing its statements in order.
     """
 
     def __init__(self, inner: object) -> None:
         self._inner = inner
         self.events: list[str] = []
 
-    def run(self, sql, params=(), *, fetch=False):
+    @staticmethod
+    def _classify(sql: str) -> str | None:
         normalized = " ".join(sql.split())
+        if normalized.startswith("WITH allocated AS ( UPDATE meta"):
+            return "allocate_and_insert_message"
+        if normalized.startswith("SELECT last_ts FROM meta") and normalized.endswith(
+            "FOR UPDATE"
+        ):
+            return "lock_last_ts_row"
         if normalized.startswith("UPDATE meta") and "last_ts" in normalized:
-            self.events.append("advance_last_ts")
-        elif "INSERT INTO messages" in normalized:
-            self.events.append("insert_message")
-        elif normalized.startswith("UPDATE messages SET claimed ="):
-            self.events.append("claim_older_pending")
+            return "advance_last_ts"
+        if "INSERT INTO messages" in normalized:
+            return "insert_message"
+        if normalized.startswith("UPDATE messages SET claimed ="):
+            return "claim_older_pending"
+        return None
+
+    def run(self, sql, params=(), *, fetch=False):
+        event = self._classify(sql)
+        if event is not None:
+            self.events.append(event)
         return self._inner.run(sql, params, fetch=fetch)  # type: ignore[attr-defined]
+
+    def run_transaction(self, statements):
+        labels = [self._classify(sql) or "other" for sql, _ in statements]
+        self.events.append("transaction(" + ", ".join(labels) + ")")
+        return self._inner.run_transaction(statements)  # type: ignore[attr-defined]
 
     def begin_immediate(self):
         self.events.append("begin")
@@ -233,6 +257,13 @@ def test_write_allocates_timestamp_inside_the_insert_transaction(
     core.write("q", "hello")
 
     events = runner.events
+    if callable(getattr(fixture._backend_plugin, "write_generated_message", None)):
+        # Server-allocated write: one transaction that locks the high-water
+        # row first, then allocates and inserts in a single statement, and
+        # commits before the result returns. Nothing else touches meta.
+        assert events == ["transaction(lock_last_ts_row, allocate_and_insert_message)"]
+        core.close()
+        return
     assert "advance_last_ts" in events and "insert_message" in events
     begin = events.index("begin")
     cas = events.index("advance_last_ts")

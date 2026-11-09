@@ -114,6 +114,7 @@ from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import BrokerTarget, normalize_sqlite_target
 from ._timestamp import (
     TimestampGenerator,
+    _run_durable_advance,
     decode_hybrid_timestamp,
     validate_timestamp_bound,
 )
@@ -2204,7 +2205,19 @@ class BrokerCore:
 
         Returns the committed timestamp so write() can hand the exact
         message ID back to the caller.
+
+        A backend that exposes the optional ``write_generated_message`` hook
+        performs the allocation, insert, notification, and commit of an
+        ordinary (no ``keep_newest``) write as one server-side atomic unit; see
+        :meth:`_do_server_allocated_write`.
         """
+        if keep_newest is None:
+            write_generated = getattr(
+                self._backend_plugin, "write_generated_message", None
+            )
+            if callable(write_generated):
+                return self._do_server_allocated_write(write_generated, queue, message)
+
         with self._lock:
             self._runner.begin_immediate()
             try:
@@ -2232,6 +2245,56 @@ class BrokerCore:
                     self._runner.rollback()
                 raise
             return timestamp
+
+    def _do_server_allocated_write(
+        self,
+        write_generated: Callable[..., int | None],
+        queue: str,
+        message: str,
+    ) -> int:
+        """Write through a backend that allocates the committed ID server-side.
+
+        The backend commits ``max(candidate, last_ts + 1)`` together with the
+        row, holding its high-water serialization through commit so generated
+        rows still commit in ID order ([SB-ID-2], checkpoint visibility). A
+        stale candidate therefore costs no retry. ``None`` means the stored
+        high-water's logical counter is exhausted at or above the candidate and
+        nothing was written; refreshing lets the generator wait for the clock
+        or raise ``TimestampError`` exactly as ``generate()`` would ([SB-ID-4]).
+        An ``IntegrityError`` (allocated ID already stored above a corrupted
+        high-water) propagates to ``write()``'s existing conflict ladder.
+
+        Failures the backend marks as high-water-phase (acquiring or advancing
+        the high-water serialization) keep the generator's contract through
+        ``_run_durable_advance``: contention is retried for the timestamp
+        budget, then ``TimestampError``; any other database failure is
+        ``TimestampError(outcome_ambiguous=True)``, as on the shared
+        transaction's compare-and-advance. Unmarked failures (insert, commit,
+        parameter adaptation) propagate unchanged.
+
+        Spec: [SB-ID-1], [SB-ID-2], [SB-ID-3], [SB-ID-4]
+        """
+        with self._lock:
+            for _ in range(6):  # same hard bound as TimestampGenerator.generate()
+                candidate = self._checked_generated_message_id(
+                    self._timestamp_gen._reserve_candidates(1)[0]
+                )
+                committed = _run_durable_advance(
+                    partial(
+                        write_generated,
+                        self._runner,
+                        queue=queue,
+                        message=message,
+                        candidate=candidate,
+                    ),
+                    marked_failures_only=True,
+                )
+                if committed is not None:
+                    committed = self._checked_generated_message_id(committed)
+                    self._timestamp_gen._publish_allocated(committed)
+                    return committed
+                self._timestamp_gen.refresh_last_ts()
+        raise IntegrityError("unable to generate unique timestamp (exhausted retries)")
 
     @staticmethod
     def _checked_generated_message_id(value: object) -> int:
