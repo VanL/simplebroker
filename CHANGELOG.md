@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `simplebroker-pg`: when the server ends the shared LISTEN session (for
+  example a server restart or `pg_terminate_backend`), waiters on that listener
+  still raise `OperationalError`, but the next waiter gets a new listener
+  instead of the failed one. A watcher's ordinary retry therefore wakes on later
+  writes again; previously every retry reused the failed listener until the
+  watcher exhausted its retries and stopped. The watcher's existing retry
+  limits are unchanged: at most two recoveries per run, and none once the run
+  is more than five minutes old.
+
 ## [8.7.2] - 2026-10-14
 
 SimpleBroker 8.7.2, `simplebroker-pg` 4.7.2, and `simplebroker-redis` 4.7.2

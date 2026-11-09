@@ -999,7 +999,11 @@ def test_listener_handles_unknown_registrations_and_surfaces_errors() -> None:
 def test_activity_registry_ignores_unknown_release() -> None:
     registry = pg_runner_module._SharedActivityRegistry()
 
-    registry.release("unknown-dsn", schema="unknown_schema")
+    registry.release(
+        "unknown-dsn",
+        schema="unknown_schema",
+        listener=cast(pg_runner_module._SharedActivityListener, object()),
+    )
 
     assert registry._listeners == {}
 
@@ -1393,6 +1397,7 @@ def test_shared_activity_registry_is_pid_scoped(
         def __init__(self, dsn: str, *, schema: str) -> None:
             self.dsn = dsn
             self.schema = schema
+            self._error: Exception | None = None
             self.close_calls = 0
             self.instances.append(self)
 
@@ -1416,18 +1421,56 @@ def test_shared_activity_registry_is_pid_scoped(
     assert child_listener is not parent_first
     assert len(FakeListener.instances) == 2
 
-    registry.release("dsn", schema="schema")
+    registry.release("dsn", schema="schema", listener=cast(Any, child_listener))
     assert child_listener.close_calls == 1
     assert parent_first.close_calls == 0
 
     current_pid = 1001
-    registry.release("dsn", schema="schema")
+    registry.release("dsn", schema="schema", listener=cast(Any, parent_first))
     assert parent_first.close_calls == 0
     replacement = cast(FakeListener, registry.acquire("dsn", schema="schema"))
     assert replacement is not parent_first
-    registry.release("dsn", schema="schema")
+    registry.release("dsn", schema="schema", listener=cast(Any, replacement))
     assert replacement.close_calls == 1
     assert parent_first.close_calls == 0
+
+
+def test_shared_activity_registry_never_hands_out_a_failed_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeListener:
+        def __init__(self, dsn: str, *, schema: str) -> None:
+            self._error: Exception | None = None
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    monkeypatch.setattr(pg_runner_module, "_SharedActivityListener", FakeListener)
+    registry = pg_runner_module._SharedActivityRegistry()
+
+    failed = registry.acquire("dsn", schema="schema")
+    assert registry.acquire("dsn", schema="schema") is failed
+    failed._error = RuntimeError("LISTEN backend terminated")
+
+    replacement = registry.acquire("dsn", schema="schema")
+    assert replacement is not failed
+    assert registry.acquire("dsn", schema="schema") is replacement
+
+    # Both holders of the failed listener release it. That must neither count
+    # against the replacement nor close the failed listener: its thread already
+    # closed its connection, and closing it would turn the stored failure into
+    # quiet wait results for holders that have not observed it yet.
+    registry.release("dsn", schema="schema", listener=failed)
+    registry.release("dsn", schema="schema", listener=failed)
+    assert cast(FakeListener, failed).close_calls == 0
+    assert cast(FakeListener, replacement).close_calls == 0
+
+    registry.release("dsn", schema="schema", listener=replacement)
+    assert cast(FakeListener, replacement).close_calls == 0
+    registry.release("dsn", schema="schema", listener=replacement)
+    assert cast(FakeListener, replacement).close_calls == 1
+    assert registry._listeners == {}
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is not available")
@@ -1465,7 +1508,7 @@ def test_postgres_activity_registry_recovers_before_inherited_lock(
                 FakeListener,
                 registry.acquire("dsn", schema="schema"),
             )
-            registry.release("dsn", schema="schema")
+            registry.release("dsn", schema="schema", listener=cast(Any, child_listener))
             os._exit(0 if child_listener.close_calls == 1 else 2)
         except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             os._exit(1)
@@ -1490,7 +1533,7 @@ def test_postgres_activity_registry_recovers_before_inherited_lock(
         holder.join(timeout=2.0)
 
     parent_listener = cast(FakeListener, registry.acquire("dsn", schema="schema"))
-    registry.release("dsn", schema="schema")
+    registry.release("dsn", schema="schema", listener=cast(Any, parent_listener))
     assert parent_listener.close_calls == 1
 
 

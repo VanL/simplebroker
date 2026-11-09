@@ -58,7 +58,8 @@ class _Registry:
         self.events.append(f"acquire:{dsn}:{schema}")
         return self.listener
 
-    def release(self, dsn: str, *, schema: str) -> None:
+    def release(self, dsn: str, *, schema: str, listener: _Listener) -> None:
+        assert listener is self.listener
         self.events.append(f"release:{dsn}:{schema}")
         if self.release_error is not None:
             raise self.release_error

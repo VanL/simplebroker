@@ -330,6 +330,20 @@ entry only when the last reference is surrendered, then closes the detached
 listener outside the registry lock. This closes the lookup/register gap: a new
 waiter cannot receive a listener concurrently selected for final close.
 
+The PostgreSQL registry never hands out a listener whose thread has published
+a failure (for example, the server ended its LISTEN session). The next acquire
+creates a replacement under the same key. Holders of the failed listener keep
+it, see the stored failure on their next wait, and recover only by acquiring
+again: the watcher's ordinary retry creates a new waiter, whose initial drain
+covers writes made while no listener was subscribed. The listener is not
+reconnected in place, because a silent resubscription would hide that gap from
+waiters that believe they were continuously subscribed. Release names the
+listener it surrenders, so releasing a replaced listener is a no-op that never
+counts against its replacement. The registry does not close a replaced
+listener: its thread closed its own connection when it failed, and closing it
+would turn the stored failure into quiet wait results for holders that have not
+observed it yet. Plan: `2026-11-08-pg-listener-failure-recovery-plan.md`.
+
 ### Fork recovery before process-owned locks
 
 Every process-owned state holder checks its PID before acquiring an inherited
@@ -628,6 +642,10 @@ The core suite also includes an AST gate for the one-way import rule and
 subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
+
+- active: 2026-11-08-pg-listener-failure-recovery-plan — the PostgreSQL
+  activity registry replaces a failed shared listener instead of handing it
+  out again; release is identity-checked.
 
 - retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`; SQL
   alias/meta fork rejection before operation and poison mutexes; see the
