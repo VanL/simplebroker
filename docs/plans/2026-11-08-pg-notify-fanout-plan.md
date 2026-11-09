@@ -5,7 +5,7 @@ NOTIFY channel and listener subscription lifecycle), adds rollout-order
 sensitivity for mixed client versions, and changes a background listener
 thread's state machine. No normative spec text changes (no channel layout is
 specified anywhere), so not class 5.
-Status: active — implemented, measured and documented on branch `perf/sb-notify-fanout`; cross-family review passed (round 2); rollout decided by the owner (clean break, 2026-11-08); PostgreSQL ≤ 18 value decision pending.
+Status: active — implemented, measured and documented on branch `perf/sb-notify-fanout`; cross-family review passed (round 2); rollout decided by the owner (clean break, 2026-11-08); PostgreSQL ≤ 18 value decided by the owner (accept the client-side gain now; revisit the server-side gain on PostgreSQL 19, 2026-11-08).
 Owner: SimpleBroker product owner; implementation agent for track SB-3.
 Boundary: `extensions/simplebroker_pg` notification SQL, channel identifiers, and the process-local shared activity listener. Core, SQLite, Redis and every public signature are out of scope.
 Verification: real-PostgreSQL wire, wake, race and subscription tests; SM-PG-LISTENER transition table; full PostgreSQL extension suite; lint/format/types; before/after fan-out measurement on disposable `postgres:18`.
@@ -226,11 +226,11 @@ Listener (one thread owns the connection; no cross-thread connection use):
 | Listener connections no longer receive notifications for unregistered queues (fewer packets, listener-thread wakes, client CPU) | C — no loss | [THEORY-4] concrete pressure (measured fan-out) |
 | PostgreSQL ≥ 19: uninterested listener backends are not signaled and run no read transaction | C — no loss | same |
 | PostgreSQL ≤ 18: server `xact_commit` per write unchanged (`1 + listening backends in the database`) | N — measured, not improved | — |
-| First registration of a queue in a process that already has a listener adds one LISTEN round trip and one server transaction; last release adds one UNLISTEN | D — bounded (one round trip per first registration; one per last release) | [THEORY-4] "Concrete pressure justifies growth" (measured fan-out); owner decision 2, pending |
-| A process's first waiter (fresh listener) pays connect + schema-channel LISTEN at startup and then a separate queue-channel LISTEN round trip and server transaction before its constructor returns: two LISTEN transactions where the baseline had one | D — bounded (one extra round trip per fresh listener; not folded into startup because registration follows `acquire`) | [THEORY-4] "Concrete pressure justifies growth"; owner decision 2, pending |
+| First registration of a queue in a process that already has a listener adds one LISTEN round trip and one server transaction; last release adds one UNLISTEN | D — bounded (one round trip per first registration; one per last release) | [THEORY-4] "Concrete pressure justifies growth" (measured fan-out); owner decision 2, accepted 2026-11-08 |
+| A process's first waiter (fresh listener) pays connect + schema-channel LISTEN at startup and then a separate queue-channel LISTEN round trip and server transaction before its constructor returns: two LISTEN transactions where the baseline had one | D — bounded (one extra round trip per fresh listener; not folded into startup because registration follows `acquire`) | [THEORY-4] "Concrete pressure justifies growth"; owner decision 2, accepted 2026-11-08 |
 | Registration can raise `OperationalError` if the subscription is not acknowledged within the listener startup timeout (5 s); registration is rolled back | A — mirrors the existing listener-startup timeout instead of degrading silently | [THEORY-4] explicit safety over magical recovery |
 | Pre-change writer → post-change waiter: wakes via the retained schema channel | N | — |
-| Post-change writer → pre-change waiter: the old waiter is not notified and wakes on its native idle re-poll (default 1–2 s; measured 44–1275 ms) or caller polling until upgraded; no message loss | D during mixed-version rollout only; avoidable by upgrading waiting processes first | [THEORY-4] "Explicit safety over magical recovery": the guarantee is named narrowly (a waiter wake is a hint, delivery is owned by the drain and the named idle re-poll), so the rollout degrades latency, never delivery; contracts [SB-API-6], [SB-DELIVERY-2]. Rollout policy (clean break vs dual-NOTIFY transition) is owner decision 1, pending — not accepted |
+| Post-change writer → pre-change waiter: the old waiter is not notified and wakes on its native idle re-poll (default 1–2 s; measured 44–1275 ms) or caller polling until upgraded; no message loss | D during mixed-version rollout only; avoidable by upgrading waiting processes first | [THEORY-4] "Explicit safety over magical recovery": the guarantee is named narrowly (a waiter wake is a hint, delivery is owned by the drain and the named idle re-poll), so the rollout degrades latency, never delivery; contracts [SB-API-6], [SB-DELIVERY-2]. Rollout policy is owner decision 1: clean break, decided 2026-11-08 |
 | `*` on the schema channel still wakes every waiter | N | — |
 | `pg_listening_channels()` on a listener backend lists per-queue channels | C — operator-visible detail | — |
 | PostgreSQL ≤ 18 listener backends scan their channel list per queue entry (`IsListeningOn` is linear); cost grows with queues per process | N — microseconds per entry at realistic counts | — |
@@ -238,7 +238,7 @@ Listener (one thread owns the connection; no cross-thread connection use):
 
 ## Owner decisions
 
-Decision 1 is owner-decided (2026-11-08); decision 2 remains open (pending owner).
+Both decisions are owner-decided (2026-11-08).
 
 1. Mixed-version rollout — OWNER DECIDED 2026-11-08: clean break (no dual-NOTIFY
    transition release), with the documented upgrade order. Author recommendation was: no dual-NOTIFY shim; document "upgrade
@@ -246,7 +246,9 @@ Decision 1 is owner-decided (2026-11-08); decision 2 remains open (pending owner
    accept both protocols, so listeners-first has no wake gap). Alternative: a
    transition release whose writers NOTIFY both channels, removed one release
    later; it doubles NOTIFY payloads and delays all benefit by a release.
-2. PostgreSQL ≤ 18 value (pending): accept that the gain there is client-side
+2. PostgreSQL ≤ 18 value — OWNER DECIDED 2026-11-08: "we do what we can now,
+   then see if we can be better on pg 19." Accept the client-side gain now; revisit
+   the server-side gain when PostgreSQL 19 is available. Original text: accept that the gain there is client-side
    only (and the LISTEN round trips in the register), with the server-side gain
    arriving with PostgreSQL 19. A PostgreSQL 18 server-side gain needs either
    a durable interest registry (rejected here) or deployment guidance to put
