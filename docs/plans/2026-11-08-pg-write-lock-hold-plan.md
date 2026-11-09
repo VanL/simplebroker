@@ -3,7 +3,7 @@
 Class: 4 — changes the PostgreSQL execution path of every ordinary generated
 write, adds a second realization of the shared SQL write behavior behind an
 optional backend seam, and touches lock ordering that other mutations depend on.
-Status: active — implemented on branch `perf/sb-write-lock`; Codex round 1 (blocker F1, plus F2) and round 2 (F3) fixed; F3 verification pending (coordinator-owned).
+Status: active — implemented on branch `perf/sb-write-lock`; Codex round 1 (blocker F1, plus F2) and round 2 (F3) fixed; F3 verified PASS by Codex round 3 (2026-11-08); owner decision on the merged-statement exception row pending.
 Owner: SimpleBroker message-identity layer (`simplebroker/db.py`, `simplebroker/_timestamp.py`) and the PostgreSQL backend (`extensions/simplebroker_pg/`).
 Boundary: ordinary `write()` without `keep_newest` on PostgreSQL. SQLite, Redis, `keep_newest`, exact insert, broadcast, rename, standalone `generate_timestamp()`, and conflict repair keep their current realization.
 Verification: real-PostgreSQL concurrency, lock-order, exhaustion, atomicity and fallback tests; shared suites on SQLite and PostgreSQL; probe and repository benchmark against disposable `postgres:18`.
@@ -591,3 +591,13 @@ is kept because without it a libpq < 14 installation would lose PostgreSQL
 writes entirely; it reuses the same statements. No new abstraction beyond one
 optional hook, one runner method, and one generator method.
 
+### Round 3 verification (coordinator)
+
+Tier 1, Codex (`codex exec -s read-only`, reasoning effort high), 2026-11-08,
+scoped to F3 over `7cde031..2607bf5`. Verdict: PASS. The phase predicate runs
+inside `_execute_with_retry` before any retry; unmarked errors reach the
+stop-aware outer write retry immediately. Read-only probes with the real core
+methods: `2607bf5` one attempt then `StopException`; `7cde031` two attempts
+then an ID. The PostgreSQL regression test was inspected, not rerun, by the
+reviewer (no DSN in its sandbox); the author ran it on postgres:18. Review loop
+closed.
