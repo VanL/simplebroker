@@ -780,6 +780,23 @@ The polling fallback still performs one ordinary configured pass, even for
 `timeout=0`; it does not create a second, faster SQLite polling cadence. A
 native zero timeout performs one nonblocking observation.
 
+A quiet native strategy still returns for a safety recheck so the owner can
+check its queues if a notification was lost. The installed waiter may declare
+the interval `R` as a positive `safety_recheck_interval` attribute; otherwise
+`R` is `max(1, 10 * max_interval)`, about 1 second by default. After a
+recheck or consumed local activity the next one is due within `[R, 2R)`; the
+first one after installing a waiter is due within `[max(R, 1), 2 * max(R, 1))`.
+The strategy notices a due recheck when its current native pass ends, which
+can add up to `max((1 + jitter_factor) * max_interval, burst_sleep)`, about
+0.115 seconds by default. PostgreSQL waiters declare 30 seconds, so a quiet
+PostgreSQL watcher does not keep a pooled data connection open and recovers a
+lost notification in under about 60.1 seconds; Redis/Valkey waiters keep the
+default (under about 2.1 seconds). These scheduling bounds additionally allow
+for scheduler delay and the queue check itself; they do not bound delivery
+when reconnecting or querying stalls. A custom waiter that declares an invalid
+value, including one whose `2R` overflows, is rejected by `start()` or
+`replace_activity_waiter()` before anything changes.
+
 Publish local result, stop, or signal state before calling
 `strategy.notify_activity()`. The call may come from a foreign thread or
 Python signal handler because it only arms one coalescing latch. The serialized

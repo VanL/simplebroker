@@ -524,6 +524,99 @@ nested-lineage memory cost for an unsafe finalization path; either requires
 measured harmful growth and a proven close-free disposal mechanism. A warning
 is also unjustified until that growth is observed.
 
+### Quiet PostgreSQL processes and the safety recheck
+
+A returned checkout is idle, not free: psycopg-pool keeps it as a server
+session. The pool therefore owns idle reaping through its public `max_idle`
+policy (`_POOL_MAX_IDLE_SECONDS`, 10 s). Each idle check closes at most one
+connection, and only when the pool never ran out of idle connections during
+the whole check period, so a single idle connection closes 10–20 s after its
+last use. `min_size` stays 0. Explicit release from the session or watcher
+was not used: psycopg-pool has no public "close idle now" operation, and
+returning a closed connection makes it open a replacement. Thread-cache
+controls (`recycle_thread()`, `cleanup_connections()`) remain unrelated to
+pool capacity, as [SB-API-3] states.
+
+Idle reaping alone does not help a watcher process: `PollingStrategy` returns
+for a quiet safety recheck and the watcher checks the queue through the pool.
+At the former 1–2 s cadence every idle-check period saw a checkout, so the
+connection stayed open (or, with a shorter idle period, would close and
+reopen around every recheck). The recheck exists to recover activity whose
+notification was lost. That loss model belongs to the backend: a live
+PostgreSQL LISTEN session receives every committed NOTIFY, so loss requires an
+undetected listener-session failure or a writer that bypasses SimpleBroker;
+Redis pub/sub resubscribes after a dropped connection and loses messages
+published in the gap. The waiter therefore declares the interval
+(`safety_recheck_interval`, [SB-API-6]); PostgreSQL declares 30 s
+(`_ACTIVITY_SAFETY_RECHECK_SECONDS`) and Redis keeps the strategy default.
+The two PostgreSQL constants are coupled: the recheck interval must exceed two
+idle checks, enforced by
+`extensions/simplebroker_pg/tests/test_pg_quiet_connections.py`.
+
+Result: a process waiting only on healthy PostgreSQL waiters holds its LISTEN
+connection, plus one data connection for 10–20 s after each 30–60 s recheck.
+The first operation after a quiet gap pays connection setup. A lost
+notification is recovered within `2R` plus one native wait pass (under
+60.115 s with the default polling settings). The pass term includes positive
+jitter, and an installation uses `max(R, 1)` for its first recheck, so the
+exact bound in [SB-API-6] is `2R′ + P`, plus scheduler delay and the
+queue check itself. This is a check-scheduling bound, not a delivery deadline
+when connection establishment or queries stall. The owner selected `[30, 60)`
+on 2026-11-09 to shorten the proposed `[60, 120)` backstop while preserving
+at least a nominal ten-second gap after the last data connection is reaped.
+The shorter interval trades more reconnects for faster missed-wakeup discovery: a
+continuously quiet watcher schedules one check every 45 seconds on average
+(about 1.33 per minute), before scheduling and query overhead. This is an
+analytic cadence, not a measured connection rate; explicit caller deadlines or
+other activity can cause additional data checkouts.
+
+### [ALT-IMPL06-001] Lengthen the safety recheck for every native waiter
+
+Disposition: rejected
+Owner: SimpleBroker product owner
+Governs: [SB-API-6] safety-recheck scheduling
+Source record: none
+Candidate: Replace `max(1, 10 × max_interval)` with one longer strategy-wide
+constant or configuration key.
+Why plausible: one value, no waiter-facing contract.
+Evidence:
+- contemporaneous: redis-py pub/sub reconnects and resubscribes without
+  replaying messages published while disconnected; SimpleBroker's Redis
+  listener surfaces only errors that escape that retry.
+- contemporaneous: Weft installs waiters through `replace_activity_waiter()`
+  on its own strategies, so a watcher-level parameter would not reach it.
+Reason: the recheck bound is the Redis backend's primary loss recovery, and
+the loss model is backend-owned ([THEORY-3]).
+Current consequence: backends declare their interval on the waiter; the
+default stays for undeclared waiters.
+Reconsider when: every first-party backend can prove lossless delivery for a
+live waiter, or the protocol gains an explicit loss signal.
+Promoted to: none
+
+### [ALT-IMPL06-002] Prove listener liveness instead of polling data
+
+Disposition: deferred
+Owner: SimpleBroker product owner
+Governs: PostgreSQL safety-recheck bound
+Source record: none
+Candidate: Keep a short recovery bound by probing the LISTEN connection itself
+(round trip or TCP keepalive) and surfacing failure, so the data recheck can
+be rare without lengthening recovery from listener loss.
+Why plausible: the listener connection is already held; probing it uses no
+pooled connection.
+Evidence:
+- contemporaneous: `_SharedActivityRegistry.acquire()` reuses a listener whose
+  thread already failed, so a detected failure would turn today's silent
+  degradation into repeated watcher retry failure.
+- contemporaneous: a blocking probe on a black-holed socket waits for kernel
+  TCP timeouts unless a client-side timeout is added.
+Reason: requires failed-listener replacement and a bounded probe; neither is
+needed to relieve the measured connection pressure.
+Current consequence: the PostgreSQL bound is the stated `2R′ + P` of [SB-API-6].
+Reconsider when: undetected listener loss is observed in a deployment, or the
+registry gains failed-listener replacement.
+Promoted to: none
+
 ## Acquisition
 
 `DBConnection.__init__()` and `DBConnection._ensure_shared_session()` are the
@@ -703,6 +796,10 @@ teardown is proved in
 Activity-waiter terminal transitions and cleanup order are proved in
 `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py` and
 `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`.
+Quiet PostgreSQL connection release, NOTIFY wake after release, the
+recheck/idle-check coupling, and lost-notification recovery are proved with a
+real spawned watcher in
+`extensions/simplebroker_pg/tests/test_pg_quiet_connections.py`.
 First-party service-backed allocation proof is in:
 
 - `extensions/simplebroker_pg/tests/test_pg_integration.py`;
@@ -726,6 +823,10 @@ real PostgreSQL in `extensions/simplebroker_pg/tests/test_pg_project_admission.p
 - active: 2026-11-08-redis-listener-failure-recovery-plan — the Redis activity
   registry replaces a failed shared Pub/Sub listener instead of handing it out
   again.
+
+- [PostgreSQL quiet-process connections](../plans/2026-11-08-pg-quiet-process-connections-plan.md):
+  pool idle closing, waiter-declared safety-recheck interval, and the
+  `[ALT-IMPL06-001]`/`[ALT-IMPL06-002]` dispositions.
 
 - retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`; SQL
   alias/meta fork rejection before operation and poison mutexes; see the

@@ -132,6 +132,14 @@ POLLING_TRANSITIONS = (
         "counter reaches zero before backoff",
     ),
     _case(
+        "NATIVE_SAFETY_RECHECK",
+        "native idle",
+        "quiet passes reach the safety-recheck deadline",
+        "native idle with recheck due",
+        "reschedule from the installed waiter's declared interval",
+        "wait returns without a native hint inside [R, 2R)",
+    ),
+    _case(
         "NATIVE_DEADLINE_QUIET",
         "native burst",
         "caller deadline truncates a quiet pass",
@@ -199,9 +207,38 @@ def _assert_local_notification_transition(
         raise AssertionError(f"unhandled local notification transition: {payload}")
 
 
+def _assert_native_safety_recheck_transition(
+    strategy: PollingStrategy,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [50.0]
+
+    class _QuietDeclaringWaiter(_Waiter):
+        safety_recheck_interval = 20.0
+
+        def wait(self, timeout: float) -> bool:
+            now[0] += timeout
+            return False
+
+    monkeypatch.setattr(watcher_module, "_monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        watcher_module,
+        "_uniform",
+        lambda low, high: (low + high) / 2 if low > 0 else 0.0,
+    )
+    strategy.start(activity_waiter=_QuietDeclaringWaiter())
+    assert strategy._next_native_idle_poll_at == 80.0
+    strategy.wait_for_activity()
+    assert 80.0 <= now[0] < 80.0 + 0.002
+    assert strategy._next_native_idle_poll_at == now[0] + 30.0
+    assert not strategy.consume_native_activity_hint()
+    strategy.close()
+
+
 @fires_transition_table("SM-POLLING", POLLING_TRANSITIONS)
 def test_polling_fires_transition_table(
     transition_case: TransitionCase[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stop = threading.Event()
     strategy = PollingStrategy(stop, initial_checks=1, max_interval=0.001)
@@ -239,6 +276,8 @@ def test_polling_fires_transition_table(
         assert not strategy.consume_native_activity_hint()
         assert not strategy.consume_local_activity_hint()
         strategy.close()
+    elif transition_case.payload == "NATIVE_SAFETY_RECHECK":
+        _assert_native_safety_recheck_transition(strategy, monkeypatch)
     elif transition_case.payload == "NATIVE_SIGNAL":
         waiter = _Waiter(signaled=True)
         strategy.start(activity_waiter=waiter)

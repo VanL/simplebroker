@@ -59,6 +59,27 @@ def _watcher_timeout(broker_target) -> float:
     return scale_timeout_for_ci(base)
 
 
+# Seconds between quiet native safety rechecks these idle-decision probes need.
+# Backend defaults may be much longer (PostgreSQL declares 60 s), so the
+# probes declare their own cadence through the [SB-API-6] waiter attribute.
+_IDLE_DECISION_RECHECK_SECONDS = 1.0
+
+
+def _declare_prompt_safety_recheck(
+    watcher: QueueWatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Make a native-backed idle watcher take a quiet turn every 1-2 s."""
+    create_waiter = watcher._create_activity_waiter
+
+    def create_with_prompt_recheck(queue: Queue) -> Any:
+        waiter: Any = create_waiter(queue)
+        if waiter is not None:
+            waiter.safety_recheck_interval = _IDLE_DECISION_RECHECK_SECONDS
+        return waiter
+
+    monkeypatch.setattr(watcher, "_create_activity_waiter", create_with_prompt_recheck)
+
+
 def _stop_all(watchers: list[QueueWatcher], queues: Sequence[Queue]) -> None:
     for watcher in watchers:
         with contextlib.suppress(Exception):
@@ -144,6 +165,9 @@ def test_unrelated_write_does_not_drain_idle_watchers(
     completed_turns = dict.fromkeys((queue.name for queue in queues), 0)
     turn_lock = threading.Lock()
     for watcher, watched in zip(watchers, queues, strict=True):
+        # Idle watchers on native backends witness a decision only at their
+        # quiet safety recheck; an unrelated write does not wake them.
+        _declare_prompt_safety_recheck(watcher, monkeypatch)
         wait = watcher._strategy.wait_for_activity
 
         def observe_wait(timeout=None, *, queue_name=watched.name, delegate=wait):
@@ -235,6 +259,7 @@ def test_skip_idle_check_environment_controls_main_loop(
         lambda _message, _timestamp: None,
         config=resolve_config(env=os.environ),
     )
+    _declare_prompt_safety_recheck(watcher, monkeypatch)
     try:
         watcher.run_in_thread()
         assert wait_for_condition(

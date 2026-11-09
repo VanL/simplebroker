@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -114,6 +115,14 @@ class FakeActivityWaiter:
             raise self.close_error
 
 
+class DeclaringActivityWaiter(FakeActivityWaiter):
+    """Fake native waiter that declares a safety-recheck interval."""
+
+    def __init__(self, safety_recheck_interval: object, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.safety_recheck_interval = safety_recheck_interval
+
+
 def _polling_strategy_state(strategy):
     """Return every mutable PollingStrategy field for atomicity assertions."""
     return (
@@ -135,6 +144,7 @@ def _polling_strategy_state(strategy):
         strategy._activity_burst_remaining,
         strategy._native_idle_poll_interval,
         strategy._next_native_idle_poll_at,
+        strategy._waiter_safety_recheck_interval,
     )
 
 
@@ -163,6 +173,7 @@ def _seed_polling_strategy_state(strategy, waiter):
     strategy._local_activity_empty_check = True
     strategy._activity_burst_remaining = 11
     strategy._native_idle_poll_interval = 7.5
+    strategy._waiter_safety_recheck_interval = 33.0
     strategy._next_native_idle_poll_at = 123.5
     return provider, callback
 
@@ -1473,6 +1484,237 @@ class TestPollingStrategy:
         assert strategy._activity_burst_remaining == 1
         assert not strategy.consume_native_activity_hint()
         assert not strategy.consume_local_activity_hint()
+
+    @pytest.mark.parametrize(
+        ("declaration", "interval"),
+        [("absent", 1.0), (None, 1.0), (30, 30.0), (45.5, 45.5)],
+    )
+    @pytest.mark.parametrize("install", ["start", "replace"])
+    def test_native_safety_recheck_uses_installed_waiter_interval(
+        self,
+        monkeypatch,
+        declaration,
+        interval,
+        install,
+    ):
+        """A quiet native wait returns for its safety recheck in [R, 2R)."""
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        now = [100.0]
+        recheck_bounds: list[tuple[float, float]] = []
+        draws = {"low": True}
+
+        class QuietWaiter(FakeActivityWaiter):
+            def __init__(self) -> None:
+                super().__init__()
+                if declaration != "absent":
+                    self.safety_recheck_interval = declaration
+
+            def wait(self, timeout: float) -> bool:
+                self.wait_calls.append(timeout)
+                now[0] += timeout
+                return False
+
+        def uniform(low: float, high: float) -> float:
+            if low > 0:
+                recheck_bounds.append((low, high))
+                return low if draws["low"] else high
+            return 0.0
+
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: now[0])
+        monkeypatch.setattr(watcher_module, "_uniform", uniform)
+        strategy = PollingStrategy(
+            threading.Event(),
+            initial_checks=0,
+            max_interval=0.1,
+            burst_sleep=0.01,
+            jitter_factor=0,
+        )
+        waiter = QuietWaiter()
+        if install == "start":
+            strategy.start(activity_waiter=waiter)
+        else:
+            strategy.start(activity_waiter=FakeActivityWaiter())
+            strategy.replace_activity_waiter(waiter)
+
+        strategy.wait_for_activity()
+
+        assert recheck_bounds[-1] == (interval, 2 * interval)
+        assert interval <= now[0] - 100.0 < interval + 0.1 + 1e-9
+        assert not strategy.consume_native_activity_hint()
+
+        # The next quiet pass is rescheduled from the same declaration, and a
+        # recheck never waits as long as twice the declared interval.
+        draws["low"] = False
+        started = now[0]
+        strategy.wait_for_activity()
+        assert recheck_bounds[-1] == (interval, 2 * interval)
+        assert interval <= now[0] - started < 2 * interval + 0.1 + 1e-9
+        strategy.close()
+
+    def test_detached_waiter_declaration_does_not_outlive_installation(
+        self,
+        monkeypatch,
+    ):
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        now = [10.0]
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: now[0])
+        monkeypatch.setattr(watcher_module, "_uniform", lambda low, high: low)
+        strategy = PollingStrategy(threading.Event(), max_interval=0.1)
+        declaring = DeclaringActivityWaiter(60.0)
+        plain = FakeActivityWaiter()
+
+        strategy.start(activity_waiter=declaring)
+        assert strategy._next_native_idle_poll_at == 70.0
+        assert strategy.replace_activity_waiter(plain) is declaring
+        assert strategy._next_native_idle_poll_at == 11.0
+        strategy.notify_activity()
+        strategy.wait_for_activity()
+        assert strategy._next_native_idle_poll_at == 11.0
+        assert strategy.detach_activity_waiter() is plain
+        strategy.start(activity_waiter=None)
+        strategy.notify_activity()
+        strategy.wait_for_activity()
+        assert strategy._next_native_idle_poll_at == 11.0
+
+    @pytest.mark.parametrize(
+        ("declaration", "error"),
+        [
+            (True, TypeError),
+            ("30", TypeError),
+            (Decimal(30), TypeError),
+            (Fraction(1, 2), TypeError),
+            (0, ValueError),
+            (-1.0, ValueError),
+            (float("nan"), ValueError),
+            (float("inf"), ValueError),
+            (10**400, ValueError),
+            (1e308, ValueError),
+            (sys.float_info.max, ValueError),
+        ],
+    )
+    def test_invalid_waiter_safety_recheck_interval_is_rejected_before_mutation(
+        self,
+        declaration,
+        error,
+    ):
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        installed = FakeActivityWaiter()
+        strategy.start(activity_waiter=installed)
+        candidate = DeclaringActivityWaiter(declaration)
+        state_before = _polling_strategy_state(strategy)
+
+        with pytest.raises(error, match="safety_recheck_interval"):
+            strategy.replace_activity_waiter(candidate)
+        assert _polling_strategy_state(strategy) == state_before
+
+        with pytest.raises(error, match="safety_recheck_interval"):
+            strategy.start(activity_waiter=candidate)
+        assert _polling_strategy_state(strategy) == state_before
+        assert installed.close_calls == 0
+        assert candidate.close_calls == 0
+
+    def test_largest_finite_recheck_range_installs_finite_deadline(self):
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        strategy.start(activity_waiter=DeclaringActivityWaiter(sys.float_info.max / 2))
+        assert math.isfinite(strategy._next_native_idle_poll_at)
+        strategy.close()
+
+    @pytest.mark.parametrize("install", ["start", "replace"])
+    def test_first_recheck_after_installation_uses_one_second_floor(
+        self,
+        monkeypatch,
+        install,
+    ):
+        """A sub-second declaration still waits [1, 2) s after installation."""
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        now = [100.0]
+        recheck_bounds: list[tuple[float, float]] = []
+
+        class QuietWaiter(DeclaringActivityWaiter):
+            def wait(self, timeout: float) -> bool:
+                self.wait_calls.append(timeout)
+                now[0] += timeout
+                return False
+
+        def latest(low: float, high: float) -> float:
+            if low > 0:
+                recheck_bounds.append((low, high))
+            return high
+
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: now[0])
+        monkeypatch.setattr(watcher_module, "_uniform", latest)
+        strategy = PollingStrategy(
+            threading.Event(),
+            initial_checks=0,
+            max_interval=0.1,
+            burst_sleep=0.01,
+            jitter_factor=0,
+        )
+        waiter = QuietWaiter(0.1)
+        if install == "start":
+            strategy.start(activity_waiter=waiter)
+        else:
+            strategy.start(activity_waiter=FakeActivityWaiter())
+            strategy.replace_activity_waiter(waiter)
+        installed_at = now[0]
+        pass_bound = 0.1  # max((1 + jitter_factor) * max_interval, burst_sleep)
+        assert recheck_bounds[-1] == (1.0, 2.0)
+
+        strategy.wait_for_activity()
+
+        assert 2.0 <= now[0] - installed_at < 2.0 + pass_bound + 1e-9
+        # The recheck reschedules from the declared interval itself.
+        assert recheck_bounds[-1] == (0.1, 0.2)
+        started = now[0]
+        strategy.wait_for_activity()
+        assert 0.2 <= now[0] - started < 0.2 + pass_bound + 1e-9
+        strategy.close()
+
+    def test_recheck_bound_includes_one_jittered_native_pass(self, monkeypatch):
+        """A recheck returns before 2R plus one maximally jittered pass."""
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        now = [100.0]
+
+        class QuietWaiter(DeclaringActivityWaiter):
+            def wait(self, timeout: float) -> bool:
+                self.wait_calls.append(timeout)
+                now[0] += timeout
+                return False
+
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: now[0])
+        # Latest recheck deadline and maximal positive jitter on every pass.
+        monkeypatch.setattr(watcher_module, "_uniform", lambda low, high: high)
+        strategy = PollingStrategy(
+            threading.Event(),
+            initial_checks=0,
+            max_interval=0.1,
+            burst_sleep=0.01,
+            jitter_factor=0.15,
+        )
+        waiter = QuietWaiter(60.0)
+        strategy.start(activity_waiter=waiter)
+        pass_bound = max((1 + 0.15) * 0.1, 0.01)
+
+        strategy.wait_for_activity()
+
+        assert 120.0 <= now[0] - 100.0 < 120.0 + pass_bound + 1e-9
+        # Jitter lengthens a quiet pass beyond max_interval, so the bound
+        # needs the jittered pass rather than max_interval alone.
+        assert max(waiter.wait_calls) == pytest.approx(pass_bound)
+        assert max(waiter.wait_calls) > 0.1
+        strategy.close()
 
     @pytest.mark.parametrize("coalesce_after_downgrade", [False, True])
     def test_downgraded_local_notification_has_exact_owner_state_vector(

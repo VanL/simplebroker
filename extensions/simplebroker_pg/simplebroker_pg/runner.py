@@ -31,6 +31,23 @@ from .validation import quote_ident
 _DEFAULT_MIN_SIZE = 0
 _DEFAULT_MAX_SIZE = 3
 
+# Seconds per psycopg-pool idle check ([SB-API-3]). Each check closes at most
+# one pooled connection that stayed unused for the whole preceding check, so a
+# quiet process's last data connection closes 10-20 s after its last use and a
+# full three-connection pool drains within 40 s. Coupled with
+# _ACTIVITY_SAFETY_RECHECK_SECONDS below: keep 2 x this value under that
+# interval, or a healthy LISTEN waiter's safety recheck keeps a data
+# connection open forever.
+_POOL_MAX_IDLE_SECONDS = 10.0
+
+# Seconds between safety rechecks that PostgreSQL activity waiters declare to
+# PollingStrategy ([SB-API-6]); each quiet recheck is drawn from [R, 2R). A
+# live LISTEN session receives every committed NOTIFY, so the recheck only
+# bounds recovery from an undetected listener-session loss (or a writer that
+# bypasses SimpleBroker and skips pg_notify). Must stay above
+# 2 x _POOL_MAX_IDLE_SECONDS (see above).
+_ACTIVITY_SAFETY_RECHECK_SECONDS = 30.0
+
 # A forked child must not finalize a pool whose locks belong to parent threads.
 _ABANDONED_FORK_POSTGRES_POOLS: list[Any] = []
 
@@ -743,7 +760,11 @@ _activity_registry = _SharedActivityRegistry()
 
 
 class PostgresActivityWaiter:
-    """LISTEN/NOTIFY-backed wake-up waiter for pg watchers."""
+    """LISTEN/NOTIFY-backed wake-up waiter for pg watchers.
+
+    ``safety_recheck_interval`` declares PostgreSQL's quiet safety-recheck
+    cadence to ``PollingStrategy`` ([SB-API-6]).
+    """
 
     def __init__(
         self,
@@ -753,6 +774,7 @@ class PostgresActivityWaiter:
         queue_name: str,
         stop_event: threading.Event,
     ) -> None:
+        self.safety_recheck_interval = _ACTIVITY_SAFETY_RECHECK_SECONDS
         self._dsn = dsn
         self._schema = schema
         self._queue_name = queue_name
@@ -814,7 +836,11 @@ class PostgresActivityWaiter:
 
 
 class PostgresMultiQueueActivityWaiter:
-    """LISTEN/NOTIFY-backed fan-in waiter for multiple pg queues."""
+    """LISTEN/NOTIFY-backed fan-in waiter for multiple pg queues.
+
+    ``safety_recheck_interval`` declares PostgreSQL's quiet safety-recheck
+    cadence to ``PollingStrategy`` ([SB-API-6]).
+    """
 
     def __init__(
         self,
@@ -826,6 +852,7 @@ class PostgresMultiQueueActivityWaiter:
     ) -> None:
         if not queue_names:
             raise ValueError("queue_names cannot be empty")
+        self.safety_recheck_interval = _ACTIVITY_SAFETY_RECHECK_SECONDS
         self._dsn = dsn
         self._schema = schema
         self._queue_names = queue_names
@@ -938,6 +965,8 @@ class PostgresRunner:
             kwargs=connection_kwargs,
             min_size=self._pool_min_size,
             max_size=self._pool_max_size,
+            # Return quiet processes' data connections to the server [SB-API-3].
+            max_idle=_POOL_MAX_IDLE_SECONDS,
             configure=configure,
             # Don't open in background — we need connections ready immediately.
             open=False,
