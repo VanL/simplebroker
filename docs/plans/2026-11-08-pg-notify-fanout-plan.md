@@ -5,7 +5,7 @@ NOTIFY channel and listener subscription lifecycle), adds rollout-order
 sensitivity for mixed client versions, and changes a background listener
 thread's state machine. No normative spec text changes (no channel layout is
 specified anywhere), so not class 5.
-Status: active — implemented, measured and documented on branch `perf/sb-notify-fanout`; cross-family review and owner decisions pending.
+Status: active — implemented, measured and documented on branch `perf/sb-notify-fanout`; cross-family review passed (round 2); rollout decided by the owner (clean break, 2026-11-08); PostgreSQL ≤ 18 value decision pending.
 Owner: SimpleBroker product owner; implementation agent for track SB-3.
 Boundary: `extensions/simplebroker_pg` notification SQL, channel identifiers, and the process-local shared activity listener. Core, SQLite, Redis and every public signature are out of scope.
 Verification: real-PostgreSQL wire, wake, race and subscription tests; SM-PG-LISTENER transition table; full PostgreSQL extension suite; lint/format/types; before/after fan-out measurement on disposable `postgres:18`.
@@ -238,9 +238,10 @@ Listener (one thread owns the connection; no cross-thread connection use):
 
 ## Owner decisions
 
-Both decisions are open (pending owner); nothing in this branch accepts them.
+Decision 1 is owner-decided (2026-11-08); decision 2 remains open (pending owner).
 
-1. Mixed-version rollout (pending). Author recommendation: no dual-NOTIFY shim; document "upgrade
+1. Mixed-version rollout — OWNER DECIDED 2026-11-08: clean break (no dual-NOTIFY
+   transition release), with the documented upgrade order. Author recommendation was: no dual-NOTIFY shim; document "upgrade
    waiting processes before or together with writers" (post-change waiters
    accept both protocols, so listeners-first has no wake gap). Alternative: a
    transition release whose writers NOTIFY both channels, removed one release
