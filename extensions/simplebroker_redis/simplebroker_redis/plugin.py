@@ -385,19 +385,34 @@ class _RedisActivityRegistry:
         self._listeners = {}
 
     def listener(self, target: str, namespace: str) -> _SharedRedisActivityListener:
+        """Return a counted reference to a listener that has not failed.
+
+        A listener whose thread published a failure is never handed out again;
+        a new listener replaces its entry. Holders of the failed listener keep
+        it: each sees the stored failure on its next wait and recovers by
+        acquiring again (the watcher's ordinary retry).
+        """
         self._reset_after_fork_if_needed()
         key = (self._pid, target, namespace)
         with self._lock:
             entry = self._listeners.get(key)
             if entry is not None:
                 listener, refcount = entry
-                self._listeners[key] = (listener, refcount + 1)
-                return listener
+                if listener._error is None:
+                    self._listeners[key] = (listener, refcount + 1)
+                    return listener
             listener = _SharedRedisActivityListener(target, namespace)
             self._listeners[key] = (listener, 1)
             return listener
 
     def release(self, listener: _SharedRedisActivityListener) -> None:
+        """Surrender one reference to ``listener``; close it after the last one.
+
+        Releasing a listener that ``listener()`` already replaced is a no-op.
+        Its thread closed its own Pub/Sub connection when it failed, and closing
+        it here would turn the stored failure into quiet wait results for
+        holders that have not observed it yet.
+        """
         self._reset_after_fork_if_needed()
         listener_to_close: _SharedRedisActivityListener | None = None
         key = (self._pid, listener._target, listener._namespace)

@@ -330,6 +330,23 @@ entry only when the last reference is surrendered, then closes the detached
 listener outside the registry lock. This closes the lookup/register gap: a new
 waiter cannot receive a listener concurrently selected for final close.
 
+The Redis registry never hands out a listener whose thread has published a
+failure (for example, the server closed its Pub/Sub connection). The next
+acquire creates a replacement under the same key. Holders of the failed
+listener keep it, see the stored failure on their next wait, and recover only
+by acquiring again: the watcher's ordinary retry creates a new waiter, whose
+initial drain covers writes made while no subscription existed. The listener
+does not reconnect in place. Its Pub/Sub connection comes from
+`redis.Redis.from_url()`, whose pooled connections carry no driver retry, so
+redis-py re-raises the first read failure; and a silent resubscription would
+hide the fire-and-forget delivery gap from waiters that believe they were
+continuously subscribed. Release is identity-checked, so releasing a replaced
+listener is a no-op that never counts against its replacement. The registry
+does not close a replaced listener: its thread closed its own Pub/Sub
+connection when it failed, and closing it would turn the stored failure into
+quiet wait results for holders that have not observed it yet. Plan:
+`2026-11-08-redis-listener-failure-recovery-plan.md`.
+
 ### Fork recovery before process-owned locks
 
 Every process-owned state holder checks its PID before acquiring an inherited
@@ -628,6 +645,10 @@ The core suite also includes an AST gate for the one-way import rule and
 subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
+
+- active: 2026-11-08-redis-listener-failure-recovery-plan — the Redis activity
+  registry replaces a failed shared Pub/Sub listener instead of handing it out
+  again.
 
 - retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`; SQL
   alias/meta fork rejection before operation and poison mutexes; see the

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
+import uuid
 import warnings
 from typing import Any, cast
 
@@ -17,9 +18,11 @@ from simplebroker_redis.keys import RedisKeys, encode_id
 from simplebroker_redis.plugin import RedisActivityWaiter, RedisMultiQueueActivityWaiter
 from simplebroker_redis.validation import key_prefix
 
+import simplebroker.watcher as watcher_module
 from simplebroker import (
     BrokerSession,
     Queue,
+    QueueWatcher,
     create_activity_waiter_for_queues,
     resolve_config,
 )
@@ -926,6 +929,86 @@ def test_activity_waiter_preserves_multiple_queue_notifications(
         waiter.close()
         core.shutdown()
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_watcher_handles_writes_after_listener_connection_is_killed(
+    redis_url: str,
+    redis_namespace: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A watcher keeps handling writes after its Pub/Sub connection is killed.
+
+    The server closes the shared listener's connection. The listener does not
+    reconnect: its Pub/Sub connection has no driver-level retry, so its thread
+    stores the failure and exits. The watcher sees that failure once, and its
+    ordinary retry must obtain a working listener, so a write made after the
+    kill is handled by the same watcher.
+
+    The ``client_name`` in the target URL names this test's connections so the
+    kill reaches only its listener on a server shared with parallel workers.
+    The large ``BROKER_MAX_INTERVAL`` pushes the native idle re-poll (20-40 s)
+    beyond the test deadline, so only a notification on a live listener can
+    deliver the write. The retry backoff is made immediate so a watcher that
+    re-acquires the failed listener exhausts its retries before the write
+    instead of racing it; the settle wait affects only that failure timing.
+    """
+    monkeypatch.setattr(watcher_module, "interruptible_sleep", lambda *_args: True)
+    thread_errors: list[BaseException | None] = []
+    monkeypatch.setattr(
+        threading,
+        "excepthook",
+        lambda args: thread_errors.append(args.exc_value),
+    )
+    client_name = f"sbtest-listener-{uuid.uuid4().hex[:12]}"
+    separator = "&" if "?" in redis_url else "?"
+    target_url = f"{redis_url}{separator}client_name={client_name}"
+    target = BrokerTarget("redis", target_url, {"namespace": redis_namespace})
+    handled: list[str] = []
+    seen = {body: threading.Event() for body in ("before", "after")}
+
+    def handler(body: str, _timestamp: int) -> None:
+        handled.append(body)
+        seen[body].set()
+
+    watcher = QueueWatcher(
+        "jobs",
+        handler,
+        db=target,
+        config=resolve_config(override={"BROKER_MAX_INTERVAL": 2.0}),
+    )
+    writer = Queue("jobs", db_path=target, persistent=True)
+    admin = redis.Redis.from_url(redis_url, decode_responses=True)
+    thread = watcher.run_in_thread()
+    try:
+        writer.write("before")
+        assert seen["before"].wait(10.0), "watcher did not handle the first write"
+
+        listener_ids = [
+            client["id"]
+            for client in admin.client_list(_type="pubsub")
+            if client["name"] == client_name
+        ]
+        assert len(listener_ids) == 1, f"expected one listener for {client_name}"
+        assert admin.client_kill_filter(_id=listener_ids[0]) == 1
+
+        # Returns early only if the watcher thread dies.
+        thread.join(timeout=2.0)
+        writer.write("after")
+        handled_after = seen["after"].wait(5.0)
+        thread.join(timeout=1.0)
+
+        assert handled_after and thread.is_alive() and thread_errors == [], (
+            f"handled={handled!r} watcher_alive={thread.is_alive()} "
+            f"thread_errors={thread_errors!r}"
+        )
+    finally:
+        watcher.stop(timeout=5.0)
+        thread.join(timeout=5.0)
+        writer.close()
+        admin.close()
+        get_backend_plugin().cleanup_target(
+            target_url, backend_options={"namespace": redis_namespace}
+        )
 
 
 def test_polling_strategy_deadline_expires_quietly_on_redis(
