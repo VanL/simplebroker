@@ -268,8 +268,9 @@ Admission is recorded on the process session, not on each Queue's connection
 manager. `DBConnection._ensure_project_target_initialized()` still owns the
 work (per-manager lock, phase lock, live validation, setup); on the persistent
 path it reads and writes `_ProcessBrokerSession.project_target_admitted()`
-instead of a per-manager flag, so only the first manager on a session key pays
-for the dedicated inspection connection and catalog reads. The record is set
+instead of a per-manager flag, so once success is recorded no later manager on
+that session key pays for the dedicated inspection connection and catalog
+reads. The record is set
 only after admission returns, is never cleared, and dies with the session
 object. That gives the invalidation rules without new machinery: a different
 target, backend options, or configuration snapshot is a different session; the
@@ -283,7 +284,10 @@ own schema setup for the same lifetime, so the record adds no staleness window
 beyond the resource it describes. The trade is deliberate: a target dropped,
 replaced, or migrated by another process after admission is detected by the
 next session, not by a new handle on the live one (plan
-`docs/plans/2026-11-08-target-validation-once-plan.md`, difference row D1).
+`docs/plans/2026-11-08-target-validation-once-plan.md`, difference row D1,
+owner-accepted 2026-11-08). A Queue reused after `close()` re-acquires its
+lease before admission and keeps it if admission fails, the same ownership a
+newly constructed persistent Queue holds (row L1).
 Ephemeral managers, injected runners, and `open_broker()` keep the per-manager
 flag, and `_initialize_project_backend_target()` validates on every direct
 call.

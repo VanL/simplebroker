@@ -1114,11 +1114,12 @@ A caller's existing connection retry policy may retry acquisition. A completion
 marker remains a hint: successful live validation is still required before it
 can skip setup.
 
-Project-target setup on the persistent Queue path is admitted once per
-process session. After live validation, or setup when validation fails,
-succeeds for a session, later persistent Queues and `BrokerSession` handles
-sharing that session key reuse the admission instead of validating again.
-A failed admission is not recorded; the next first use retries it. The
+Project-target setup on the persistent Queue path is admitted per process
+session. After live validation, or setup when validation fails, succeeds
+and is recorded for a session, later uses by persistent Queues and
+`BrokerSession` handles sharing that session key reuse the admission instead
+of validating again. First users racing before success is recorded may each
+validate. A failed admission is not recorded; the next first use retries it. The
 record belongs to the session: it ends when the session ends (last lease
 released, explicit close, or process-wide session shutdown), a forked child
 never inherits it, and session keys that differ in target, backend options,
@@ -1403,7 +1404,8 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 
 - [Project-target validation once per process session](../plans/2026-11-08-target-validation-once-plan.md):
   [SB-API-11] project-target admission is recorded per process session
-  instead of per persistent Queue; active, owner decision pending.
+  instead of per persistent Queue; active, owner accepted the behavior
+  change 2026-11-08.
 
 - [Core finalizer cleanup ownership](../plans/2026-10-14-core-finalizer-ownership-plan.md):
   repair borrowed SQL cleanup under the existing [SB-API-3], [SB-API-7] and

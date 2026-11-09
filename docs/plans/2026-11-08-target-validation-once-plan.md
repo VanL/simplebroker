@@ -1,17 +1,19 @@
 # Project-target validation once per process session
 
 Class: 5 — [SB-API-11] normative text changes (project-target admission granularity); the [DOM-5] risky trigger "changes a public contract" also fires, so the hardening checklist applies.
-Status: active — implementation, spec promotion, and verification on branch `perf/sb-validate-once`; cross-family review pending (coordinator-run).
+Status: active — implementation, spec promotion, and verification on branch `perf/sb-validate-once`; Tier-1 cross-family review returned no blocker and its two P3 findings are fixed; owner accepted D1 on 2026-11-08; awaiting owner landing.
 Owner: SimpleBroker product owner decides; implementation agent authored the branch.
 Boundary: project-scoped service-target setup on the persistent (process-session) Queue path only. Ephemeral, injected-runner, `open_broker()`, explicit service targets, direct `_initialize_project_backend_target()` calls, and SQLite admission are unchanged.
 Verification: RED/GREEN real PostgreSQL connection-count proofs, counting-backend lifecycle proofs, targeted core and PostgreSQL suites, lint/format/type gates, before/after connection and catalog-statement measurement on disposable `postgres:18`.
-Required action: owner accepts or rejects the admission-granularity change recorded in the difference register (row D1) before landing.
+Required action: owner lands or rejects the branch; the admission-granularity change (difference register row D1) was owner-accepted on 2026-11-08.
 
 ## Goal
 
 - [x] A persistent Queue (or `BrokerSession`-minted Queue) on a project-scoped
-  service target performs live target validation at most once per process
-  session, instead of once per handle.
+  service target skips live target validation once its process session has
+  recorded a successful admission, instead of validating once per handle.
+  First users racing before that record exists may each validate
+  (invariant 7); every use after it skips.
 - [x] An uninitialized, foreign, or incompatible schema is still rejected on
   the first use in each process session, and a failed admission is never
   recorded.
@@ -141,10 +143,11 @@ doc 06, `CHANGELOG.md` `[Unreleased]`, tests in
 
 | # | Change | Class | Theory basis |
 |---|--------|-------|--------------|
-| D1 | A persistent handle opened on a live process session after that session's successful admission no longer re-runs live validation. If another process drops, replaces, or migrates the target after admission, such a new handle no longer detects it (or re-initializes a dropped schema) at its first use; the session's existing handles never did. Detection and repair still happen on the next process session (any new process, or this process after its last lease ends). | D (narrow) — owner decision requested | [REV-THEORY-004]/[REV-THEORY-006]: a Queue is a capability over the session's resolved target, not the owner of a backend stack; admission is a fact about the session's use of the target, like its runner's schema setup. [THEORY-4] "explicit safety over magical recovery": re-initializing a target dropped under a live process was incidental per-handle recovery, not a named guarantee. [SB-API-11] already scopes the mixed-version guarantee to processes ("stop every old process"; "already-admitted old clients ... are outside"). [SB-OPS-7]: cleanup is not quiescent maintenance. |
+| D1 | A persistent handle opened on a live process session after that session's successful admission no longer re-runs live validation. If another process drops, replaces, or migrates the target after admission, such a new handle no longer detects it (or re-initializes a dropped schema) at its first use; the session's existing handles never did. Detection and repair still happen on the next process session (any new process, or this process after its last lease ends). | A — owner-accepted 2026-11-08 (narrow behavior change; was proposed as D) | [REV-THEORY-004]/[REV-THEORY-006]: a Queue is a capability over the session's resolved target, not the owner of a backend stack; admission is a fact about the session's use of the target, like its runner's schema setup. [THEORY-4] "explicit safety over magical recovery": re-initializing a target dropped under a live process was incidental per-handle recovery, not a named guarantee. [SB-API-11] already scopes the mixed-version guarantee to processes ("stop every old process"; "already-admitted old clients ... are outside"). [SB-OPS-7]: cleanup is not quiescent maintenance. |
 | C1 | A persistent Queue reused after `close()` on a new process session now validates once for that new session; at baseline its per-handle flag skipped validation forever. | C — no loss (stricter, one validation per new session) | Same session-ownership basis; removes a per-handle record that outlived the session it described. |
 | N1 | Ephemeral, injected-runner, `open_broker()`, explicit service targets, direct `_initialize_project_backend_target()` calls, SQLite. | N | — |
 | N2 | Error types, messages, retry policy, phase-lock markers, capacity waiting. | N | — |
+| L1 | Lifecycle: a persistent Queue closed and then reused re-acquires its session lease at the start of admission. If that admission fails, the handle keeps the re-acquired lease until its next `close()` or finalization; at baseline admission ran before lease acquisition, so a failed reopen retained no lease. While retained, the lease can keep session resources that another handle later creates (runner or pool, cached cores) alive past that other handle's close. | C — no capability loss; lifetime extension only, released by the existing `close()` / finalizer path | [SB-API-3]: a Queue's lease is its ownership of the session, and a freshly constructed persistent Queue already holds its lease from construction, before any operation or admission; a reused Queue is again in use, so holding the lease until `close()` matches that state. [REV-THEORY-006]: the session, not admission success, defines ownership; admission failure is an operation failure, not a release. Remedy is the documented one: close the Queue. |
 | N3 | First handle per session, and every handle when sessions do not overlap, behave exactly as at baseline. | N | — |
 
 ## Proposed Spec Delta
@@ -239,13 +242,14 @@ as at baseline; recording success is a plain attribute write that cannot fail.
 | Date | Deviation | Disposition |
 |------|-----------|-------------|
 | 2026-11-08 | Targeted PostgreSQL iterations ran against the disposable measurement container (`SIMPLEBROKER_PG_TEST_DSN` set directly) instead of one `bin/pytest-pg` container per iteration; the broad PostgreSQL gate used `bin/pytest-pg` once. | Same tests and server image; container reuse only saved setup time. |
+| 2026-11-08 | Review F1/F2 (P3, docs only): qualified the "once" bound for racing first users in the plan, spec, and CHANGELOG; added lifecycle register row L1. | Accepted; no code change. |
 | 2026-11-08 | `DBConnection._ensure_shared_process_owner()` no longer resets `_project_setup_complete`: shared managers never read that flag now, and the child session starts unadmitted. | Removes a misleading reset; behavior unchanged (fork test passes). |
 
 ## Independent Review Loop
 
 - Author family: claude
-- Reviewer family: pending — selected by the coordinator from `docs/implementation/03-agent-inventory.md`
-- Review invocation: coordinator-run via `skills/call-agent/SKILL.md` (not run by the authoring agent per the track brief)
+- Reviewer family: codex (selected by the coordinator from `docs/implementation/03-agent-inventory.md`)
+- Review invocation: coordinator-run via `skills/call-agent/SKILL.md`, `codex exec -s read-only`, reasoning effort high (not run by the authoring agent per the track brief)
 
 Review inputs: this plan, [SB-API-3]/[SB-API-11] at baseline and promoted,
 the branch diff, the measurement output.
@@ -277,7 +281,23 @@ recorded in the execution record.
 
 ### Cross-family review
 
-(Coordinator fills the cross-family review.)
+Tier 1, Codex (codex exec -s read-only, reasoning effort high), 2026-11-08,
+scoped-change review of plan+implementation at daaece4f against 5d29fbf.
+Verdict: no blocker. The reviewer judged the change direct session-scoped
+memoization whose ownership and invalidation fit [REV-THEORY-004]/[REV-THEORY-006],
+found D1's theory basis consistent, and found the new tests falsifiable.
+
+| # | Severity | Finding | Disposition |
+|---|----------|---------|-------------|
+| F1 | P3 | "At most once" overstated the bound (plan Goal, spec [SB-API-11]). Two concurrent first managers can both validate before either records success; an in-memory probe reproduced two admissions, then zero on later uses. Invariant 7 already permits this. | Accepted, fixed: plan Goal, spec [SB-API-11] paragraph, and `CHANGELOG.md` now say uses after a recorded success skip validation and racing first users may each validate; locking design unchanged. |
+| F2 | P3 | The difference register omitted an ownership change: closing an unused persistent Queue and reusing it while admission fails re-acquires and retains a session lease until close or finalization (baseline retained none), which can keep resources later created by another handle alive. Noted only in fresh-eyes notes. | Accepted, fixed: added register row L1 (class C, lifetime extension released by the existing `close()` / finalizer path) with its [SB-API-3]/[REV-THEORY-006] session-ownership rationale; no code change. |
+
+### Owner decision
+
+The repository owner accepted D1 on 2026-11-08: a new handle on a live
+session no longer re-checks a target that another process dropped, replaced,
+or migrated after this session validated it; the next session does. Register
+row D1 is class A (owner-accepted 2026-11-08).
 
 ### Implementation
 

@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Project-scoped PostgreSQL and Redis targets are validated once per process
-  session instead of once per persistent Queue. Later persistent Queues and
-  `BrokerSession` handles on the same target, backend options, and
-  configuration reuse the session's successful admission, so they no longer
+- Project-scoped PostgreSQL and Redis targets are validated per process
+  session instead of once per persistent Queue. Once a session records a
+  successful admission, later persistent Queues and `BrokerSession` handles
+  on the same target, backend options, and configuration reuse it (first
+  users racing before that may each validate), so they no longer
   open a dedicated inspection connection (on PostgreSQL, one connection and
   five catalog statements each). The first use in every new session still
   validates, a failed admission is retried on the next use, and a target
