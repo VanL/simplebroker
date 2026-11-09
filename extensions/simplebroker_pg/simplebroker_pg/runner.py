@@ -688,32 +688,53 @@ class _SharedActivityRegistry:
         self._listeners = {}
 
     def acquire(self, dsn: str, *, schema: str) -> _SharedActivityListener:
+        """Return a counted reference to a listener that has not failed.
+
+        A listener whose thread published a failure is never handed out again;
+        a new listener replaces its entry. Holders of the failed listener keep
+        it: each sees the stored failure on its next wait and recovers by
+        acquiring again (the watcher's ordinary retry).
+        """
         self._reset_after_fork_if_needed()
         key = (self._pid, dsn, schema)
         with self._lock:
             entry = self._listeners.get(key)
             if entry is not None:
                 listener, refcount = entry
-                self._listeners[key] = (listener, refcount + 1)
-                return listener
+                if listener._error is None:
+                    self._listeners[key] = (listener, refcount + 1)
+                    return listener
 
             listener = _SharedActivityListener(dsn, schema=schema)
             self._listeners[key] = (listener, 1)
             return listener
 
-    def release(self, dsn: str, *, schema: str) -> None:
+    def release(
+        self,
+        dsn: str,
+        *,
+        schema: str,
+        listener: _SharedActivityListener,
+    ) -> None:
+        """Surrender one reference to ``listener``; close it after the last one.
+
+        Releasing a listener that ``acquire`` already replaced is a no-op. Its
+        failed thread owns its cleanup and closes its connection in
+        ``finally``. Closing it here would also turn the stored failure into
+        quiet wait results for holders that have not observed it yet.
+        """
         self._reset_after_fork_if_needed()
         key = (self._pid, dsn, schema)
-        listener: _SharedActivityListener | None = None
         with self._lock:
             entry = self._listeners.get(key)
             if entry is None:
                 return
             current_listener, refcount = entry
+            if current_listener is not listener:
+                return
             if refcount > 1:
                 self._listeners[key] = (current_listener, refcount - 1)
                 return
-            listener = current_listener
             del self._listeners[key]
         listener.close()
 
@@ -786,6 +807,7 @@ class PostgresActivityWaiter:
                 lambda: _activity_registry.release(
                     self._dsn,
                     schema=self._schema,
+                    listener=self._listener,
                 ),
             )
         )
@@ -867,6 +889,7 @@ class PostgresMultiQueueActivityWaiter:
                 lambda: _activity_registry.release(
                     self._dsn,
                     schema=self._schema,
+                    listener=self._listener,
                 ),
             )
         )

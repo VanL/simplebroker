@@ -1440,6 +1440,10 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
   instead of per persistent Queue; active, owner accepted the behavior
   change 2026-11-08.
 
+- [PostgreSQL listener failure recovery](../plans/2026-11-08-pg-listener-failure-recovery-plan.md):
+  a failed shared PostgreSQL listener is replaced instead of reused, so watcher
+  retry recovers under the existing [SB-API-6] waiter contract; no normative
+  API change.
 - [Core finalizer cleanup ownership](../plans/2026-10-14-core-finalizer-ownership-plan.md):
   repair borrowed SQL cleanup under the existing [SB-API-3], [SB-API-7] and
   [SB-API-11] ownership

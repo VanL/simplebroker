@@ -376,6 +376,23 @@ each runs a read transaction. PostgreSQL 19 signals only sessions listening on
 the notified channel. A schema-wide channel can never benefit, because every
 listener listens on it. Plan: `2026-11-08-pg-notify-fanout-plan.md`.
 
+The PostgreSQL registry never hands out a listener whose thread has published
+a failure (for example, the server ended its LISTEN session). The next acquire
+creates a replacement under the same key. Holders of the failed listener keep
+it, see the stored failure on their next wait, and recover only by acquiring
+again: the watcher's ordinary retry creates a new waiter, whose initial drain
+covers writes made while no listener was subscribed. The listener is not
+reconnected in place, because a silent resubscription would hide that gap from
+waiters that believe they were continuously subscribed. Release names the
+listener it surrenders, so releasing a replaced listener is a no-op that never
+counts against its replacement. The registry does not close a replaced
+listener. Its failed thread owns its cleanup: it publishes the failure and wakes
+waiters first, then closes its connection in `finally`, so a replacement may
+connect while that cleanup is still unwinding. In steady state each key still
+has one LISTEN connection. Closing the replaced listener from the registry
+would also turn the stored failure into quiet wait results for holders that
+have not observed it yet. Plan: `2026-11-08-pg-listener-failure-recovery-plan.md`.
+
 ### Fork recovery before process-owned locks
 
 Every process-owned state holder checks its PID before acquiring an inherited
@@ -683,6 +700,9 @@ real PostgreSQL in `extensions/simplebroker_pg/tests/test_pg_project_admission.p
   notification channels and listener subscription reconciliation.
 - active: [2026-11-08-target-validation-once-plan](../plans/2026-11-08-target-validation-once-plan.md)
   — project-target admission recorded on the process session.
+- active: 2026-11-08-pg-listener-failure-recovery-plan — the PostgreSQL
+  activity registry replaces a failed shared listener instead of handing it
+  out again; release is identity-checked.
 
 - retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`; SQL
   alias/meta fork rejection before operation and poison mutexes; see the

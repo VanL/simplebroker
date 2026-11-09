@@ -17,7 +17,14 @@ from simplebroker_pg.runner import (
     PostgresMultiQueueActivityWaiter,
 )
 
-from simplebroker import Queue, create_activity_waiter_for_queues
+import simplebroker.watcher as watcher_module
+from simplebroker import (
+    BrokerTarget,
+    Queue,
+    QueueWatcher,
+    create_activity_waiter_for_queues,
+    resolve_config,
+)
 from simplebroker._backend_plugins import BackendPlugin
 from simplebroker.db import BrokerCore
 from simplebroker.ext import PollingStrategy
@@ -639,6 +646,111 @@ def test_multi_queue_activity_waiter_reraises_listener_error(
             pg_waiter.close()
         queue_a.close()
         queue_b.close()
+
+
+def _shared_listener_for(schema: str) -> Any:
+    entries = [
+        entry
+        for key, entry in pg_runner_module._activity_registry._listeners.items()
+        if key[2] == schema
+    ]
+    assert len(entries) == 1, f"expected one shared listener for {schema}"
+    listener, _refcount = entries[0]
+    return listener
+
+
+def test_watcher_handles_writes_after_listener_backend_is_terminated(
+    pg_dsn: str,
+    pg_plugin: BackendPlugin,
+    pg_schema: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A watcher keeps handling writes after its LISTEN backend dies.
+
+    The server ends the shared listener's session. The watcher sees that
+    failure once, and its ordinary retry must obtain a working listener, so a
+    write made after the termination is handled by the same watcher.
+
+    The write is made only after the watcher has entered a wait on a
+    listener other than the failed one. The watcher waits only after its
+    retry's startup and initial drain have finished, so that drain cannot
+    consume the write. The large ``BROKER_MAX_INTERVAL`` pushes the native idle
+    re-poll (20-40 s) beyond the test deadline, so only a notification on the
+    replacement listener can deliver it. The retry backoff is made immediate
+    so a watcher that re-acquires the failed listener exhausts its retries
+    promptly instead of reaching the deadline.
+    """
+    monkeypatch.setattr(watcher_module, "interruptible_sleep", lambda *_args: True)
+    failed_listener: list[pg_runner_module._SharedActivityListener] = []
+    replacement_waiting = threading.Event()
+    listener_wait = pg_runner_module._SharedActivityListener.wait
+
+    def observed_wait(
+        listener: pg_runner_module._SharedActivityListener, **kwargs: Any
+    ) -> tuple[bool, int, int]:
+        if failed_listener and listener is not failed_listener[0]:
+            replacement_waiting.set()
+        return listener_wait(listener, **kwargs)
+
+    monkeypatch.setattr(pg_runner_module._SharedActivityListener, "wait", observed_wait)
+    thread_errors: list[BaseException | None] = []
+    monkeypatch.setattr(
+        threading,
+        "excepthook",
+        lambda args: thread_errors.append(args.exc_value),
+    )
+    target = BrokerTarget("postgres", pg_dsn, {"schema": pg_schema})
+    handled: list[str] = []
+    seen = {body: threading.Event() for body in ("before", "after")}
+
+    def handler(body: str, _timestamp: int) -> None:
+        handled.append(body)
+        seen[body].set()
+
+    watcher = QueueWatcher(
+        "jobs",
+        handler,
+        db=target,
+        config=resolve_config(override={"BROKER_MAX_INTERVAL": 2.0}),
+    )
+    writer = Queue("jobs", db_path=target, persistent=True)
+    thread = watcher.run_in_thread()
+    try:
+        writer.write("before")
+        assert seen["before"].wait(10.0), "watcher did not handle the first write"
+
+        listener = _shared_listener_for(pg_schema)
+        failed_listener.append(listener)
+        backend_pid = listener._conn.info.backend_pid
+        with psycopg.connect(pg_dsn, autocommit=True) as admin:
+            row = admin.execute(
+                "SELECT pg_terminate_backend(%s)", (backend_pid,)
+            ).fetchone()
+        assert row == (True,)
+
+        deadline = time.monotonic() + 10.0
+        while thread.is_alive() and time.monotonic() < deadline:
+            if replacement_waiting.wait(0.05):
+                break
+        writer.write("after")
+        handled_after = seen["after"].wait(5.0)
+        thread.join(timeout=1.0)
+
+        assert (
+            replacement_waiting.is_set()
+            and handled_after
+            and thread.is_alive()
+            and thread_errors == []
+        ), (
+            f"replacement_waiting={replacement_waiting.is_set()} "
+            f"handled={handled!r} watcher_alive={thread.is_alive()} "
+            f"thread_errors={thread_errors!r}"
+        )
+    finally:
+        watcher.stop(timeout=5.0)
+        thread.join(timeout=5.0)
+        writer.close()
+        pg_plugin.cleanup_target(pg_dsn, backend_options={"schema": pg_schema})
 
 
 def test_multi_queue_activity_waiter_clamps_each_queue_version(
