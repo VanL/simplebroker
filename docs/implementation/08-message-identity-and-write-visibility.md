@@ -135,9 +135,11 @@ What the row lock still guarantees, and why each piece of the shape exists:
   marks a failure of the row-lock statement (where the write waits for and
   takes high-water) `OperationalError._high_water_phase`, and core runs the
   whole exchange through `simplebroker/_timestamp.py::_run_durable_advance`,
-  the classifier `_store_if_greater` also uses. Allocate-and-insert failures
-  (including parameter adaptation, such as a NUL body) and commit failures
-  stay native. Retryable contention on the row lock now gets the documented
+  the classifier `_store_if_greater` also uses. Only marked failures get the
+  timestamp-budget contention retry; allocate-and-insert failures (including
+  parameter adaptation, such as a NUL body) and commit failures leave it at
+  once, stay native, and their contention is retried by the write's
+  stop-aware operation retry. Retryable contention on the row lock now gets the documented
   contention retry; on the shared transaction PostgreSQL could not retry
   inside the aborted transaction.
 - **Transport.** psycopg flushes each pipelined statement as it is queued, so

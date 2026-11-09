@@ -3,7 +3,7 @@
 Class: 4 — changes the PostgreSQL execution path of every ordinary generated
 write, adds a second realization of the shared SQL write behavior behind an
 optional backend seam, and touches lock ordering that other mutations depend on.
-Status: active — implemented on branch `perf/sb-write-lock`; Codex round 1 (blocker F1, plus F2) fixed; round-2 verification pending (coordinator-owned).
+Status: active — implemented on branch `perf/sb-write-lock`; Codex round 1 (blocker F1, plus F2) and round 2 (F3) fixed; F3 verification pending (coordinator-owned).
 Owner: SimpleBroker message-identity layer (`simplebroker/db.py`, `simplebroker/_timestamp.py`) and the PostgreSQL backend (`extensions/simplebroker_pg/`).
 Boundary: ordinary `write()` without `keep_newest` on PostgreSQL. SQLite, Redis, `keep_newest`, exact insert, broadcast, rename, standalone `generate_timestamp()`, and conflict repair keep their current realization.
 Verification: real-PostgreSQL concurrency, lock-order, exhaustion, atomicity and fallback tests; shared suites on SQLite and PostgreSQL; probe and repository benchmark against disposable `postgres:18`.
@@ -340,6 +340,14 @@ Verdict: blocker: F1.
 | F1 | P2 | `simplebroker/db.py` `_do_server_allocated_write`; plan invariants. A nonretryable `OperationalError` during high-water advancement became `TimestampError(outcome_ambiguous=True)` through `_store_if_greater()` on base, but the hook let `OperationalError` escape, breaking existing catches and ambiguity inspection; the plan claimed exception types were unchanged and the register omitted it. | Accepted, fixed: `_store_if_greater`'s retry and classification moved unchanged into `simplebroker/_timestamp.py::_run_durable_advance`, which the server-allocated write now also uses (`marked_failures_only=True`). `PostgresRunner.run_transaction` reports which statement a failure reached (`failed_statement`); the PostgreSQL hook marks first-statement failures (waiting for or taking the high-water row lock) `OperationalError._high_water_phase`, so they become `TimestampError` with the base retry and ambiguity semantics, while allocate-and-insert and commit failures stay native. New test `test_high_water_wait_failure_is_an_ambiguous_timestamp_error` (real `statement_timeout` while another session holds the row, both write paths) failed on 7a146923 for the server-allocated case and passes now. Register rows and invariants amended. |
 | F2 | P3 | `extensions/simplebroker_pg/tests/test_pg_write_allocation.py`. The "one exchange" assertion counted `run_transaction()` calls, not protocol exchanges, and would also pass with the sequential transport that holds the lock across round trips. | Accepted, fixed: new `test_generated_write_sends_whole_transaction_while_row_lock_waits` relays the writer's connection through a recording TCP relay and checks the frontend protocol bytes while the first statement waits for the row lock: both `Execute` messages and exactly one `Sync` must already be sent, with no simple `Query`. Forcing the sequential transport or adding a `Sync` between the statements fails it. The runner-call test's docstring now says what it counts. |
 
+Tier 1, Codex round 2, 2026-11-08, scoped verification of F1 and F2 at
+7cde031. Verdict: FAIL (F1 and F2 fixes sound; new finding F3 introduced
+by the F1 fix).
+
+| Finding | Severity | Finding | Disposition |
+|---------|----------|---------|-------------|
+| F3 | P2 | `simplebroker/_timestamp.py` `_run_durable_advance` (7cde031 lines 95-105). `marked_failures_only` filtered errors only after `_execute_with_retry` finished, so unmarked insert or commit contention entered the timestamp retry loop, which does not honor the operation's stop event. Reproduced with the real core methods and an injected unmarked lock-timeout whose first attempt sets the stop event: 7a14692 makes one attempt and raises `StopException`; 7cde031 makes two attempts and returns a committed ID. | Accepted, fixed: the phase filter now applies before retrying. `simplebroker/_retry_policy.py::_execute_with_retry` gained an optional `retry_if` predicate; `_run_durable_advance` passes one that, with `marked_failures_only`, retries only failures marked `_high_water_phase`. Unmarked failures leave the timestamp loop at once and reach the write's stop-aware `_run_with_retry`. New test `test_unmarked_contention_leaves_retry_to_the_stop_aware_operation` failed on 7cde031 for that reason and passes now. |
+
 ### Comprehension answers (implementer, before editing)
 
 1. The row lock is transactional and released only after the holder's commit
@@ -437,6 +445,26 @@ before any production edit: 5 failed, 2 passed.
   applicability skips and the existing `get_data_version` skip); extension
   suite once, 437 passed, 7 skipped; ruff check and format, mypy (core plus
   both extensions, PostgreSQL tests, all core tests), plan and doc gates OK.
+
+### Round-3 fix (review F3)
+
+- RED on 7cde031 (test added before the fix):
+  `test_unmarked_contention_leaves_retry_to_the_stop_aware_operation` failed
+  with `Failed: DID NOT RAISE StopException`; locals showed two backend calls
+  with the same candidate (`calls = [1794201765256806400, 1794201765256806400]`):
+  the timestamp loop retried the unmarked lock timeout and the second call
+  committed despite the stop event.
+- Sensitivity control: reverting only the fix (`simplebroker/_timestamp.py`
+  and `simplebroker/_retry_policy.py` back to their 7cde031 contents; `git
+  diff` empty for both) fails the test again with `DID NOT RAISE
+  StopException` and two calls; restoring the fix (`shasum` matched) passes
+  it.
+- Runs on the round-3 tree: `test_pg_write_allocation.py` 11 passed (twice);
+  shared timestamp/write/identity/delivery/dump/keep/broadcast modules plus
+  `tests/test_retry.py` and `tests/test_retry_policy_coverage.py` on SQLite:
+  416 passed; the shared modules on PostgreSQL: 189 passed, 3 skipped (same
+  three skips as before); ruff check and format, mypy (core plus both
+  extensions, PostgreSQL tests, all core tests), plan and doc gates OK.
 
 ### Verification runs (round 1, commit 7a14692)
 

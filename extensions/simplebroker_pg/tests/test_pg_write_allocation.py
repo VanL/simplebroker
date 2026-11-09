@@ -36,7 +36,11 @@ from simplebroker._constants import (
     MAX_LOGICAL_COUNTER,
     NS_PER_SECOND,
 )
-from simplebroker._exceptions import OperationalError, TimestampError
+from simplebroker._exceptions import (
+    OperationalError,
+    StopException,
+    TimestampError,
+)
 from simplebroker.db import BrokerCore
 from simplebroker.ext import IntegrityError
 
@@ -532,6 +536,47 @@ def test_generated_write_conflict_rolls_back_allocation(
     )
     assert after == occupant + 1
     assert pg_plugin.read_last_ts(pg_runner) == after
+
+
+def test_unmarked_contention_leaves_retry_to_the_stop_aware_operation(
+    pg_core: BrokerCore,
+    pg_runner: PostgresRunner,
+    pg_plugin: BackendPlugin,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Contention outside the high-water row lock (allocate-and-insert or
+    commit) is retried only by the write's own operation retry, which honors
+    the core's stop event, never by the timestamp budget, which does not.
+
+    The backend reports one retryable, unmarked lock-timeout failure; the stop
+    event is set while it happens. The write must stop without another backend
+    call, so no row commits and no ID is returned.
+    """
+    pg_core.write("jobs", "seed")
+    high_water = pg_plugin.read_last_ts(pg_runner)
+    stop = threading.Event()
+    pg_core.set_stop_event(stop)
+    real_write_generated = pg_plugin.write_generated_message  # type: ignore[attr-defined]
+    calls: list[int] = []
+
+    def contended_once(runner: Any, **kwargs: Any) -> int | None:
+        calls.append(kwargs["candidate"])
+        if len(calls) == 1:
+            stop.set()
+            error = OperationalError("canceling statement due to lock timeout")
+            error.retryable = True  # unmarked: not the high-water row lock
+            raise error
+        return cast("int | None", real_write_generated(runner, **kwargs))
+
+    monkeypatch.setattr(pg_plugin, "write_generated_message", contended_once)
+
+    with pytest.raises(StopException):
+        pg_core.write("jobs", "stopped")
+
+    assert len(calls) == 1
+    stop.clear()  # let the verification reads run
+    assert pg_plugin.read_last_ts(pg_runner) == high_water
+    assert pg_core.peek_many("jobs", with_timestamps=False) == ["seed"]
 
 
 def test_persistently_conflicting_candidate_self_heals_after_resync(

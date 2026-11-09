@@ -86,12 +86,18 @@ def _run_durable_advance(
 
     With ``marked_failures_only`` (a server-allocated write, whose operation
     also inserts and commits the row), only failures the backend marked
-    ``OperationalError._high_water_phase`` are advance failures; any other
-    error propagates unchanged, exactly as an insert or commit failure does on
-    the shared SQL transaction.
+    ``OperationalError._high_water_phase`` are advance failures. Any other
+    error propagates unchanged and at once, without a timestamp-budget retry,
+    exactly as an insert or commit failure does on the shared SQL
+    transaction: its contention belongs to the caller's stop-aware operation
+    retry.
 
     Spec: [SB-ID-2], [SB-ID-3]
     """
+
+    def retry_if(error: OperationalError) -> bool:
+        return error._high_water_phase or not marked_failures_only
+
     try:
         return _execute_with_retry(
             operation,
@@ -99,6 +105,7 @@ def _run_durable_advance(
             retry_delay=0.002,
             max_elapsed=TS_RETRY_MAX_ELAPSED,
             max_retry_delay=TS_RETRY_MAX_DELAY,
+            retry_if=retry_if,
         )
     except OperationalError as e:  # pragma busy_timeout etc.
         if marked_failures_only and not e._high_water_phase:

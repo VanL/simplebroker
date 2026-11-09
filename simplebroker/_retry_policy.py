@@ -111,6 +111,7 @@ def _execute_with_retry(
     max_elapsed: float | None = None,
     max_retry_delay: float | None = None,
     progress_token: Callable[[], object | None] | None = None,
+    retry_if: Callable[[OperationalError], bool] | None = None,
 ) -> T:
     """Execute a database operation with retry logic for locked database errors.
 
@@ -125,6 +126,9 @@ def _execute_with_retry(
         progress_token: Optional external progress marker. When it changes,
             max_elapsed is treated as an idle timeout instead of a fixed
             wall-clock deadline.
+        retry_if: Optional further condition a locked error must meet to be
+            retried here; a locked error it rejects is raised at once so an
+            outer retry policy can own it.
 
     Returns:
         The result of the operation
@@ -137,6 +141,8 @@ def _execute_with_retry(
 
     def retry_on(exc: Exception) -> bool:
         if not isinstance(exc, OperationalError):
+            return False
+        if retry_if is not None and not retry_if(exc):
             return False
         return _is_locked_operational_error(exc)
 
