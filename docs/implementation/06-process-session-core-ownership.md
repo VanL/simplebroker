@@ -472,7 +472,10 @@ idle checks, enforced by
 Result: a process waiting only on healthy PostgreSQL waiters holds its LISTEN
 connection, plus one data connection for 10–20 s after each 60–120 s recheck.
 The first operation after a quiet gap pays connection setup. A lost
-notification is recovered within `2R` (under 120 s) plus one quiet pass.
+notification is recovered within `2R` plus one native wait pass (under
+120.115 s with the default polling settings). The pass term includes positive
+jitter, and an installation uses `max(R, 1)` for its first recheck, so the
+exact bound in [SB-API-6] is `2R′ + P`.
 
 ### [ALT-IMPL06-001] Lengthen the safety recheck for every native waiter
 
@@ -516,7 +519,7 @@ Evidence:
   TCP timeouts unless a client-side timeout is added.
 Reason: requires failed-listener replacement and a bounded probe; neither is
 needed to relieve the measured connection pressure.
-Current consequence: the PostgreSQL bound is the stated `2R`.
+Current consequence: the PostgreSQL bound is the stated `2R′ + P` of [SB-API-6].
 Reconsider when: undetected listener loss is observed in a deployment, or the
 registry gains failed-listener replacement.
 Promoted to: none

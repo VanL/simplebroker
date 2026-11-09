@@ -1385,6 +1385,13 @@ def _declared_safety_recheck_interval(waiter: ActivityWaiter | None) -> float | 
         raise ValueError(
             "activity waiter safety_recheck_interval must be finite and positive"
         )
+    # Deadlines are drawn from [R, 2R); an overflowing upper bound would
+    # install an infinite deadline and silently disable the recheck.
+    if not math.isfinite(interval * 2):
+        raise ValueError(
+            "activity waiter safety_recheck_interval must leave a finite "
+            "[R, 2R) recheck range"
+        )
     return interval
 
 
@@ -1699,7 +1706,12 @@ class PollingStrategy:
 
         The deadline is drawn uniformly from ``[R, 2R)`` after now, where ``R``
         is the installed waiter's declared ``safety_recheck_interval`` or the
-        strategy default ``max(1, 10 * max_interval)`` ([SB-API-6]).
+        strategy default ``max(1, 10 * max_interval)``. An installation
+        (``initial``) uses ``max(R, 1)`` instead. ``wait_for_activity()``
+        notices a passed deadline only when its current native pass ends, so
+        a recheck can return up to one pass of
+        ``max((1 + jitter_factor) * max_interval, burst_sleep)`` later
+        ([SB-API-6]).
         """
         if interval is None:
             interval = self._effective_safety_recheck_interval(

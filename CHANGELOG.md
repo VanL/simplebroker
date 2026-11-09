@@ -15,11 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check), and PostgreSQL waiters declare a 60-second safety recheck, so a
   waiting process keeps its listener connection plus, briefly after each
   60-120 second recheck, one data connection. NOTIFY wakeups are unchanged; the
-  first operation after a quiet gap opens a new connection. Recovery from a
-  lost notification is now bounded by 120 seconds instead of 2 seconds.
+  first operation after a quiet gap opens a new connection. With the default
+  polling settings, recovery from a lost notification is now bounded by about
+  120.1 seconds (twice the recheck interval plus one polling pass) instead of
+  about 2.1 seconds.
 - `PollingStrategy` honors an optional `safety_recheck_interval` declared by
   the installed activity waiter and rejects invalid declarations at
-  `start()`/`replace_activity_waiter()` before changing state. Waiters that
+  `start()`/`replace_activity_waiter()` before changing state, including a
+  declaration whose doubled recheck range would overflow. Waiters that
   declare nothing, including Redis/Valkey, keep the existing
   `max(1, 10 * max_interval)` recheck.
 

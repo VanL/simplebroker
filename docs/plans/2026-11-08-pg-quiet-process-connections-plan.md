@@ -146,22 +146,28 @@ editing):
 > still returns from `wait_for_activity()` for a quiet safety recheck so its
 > owner can check the queue. The recheck recovers activity whose backend
 > notification was lost; it is not the wake path and does not change
-> notification latency. Each recheck deadline is drawn uniformly from
-> `[R, 2R)` after the waiter's installation by `start()` or
-> `replace_activity_waiter()`, after the owner consumes a local activity
-> notification, or after the previous recheck; the first deadline after
-> installation is at least one second away. `R` is the installed waiter's
-> optional `safety_recheck_interval` attribute when it exists and is not
-> `None`, and otherwise `max(1, 10 × max_interval)`. A declaration that is
-> neither `None` nor a non-boolean `int`/`float` makes `start()` and
-> `replace_activity_waiter()` raise `TypeError`; a non-positive, non-finite or
-> float-overflowing declaration raises `ValueError`. Both raise before any
-> strategy state changes and before any waiter is detached or closed. A caller
-> deadline returns earlier without moving the recheck deadline. A committed
-> write whose notification never arrives is therefore seen by the next
-> recheck, less than `2R` plus one quiet pass (at most `max_interval`) after
-> the write, plus the time of the pending check itself. PostgreSQL waiters
-> declare `R = 60` seconds; Redis/Valkey waiters declare none.
+> notification latency. `R` is the installed waiter's optional
+> `safety_recheck_interval` attribute when it exists and is not `None`, and
+> otherwise `max(1, 10 × max_interval)`. After each recheck, and after the owner
+> consumes a local activity notification, the next recheck deadline is drawn
+> uniformly from `[R, 2R)`. When `start()` or `replace_activity_waiter()`
+> installs a waiter, its first deadline is drawn from `[R₀, 2R₀)` with
+> `R₀ = max(R, 1)` seconds. The strategy notices a passed deadline when its
+> current native wait pass ends; one pass lasts at most
+> `P = max((1 + jitter_factor) × max_interval, burst_sleep)` plus scheduler
+> delay. A caller deadline returns earlier without moving the recheck deadline.
+> A declaration that is neither `None` nor a non-boolean `int`/`float` makes
+> `start()` and `replace_activity_waiter()` raise `TypeError`; a non-positive,
+> non-finite or float-overflowing declaration, or one whose `2R` is not finite,
+> raises `ValueError`. Both raise before any strategy state changes and before
+> any waiter is detached or closed. A committed write whose notification never
+> arrives is therefore seen by the owner's check after the next strategy return,
+> less than `2R′ + P` after the write (plus scheduler delay and the check
+> itself), where `R′` is `R₀` until the first recheck or consumed local activity
+> after installation and `R` afterward. PostgreSQL waiters declare `R = 60`
+> seconds: with the default polling configuration the bound is under 120.115
+> seconds. Redis/Valkey waiters declare none and keep the default: under 2.115
+> seconds with the default configuration.
 
 ### [SB-API-3] — insert after the sentence "A suspended iterator or open transaction occupies its checkout until it is exhausted, closed, committed, or rolled back."
 
@@ -181,7 +187,7 @@ editing):
 | Change | Class | Theory basis |
 |--------|-------|--------------|
 | Quiet PostgreSQL watcher processes return their data connection to the server (steady sessions per quiet process ≈ 1.1–1.2 instead of 2). | N (no loss; resource relief) | [REV-THEORY-004] (resource count must not scale with idle handles against server connection limits); [THEORY-3] process session / backend runner own reusable resources |
-| PostgreSQL lost-notification recovery bound rises from < 2 s (+pass) to < 120 s (+pass); wake on delivered NOTIFY unchanged. | D (diminution in a failure mode) — owner decision OD-1 | [THEORY-4] explicit safety over magical recovery: the bound is now stated; the recheck covers only undetected listener-session loss or writers that bypass SimpleBroker; [THEORY-3] backend owns its loss model. Not on any `[ALT-*]` rejected path. |
+| PostgreSQL lost-notification recovery bound rises from `2R′ + P` ≈ 2.115 s to ≈ 120.115 s with default polling settings ([SB-API-6]); wake on delivered NOTIFY unchanged. | D (diminution in a failure mode) — owner decision OD-1 | [THEORY-4] explicit safety over magical recovery: the bound is now stated; the recheck covers only undetected listener-session loss or writers that bypass SimpleBroker; [THEORY-3] backend owns its loss model. Not on any `[ALT-*]` rejected path. |
 | First operation after ≥ 10–20 s of quiet on PostgreSQL pays a new connection setup (measured below); applies to the first wake after quiet too. | D (latency for first operation after quiet) — owner decision OD-2 | [THEORY-1]/[THEORY-4]: operationally small, predictable default for many cooperating processes; tunable constants named at the edit point |
 | More connection establishments for intermittently active PostgreSQL processes (one per quiet gap > ~20 s; one per recheck for fully quiet processes, i.e. every 60–120 s). | C (cost moved, no capability lost) | same as above |
 | Optional `safety_recheck_interval` waiter declaration; invalid declarations raise `TypeError`/`ValueError` at `start()`/`replace_activity_waiter()`. | A (additive contract; owner-decided via this plan) | [THEORY-3] backend adapter owns substrate behavior; matches existing optional-hook pattern |
@@ -205,10 +211,11 @@ editing):
   policy constants are shortened in the child (seams, not mocks). Core cadence
   proofs patch the module-owned `_monotonic`/`_uniform` aliases only.
 - Rollback: revert the single commit. No persistent state, schema or wire
-  change; old and new processes interoperate. Partial rollback is possible:
-  removing only `max_idle` restores held connections; removing only the
-  waiter declaration restores the 1–2 s recheck (and the pool then churns one
-  connection per recheck — so roll both back together).
+  change; old and new processes interoperate. Either half can be reverted
+  alone: removing only `max_idle` restores held connections; removing only
+  the waiter declaration restores the 1–2 s recheck, which keeps the single
+  data connection in use in every 10 s idle check, so it stays open as before
+  (see the mixed-version note below).
 - One-way doors: none. The waiter attribute is additive.
 - Mixed versions: a new `simplebroker-pg` with an older core keeps the 1–2 s
   recheck (the attribute is ignored), so the 10 s idle check never finds a
@@ -247,7 +254,10 @@ editing):
 | SM-POLLING row | `tests/test_watcher_transition_tables.py::test_polling_fires_transition_table[SM-POLLING::NATIVE_SAFETY_RECHECK]` | base: deadline 51.5 ≠ 80.0 |
 | Coupling: PG declared recheck > 2 idle checks (single and fan-in waiters) | `extensions/simplebroker_pg/tests/test_pg_quiet_connections.py::test_pg_waiters_declare_recheck_longer_than_two_pool_idle_checks` | base PG: no attribute |
 | Quiet watcher keeps only LISTEN, stays there across a window the old cadence could not, and still wakes on NOTIFY in < 5 s | `::test_quiet_watcher_holds_only_listener_and_still_wakes_promptly` | base PG: "kept 2 sessions; expected 1" |
-| Lost notification (row committed without `pg_notify`) is recovered within `2R` + slack | `::test_safety_recheck_recovers_write_without_notification` | preservation proof (passes before and after) |
+| Lost notification (row committed without `pg_notify` after the watcher is observed quiet) is recovered within `2R` + slack | `::test_safety_recheck_recovers_write_without_notification` | preservation proof (passes before and after); sensitivity control in the review record: fails with the recheck return disabled |
+| First recheck after installation uses `max(R, 1)`; later rechecks use `R`; each return lands before the deadline plus one pass | `tests/test_watcher.py::TestPollingStrategy::test_first_recheck_after_installation_uses_one_second_floor` | contract pin (behavior predates this plan; the original delta misstated it) |
+| The pass term includes positive jitter (`R = 60`, maximal jitter returns in `[120, 120.115)`) | `::test_recheck_bound_includes_one_jittered_native_pass` | contract pin |
+| A declaration whose `2R` overflows is rejected before mutation; the largest finite range installs a finite deadline | `::test_invalid_waiter_safety_recheck_interval_is_rejected_before_mutation[1e+308/max]`, `::test_largest_finite_recheck_range_installs_finite_deadline` | prior commit: `DID NOT RAISE ValueError` for both overflow cases |
 | Idle-decision probes declare their own recheck cadence (existing tests repaired) | `tests/test_watcher_thundering_herd.py::test_unrelated_write_does_not_drain_idle_watchers`, `::test_skip_idle_check_environment_controls_main_loop` | branch before repair: three PostgreSQL-backed failures waiting 10 s for an idle decision (see execution record) |
 | No regression | full PostgreSQL extension suite; PostgreSQL-backed shared suite; full core suite; Redis integration and waiter-lifecycle suites | — |
 
@@ -287,19 +297,20 @@ reference, so the retry fails again. See the execution record for evidence.
 
 ## Owner Decisions Needed
 
-- OD-1: accept the PostgreSQL lost-notification recovery bound `< 2R` with
-  `R = 60 s` (was `< 2 s`), or choose a different `R`.
+- OD-1: accept the PostgreSQL lost-notification recovery bound `2R′ + P`
+  with `R = 60 s` (under 120.115 s with default polling settings; was under
+  2.115 s), or choose a different `R`. Pending.
 - OD-2: accept the 10-second pool idle check (first operation after ~10–20 s
   of quiet reconnects), or choose a different value; `R > 2 × max_idle` must
-  hold.
+  hold. Pending.
 - OD-3: whether to pursue F-1 (listener replacement) and, with it, a LISTEN
   liveness probe that would allow a short bound again without a data
-  connection.
+  connection. Pending.
 
 ## Independent Review Loop
 
 - Author family: anthropic (Claude)
-- Reviewer family: pending — coordinator-selected cross-family reviewer
+- Reviewer family: openai (Codex), coordinator-run
 - Review invocation: coordinator via `skills/call-agent/SKILL.md` (not invoked by the author)
 
 ## Review and execution record
@@ -379,6 +390,17 @@ this plan.
 | `mypy simplebroker bin/release.py bin/ruff_suppression_index.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis`; PostgreSQL extension + tests; touched root tests | no issues |
 | `bin/check-plan-context`; `python3 bin/check-dom15-fixtures`; `bin/check-doc-paths` | OK |
 
+After the review fixes (F1–F4), rerun on the current tree:
+
+| Command | Result |
+|---------|--------|
+| Core watcher, config and doc-contract selection (15 files, SQLite, `-n 4`) | 350 passed |
+| `BROKER_TEST_BACKEND=postgres pytest tests/test_watcher*.py -m shared -n 4` (postgres:18) | 213 passed |
+| `pytest extensions/simplebroker_pg/tests/test_pg_quiet_connections.py`, three repeats | 3 passed ×3 |
+| `pytest extensions/simplebroker_pg/tests -m pg_only -n 4` | 430 passed, 7 skipped |
+| ruff check, ruff format --check (CI paths), mypy (core + extensions, PostgreSQL extension tests, touched root tests) | clean |
+| `bin/check-plan-context`, `bin/check-doc-paths`, `python3 bin/check-dom15-fixtures` | OK |
+
 ### Measurement (disposable postgres:18, same machine, other agents running)
 
 Script: N child processes, each one consuming `QueueWatcher` on its own
@@ -409,4 +431,29 @@ connect, the pool worker hand-off and a cold prepared-statement cache.
 
 ### Cross-family review
 
-(coordinator)
+Tier 1, Codex (codex exec -s read-only, reasoning effort high), 2026-11-08,
+scoped-change review of plan+implementation at 6679e17c against 5d29fbf.
+Verdict: blocker: F1, F3.
+
+The reviewer judged the intended differences registered, both D rows
+consistent with the theory, and backend-owned cadence plus pool-owned reaping
+a good fit. Owner decisions OD-1, OD-2 and OD-3 remain pending.
+
+| ID | Severity | Finding | Disposition |
+|----|----------|---------|-------------|
+| F1 | P2 | The stated recovery bound (`2R` plus one quiet pass of at most `max_interval`) is false for valid declarations: installation clamps the first interval to `max(R, 1)` (R = 0.1 returned at 1.001 s > 0.3 s), and the pass excludes positive jitter (R = 60 returned at 120.109 s > 120.1 s). | Accepted, fixed: [SB-API-6] now states the installation floor `R₀ = max(R, 1)`, the pass bound `P = max((1 + jitter_factor) × max_interval, burst_sleep)`, and the bound `2R′ + P` (PostgreSQL under 120.115 s, default under 2.115 s with default settings); plan delta, difference register, OD-1, guide, PostgreSQL README, implementation doc 06, `_next_native_idle_poll_deadline` docstring and CHANGELOG aligned. Boundary tests `test_first_recheck_after_installation_uses_one_second_floor` (start and replace) and `test_recheck_bound_includes_one_jittered_native_pass` pin both terms. PostgreSQL policy unchanged (R = 60, max_idle = 10). |
+| F2 | P3 | `safety_recheck_interval = 1e308` passes validation but `2R` overflows, installing an infinite deadline that silently disables quiet recovery. | Accepted, fixed: `_declared_safety_recheck_interval` rejects a declaration whose `2R` is not finite with `ValueError` before installation mutates state; [SB-API-6] states it. Tests add `1e308` and `sys.float_info.max` to the invalid-declaration cases (RED on 6679e17c: `DID NOT RAISE ValueError`) and `test_largest_finite_recheck_range_installs_finite_deadline` for the accepted boundary. |
+| F3 | P2 | The lost-notification test inserted the silent row right after the first handler acknowledgement, before the drain's local follow-up check, so the row could be admitted without a safety recheck. | Accepted, fixed: the spawned watcher optionally reports each re-entry into `wait_for_activity()`; the test inserts only after two entries following the acknowledgement (the first consumes the drain's local follow-up and runs its pending check, the second begins a quiet native wait), drops the unrelated short pool idle period, and keeps the `2R` + slack assertion. Sensitivity control recorded below. |
+| F4 | nit | The partial-rollback note predicted reconnect churn after removing only the waiter declaration; a 1–2 s recheck keeps the single connection in use in every 10 s idle check. | Accepted, fixed: the note now says either half can be reverted alone and that removing only the declaration keeps the connection open as before; the "roll both back together" requirement is removed. |
+
+F3 sensitivity control (postgres:18, this worktree): with the recheck return
+temporarily disabled in `PollingStrategy.wait_for_activity()` (the
+`if _monotonic() >= self._next_native_idle_poll_at:` branch made unreachable,
+then restored from a byte copy), the revised
+`test_safety_recheck_recovers_write_without_notification` failed at its
+receive deadline: `AssertionError: silent: pid=…, exit=None, alive=True`,
+`1 failed in 30.96s`. Restored code: `3 passed` for the whole file. Under the
+same mutation the 6679e17c version of the test also failed in three runs here
+(30.97 s, 31.12 s, 31.20 s); its race is timing-dependent, and the reviewer's
+deterministic reproduction stands. The revised test removes the race by
+construction rather than by timing.

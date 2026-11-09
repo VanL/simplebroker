@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -1591,6 +1592,8 @@ class TestPollingStrategy:
             (float("nan"), ValueError),
             (float("inf"), ValueError),
             (10**400, ValueError),
+            (1e308, ValueError),
+            (sys.float_info.max, ValueError),
         ],
     )
     def test_invalid_waiter_safety_recheck_interval_is_rejected_before_mutation(
@@ -1615,6 +1618,103 @@ class TestPollingStrategy:
         assert _polling_strategy_state(strategy) == state_before
         assert installed.close_calls == 0
         assert candidate.close_calls == 0
+
+    def test_largest_finite_recheck_range_installs_finite_deadline(self):
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        strategy.start(activity_waiter=DeclaringActivityWaiter(sys.float_info.max / 2))
+        assert math.isfinite(strategy._next_native_idle_poll_at)
+        strategy.close()
+
+    @pytest.mark.parametrize("install", ["start", "replace"])
+    def test_first_recheck_after_installation_uses_one_second_floor(
+        self,
+        monkeypatch,
+        install,
+    ):
+        """A sub-second declaration still waits [1, 2) s after installation."""
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        now = [100.0]
+        recheck_bounds: list[tuple[float, float]] = []
+
+        class QuietWaiter(DeclaringActivityWaiter):
+            def wait(self, timeout: float) -> bool:
+                self.wait_calls.append(timeout)
+                now[0] += timeout
+                return False
+
+        def latest(low: float, high: float) -> float:
+            if low > 0:
+                recheck_bounds.append((low, high))
+            return high
+
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: now[0])
+        monkeypatch.setattr(watcher_module, "_uniform", latest)
+        strategy = PollingStrategy(
+            threading.Event(),
+            initial_checks=0,
+            max_interval=0.1,
+            burst_sleep=0.01,
+            jitter_factor=0,
+        )
+        waiter = QuietWaiter(0.1)
+        if install == "start":
+            strategy.start(activity_waiter=waiter)
+        else:
+            strategy.start(activity_waiter=FakeActivityWaiter())
+            strategy.replace_activity_waiter(waiter)
+        installed_at = now[0]
+        pass_bound = 0.1  # max((1 + jitter_factor) * max_interval, burst_sleep)
+        assert recheck_bounds[-1] == (1.0, 2.0)
+
+        strategy.wait_for_activity()
+
+        assert 2.0 <= now[0] - installed_at < 2.0 + pass_bound + 1e-9
+        # The recheck reschedules from the declared interval itself.
+        assert recheck_bounds[-1] == (0.1, 0.2)
+        started = now[0]
+        strategy.wait_for_activity()
+        assert 0.2 <= now[0] - started < 0.2 + pass_bound + 1e-9
+        strategy.close()
+
+    def test_recheck_bound_includes_one_jittered_native_pass(self, monkeypatch):
+        """A recheck returns before 2R plus one maximally jittered pass."""
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        now = [100.0]
+
+        class QuietWaiter(DeclaringActivityWaiter):
+            def wait(self, timeout: float) -> bool:
+                self.wait_calls.append(timeout)
+                now[0] += timeout
+                return False
+
+        monkeypatch.setattr(watcher_module, "_monotonic", lambda: now[0])
+        # Latest recheck deadline and maximal positive jitter on every pass.
+        monkeypatch.setattr(watcher_module, "_uniform", lambda low, high: high)
+        strategy = PollingStrategy(
+            threading.Event(),
+            initial_checks=0,
+            max_interval=0.1,
+            burst_sleep=0.01,
+            jitter_factor=0.15,
+        )
+        waiter = QuietWaiter(60.0)
+        strategy.start(activity_waiter=waiter)
+        pass_bound = max((1 + 0.15) * 0.1, 0.01)
+
+        strategy.wait_for_activity()
+
+        assert 120.0 <= now[0] - 100.0 < 120.0 + pass_bound + 1e-9
+        # Jitter lengthens a quiet pass beyond max_interval, so the bound
+        # needs the jittered pass rather than max_interval alone.
+        assert max(waiter.wait_calls) == pytest.approx(pass_bound)
+        assert max(waiter.wait_calls) > 0.1
+        strategy.close()
 
     @pytest.mark.parametrize("coalesce_after_downgrade", [False, True])
     def test_downgraded_local_notification_has_exact_owner_state_vector(

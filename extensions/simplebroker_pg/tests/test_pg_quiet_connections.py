@@ -41,13 +41,20 @@ def _quiet_watcher_actor(
     label: str,
     pool_max_idle: float | None,
     safety_recheck: float | None,
+    report_waits: bool,
     pipe: Connection,
 ) -> None:
-    """Run one consuming watcher; report each handled body over ``pipe``."""
+    """Run one consuming watcher; report each handled body over ``pipe``.
+
+    With ``report_waits`` the watcher also sends ``("wait_entered",)`` each
+    time its loop re-enters ``PollingStrategy.wait_for_activity()``, which
+    acknowledges that the previous drain or pending-check decision finished.
+    """
 
     watcher: QueueWatcher | None = None
     thread: threading.Thread | None = None
     timeout = scale_timeout_for_ci(120.0)
+    patcher = pytest.MonkeyPatch()
     try:
         # Module-owned policy values are read when the pool and waiters are
         # created; set them before any PostgreSQL resource exists.
@@ -66,6 +73,14 @@ def _quiet_watcher_actor(
             handler,
             db=BrokerTarget("postgres", dsn, {"schema": schema}),
         )
+        if report_waits:
+            wait = watcher._strategy.wait_for_activity
+
+            def report_wait(timeout: float | None = None) -> None:
+                pipe.send(("wait_entered",))
+                wait(timeout)
+
+            patcher.setattr(watcher._strategy, "wait_for_activity", report_wait)
         thread = watcher.run_in_thread()
         pipe.send(("started",))
         assert pipe.poll(timeout), "parent command deadline expired"
@@ -78,6 +93,7 @@ def _quiet_watcher_actor(
             watcher.stop()
         if thread is not None:
             thread.join(timeout)
+        patcher.undo()
         pipe.close()
 
 
@@ -89,12 +105,13 @@ def _watcher_process(
     *,
     pool_max_idle: float | None = None,
     safety_recheck: float | None = None,
+    report_waits: bool = False,
 ) -> Iterator[tuple[Any, Connection]]:
     context = multiprocessing.get_context("spawn")
     parent, child = context.Pipe()
     process = context.Process(
         target=_quiet_watcher_actor,
-        args=(dsn, schema, label, pool_max_idle, safety_recheck, child),
+        args=(dsn, schema, label, pool_max_idle, safety_recheck, report_waits, child),
     )
     process.start()
     child.close()
@@ -123,6 +140,41 @@ def _receive(pipe: Connection, process: Any, timeout: float, phase: str) -> Any:
     message = pipe.recv()
     assert message[0] != "error", message[1]
     return message
+
+
+def _receive_skipping_waits(
+    pipe: Connection, process: Any, timeout: float, phase: str
+) -> tuple[Any, int]:
+    """Return the next non-wait message and how many wait entries preceded it."""
+
+    deadline = time.monotonic() + scale_timeout_for_ci(timeout)
+    waits = 0
+    while True:
+        remaining = max(0.0, deadline - time.monotonic())
+        assert pipe.poll(remaining), (
+            f"{phase}: pid={process.pid}, exit={process.exitcode}, "
+            f"alive={process.is_alive()}"
+        )
+        message = pipe.recv()
+        assert message[0] != "error", message[1]
+        if message != ("wait_entered",):
+            return message, waits
+        waits += 1
+
+
+def _await_wait_entries(
+    pipe: Connection, process: Any, count: int, timeout: float, phase: str
+) -> None:
+    deadline = time.monotonic() + scale_timeout_for_ci(timeout)
+    for _ in range(count):
+        remaining = max(0.0, deadline - time.monotonic())
+        assert pipe.poll(remaining), (
+            f"{phase}: pid={process.pid}, exit={process.exitcode}, "
+            f"alive={process.is_alive()}"
+        )
+        message = pipe.recv()
+        assert message[0] != "error", message[1]
+        assert message == ("wait_entered",), message
 
 
 def _owner_count(observer: Queue, label: str) -> int:
@@ -232,9 +284,12 @@ def test_safety_recheck_recovers_write_without_notification(
 ) -> None:
     """A committed row whose NOTIFY never arrives is found by the recheck.
 
-    The waiter declares R = 1 s here (the default is 60 s); the bound under
-    test is that the next quiet recheck lands within [R, 2R) of the previous
-    schedule point, plus one pending check and claim.
+    The waiter declares R = 1 s here (the default is 60 s). The row is
+    committed only after the watcher is quiet, so no notification, local
+    follow-up or drain can find it: the [SB-API-6] safety recheck is the only
+    remaining path, and it must return within 2R plus one native pass, plus
+    the pending check and claim. Sensitivity control (recorded in the plan):
+    with the recheck return disabled, this test fails at the receive deadline.
     """
 
     recheck = 1.0
@@ -245,11 +300,16 @@ def test_safety_recheck_recovers_write_without_notification(
             pg_dsn,
             pg_schema,
             label,
-            pool_max_idle=0.2,
             safety_recheck=recheck,
+            report_waits=True,
         ) as (process, pipe):
             writer.write("notified")
-            _handled_after(pipe, process, "notified", time.monotonic(), 30.0)
+            message, _ = _receive_skipping_waits(pipe, process, 30.0, "notified")
+            assert message == ("handled", "notified")
+            # The handler acknowledges before its drain finishes. The first
+            # later wait entry consumes the drain's local follow-up and runs
+            # its pending check; the second begins a quiet native wait.
+            _await_wait_entries(pipe, process, 2, 30.0, "quiet wait")
 
             # Simulate a lost notification: commit a valid pending row through
             # SQL that does not call pg_notify.
@@ -269,7 +329,9 @@ def test_safety_recheck_recovers_write_without_notification(
                 ).format(schema=sql.Identifier(pg_schema)),
                 ("jobs", "silent"),
             )
-            elapsed = _handled_after(pipe, process, "silent", started, 30.0)
+            message, _ = _receive_skipping_waits(pipe, process, 30.0, "silent")
+            elapsed = time.monotonic() - started
+            assert message == ("handled", "silent")
             assert elapsed < 2 * recheck + scale_timeout_for_ci(1.5)
     finally:
         writer.close()
