@@ -15,10 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reuse the validated plugin instead of rescanning: a PostgreSQL lookup drops
   from about 0.75 ms to under 0.1 µs in a 32-distribution environment, and an
   8-queue PostgreSQL activity waiter from about 6.2 ms to 34 µs. A third-party
-  entry point that is a factory or class is called once per process. Failed
+  entry point that is a factory or class yields one retained plugin per
+  process; racing first lookups may still call it more than once. Failed
   lookups are not retained, so a backend installed after a failed lookup is
   found by the next one. Replacing an already-resolved backend package takes
-  effect in new processes.
+  effect in new processes, and a duplicate registration added after a
+  successful lookup is no longer reported by that process. A forked child
+  retains nothing and resolves each backend again.
 
 ## [8.7.2] - 2026-10-14
 

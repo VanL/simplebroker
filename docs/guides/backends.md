@@ -106,13 +106,15 @@ full backend packages also use private core modules. Backend plugins declare a
 code-level `backend_api_version`; core checks it during backend resolution and
 release tooling verifies the first-party packages move with the core backend
 seam. That handshake is not stored in broker databases or backend metadata.
-Core loads a backend's entry point once per process and reuses the validated
-plugin object for every later lookup of that name, so a factory or class
-registered as the entry point is called once, not once per lookup
+Core retains one validated plugin object per backend name per process and
+returns it for every later lookup of that name
 ([SB-API-11](../specs/16-python-library-api.md#ext-advanced-and-backend-facing-exports-sb-api-11)).
-A failed lookup is not retained, so the next lookup sees a newly installed or
-repaired backend; replacing a backend the process already resolved takes
-effect in new processes.
+A factory or class registered as the entry point is therefore not called once
+per lookup; racing first lookups may still call it more than once, and all of
+them get the one retained result. A failed lookup is not retained, so the next
+lookup sees a newly installed or repaired backend; replacing a backend the
+process already resolved takes effect in new processes. A forked child starts
+with nothing retained and loads the entry point again.
 
 Backend API v2 publicly exports `DeliveryGuarantee`,
 `validate_delivery_guarantee()`, `MaintenanceSchedule`, and

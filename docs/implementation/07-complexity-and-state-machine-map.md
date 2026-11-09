@@ -295,12 +295,19 @@ connection setup and each queue in a multi-queue waiter all resolve the
 backend. The memo is a plain dict, not `functools.cache` or a locked registry:
 racing first lookups may both load, `setdefault` makes them share the first
 stored plugin, and the absence of a lock means a forked child cannot inherit a
-resolution lock held by a parent thread. Only validated plugins are stored, so
+resolution lock held by a parent thread. An `os.register_at_fork` child hook
+rebinds the memo to an empty dict, the `_phaselock.py` pattern, because a
+retained plugin created by a class or factory entry point may own a lock that a
+parent thread holds at fork time; reusing it would block a fresh child Queue,
+which resolved afresh before resolutions were retained. Only validated plugins are stored, so
 an unknown, ambiguous, unloadable or invalid registration is rescanned on the
-next lookup. Retaining a success matches what the process can actually do:
-the plugin module stays in `sys.modules` and live handles keep their plugin
-object, so rescanning after an in-place install could only fail new handles or
-import a second copy of a moved plugin module beside the first. Tests that
+next lookup. Retaining a success gives up one diagnostic: a duplicate
+registration installed after a name's first successful lookup is no longer
+reported as ambiguous by that process (an explicit tradeoff, recorded for owner
+disposition in the resolution-cache plan). Other in-place metadata changes
+lose little, because the plugin module stays in `sys.modules` and live handles
+keep their plugin object; rescanning could only fail new handles or import a
+second copy of a moved plugin module beside the first. Tests that
 replace `metadata.entry_points` also replace the memo through monkeypatch; the
 module comment marks that coupling. The built-in SQLite plugin does not use
 the memo because it does not scan entry points.

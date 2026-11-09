@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from importlib import metadata
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
@@ -605,12 +606,28 @@ def resolve_runner_backend_plugin(
 # name [SB-API-11]. Only validated plugins are stored: an unknown, ambiguous,
 # unloadable or invalid registration is rescanned on the next lookup, so a
 # later install or repair is seen. get/setdefault on a plain dict take no lock,
-# so a forked child never waits on a resolution in flight in its parent; it
-# inherits the parent's resolved plugin objects, as it already inherits every
-# Queue's plugin reference. Coupling: tests that substitute
-# ``metadata.entry_points`` must substitute this mapping too (monkeypatch), or
-# their stub plugins see and leak memoized resolutions.
+# so a forked child never waits on a resolution in flight in its parent, and
+# the fork hook below gives the child an empty memo. Coupling: tests that
+# substitute ``metadata.entry_points`` must substitute this mapping too
+# (monkeypatch), or their stub plugins see and leak memoized resolutions.
 _RESOLVED_ENTRY_POINT_PLUGINS: dict[str, BackendPlugin] = {}
+
+
+def _forget_resolutions_after_fork() -> None:
+    """Give a fork child no retained resolutions [SB-API-11].
+
+    A plugin object created by the parent's lookup may own locks or resources
+    that parent threads hold at fork time; the child resolves afresh instead,
+    as it did before resolutions were retained. Rebinding never touches the
+    inherited mapping.
+    """
+    global _RESOLVED_ENTRY_POINT_PLUGINS
+
+    _RESOLVED_ENTRY_POINT_PLUGINS = {}
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_resolutions_after_fork)
 
 
 def _load_entry_point_plugin(name: str) -> BackendPlugin:

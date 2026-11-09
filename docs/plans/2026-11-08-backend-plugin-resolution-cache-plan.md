@@ -5,16 +5,16 @@ resolution). A [DOM-5] risky trigger also fires: the public
 `simplebroker.ext.get_backend_plugin` changes observable behavior for
 third-party entry points and for installed-metadata changes after resolution.
 The hardening checklist applies.
-Status: active — implemented on `perf/sb-plugin-cache`; cross-family review and owner decision D2 pending.
+Status: active — implemented on `perf/sb-plugin-cache`; round-1 Codex findings F1-F3 fixed; round-2 review of F1 and owner decision D3 pending.
 Owner: implementation agent (performance track SB-2); the coordinator runs the
-cross-family review; the repository owner decides difference D2.
+cross-family review; the repository owner accepted D2 (2026-11-08) and decides D3.
 Boundary: entry-point resolution in `simplebroker/_backend_plugins.py`, its
 tests and its documentation. Callers, extensions, backend API version and
 storage are unchanged.
 Verification: RED/GREEN unit tests with mutation checks, targeted core,
 process-session, PostgreSQL and Redis suites, static and documentation gates,
 and a PostgreSQL 18 microbenchmark.
-Required action: review the spec delta and difference register; decide D2.
+Required action: round-2 review of the F1 fork fix; owner disposition of D3.
 
 ## Goal
 
@@ -71,18 +71,28 @@ backlink, code, tests and this plan land in one commit on
 
 ### [SB-API-11] — insert after the entry-point uniqueness paragraph
 
-> A process resolves each entry-point backend name successfully at most once.
+> A process retains one successful resolution per entry-point backend name.
 > The first successful lookup scans installed entry points, loads the entry
 > point, applies the handshake and capability checks, and retains the resulting
 > plugin object. Later lookups of that name in the same process return that
-> object without rescanning installed metadata or loading the entry point again,
-> including when racing first lookups each loaded one. A failed lookup (unknown
-> name, ambiguous registration, load failure, or failed handshake or capability
-> check) is not retained, so the next lookup in the process sees a later install
-> or repair. Installed-metadata changes after a name's first successful lookup
-> are visible to new processes, not to that process. A forked child starts with
-> its parent's retained plugins; a spawned process starts with none. The built-in
-> `sqlite` backend is not an entry point and does not use this resolution.
+> object without rescanning installed metadata or loading the entry point again.
+> Racing first lookups may each load the entry point, so a class or factory
+> entry point may be called more than once, but every lookup returns the one
+> retained object. A failed lookup (unknown name, ambiguous registration, load
+> failure, or failed handshake or capability check) is not retained, so the next
+> lookup in the process sees a later install or repair. Installed-metadata
+> changes after a name's first successful lookup are visible to new processes,
+> not to that process. A forked child does not inherit retained resolutions: its
+> first lookup of each name scans and loads the entry point again, and never
+> waits on a lookup in flight in the parent. Whether that load returns an object
+> the parent already created is the entry point's choice, and such a plugin owns
+> its own fork recovery. A spawned process likewise starts with none. The
+> built-in `sqlite` backend is not an entry point and does not use this
+> resolution.
+
+Round 1 revised the promoted text (F1, F2): the forked-child sentence replaced
+"A forked child starts with its parent's retained plugins", and the racing
+sentence now says a class or factory may be called more than once.
 
 The [SB-API-11] verification row now names the firing tests listed under
 Testing Plan.
@@ -98,8 +108,10 @@ Testing Plan.
   the plugin name, then runs `_ensure_backend_plugin_capabilities` (exact
   `backend_api_version` handshake plus SQL namespace or direct-core hook).
   Before this plan nothing was retained. The edit adds the module-level
-  `_RESOLVED_ENTRY_POINT_PLUGINS` dict, a memo read at function entry, and a
-  `setdefault` after validation.
+  `_RESOLVED_ENTRY_POINT_PLUGINS` dict, a memo read at function entry, a
+  `setdefault` after validation, and an `os.register_at_fork` child hook
+  (`_forget_resolutions_after_fork`) that rebinds the memo to an empty dict,
+  following `simplebroker/_phaselock.py::_reset_darwin_xattr_lock_after_fork`.
 - Callers, all unchanged and all routed through `get_backend_plugin`:
   `simplebroker/_targets.py::BrokerTarget.plugin` (lazy property; targets stay
   data-only); `simplebroker/sbqueue.py::Queue._activity_waiter_identity`
@@ -126,10 +138,13 @@ Comprehension questions (answers recorded in the Execution log before edits):
    resolution turns an unknown backend into install guidance; a retained
    failure would keep a process from using a backend installed or repaired
    after a failed probe.
-2. Why no lock around resolution? Expected: a parent thread holding it during a
-   slow import would leave a forked child blocked on an inherited held lock
-   (SB-API-11 fork recovery rule; 2026-10-14 lesson). `setdefault` already gives
-   every racing caller one object.
+2. Why no lock around resolution, and why does a fork child drop the memo?
+   Expected: a parent thread holding a resolution lock during a slow import
+   would leave a forked child blocked on an inherited held lock (SB-API-11 fork
+   recovery rule; 2026-10-14 lesson); `setdefault` already gives every racing
+   caller one object. A retained plugin made by a class or factory entry point
+   may own a lock a parent thread holds at fork time, so the child must resolve
+   afresh rather than reuse it (round-1 finding F1).
 3. Why must a test that substitutes `metadata.entry_points` also substitute the
    memo? Expected: otherwise a name resolved earlier in the same xdist worker
    returns the earlier stub, and a stub registered under `postgres` would leak
@@ -144,7 +159,8 @@ Comprehension questions (answers recorded in the Execution log before edits):
   unknown name; existing `RuntimeError` texts).
 - The SQLite path, every caller, backend API v9, storage, session identity and
   waiter grouping are unchanged.
-- No lock, fork hook, public name, dependency, or test-only production API.
+- No resolution lock, public name, dependency, or test-only production API.
+  The only fork handling is the child hook that empties the memo.
   Tests reset through monkeypatch, the pattern they already use for
   `metadata.entry_points`.
 - One owner of resolution: no per-Queue or per-target plugin field is added.
@@ -154,12 +170,12 @@ Comprehension questions (answers recorded in the Execution log before edits):
 | # | Change | Class | Theory basis |
 |---|--------|-------|--------------|
 | D1 | Repeated successful lookups no longer rescan metadata or reload the entry point. First-party lookups return the same singleton as before. | C — no loss | [THEORY-4] concrete pressure justifies growth; [THEORY-3] resolution is a process-level fact beside the process session that owns reusable backend resources. |
-| D2 | A third-party entry point that returns a new object per call (a class or factory) is called once per process; every lookup, including racing first lookups, shares that object. Before, each lookup made a new one. | A — owner decides; recommend accept | [THEORY-3] the backend adapter owns substrate resources, and a plugin is the process's handle to that adapter. One Queue already performed several lookups, so per-instance plugin state was never shared even within one Queue; first-party plugins are singletons. |
-| D3 | After a name's first successful lookup, uninstalling it, adding a duplicate registration, or upgrading it in place is not seen by that process; new processes see it. | C — no loss (argued) | [THEORY-4] explicit safety over magical recovery: the old rescan was not a recovery path. The plugin module stays in `sys.modules` and live handles keep the old object, so a rescan could only fail new handles of a backend live handles still use, or import a moved plugin module beside the loaded one. Uniqueness is still enforced at resolution. |
+| D2 | A third-party entry point that returns a new object per call (a class or factory) yields one retained plugin per process, which every later lookup returns. Racing first lookups may still call it more than once; all of them return the retained result. Before, each lookup made a new object. | A — owner accepted 2026-11-08 (class/factory entry points are resolved once and the result reused per process) | [THEORY-3] the backend adapter owns substrate resources, and a plugin is the process's handle to that adapter. One Queue already performed several lookups, so per-instance plugin state was never shared even within one Queue; first-party plugins are singletons. |
+| D3 | After a name's first successful lookup, uninstalling it, adding a duplicate registration, or upgrading it in place is not seen by that process; new processes see it. The lost diagnostic: a duplicate registration added after a successful lookup raised `Ambiguous backend plugin` on later lookups at baseline and is silently ignored now. | D — diminution, explicit tradeoff; open for owner disposition (no invalidation mechanism requested) | [THEORY-4] concrete pressure justifies growth: the rescan that carried this diagnostic cost 0.75-1.66 ms per lookup on every Queue, waiter and session path (Measurements). Uniqueness is still enforced when a name is first resolved in each process. Other in-place changes lose little: the plugin module stays in `sys.modules` and live handles keep the old object, so a rescan could only fail new handles or import a moved plugin module beside the loaded one. |
 | D4 | Failed lookups rescan every time. | N — unchanged | — |
-| D5 | A forked child returns its parent's retained plugins instead of reloading; a lookup in the child never waits on a resolution in flight in the parent. | C — no loss | [SB-API-11] fork recovery rule; no inherited lock is introduced. First-party results are identical. |
+| D5 | A forked child retains nothing: its first lookup of each name scans and loads the entry point again, exactly as at baseline, and never waits on a resolution in flight in the parent. | N — unchanged from baseline (revised after F1; the first version inherited the parent's retained plugins, class C, which F1 showed could block a fresh child Queue) | [SB-API-11] fork recovery rule and fresh-child-Queue usability; no inherited lock is introduced. |
 
-No D (diminution) entries.
+One D entry (D3), recorded for owner disposition.
 
 ## Design and Rejected Alternatives
 
@@ -184,6 +200,12 @@ Rejected:
   child, and `setdefault` already provides one shared object.
 - A public reset function: a test-only production seam; monkeypatch already
   restores the process memo.
+- Letting a forked child inherit the memo (the first version, rejected in
+  review round 1, F1): a retained plugin made by a class or factory entry point
+  may own a lock a parent thread holds at fork time. A pid check on every read
+  was also possible; the at-fork hook was chosen because it costs nothing per
+  lookup, drops every inherited entry, and is the existing `_phaselock.py`
+  pattern. A child pays one scan per backend name, as a spawned process does.
 
 ## Hidden Couplings
 
@@ -211,6 +233,8 @@ are substituted. The new tests use the real `get_backend_plugin`,
   before changing tests further.
 - Any PostgreSQL or Redis failure that depends on plugin object identity: stop;
   D2/D5 reasoning would be wrong.
+- Any fork-child failure involving plugin state: stop; the child must resolve
+  afresh (F1).
 
 ## Tasks
 
@@ -238,13 +262,19 @@ New tests in `tests/test_backend_plugin_resolution.py` (all through
 | `test_queue_backend_identity_paths_reuse_the_memoized_resolution` | three Queues' `backend_name` plus multi-queue waiter grouping scan once | RED: `assert 6 == 1` |
 | `test_failed_entry_point_resolution_is_not_memoized[unknown, ambiguous, load-failure, validation-failure]` | each failure kind in the spec list fails with its own error, is rescanned, and a repair resolves (one firing case per listed kind) | passes (guard) |
 | `test_concurrent_first_lookups_share_one_plugin_object` | racing first lookups both load and still get one object | RED: two distinct instances |
-| `test_forked_child_inherits_memo_while_parent_resolution_is_in_flight` | child returns the parent's retained object and resolves while a parent thread is blocked mid-load | RED: child reloaded, exits 1 |
+| `test_forked_child_queue_does_not_reuse_parent_plugin_state` (round 1, F1) | a parent thread holds a retained plugin's own lock at fork; a new child Queue's waiter hook still completes because the child resolves afresh | RED on `2ca51c53`: "forked child blocked on state inherited from its parent"; passes on `5d29fbf` behavior and after the fix |
+| `test_forked_child_resolves_while_parent_resolution_is_in_flight` | the child resolves promptly while a parent thread is blocked mid-load | passes (guard against a resolution lock) |
 
 Mutation checks for the guards (run on the implementation, then restored):
 retaining a failed lookup's exception failed all four failure cases at the
 post-repair lookup; storing with plain assignment instead of `setdefault`
-failed the racing test; a module lock around resolution failed the fork test
-("forked child blocked on its parent's in-flight resolution").
+failed the racing test; a module lock around resolution failed the in-flight
+fork test ("forked child blocked on state inherited from its parent"); removing
+the fork hook (the `2ca51c53` implementation) failed the plugin-lock fork test.
+
+The first version's fork test asserted that the child returned the parent's
+retained object and read only identity and name; it never called a plugin hook,
+so it could not see F1. It was replaced by the two fork tests above.
 
 ## Verification and Gates
 
@@ -319,7 +349,19 @@ count).
 
 ### Cross-family review
 
-Pending — filled by the coordinator.
+Tier 1, Codex (codex exec -s read-only, reasoning effort high), 2026-11-08,
+scoped-change review of plan+implementation at 2ca51c53 against 5d29fbf.
+Verdict: blocker: F1.
+
+| ID | Severity | Finding | Disposition |
+|----|----------|---------|-------------|
+| F1 | P2 (blocker; RECONSIDERATION REQUESTED on D5) | Retaining factory-created plugins across fork carries parent-held plugin locks into new child Queues. The reviewer reproduced it with a subclass of the real SQLite plugin: warm resolution, a parent thread holds the plugin's lock, fork, then a fresh child Queue's waiter hook blocks on HEAD and completes on baseline. This contradicts [SB-API-11] fresh-child-Queue usability; the plan's fork test read only identity and name. | Accepted, fixed: `_forget_resolutions_after_fork`, registered with `os.register_at_fork(after_in_child=...)`, rebinds the memo to an empty dict in the child (still lock-free). New `test_forked_child_queue_does_not_reuse_parent_plugin_state` fails on `2ca51c53` and passes after; the identity-inheritance assertion was removed and the in-flight fork test kept. [SB-API-11] text, implementation doc 07, guide, CHANGELOG and D5 (now N) updated. |
+| F2 | P3 | "Called once per process" overstates `setdefault`: it shares one retained result but is not single-flight, so racing misses may call a class or factory more than once. | Accepted, fixed: guide, CHANGELOG, [SB-API-11] text and D2 now say one retained result per process, with racing first lookups possibly calling the entry point more than once. Implementation unchanged. |
+| F3 | P3 | D3 removes an observable diagnostic: a duplicate registration added after a successful lookup raised ambiguity at baseline and is silently ignored on HEAD, so "no loss" is wrong. | Accepted, fixed: D3 reclassified as an explicit D tradeoff, open for owner disposition, with [THEORY-4] measured-pressure basis; implementation doc 07 and CHANGELOG name the lost diagnostic. No invalidation mechanism added. |
+
+Owner decision: D2 accepted by the repository owner on 2026-11-08 (class or
+factory entry points are resolved once and the result reused per process). D3
+remains open for the owner. Round 2 (coordinator) is scoped to F1.
 
 ### Execution log
 
@@ -368,3 +410,21 @@ Pending — filled by the coordinator.
   `bin/check-dom15-fixtures`, `bin/check-doc-paths` OK; `git diff --check`
   clean. Containers started by these runs were removed by the runners.
 - After benchmark: Measurements "After" columns.
+- Round 1 (2026-11-08, Codex findings F1-F3, all accepted): wrote
+  `test_forked_child_queue_does_not_reuse_parent_plugin_state` first and ran it
+  against the `2ca51c53` implementation: `pytest -n 0
+  tests/test_backend_plugin_resolution.py -k forked` → 1 failed, 1 passed;
+  `AssertionError: forked child blocked on state inherited from its parent`.
+  Against `5d29fbf` behavior (base file plus an unused memo attribute) both
+  fork tests passed. Added `_forget_resolutions_after_fork` and the
+  `os.register_at_fork` hook; resolution and process-session modules → 125
+  passed. Lock-around-resolution mutation on the fixed code still fails the
+  in-flight fork test. Docs and register updated per the review table.
+  Round-1 gates on the final tree: resolution, process-session, fork-safety,
+  activity-waiter and broker-session modules (`-n 4`) → 209 passed;
+  `uv run ./bin/pytest-pg --fast -n 4` → shared 1775 passed, 12 skipped;
+  PostgreSQL extension 427 passed, 7 skipped; `tests/test_plan_context_gate.py`
+  → 4 passed; `ruff check .`, `ruff format --check`, `mypy simplebroker
+  bin/release.py`, tests mypy (CI exclusion), `bin/check-plan-context`,
+  `bin/check-dom15-fixtures`, `bin/check-doc-paths` and `git diff --check`
+  clean. The PostgreSQL runner removed its container.

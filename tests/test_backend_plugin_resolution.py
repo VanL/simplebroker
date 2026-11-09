@@ -366,18 +366,114 @@ def test_concurrent_first_lookups_share_one_plugin_object(
     assert get_backend_plugin("dummy") is results[0]
 
 
+def _assert_fork_child_succeeds(child: Callable[[], bool]) -> None:
+    """Run ``child`` in a forked process and require it to return True promptly.
+
+    A child blocked on state inherited from its parent is killed and reaped.
+    """
+    read_fd, write_fd = os.pipe()
+    child_pid: int | None = None
+    try:
+        child_pid = os.fork()
+        if child_pid == 0:
+            status = 1
+            try:
+                os.close(read_fd)
+                if child():
+                    os.write(write_fd, b"ok")
+                    status = 0
+            finally:
+                os._exit(status)
+
+        os.close(write_fd)
+        write_fd = -1
+        ready, _, _ = select.select([read_fd], [], [], 5.0)
+        assert ready, "forked child blocked on state inherited from its parent"
+        assert os.read(read_fd, 16) == b"ok"
+        _, status = os.waitpid(child_pid, 0)
+        child_pid = None
+        assert os.WIFEXITED(status)
+        assert os.WEXITSTATUS(status) == 0
+    finally:
+        if child_pid is not None:
+            os.kill(child_pid, signal.SIGKILL)
+            os.waitpid(child_pid, 0)
+        os.close(read_fd)
+        if write_fd != -1:
+            os.close(write_fd)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
-def test_forked_child_inherits_memo_while_parent_resolution_is_in_flight(
+def test_forked_child_queue_does_not_reuse_parent_plugin_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A child resolves afresh, so a parent-held plugin lock cannot block it.
+
+    The plugin's own lock is held by a parent thread at fork time. A child
+    that reused the parent's plugin object would inherit that lock held.
+    """
+
+    class LockingPlugin(ValidDummyPlugin):
+        name = "locking"
+
+        def __init__(self) -> None:
+            self.lock = threading.Lock()
+
+        def create_activity_waiter(
+            self,
+            *,
+            target: str | None,
+            backend_options: dict[str, Any] | None = None,
+            runner: Any = None,
+            queue_name: str,
+            stop_event: threading.Event,
+        ) -> None:
+            del target, backend_options, runner, queue_name, stop_event
+            # A backend hook that serializes on plugin-owned state.
+            with self.lock:
+                pass
+
+    _use_entry_points(
+        monkeypatch,
+        CountingEntryPoints(EntryPointStub("locking", LockingPlugin)),
+    )
+    parent_plugin = get_backend_plugin("locking")
+    assert isinstance(parent_plugin, LockingPlugin)
+    target = BrokerTarget("locking", str(tmp_path / "child.db"), {})
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_plugin_lock() -> None:
+        with parent_plugin.lock:
+            held.set()
+            release.wait(15.0)
+
+    def child_queue_creates_waiter() -> bool:
+        queue = Queue("child", db_path=target)
+        return queue.create_activity_waiter(stop_event=threading.Event()) is None
+
+    holder = threading.Thread(target=hold_plugin_lock)
+    holder.start()
+    try:
+        assert held.wait(5.0)
+        _assert_fork_child_succeeds(child_queue_creates_waiter)
+    finally:
+        release.set()
+        holder.join(timeout=5.0)
+    assert not holder.is_alive()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_forked_child_resolves_while_parent_resolution_is_in_flight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The child reuses resolved plugins and never waits on its parent's load."""
+    """Resolution takes no lock that a forked child could inherit held."""
     parent_pid = os.getpid()
     loading = threading.Event()
     release = threading.Event()
-
-    class WarmPlugin(ValidDummyPlugin):
-        name = "warm"
 
     class InFlightPlugin(ValidDummyPlugin):
         name = "inflight"
@@ -391,47 +487,16 @@ def test_forked_child_inherits_memo_while_parent_resolution_is_in_flight(
 
     _use_entry_points(
         monkeypatch,
-        CountingEntryPoints(
-            EntryPointStub("warm", WarmPlugin),
-            ParentBlockingEntryPoint("inflight", InFlightPlugin),
-        ),
+        CountingEntryPoints(ParentBlockingEntryPoint("inflight", InFlightPlugin)),
     )
-    warm = get_backend_plugin("warm")
     resolver = threading.Thread(target=get_backend_plugin, args=("inflight",))
     resolver.start()
-    read_fd, write_fd = os.pipe()
-    child_pid: int | None = None
     try:
         assert loading.wait(5.0)
-        child_pid = os.fork()
-        if child_pid == 0:
-            status = 1
-            try:
-                os.close(read_fd)
-                inherited = get_backend_plugin("warm") is warm
-                in_flight = get_backend_plugin("inflight").name == "inflight"
-                if inherited and in_flight:
-                    os.write(write_fd, b"resolved")
-                    status = 0
-            finally:
-                os._exit(status)
-
-        os.close(write_fd)
-        write_fd = -1
-        ready, _, _ = select.select([read_fd], [], [], 5.0)
-        assert ready, "forked child blocked on its parent's in-flight resolution"
-        assert os.read(read_fd, 64) == b"resolved"
-        _, status = os.waitpid(child_pid, 0)
-        child_pid = None
-        assert os.WIFEXITED(status)
-        assert os.WEXITSTATUS(status) == 0
+        _assert_fork_child_succeeds(
+            lambda: get_backend_plugin("inflight").name == "inflight"
+        )
     finally:
-        if child_pid is not None:
-            os.kill(child_pid, signal.SIGKILL)
-            os.waitpid(child_pid, 0)
-        os.close(read_fd)
-        if write_fd != -1:
-            os.close(write_fd)
         release.set()
         resolver.join(timeout=5.0)
     assert not resolver.is_alive()
