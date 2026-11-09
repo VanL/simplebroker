@@ -5,16 +5,16 @@ resolution). A [DOM-5] risky trigger also fires: the public
 `simplebroker.ext.get_backend_plugin` changes observable behavior for
 third-party entry points and for installed-metadata changes after resolution.
 The hardening checklist applies.
-Status: active — implemented on `perf/sb-plugin-cache`; Codex findings F1-F4 fixed; round-3 verification of F4 and owner decision D3 pending.
+Status: active — implemented on `perf/sb-plugin-cache`; Codex findings F1-F4 dispositioned (F4 by owner decision F4-O2, 2026-11-08); owner decision D3 pending.
 Owner: implementation agent (performance track SB-2); the coordinator runs the
-cross-family review; the repository owner accepted D2 (2026-11-08) and decides D3.
+cross-family review; the repository owner accepted D2 and chose F4-O2 (2026-11-08) and decides D3.
 Boundary: entry-point resolution in `simplebroker/_backend_plugins.py`, its
 tests and its documentation. Callers, extensions, backend API version and
 storage are unchanged.
 Verification: RED/GREEN unit tests with mutation checks, targeted core,
 process-session, PostgreSQL and Redis suites, static and documentation gates,
 and a PostgreSQL 18 microbenchmark.
-Required action: round-3 verification of the F4 fork-hook fix; owner disposition of D3.
+Required action: owner disposition of D3.
 
 ## Goal
 
@@ -181,7 +181,7 @@ Comprehension questions (answers recorded in the Execution log before edits):
 | D2 | A third-party entry point that returns a new object per call (a class or factory) yields one retained plugin per process, which every later lookup returns. Racing first lookups may still call it more than once; all of them return the retained result. Before, each lookup made a new object. | A — owner accepted 2026-11-08 (class/factory entry points are resolved once and the result reused per process) | [THEORY-3] the backend adapter owns substrate resources, and a plugin is the process's handle to that adapter. One Queue already performed several lookups, so per-instance plugin state was never shared even within one Queue; first-party plugins are singletons. |
 | D3 | After a name's first successful lookup, uninstalling it, adding a duplicate registration, or upgrading it in place is not seen by that process; new processes see it. The lost diagnostic: a duplicate registration added after a successful lookup raised `Ambiguous backend plugin` on later lookups at baseline and is silently ignored now. | D — diminution, explicit tradeoff; open for owner disposition (no invalidation mechanism requested) | [THEORY-4] concrete pressure justifies growth: the rescan that carried this diagnostic cost 0.75-1.66 ms per lookup on every Queue, waiter and session path (Measurements). Uniqueness is still enforced when a name is first resolved in each process. Other in-place changes lose little: the plugin module stays in `sys.modules` and live handles keep the old object, so a rescan could only fail new handles or import a moved plugin module beside the loaded one. |
 | D4 | Failed lookups rescan every time. | N — unchanged | — |
-| D5 | A forked child retains nothing: its first lookup of each name scans and loads the entry point again, exactly as at baseline, and never waits on a resolution in flight in the parent. The inherited plugin objects stay referenced by a never-read keep-alive list, so none is finalized because of the fork; the retention is bounded to one mapping per fork generation, each holding the few backends its parent resolved. | N — unchanged from baseline (revised after F1 and F4; the first version inherited the parent's retained plugins, which F1 showed could block a fresh child Queue, and the second released them in the fork hook, which F4 showed could run a blocking finalizer there) | [SB-API-11] fork recovery rule and fresh-child-Queue usability; [REV-THEORY-005] suspended or inherited ownership is not settled from an incompatible context, so the child abandons, rather than finalizes, parent-created plugins. |
+| D5 | A forked child retains nothing: its first lookup of each name scans and loads the entry point again, exactly as at baseline, and never waits on a resolution in flight in the parent. The inherited plugin objects stay referenced by a never-read keep-alive list, so none is finalized because of the fork (the child's interpreter may still finalize them at exit; plugin finalizers must be fork-safe, owner decision F4-O2); the retention is bounded to one mapping per fork generation, each holding the few backends its parent resolved. | N — unchanged from baseline (revised after F1 and F4; the first version inherited the parent's retained plugins, which F1 showed could block a fresh child Queue, and the second released them in the fork hook, which F4 showed could run a blocking finalizer there) | [SB-API-11] fork recovery rule and fresh-child-Queue usability; [REV-THEORY-005] suspended or inherited ownership is not settled from an incompatible context, so the child abandons, rather than finalizes, parent-created plugins. |
 
 One D entry (D3), recorded for owner disposition.
 
@@ -496,3 +496,13 @@ decision rather than a further fix round:
   live plugin objects to children through any inherited open handles.
 - **F4-O3:** do not retain class/factory-created plugin objects across fork at
   all (child gets nothing inherited) — requires revisiting accepted D2 semantics.
+
+**OWNER DECIDED 2026-11-08: F4-O2.** [SB-API-11] and the backends guide now
+state that a plugin finalizer must be fork-safe; the keep-alive list stays, so
+no inherited plugin is finalized inside the fork hook. Basis: baseline already
+hands live plugin objects to children through inherited handles, so pinning the
+memo (F4-O1) would close one path to the hazard, not the hazard; F4-O1 needs a
+CPython-only `ctypes` reference leak; the first-party PostgreSQL finalizer and
+Redis `close()` already check the PID and abandon inherited resources
+(implementation doc 06, fork recovery), which is the obligation F4-O2 states.
+No code change; the F4 regression test keeps covering the fork-hook deadlock.

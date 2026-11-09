@@ -1173,7 +1173,11 @@ not to that process. A forked child does not inherit retained resolutions: its
 first lookup of each name scans and loads the entry point again, and never
 waits on a lookup in flight in the parent. Plugin objects the parent retained
 stay alive in the child and are never released by this resolution, so no
-plugin finalizer runs because of the fork. Whether the child's load returns an
+plugin finalizer runs because of the fork. Like any object a child inherits,
+they may still be finalized when the child's interpreter exits, so a plugin
+finalizer must be fork-safe: it must not take a lock that a parent thread could
+hold at fork (the first-party backends' resource finalizers check the PID
+and abandon inherited resources). Whether the child's load returns an
 object the parent already created is the entry point's choice, and such a
 plugin owns its own fork recovery. A spawned process likewise starts with none.
 The

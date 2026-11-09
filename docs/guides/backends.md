@@ -115,6 +115,12 @@ them get the one retained result. A failed lookup is not retained, so the next
 lookup sees a newly installed or repaired backend; replacing a backend the
 process already resolved takes effect in new processes. A forked child starts
 with nothing retained and loads the entry point again.
+A plugin's finalizer must be fork-safe. A forked child keeps the plugin objects
+its parent retained, and its interpreter may finalize them when it exits, so a
+finalizer must not take a lock that a parent thread could hold at fork. Check
+the PID first and abandon inherited resources, as the first-party PostgreSQL
+and Redis resource finalizers do, or reset such locks with
+`os.register_at_fork(after_in_child=...)`.
 
 Backend API v2 publicly exports `DeliveryGuarantee`,
 `validate_delivery_guarantee()`, `MaintenanceSchedule`, and
