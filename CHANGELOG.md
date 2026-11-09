@@ -14,9 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still raise `OperationalError`, but the next waiter gets a new listener
   instead of the failed one. A watcher's ordinary retry therefore wakes on later
   writes again; previously every retry reused the failed listener until the
-  watcher exhausted its retries and stopped. The watcher's existing retry
-  limits are unchanged: at most two recoveries per run, and none once the run
-  is more than five minutes old.
+  watcher exhausted its retries and stopped. Recovery happens within the
+  watcher's retry limits.
 
 ## [8.7.2] - 2026-10-14
 

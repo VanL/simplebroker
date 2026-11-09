@@ -527,9 +527,9 @@ class _SharedActivityRegistry:
         """Surrender one reference to ``listener``; close it after the last one.
 
         Releasing a listener that ``acquire`` already replaced is a no-op. Its
-        thread closed its own connection when it failed, and closing it here
-        would turn the stored failure into quiet wait results for holders that
-        have not observed it yet.
+        failed thread owns its cleanup and closes its connection in
+        ``finally``. Closing it here would also turn the stored failure into
+        quiet wait results for holders that have not observed it yet.
         """
         self._reset_after_fork_if_needed()
         key = (self._pid, dsn, schema)

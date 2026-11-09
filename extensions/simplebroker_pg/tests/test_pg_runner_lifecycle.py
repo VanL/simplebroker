@@ -1458,9 +1458,9 @@ def test_shared_activity_registry_never_hands_out_a_failed_listener(
     assert registry.acquire("dsn", schema="schema") is replacement
 
     # Both holders of the failed listener release it. That must neither count
-    # against the replacement nor close the failed listener: its thread already
-    # closed its connection, and closing it would turn the stored failure into
-    # quiet wait results for holders that have not observed it yet.
+    # against the replacement nor close the failed listener: its failed thread
+    # owns its cleanup, and closing it would turn the stored failure into quiet
+    # wait results for holders that have not observed it yet.
     registry.release("dsn", schema="schema", listener=failed)
     registry.release("dsn", schema="schema", listener=failed)
     assert cast(FakeListener, failed).close_calls == 0

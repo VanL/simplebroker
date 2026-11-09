@@ -340,9 +340,12 @@ reconnected in place, because a silent resubscription would hide that gap from
 waiters that believe they were continuously subscribed. Release names the
 listener it surrenders, so releasing a replaced listener is a no-op that never
 counts against its replacement. The registry does not close a replaced
-listener: its thread closed its own connection when it failed, and closing it
-would turn the stored failure into quiet wait results for holders that have not
-observed it yet. Plan: `2026-11-08-pg-listener-failure-recovery-plan.md`.
+listener. Its failed thread owns its cleanup: it publishes the failure and wakes
+waiters first, then closes its connection in `finally`, so a replacement may
+connect while that cleanup is still unwinding. In steady state each key still
+has one LISTEN connection. Closing the replaced listener from the registry
+would also turn the stored failure into quiet wait results for holders that
+have not observed it yet. Plan: `2026-11-08-pg-listener-failure-recovery-plan.md`.
 
 ### Fork recovery before process-owned locks
 

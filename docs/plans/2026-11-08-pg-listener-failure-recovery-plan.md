@@ -6,7 +6,8 @@ custody without a registry close, and release becomes identity-checked) and
 the private waiter/registry protocol that a concurrent track (SB-3) also edits.
 No normative spec text changes, so not class 5.
 Status: active — implemented and verified on branch `perf/sb-listener-recovery`
-(base `perf/sb-base` = `5d29fbf`); cross-family review pending (coordinator).
+(base `perf/sb-base` = `5d29fbf`); cross-family review SB-6: no blocker, F1 and F2
+fixed (see the review record).
 Owner: SimpleBroker product owner; implementation agent for the F-1 fix.
 Boundary: `extensions/simplebroker_pg/simplebroker_pg/runner.py`
 `_SharedActivityRegistry` and the two waiter `close()` call sites. The listener
@@ -102,10 +103,13 @@ connection unexpectedly ...')]`, log `Watcher failed after 3 retries`.
   one), release is a no-op. Otherwise the refcount/close behavior is unchanged.
 - Waiter `close()` passes `listener=self._listener`.
 
-Why the registry does not close a replaced listener: its thread already
-closed its connection, so nothing remains to release; and `close()` sets
-`_stop_event`, which would turn the stored failure into quiet `False` waits for
-holders that have not yet observed it, leaving them on a dead listener.
+Why the registry does not close a replaced listener: its failed thread owns
+its cleanup. `_run()` publishes `_error` and wakes waiters first, then closes
+its connection in `finally`, so a replacement may connect while that cleanup is
+still unwinding; the registry has nothing of its own to release. And `close()`
+sets `_stop_event`, which would turn the stored failure into quiet `False`
+waits for holders that have not yet observed it, leaving them on a dead
+listener.
 
 Why no in-place reconnect: [THEORY-4] explicit safety over magical recovery.
 Notifications sent while no LISTEN session exists are lost. A listener that
@@ -147,10 +151,10 @@ the registry lock at hand-out time. No probe, round trip, or read-back is added.
 |--------|-------|--------------|
 | After the server ends the shared LISTEN session, a watcher's first retry gets a new listener and keeps handling writes through notifications (was: re-acquired the failed listener and died after its retries, about 6–14 s later) | C — no loss; restores watcher retry recovery | [THEORY-3] watcher/waiter adapter; [THEORY-4] explicit safety over magical recovery (failure surfaced once, recovery through the explicit retry plus drain) |
 | Waiters holding the failed listener keep raising the stored `OperationalError` on every wait | N — unchanged | [THEORY-4] failure stays explicit |
-| A new waiter created after a failure opens a new LISTEN connection; the failed one closed itself | N — budget unchanged (one live listener per key) | [REV-THEORY-004] substrate owned below handles |
+| A new waiter created after a failure opens a new LISTEN connection; the failed thread closes its own connection in `finally`, possibly just after the replacement connects | N — steady-state budget unchanged (one LISTEN connection per key; briefly two while the failed thread unwinds) | [REV-THEORY-004] substrate owned below handles |
 | Creating the replacement can fail (server still down): the waiter constructor raises the listener startup `OperationalError` and the watcher retry counts it | N — same as creating the first listener | [THEORY-4] |
 | Private `_SharedActivityRegistry.release` now requires `listener=`; releasing a replaced listener is a no-op | N — private surface; not exported | [THEORY-4] small concept count; mirrors the Redis registry's identity release |
-| The watcher's retry limits are unchanged: at most two recoveries per run, none once the run is more than five minutes old (see Q1) | N — unchanged, now documented in CHANGELOG so the fix is not over-claimed | [THEORY-4] guarantees named narrowly |
+| Recovery stays within the watcher's retry limits, which this fix does not change (on `5d29fbf`: at most two recoveries per run, none once the run is more than five minutes old; see Q1 and `perf/sb-watcher-retry-budget`) | N — unchanged; the CHANGELOG says "within the watcher's retry limits" without numbers so it stays true after the retry-budget change lands | [THEORY-4] guarantees named narrowly |
 
 ## Alternatives (plan-local unless the owner promotes them)
 
@@ -186,9 +190,14 @@ the registry lock at hand-out time. No probe, round trip, or read-back is added.
   on the shared listener's backend; asserts a write made after termination is
   handled, the watcher thread is alive, and no thread exception occurred.
   `BROKER_MAX_INTERVAL=2.0` pushes the native idle re-poll to 20–40 s so only a
-  live notification can deliver the write within 5 s. The retry backoff is
-  patched to immediate (the existing `test_absolute_timeout_exceeded` seam) so
-  the unfixed watcher dies before the write instead of racing it.
+  live notification can deliver the write within 5 s. The write is made only
+  after the watcher has entered `_SharedActivityListener.wait` on a listener
+  other than the failed one (observed by wrapping that method); the watcher
+  waits only after its retry's startup and initial drain have finished, so that
+  drain cannot consume the write (review F1). The retry backoff is patched to
+  immediate (the existing `test_absolute_timeout_exceeded` seam) so the unfixed
+  watcher exhausts its retries promptly; the observation loop ends when the
+  watcher thread dies or after 10 s.
 - `extensions/simplebroker_pg/tests/test_pg_runner_lifecycle.py::test_shared_activity_registry_never_hands_out_a_failed_listener`:
   failed listener replaced; replacement shared; two releases of the failed one
   neither count against the replacement nor close the failed listener;
@@ -278,15 +287,39 @@ the registry lock at hand-out time. No probe, round trip, or read-back is added.
 
 ## Review and execution record
 
-(Coordinator: record the cross-family review, findings and dispositions here.)
+Review SB-6 (cross-family, coordinator-run) of `74683fd`: verdict "no blocker".
+The reviewer confirmed the production change and the register (no D rows).
+They also confirmed the baseline failure and the identity-guard control by
+running the registry class in memory. PostgreSQL integration was not rerun by
+the reviewer. Findings and dispositions:
+
+| ID | Severity | Location | Finding | Disposition | Evidence |
+|----|----------|----------|---------|-------------|----------|
+| F1 | P3 | `extensions/simplebroker_pg/tests/test_pg_notify.py` (old lines 708–714) | The 2 s join did not prove the retry's startup and initial drain had finished, so a delayed retry drain could consume `"after"` with no notification. | Fixed. The test now wraps `_SharedActivityListener.wait` and writes `"after"` only after the watcher has entered a wait on a listener other than the failed one. The watcher waits only after the retry's startup and initial drain, and the 20–40 s idle re-poll excludes polling. The observation is part of the final assertion. The loop ends early if the watcher thread dies, which is how the baseline fails. The coordinator asked for this fix to take the same shape as the SB-8 (Redis) one. | See rows below |
+| F2 | nit | Plan Design and register; implementation doc 06 | "Its thread already closed its connection" overstated the ordering: `_run()` publishes `_error` and wakes waiters before `finally` closes the connection. | Fixed. Plan, doc 06, the `release` docstring and the registry test comment now say the failed thread owns its cleanup in `finally` and a replacement may connect while it unwinds. The budget claim is now explicitly steady-state (briefly two connections). No synchronization added, per the reviewer. | Doc diff in this commit |
+| Merge note | — | `CHANGELOG.md` | Numeric retry limits become false once `perf/sb-watcher-retry-budget` lands. | Fixed: the entry now says "Recovery happens within the watcher's retry limits." The plan register keeps the `5d29fbf` numbers as historical context. | Doc diff in this commit |
+
+Execution evidence after the fixes (2026-11-09, foreground, PostgreSQL 18 via
+`bin/pytest-pg`):
+
+| Command | Result |
+|---------|--------|
+| `uv run ./bin/pytest-pg extensions/simplebroker_pg/tests/test_pg_notify.py -k terminated -n 0` | 1 passed (2.7 s) |
+| Baseline sensitivity: `git diff 5d29fbf -- runner.py` saved (sha256 `f6312660…3e10`), `git apply -R`, then `pytest-pg test_pg_notify.py test_pg_runner_lifecycle.py -k "terminated or never_hands_out" -n 0` | 2 failed for the F-1 reason. Watcher test: `replacement_waiting=False handled=['before'] watcher_alive=False thread_errors=[OperationalError('consuming input failed: server closed the connection unexpectedly ...')]`; log `Watcher failed after 3 retries`. Registry test: `assert replacement is not failed` |
+| Restore: `git apply` of the saved patch | `runner.py` diff against `5d29fbf` byte-identical to the saved patch (`cmp` OK, same sha256) |
+| Same two tests, five runs (`-n 2`) | 2 passed each run |
+| `pytest-pg` on `test_pg_notify`, `test_pg_runner_lifecycle`, `test_pg_activity_waiter_lifecycle`, `test_pg_state_machine_transitions`, `test_pg_example_multi_queue_watcher` (`-n 4`) | 123 passed |
+| `python -m pytest test_pg_runner_lifecycle.py test_pg_activity_waiter_lifecycle.py -n 0 -m ""` (no PostgreSQL) | 57 passed, 10 skipped (the skips need a DSN) |
+| `ruff check .`; suppression index `--check`; `ruff format --check` on CI paths; mypy on packages and on all PG test files; `check-plan-context`; `check-dom15-fixtures`; `check-doc-paths` | all clean (351 files formatted; mypy 68 and 42 files, no issues) |
 
 ## Fresh-Eyes Review
 
 - Could a holder see a quiet `False` from the failed listener? Only if it is
   closed; the registry never closes a replaced listener, and the holder's own
   `close()` only unregisters and releases (no-op).
-- Could two live listeners exist for one key? Only transiently a failed
-  (connectionless) one plus the replacement; never two live ones.
+- Could two live listeners exist for one key? Only transiently: a failed one
+  whose thread may still be closing its connection, plus the replacement; never
+  two that accept registrations.
 - Could the replacement be closed early? Only by a release naming it; replaced
   listeners' releases are no-ops.
 - Comprehension check for reviewers: (a) why does closing a replaced listener

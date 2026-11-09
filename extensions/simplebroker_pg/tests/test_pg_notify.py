@@ -665,13 +665,28 @@ def test_watcher_handles_writes_after_listener_backend_is_terminated(
     failure once, and its ordinary retry must obtain a working listener, so a
     write made after the termination is handled by the same watcher.
 
-    The large ``BROKER_MAX_INTERVAL`` pushes the native idle re-poll (20-40 s)
-    beyond the test deadline, so only a notification on a live listener can
-    deliver the write. The retry backoff is made immediate so a watcher that
-    re-acquires the failed listener exhausts its retries before the write
-    instead of racing it; the settle wait affects only that failure timing.
+    The write is made only after the watcher has entered a wait on a
+    listener other than the failed one. The watcher waits only after its
+    retry's startup and initial drain have finished, so that drain cannot
+    consume the write. The large ``BROKER_MAX_INTERVAL`` pushes the native idle
+    re-poll (20-40 s) beyond the test deadline, so only a notification on the
+    replacement listener can deliver it. The retry backoff is made immediate
+    so a watcher that re-acquires the failed listener exhausts its retries
+    promptly instead of reaching the deadline.
     """
     monkeypatch.setattr(watcher_module, "interruptible_sleep", lambda *_args: True)
+    failed_listener: list[pg_runner_module._SharedActivityListener] = []
+    replacement_waiting = threading.Event()
+    listener_wait = pg_runner_module._SharedActivityListener.wait
+
+    def observed_wait(
+        listener: pg_runner_module._SharedActivityListener, **kwargs: Any
+    ) -> tuple[bool, int, int]:
+        if failed_listener and listener is not failed_listener[0]:
+            replacement_waiting.set()
+        return listener_wait(listener, **kwargs)
+
+    monkeypatch.setattr(pg_runner_module._SharedActivityListener, "wait", observed_wait)
     thread_errors: list[BaseException | None] = []
     monkeypatch.setattr(
         threading,
@@ -698,20 +713,30 @@ def test_watcher_handles_writes_after_listener_backend_is_terminated(
         writer.write("before")
         assert seen["before"].wait(10.0), "watcher did not handle the first write"
 
-        backend_pid = _shared_listener_for(pg_schema)._conn.info.backend_pid
+        listener = _shared_listener_for(pg_schema)
+        failed_listener.append(listener)
+        backend_pid = listener._conn.info.backend_pid
         with psycopg.connect(pg_dsn, autocommit=True) as admin:
             row = admin.execute(
                 "SELECT pg_terminate_backend(%s)", (backend_pid,)
             ).fetchone()
         assert row == (True,)
 
-        # Returns early only if the watcher thread dies.
-        thread.join(timeout=2.0)
+        deadline = time.monotonic() + 10.0
+        while thread.is_alive() and time.monotonic() < deadline:
+            if replacement_waiting.wait(0.05):
+                break
         writer.write("after")
         handled_after = seen["after"].wait(5.0)
         thread.join(timeout=1.0)
 
-        assert handled_after and thread.is_alive() and thread_errors == [], (
+        assert (
+            replacement_waiting.is_set()
+            and handled_after
+            and thread.is_alive()
+            and thread_errors == []
+        ), (
+            f"replacement_waiting={replacement_waiting.is_set()} "
             f"handled={handled!r} watcher_alive={thread.is_alive()} "
             f"thread_errors={thread_errors!r}"
         )
