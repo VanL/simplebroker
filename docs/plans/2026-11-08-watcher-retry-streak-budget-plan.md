@@ -451,3 +451,15 @@ reviewed; the coordinator decides whether it needs another round.
   failure rather than at the healthy wait? (b) why is a successful start and
   initial drain not a recovery? (c) what does a `_process_messages` override
   need to do, and what happens if it does not?
+
+### Revision 2 verification (coordinator)
+
+Tier 1, Codex (`codex exec -s read-only`, reasoning effort high), 2026-11-09,
+scoped to `9473af3..79fa179` (owner Q1 decision: reset only after a processing
+wait returns normally; WARNING per retry). Verdict: PASS, no new blocking
+defect. Write-free probes of both revisions' method bodies (both processing
+loops, witness-omission controls) confirmed: a recurring first-wait failure
+surfaces the original exception on failure three with backoffs `[2, 4]`; real
+recovery resets; the WARNING format matches. The database-backed suites were
+inspected, not rerun, by the reviewer. Review loop closed; Q2 (an [SB-API-6]
+per-streak contract) remains open.
