@@ -286,6 +286,25 @@ Unknown backend entry-point lookup raises the private
 callers. Project resolution catches that type to add install guidance; other
 plugin runtime failures propagate without depending on exception prose.
 
+Successful entry-point resolution is retained per process in
+`simplebroker/_backend_plugins.py::_RESOLVED_ENTRY_POINT_PLUGINS`
+([SB-API-11]). `importlib.metadata.entry_points()` reads every installed
+distribution's metadata, about 0.75 ms with 32 distributions and longer in
+larger environments, and Queue identity, `backend_name`, `BrokerTarget.plugin`,
+connection setup and each queue in a multi-queue waiter all resolve the
+backend. The memo is a plain dict, not `functools.cache` or a locked registry:
+racing first lookups may both load, `setdefault` makes them share the first
+stored plugin, and the absence of a lock means a forked child cannot inherit a
+resolution lock held by a parent thread. Only validated plugins are stored, so
+an unknown, ambiguous, unloadable or invalid registration is rescanned on the
+next lookup. Retaining a success matches what the process can actually do:
+the plugin module stays in `sys.modules` and live handles keep their plugin
+object, so rescanning after an in-place install could only fail new handles or
+import a second copy of a moved plugin module beside the first. Tests that
+replace `metadata.entry_points` also replace the memo through monkeypatch; the
+module comment marks that coupling. The built-in SQLite plugin does not use
+the memo because it does not scan entry points.
+
 Post-parse CLI failure mapping is cause-owned rather than phase-owned.
 `_classify_cli_error()` checks `DatabaseError` first because `DataError` also
 inherits `ValueError`, then recognizes the private caller-validation type plus

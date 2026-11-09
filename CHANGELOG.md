@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Backend lookup by entry-point name now scans installed package metadata once
+  per process. Later lookups of a resolved backend, including each Queue
+  construction, `Queue.backend_name`, and each queue in an activity waiter,
+  reuse the validated plugin instead of rescanning: a PostgreSQL lookup drops
+  from about 0.75 ms to under 0.1 µs in a 32-distribution environment, and an
+  8-queue PostgreSQL activity waiter from about 6.2 ms to 34 µs. A third-party
+  entry point that is a factory or class is called once per process. Failed
+  lookups are not retained, so a backend installed after a failed lookup is
+  found by the next one. Replacing an already-resolved backend package takes
+  effect in new processes.
+
 ## [8.7.2] - 2026-10-14
 
 SimpleBroker 8.7.2, `simplebroker-pg` 4.7.2, and `simplebroker-redis` 4.7.2
