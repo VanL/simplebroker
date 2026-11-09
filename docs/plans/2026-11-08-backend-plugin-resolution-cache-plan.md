@@ -471,3 +471,28 @@ remains open for the owner. Round 3 (coordinator) is scoped to F4.
   exclusion), `bin/check-plan-context`, `bin/check-dom15-fixtures`,
   `bin/check-doc-paths` and `git diff --check` clean. The PostgreSQL runner
   removed its container.
+
+### Cross-family review, round 3 (stopped at an owner decision)
+
+Tier 1, Codex (codex exec -s read-only, reasoning effort high), 2026-11-08,
+round-3 verification scoped to F4 over `188e7d6b..9ffc48be`. Verdict: FAIL,
+F4 partially fixed. The keep-alive list prevents finalization inside the fork
+callback (the new regression test is falsifiable and bounded), but CPython
+interpreter teardown still releases the list in a child that exits normally, so
+an inherited plugin whose `__del__` takes a lock held by a parent thread at fork
+time can block child shutdown (bounded probe on 9ffc48be: child entered the
+finalizer at exit and had to be killed). The test helper's `os._exit()` bypasses
+teardown and hides this.
+
+The coordinator stopped the review loop here and records this as an open owner
+decision rather than a further fix round:
+
+- **F4-O1:** pin inherited plugin objects permanently in a forked child (for
+  example an explicit extra reference via `ctypes.pythonapi.Py_IncRef`, a
+  deliberate bounded leak), plus a normal-exit regression test.
+- **F4-O2:** state in [SB-API-11] and the backends guide that plugin finalizers
+  must be fork-safe (must not take locks a forked child could inherit held);
+  retain the current keep-alive list. Note that baseline code already hands
+  live plugin objects to children through any inherited open handles.
+- **F4-O3:** do not retain class/factory-created plugin objects across fork at
+  all (child gets nothing inherited) — requires revisiting accepted D2 semantics.
