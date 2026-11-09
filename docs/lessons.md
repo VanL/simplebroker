@@ -97,6 +97,15 @@ pass; bootstrap source `2f93ee5`)
 
 ## Ledger
 
+- 2026-11-08: Through PostgreSQL 18, every NOTIFY signals every listening
+  session in the same database, whatever its channel, and each signaled
+  session runs one read transaction. Narrower channels save only forwarding
+  and client wakeups there; separate databases, not schemas, isolate the
+  server cost, and PostgreSQL 19 adds channel-targeted signaling. Measure
+  `pg_stat_database.xact_commit` per NOTIFY against listeners on unrelated
+  channels before claiming server-side savings from channel layout.
+  (PostgreSQL notify fan-out plan, `2026-11-08-pg-notify-fanout-plan.md`.)
+
 - 2026-10-06: Coverage's merge API normalizes incoming paths to the host's
   native separators. Treat separators as local representation, not as a
   cross-platform artifact promise. Keep root alias mapping and measurement

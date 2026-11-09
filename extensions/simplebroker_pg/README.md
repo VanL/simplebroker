@@ -236,6 +236,34 @@ terminal before cleanup; every later call is a no-op, including when the first
 call raised. The waiter owns registrations, not the runner or shared listener,
 and does not expose `shutdown()`.
 
+### Notification channels
+
+Each write, move target, rename (old and new name) and broadcast target sends
+one NOTIFY on that queue's own channel: `simplebroker_q_` followed by the
+first 24 hex digits of `md5(schema || chr(31) || queue)`, with the queue name
+as payload. The shared listener LISTENs the channel of every queue it
+currently waits on. It also LISTENs the schema channel (`simplebroker_`
+followed by the first 24 hex digits of `md5(schema)`), which carries the `*`
+wildcard that wakes every waiter and the notifications of `simplebroker-pg`
+4.7.x and older. Creating a waiter for a queue the listener does not yet
+follow costs one LISTEN round trip; the constructor returns only after that
+LISTEN is active, and raises `OperationalError` if the listener cannot
+subscribe within its startup timeout.
+
+A listener connection therefore receives no traffic for queues it does not
+wait on. Through PostgreSQL 18 the server still signals every listening
+session in the same database on each NOTIFY, and each signaled session runs a
+short transaction to skip the message; separate databases, not separate
+schemas, isolate that cost. PostgreSQL 19 signals only sessions listening on
+the notified channel (upstream commit `282b1cde9`), which per-queue channels
+let it use.
+
+Upgrading from 4.7.x or older: old waiters LISTEN only the schema channel, so
+they do not hear writes from newer clients and fall back to their idle
+re-poll (about 1–2 seconds with default settings) until they are upgraded.
+New waiters still hear old writers. Upgrade waiting processes before, or
+together with, the processes that write to their queues.
+
 ## CLI Usage
 
 Create `.broker.toml` in the project root, or use the configured

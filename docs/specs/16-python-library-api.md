@@ -1388,6 +1388,9 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 
 ## Related Plans
 
+- [PostgreSQL per-queue notification channels](../plans/2026-11-08-pg-notify-fanout-plan.md):
+  narrows PostgreSQL activity delivery under the existing [SB-API-6] waiter
+  contract; no normative API change.
 - [Core finalizer cleanup ownership](../plans/2026-10-14-core-finalizer-ownership-plan.md):
   repair borrowed SQL cleanup under the existing [SB-API-3], [SB-API-7] and
   [SB-API-11] ownership

@@ -966,6 +966,13 @@ def test_listener_handles_unknown_registrations_and_surfaces_errors() -> None:
     listener._wildcard_version = 7
     listener._stop_event = threading.Event()
     listener._error = None
+    # The jobs channel is already subscribed, so registration needs no
+    # listener thread; subscription handshakes are covered by SM-PG-LISTENER.
+    listener._schema = "lifecycle"
+    listener._queue_channels = {}
+    listener._listening = {
+        pg_runner_module.queue_activity_channel_name("lifecycle", "jobs")
+    }
 
     listener.unregister_queue("missing")
     listener.unregister_queue_set(999)

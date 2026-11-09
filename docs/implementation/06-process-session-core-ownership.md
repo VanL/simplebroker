@@ -330,6 +330,24 @@ entry only when the last reference is surrendered, then closes the detached
 listener outside the registry lock. This closes the lookup/register gap: a new
 waiter cannot receive a listener concurrently selected for final close.
 
+PostgreSQL waiters subscribe per queue. Writers NOTIFY the canonical queue's
+own channel (name derived in SQL from `current_schema()` and the queue), and
+the shared listener thread reconciles one LISTEN per registered queue on its
+connection, plus the schema channel for the `*` wildcard and 4.7.x writers.
+Registration waits until its queue channel's LISTEN has committed, because a
+write committed before that LISTEN never reaches the session while the
+caller's drain may already have passed it. Channels leave the committed set
+before their UNLISTEN runs, so a concurrent registrant cannot rely on a
+subscription that is closing. Routing stays payload-based, so collisions and
+schema-channel traffic remain hints only. The listener thread is the only user
+of its connection and is woken by a private socket pair; registrants never
+execute on it, because psycopg's `notifies()` holds the connection lock for
+its whole wait. Narrowing channels cannot reduce PostgreSQL 18 server work:
+through 18, every NOTIFY signals every listening session in the database and
+each runs a read transaction. PostgreSQL 19 signals only sessions listening on
+the notified channel. A schema-wide channel can never benefit, because every
+listener listens on it. Plan: `2026-11-08-pg-notify-fanout-plan.md`.
+
 ### Fork recovery before process-owned locks
 
 Every process-owned state holder checks its PID before acquiring an inherited
@@ -628,6 +646,9 @@ The core suite also includes an AST gate for the one-way import rule and
 subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
+
+- active: 2026-11-08-pg-notify-fanout-plan — PostgreSQL per-queue
+  notification channels and listener subscription reconciliation.
 
 - retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`; SQL
   alias/meta fork rejection before operation and poison mutexes; see the

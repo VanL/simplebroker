@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-11-08-pg-notify-fanout-plan.md | active — class 4; PostgreSQL per-queue activity notification channels with listener-side LISTEN reconciliation; branch `perf/sb-notify-fanout`; cross-family review pending |
 | 2026-10-14-agent-theory-delta-wave-plan.md | completed — class 5+P propagation of agent-theory 8f41a9d delta wave across DOM specs, AT-REF primer, shared agent-context, skills, and doc/coalescing gates |
 | 2026-10-14-create-parent-adoption-plan.md | completed — vendorable optional parent creation shipped in coordinated 8.7.2/4.7.2 releases with exact-SHA CI and artifact verification |
 | 2026-10-14-core-finalizer-ownership-plan.md | completed — borrowed SQL GC ownership repaired; native backend proofs and single-file acquire refactor verified |
