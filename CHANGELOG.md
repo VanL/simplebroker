@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.8.0] - 2026-11-09
 
+SimpleBroker 8.8.0, `simplebroker-pg` 4.8.0, and `simplebroker-redis` 4.8.0
+are the coordinated minor release set. Both extensions require SimpleBroker
+8.8.0 or newer, and the core `pg` and `redis` extras require the matching
+4.8.0 extension or newer.
+
 ### Changed
 
 - PostgreSQL ordinary writes no longer hold the `last_ts` high-water row lock
