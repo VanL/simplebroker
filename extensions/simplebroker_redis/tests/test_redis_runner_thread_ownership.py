@@ -315,7 +315,7 @@ def test_checkout_paused_before_slot_acquisition_is_refused_after_close(
         namespace=redis_namespace,
         pool_options=RedisPoolOptions(max_connections=1, timeout=5.0),
     )
-    pool = runner.client.connection_pool
+    pool = cast(redis.BlockingConnectionPool, runner.client.connection_pool)
     entered = threading.Event()
     resume = threading.Event()
     original = pool.pool.get
