@@ -450,3 +450,37 @@ and `shutdown()` stay idempotent. Residual risks named for review: a listener
 statement hung on the network now keeps its connection until the statement
 ends (bounded `close()` return, daemon thread); core construction on a
 caller-shared `SQLiteRunner` can wait behind a foreign transaction (Q1).
+
+## Follow-up review repairs (2026-11-10)
+
+Review of `0ac2cfc` found two Redis slot handoff races and one SQLite
+generation race. This repair stays within D5 and D8 and preserves the existing
+close deadline and SQLite close-then-reuse contract.
+
+- **Redis return:** redis-py can pause between release admission and publication.
+  Final retirement and publication now serialize on the slot queue. Close
+  collects published slots, while a return after retirement disconnects on
+  the returning thread. Neither path disconnects a socket still in use.
+- **Redis checkout:** final retirement wakes callers already blocked in the slot
+  queue. A permanent marker makes racing acquisitions fail with the closed
+  error before redis-py can open a socket.
+- **SQLite settings:** setup PRAGMAs borrow a current-generation connection under
+  the operation lock. Timeout restoration skips an invalidated connection.
+  An ordinary operation can still acquire a new one.
+
+Verification: all three regression tests failed at their intended assertions
+on an archived `0ac2cfc` source tree using the new tests, then passed on the
+fix with live Valkey and SQLite. The return case checks the real server client
+ID after the close deadline. The checkout case crosses the initial close check
+and must fail before its configured pool timeout. The SQLite case completes
+setup-timeout restoration after a real runner close and checks that no new
+connection was tracked. Broader verification: 497 passed, one opt-in diagnostic
+skipped, with the Valkey extension suite and SQLite lifecycle/admission tests.
+Ruff, formatting, mypy, diff whitespace and the doc gates passed.
+
+Tier-1 agy (gemini-4-argon-medium, plan mode with sandbox, read-only packet)
+returned **no blocker**, conversation `3fbeda01-b925-438a-9ea8-e0784c6c84fc`.
+The review covered slot ownership, retirement lock order, waiter wakeup,
+SQLite generation and fork handling, and the three negative controls. No
+findings required disposition. The test-audit guidance helped retain real
+backend observations while pausing only the contested dependency boundary.

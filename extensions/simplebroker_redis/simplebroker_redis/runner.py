@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from collections.abc import Iterable
-from queue import Empty
+from queue import Empty, LifoQueue
 from typing import Any
 
 import redis
@@ -23,10 +23,43 @@ from .validation import require_namespace
 _ABANDONED_FORK_REDIS_RESOURCES: list[Any] = []
 
 
+class _PoolSlots(LifoQueue[Any]):
+    """Make final retirement atomic with slot publication."""
+
+    def __init__(self, maxsize: int) -> None:
+        super().__init__(maxsize)
+        self._retirement_lock = threading.Lock()
+        self._retired = False
+
+    def _get(self) -> Any:
+        # The permanent placeholder wakes all get() callers, including those
+        # already blocked inside redis-py. Never let one consume it.
+        if self._retired:
+            raise redis.ConnectionError("Redis runner is closed")
+        return super()._get()
+
+    def put_nowait(self, item: Any) -> None:
+        with self._retirement_lock:
+            if not self._retired:
+                super().put_nowait(item)
+                return
+        if item is not None:
+            item.disconnect()
+
+    def retire(self) -> list[Any]:
+        with self._retirement_lock, self.not_empty:
+            slots = list(self.queue)
+            self.queue.clear()
+            self._retired = True
+            self._put(None)
+            self.not_empty.notify_all()
+            return slots
+
+
 class _ClosingConnectionPool(redis.BlockingConnectionPool):
     """Blocking pool whose close waits for checked-out connections.
 
-    The pool's queue holds exactly ``max_connections`` slots, each a connection
+    Before retirement the pool has ``max_connections`` slots, each a connection
     or a placeholder; a checkout takes one and its release returns it. Closing
     acquires every slot (bounded), so each connection it disconnects is its own
     and none is touched while a thread still holds it. A slot still out at the
@@ -36,8 +69,9 @@ class _ClosingConnectionPool(redis.BlockingConnectionPool):
     Q4 option b).
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs["queue_class"] = _PoolSlots
+        super().__init__(**kwargs)
         self._closing = False
 
     def get_connection(self, *args: Any, **kwargs: Any) -> Any:
@@ -49,12 +83,6 @@ class _ClosingConnectionPool(redis.BlockingConnectionPool):
             self.release(connection)
             raise redis.ConnectionError("Redis runner is closed")
         return connection
-
-    def release(self, connection: Any) -> None:
-        if self._closing:
-            # The owner disconnects its own connection before returning the slot.
-            connection.disconnect()
-        super().release(connection)
 
     def close_when_idle(self, timeout: float) -> None:
         self._closing = True
@@ -69,6 +97,7 @@ class _ClosingConnectionPool(redis.BlockingConnectionPool):
                     slots.append(self.pool.get_nowait())
             except Empty:
                 break
+        slots.extend(self.pool.retire())
         for slot in slots:
             if slot is not None:
                 slot.disconnect()

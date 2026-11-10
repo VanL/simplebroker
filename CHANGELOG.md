@@ -32,7 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SQLiteRunner` configures a new connection before tracking it for
   `close()`, and every statement on a tracked connection outside a runner call
   (the construction-time admission read, setup busy-timeout and optimization
-  settings) now runs under the runner's admission and operation lock. A
+  settings) now holds the runner's operation lock. Setup settings skip a
+  connection invalidated by close instead of opening a replacement. A
   caller-shared `SQLiteRunner` closed from another thread while a core was
   being constructed could segfault. New `SQLiteRunner.owned_connection()`
   yields the thread's connection under that protocol.
@@ -44,8 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   untranslated `ValueError` and could lose a command's reply. `close()` now
   refuses new checkouts (a translated `OperationalError`) and acquires every
   pool slot as commands return them, waiting up to 5 seconds, disconnecting
-  only connections it holds; a connection still in use after that is
-  disconnected by its owner when the command returns.
+  only connections it holds. When the pool retires, blocked checkouts wake
+  with the closed error, and late returns disconnect their sockets on the
+  returning thread.
 - `simplebroker-pg` and `simplebroker-redis`: an activity waiter inherited
   across `fork()` no longer takes the parent's listener lock, which could
   block the child forever when a parent thread held it at the fork. In the

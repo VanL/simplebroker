@@ -526,10 +526,11 @@ Runner close is resource-scoped, not terminal. At its linearization point,
 `SQLiteRunner.close()` advances the connection generation and snapshots all
 connections then tracked by that runner. Because it closes other threads'
 connections, a connection is configured before it is tracked, and every
-statement on a tracked connection outside a runner call (the admission read,
-setup busy-timeout and optimization settings) runs through
-`owned_connection()`, under admission and the operation lock. It closes that owned snapshot and
-keeps failed closes tracked so cleanup can be retried safely. The runner itself
+statement on a tracked connection outside a runner call holds the operation
+lock. The admission read also uses `owned_connection()` to take admission.
+Connection-level settings borrow only an existing connection from the current
+generation. If close invalidated it, restoring the settings leaves it closed.
+Close settles its owned snapshot and keeps failed closes tracked for retry. The runner itself
 remains reusable: an operation linearized later may acquire a distinct
 connection in the new generation, including when its acquisition overlapped
 the close but registered after the snapshot. Terminal operation admission

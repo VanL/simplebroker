@@ -426,8 +426,8 @@ class SQLiteRunner:
         """Setup performance optimizations."""
         # Apply optimization settings to the current thread's connection
         # This ensures they take effect immediately after setup
-        if hasattr(self._thread_local, "conn"):
-            with self._settings_connection() as conn:
+        with self._settings_connection() as conn:
+            if conn is not None:
                 self._apply_optimization_settings(conn)
                 self._thread_local.optimization_applied = True
 
@@ -449,21 +449,24 @@ class SQLiteRunner:
             yield self.get_connection()
 
     @contextlib.contextmanager
-    def _settings_connection(self) -> Iterator[sqlite3.Connection]:
-        """Yield this thread's connection for connection-level PRAGMAs.
+    def _settings_connection(self) -> Iterator[sqlite3.Connection | None]:
+        """Borrow a current connection for connection-level PRAGMAs.
 
-        Busy-timeout, cache and synchronous settings never take a database
-        lock, so the operation lock alone serializes them with ``close()``
-        without waiting for transaction admission.
+        These settings need the operation lock but no transaction admission.
+        If close invalidated the connection, leave it closed. First use of a
+        new connection applies its settings before publishing it.
         """
+        self._recover_after_fork_if_needed()
         with self._operation_lock:
-            yield self.get_connection()
+            conn = getattr(self._thread_local, "conn", None)
+            generation = getattr(self._thread_local, "conn_generation", None)
+            yield conn if generation == self._connection_generation else None
 
     def _apply_thread_busy_timeout(self, timeout_ms: int) -> None:
         """Apply a busy timeout to this thread's existing connection, if any."""
 
-        if hasattr(self._thread_local, "conn"):
-            with self._settings_connection() as conn:
+        with self._settings_connection() as conn:
+            if conn is not None:
                 self._apply_busy_timeout(conn, timeout_ms)
 
     def _apply_optimization_settings(self, conn: sqlite3.Connection) -> None:

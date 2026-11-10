@@ -257,3 +257,87 @@ def test_close_bound_leaves_a_long_command_to_its_owner(
         observer.delete(key)
         observer.close()
         runner.shutdown()
+
+
+def test_return_paused_before_slot_publication_disconnects_after_close_deadline(
+    redis_url: str, redis_namespace: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A return that started before close still settles its socket after retirement."""
+    monkeypatch.setattr(
+        redis_runner_module, "RUNNER_CLOSE_IN_FLIGHT_WAIT_SECONDS", 0.05
+    )
+    runner = RedisRunner(
+        redis_url,
+        namespace=redis_namespace,
+        pool_options=RedisPoolOptions(max_connections=1),
+    )
+    pool = runner.client.connection_pool
+    conn = pool.get_connection()
+    conn.send_command("CLIENT", "ID")
+    client_id = int(conn.read_response())
+    entered = threading.Event()
+    resume = threading.Event()
+    original = conn.should_reconnect
+
+    def paused_return() -> bool:
+        entered.set()
+        assert resume.wait(5)
+        return bool(original())
+
+    monkeypatch.setattr(conn, "should_reconnect", paused_return)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            returned = worker.submit(pool.release, conn)
+            try:
+                assert entered.wait(5)
+                runner.close()
+            finally:
+                resume.set()
+            returned.result(timeout=5)
+        with redis.Redis.from_url(redis_url) as observer:
+            _wait_until(
+                lambda: all(
+                    int(row["id"]) != client_id for row in observer.client_list()
+                ),
+                "late return left a live connection in the retired pool",
+            )
+    finally:
+        conn.disconnect()
+        runner.close()
+
+
+def test_checkout_paused_before_slot_acquisition_is_refused_after_close(
+    redis_url: str, redis_namespace: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retirement refuses a checkout that already passed its first close check."""
+    runner = RedisRunner(
+        redis_url,
+        namespace=redis_namespace,
+        pool_options=RedisPoolOptions(max_connections=1, timeout=5.0),
+    )
+    pool = runner.client.connection_pool
+    entered = threading.Event()
+    resume = threading.Event()
+    original = pool.pool.get
+
+    def paused_checkout(*args: Any, **kwargs: Any) -> Any:
+        if threading.current_thread().name.startswith("late-checkout"):
+            entered.set()
+            assert resume.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pool.pool, "get", paused_checkout)
+    try:
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="late-checkout"
+        ) as worker:
+            acquired = worker.submit(pool.get_connection)
+            try:
+                assert entered.wait(5)
+                runner.close()
+            finally:
+                resume.set()
+            with pytest.raises(redis.ConnectionError, match="Redis runner is closed"):
+                acquired.result(timeout=2)
+    finally:
+        runner.close()

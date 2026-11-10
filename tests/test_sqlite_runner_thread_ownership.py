@@ -17,6 +17,8 @@ import sqlite3
 import threading
 import traceback
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
@@ -131,5 +133,39 @@ def test_setup_busy_timeout_does_not_wait_behind_a_foreign_transaction(
     try:
         with runner.owned_connection("test read-back") as conn:
             assert conn.execute("PRAGMA busy_timeout").fetchone() == (1000,)
+    finally:
+        runner.close()
+
+
+def test_busy_timeout_restore_does_not_reopen_connection_closed_during_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = SQLiteRunner(str(tmp_path / "ownership.db"))
+    entered = threading.Event()
+    resume = threading.Event()
+    original = runner._settings_connection
+
+    @contextmanager
+    def paused_restore() -> Iterator[sqlite3.Connection | None]:
+        entered.set()
+        assert resume.wait(5)
+        with original() as conn:
+            yield conn
+
+    def restore_timeout() -> None:
+        runner.get_connection()
+        with runner._setup_operation_context():
+            monkeypatch.setattr(runner, "_settings_connection", paused_restore)
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            restored = worker.submit(restore_timeout)
+            try:
+                assert entered.wait(5)
+                runner.close()
+            finally:
+                resume.set()
+            restored.result(timeout=5)
+        assert not runner._all_connections
     finally:
         runner.close()
