@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.8.1] - 2026-11-10
+
+SimpleBroker 8.8.1, `simplebroker-pg` 4.8.1, and `simplebroker-redis` 4.8.1
+are the coordinated patch release set. Both extensions require SimpleBroker
+8.8.1 or newer, and the core `pg` and `redis` extras require the matching
+4.8.1 extension or newer.
+
 ### Fixed
 
 - `simplebroker-pg`: closing the last activity waiter no longer closes the
