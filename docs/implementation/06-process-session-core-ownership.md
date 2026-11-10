@@ -430,6 +430,23 @@ initialization and maintenance, and the backend activity registries. Checking
 after lock acquisition is not recovery: the child may already be waiting on a
 lock held by a vanished parent thread.
 
+Activity waiters apply the same rule to the listener they hold. A registry
+reset does not change the listener an inherited waiter already references, so
+each PostgreSQL and Redis waiter records its creating process ID. In another
+process, `close()` marks the waiter closed and returns without unregistering,
+releasing the registry reference, or taking the inherited listener lock;
+`wait()` raises `OperationalError` naming the fork before touching the
+listener. The parent's listener and registry entries stay the parent's, and a
+child's new waiter gets a new listener from the reset registry. Ownership
+follows each registration, not its newest wrapper: a Redis composite's
+shared-listener fast path requires every constituent from the composite's own
+process, so a composite built in a child from inherited waiters reaches each
+constituent's own refusal. This covers waiter operations only. An inherited
+`BaseWatcher` still takes its `_stop_lock` in `stop()`, which its
+interpreter-exit finalizer also calls, before any waiter cleanup, and an
+inherited SQL-backed Queue session rejects use; neither is recovered across
+`fork()`. Plan: `2026-11-10-fork-inherited-activity-waiter-plan.md`.
+
 The process-session registry checks PID before acquire, release, or shutdown
 takes its global lock. Child recovery retains the inherited entry graph without
 finalizing backend resources, then creates an empty registry and a fresh lock.

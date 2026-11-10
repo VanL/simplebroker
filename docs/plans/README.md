@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-11-10-fork-inherited-activity-waiter-plan.md | completed — class 4; PostgreSQL and Redis activity waiters inherited across fork() abandon the parent's listener (close) and report the inheritance (wait) instead of blocking on its lock; waiter operations only, watcher lifecycle across fork() not recovered; follow-up to the thread-ownership plan (owner decision Q2); implemented and verified; plan review F1-F3 resolved; completed-work review PASS |
 | 2026-11-10-backend-thread-ownership-plan.md | completed — class 4; only the owning context touches its connection: PostgreSQL listener close (observed heap corruption), SQLite runner unlocked setup (reproduced segfault), PostgreSQL runner release/shutdown, Redis client publication and close ordered after in-flight commands (owner decision Q4 option b); implemented and verified on `fix/backend-thread-ownership`; Codex plan rounds 1-2 and completed-work review dispositioned; Q2 fork follow-up separate |
 | 2026-11-09-performance-branches-integration-plan.md | completed — class 5; SB-1..SB-8 landed; SB-4 [30,60) verified; agy no blocker; full 36-cell paired rerun complete |
 | 2026-11-08-pg-write-lock-hold-plan.md | completed — class 4; PostgreSQL ordinary generated writes allocate, insert, notify and commit in one pipelined exchange behind the high-water row lock; Codex findings F1/F2 (round 1) and F3 (round 2) fixed, round 3 PASS; owner accepted the merged-statement exception row 2026-11-09 |

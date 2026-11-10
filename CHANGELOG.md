@@ -46,6 +46,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pool slot as commands return them, waiting up to 5 seconds, disconnecting
   only connections it holds; a connection still in use after that is
   disconnected by its owner when the command returns.
+- `simplebroker-pg` and `simplebroker-redis`: an activity waiter inherited
+  across `fork()` no longer takes the parent's listener lock, which could
+  block the child forever when a parent thread held it at the fork. In the
+  child, `close()` now abandons the inherited waiter without unregistering it
+  or releasing the parent's listener, and `wait()` raises `OperationalError`
+  naming the fork; create a new waiter in the child, which gets its own
+  listener. A Redis multi-queue waiter built in the child from inherited
+  waiters refuses them the same way. An inherited watcher's own `stop()` is
+  unchanged and is still not safe across `fork()`.
 
 ## [8.8.0] - 2026-11-09
 

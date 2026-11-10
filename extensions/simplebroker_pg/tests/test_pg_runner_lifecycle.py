@@ -1032,6 +1032,7 @@ def test_activity_waiters_clamp_versions_and_translate_driver_errors() -> None:
     single._stop_event = threading.Event()
     single._last_queue_version = 4
     single._last_wildcard_version = 5
+    single._pid = os.getpid()
 
     assert single.wait(1.0) is True
     assert single._last_queue_version == 4
@@ -1055,6 +1056,7 @@ def test_activity_waiters_clamp_versions_and_translate_driver_errors() -> None:
     multi._stop_event = threading.Event()
     multi._last_queue_versions = {"jobs": 1, "other": 1}
     multi._last_wildcard_version = 5
+    multi._pid = os.getpid()
 
     assert multi.wait(1.0) is True
     assert multi._last_queue_versions == {"jobs": 2, "other": 1}

@@ -779,6 +779,22 @@ class _SharedActivityRegistry:
 _activity_registry = _SharedActivityRegistry()
 
 
+_INHERITED_WAITER_MESSAGE = (
+    "activity waiter was inherited across fork(); create a new waiter in this process"
+)
+
+
+def _raise_if_inherited(owner_pid: int) -> None:
+    """Refuse to wait on a listener that belongs to the parent process.
+
+    A forked child inherits the waiter and its listener object but not the
+    listener thread, and a lock a parent thread held at the fork stays held.
+    Plan: docs/plans/2026-11-10-fork-inherited-activity-waiter-plan.md (D3).
+    """
+    if os.getpid() != owner_pid:
+        raise OperationalError(_INHERITED_WAITER_MESSAGE)
+
+
 class PostgresActivityWaiter:
     """LISTEN/NOTIFY-backed wake-up waiter for pg watchers.
 
@@ -801,6 +817,7 @@ class PostgresActivityWaiter:
         self._stop_event = stop_event
         self._listener = _activity_registry.acquire(dsn, schema=schema)
         self._closed = False
+        self._pid = os.getpid()
         try:
             self._last_queue_version, self._last_wildcard_version = (
                 self._listener.register_queue(queue_name)
@@ -812,6 +829,7 @@ class PostgresActivityWaiter:
 
     def wait(self, timeout: float) -> bool:
         """Wait for a relevant queue notification until timeout expires."""
+        _raise_if_inherited(self._pid)
         try:
             previous_queue_version = self._last_queue_version
             previous_wildcard_version = self._last_wildcard_version
@@ -843,6 +861,10 @@ class PostgresActivityWaiter:
         if self._closed:
             return
         self._closed = True
+        if os.getpid() != self._pid:
+            # Inherited across fork(): abandon the parent's listener and
+            # registry entry instead of locking them (D2).
+            return
         _run_activity_waiter_cleanup(
             (
                 lambda: self._listener.unregister_queue(self._queue_name),
@@ -879,6 +901,7 @@ class PostgresMultiQueueActivityWaiter:
         self._stop_event = stop_event
         self._listener = _activity_registry.acquire(dsn, schema=schema)
         self._closed = False
+        self._pid = os.getpid()
         try:
             (
                 self._fan_in_id,
@@ -892,6 +915,7 @@ class PostgresMultiQueueActivityWaiter:
 
     def wait(self, timeout: float) -> bool:
         """Wait for any watched queue notification until timeout expires."""
+        _raise_if_inherited(self._pid)
         try:
             previous_queue_versions = dict(self._last_queue_versions)
             previous_wildcard_version = self._last_wildcard_version
@@ -930,6 +954,10 @@ class PostgresMultiQueueActivityWaiter:
         if self._closed:
             return
         self._closed = True
+        if os.getpid() != self._pid:
+            # Inherited across fork(): abandon the parent's listener and
+            # registry entry instead of locking them (D2).
+            return
         _run_activity_waiter_cleanup(
             (
                 lambda: self._listener.unregister_queue_set(self._fan_in_id),
