@@ -298,6 +298,22 @@ class _SharedRedisActivityListener:
             thread.join(timeout=1.0)
 
 
+_INHERITED_WAITER_MESSAGE = (
+    "activity waiter was inherited across fork(); create a new waiter in this process"
+)
+
+
+def _raise_if_inherited(owner_pid: int) -> None:
+    """Refuse to wait on a listener that belongs to the parent process.
+
+    A forked child inherits the waiter and its listener object but not the
+    listener thread, and a lock a parent thread held at the fork stays held.
+    Plan: docs/plans/2026-11-10-fork-inherited-activity-waiter-plan.md (D3).
+    """
+    if os.getpid() != owner_pid:
+        raise OperationalError(_INHERITED_WAITER_MESSAGE)
+
+
 class RedisActivityWaiter:
     def __init__(
         self,
@@ -309,10 +325,12 @@ class RedisActivityWaiter:
         self._registration = registration
         self._stop_event = stop_event
         self._closed = False
+        self._pid = os.getpid()
 
     def wait(self, timeout: float) -> bool:
         if self._closed:
             return False
+        _raise_if_inherited(self._pid)
         return self._listener.wait(
             self._registration, timeout, stop_event=self._stop_event
         )
@@ -321,6 +339,10 @@ class RedisActivityWaiter:
         if self._closed:
             return
         self._closed = True
+        if os.getpid() != self._pid:
+            # Inherited across fork(): abandon the parent's listener and
+            # registry entry instead of locking them (D2).
+            return
         _run_activity_waiter_cleanup(
             (
                 lambda: self._listener.unregister(self._registration.queue_name),
@@ -334,15 +356,22 @@ class RedisMultiQueueActivityWaiter:
         self._waiters = list(waiters)
         self._stop_event = stop_event
         self._closed = False
+        self._pid = os.getpid()
 
     def wait(self, timeout: float) -> bool:
+        if not self._closed:
+            _raise_if_inherited(self._pid)
         open_waiters = [w for w in self._waiters if not getattr(w, "_closed", False)]
         if not self._closed and open_waiters:
             first_listener = getattr(open_waiters[0], "_listener", None)
+            # Process ownership follows each registration, not the newest
+            # wrapper: a constituent created in another process takes the
+            # per-waiter path below, whose own wait() refuses it.
             if isinstance(first_listener, _SharedRedisActivityListener) and all(
                 isinstance(w, RedisActivityWaiter)
                 and w._listener is first_listener
                 and w._stop_event is self._stop_event
+                and w._pid == self._pid
                 for w in open_waiters
             ):
                 return first_listener.wait_many(

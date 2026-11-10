@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `simplebroker-pg`: closing the last activity waiter no longer closes the
+  shared LISTEN listener's connection from the releasing thread. Since 4.8.0
+  the listener thread executes the UNLISTEN batch that the close itself
+  requests, and psycopg's `close()` frees the libpq connection without taking
+  the connection lock, so the release freed the connection under that live
+  statement. libpq then wrote into freed memory, which surfaced later as
+  segfaults during garbage collection in long-running PostgreSQL processes.
+  The listener thread now closes its own connection after any in-flight batch
+  returns; `close()` still returns after its bounded join. A wake sent after
+  the listener closed its socket pair is now a no-op instead of a write to a
+  possibly reused descriptor.
+- `simplebroker-pg`: a runner operation owns its pooled checkout from
+  acquisition through its own cleanup. A `release_thread_connection()` or
+  `shutdown()` that runs on the same thread inside an operation (a finalizer,
+  a callback, a core closed re-entrantly) is performed after the operation,
+  so it can no longer return a checkout before `execute()`, under a statement,
+  or between the statements of a transaction (which split the transaction).
+  `shutdown()` leaves a live thread's leased checkout to that thread, whose
+  release returns it into the closed pool, which closes it there; leases of
+  exited threads are still returned at shutdown.
+- `SQLiteRunner` configures a new connection before tracking it for
+  `close()`, and every statement on a tracked connection outside a runner call
+  (the construction-time admission read, setup busy-timeout and optimization
+  settings) now holds the runner's operation lock. Setup settings skip a
+  connection invalidated by close instead of opening a replacement. A
+  caller-shared `SQLiteRunner` closed from another thread while a core was
+  being constructed could segfault. New `SQLiteRunner.owned_connection()`
+  yields the thread's connection under that protocol.
+- `simplebroker-redis`: `RedisRunner.client` no longer returns `None` when
+  `close()` runs concurrently; `close()` detaches the client under the client
+  lock.
+- `simplebroker-redis`: `RedisRunner.close()` no longer tears down
+  connections that other threads are using mid-command, which surfaced as an
+  untranslated `ValueError` and could lose a command's reply. `close()` now
+  refuses new checkouts (a translated `OperationalError`) and acquires every
+  pool slot as commands return them, waiting up to 5 seconds, disconnecting
+  only connections it holds. When the pool retires, blocked checkouts wake
+  with the closed error, and late returns disconnect their sockets on the
+  returning thread.
+- `simplebroker-pg` and `simplebroker-redis`: an activity waiter inherited
+  across `fork()` no longer takes the parent's listener lock, which could
+  block the child forever when a parent thread held it at the fork. In the
+  child, `close()` now abandons the inherited waiter without unregistering it
+  or releasing the parent's listener, and `wait()` raises `OperationalError`
+  naming the fork; create a new waiter in the child, which gets its own
+  listener. A Redis multi-queue waiter built in the child from inherited
+  waiters refuses them the same way. An inherited watcher's own `stop()` is
+  unchanged and is still not safe across `fork()`.
+
 ### Maintenance
 
 - Update the CodeQL init, analyze, and SARIF upload actions to 4.39.3.

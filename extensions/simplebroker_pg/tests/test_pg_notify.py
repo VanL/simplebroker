@@ -1031,6 +1031,129 @@ class _DelayedQueueListenConnection:
         )
 
 
+class _HeldUnlistenCursor:
+    """Real cursor whose UNLISTEN batch waits, before libpq, for the test."""
+
+    def __init__(
+        self, owner: _OwnershipObservedConnection, cursor: psycopg.Cursor[Any]
+    ) -> None:
+        self._owner = owner
+        self._cursor = cursor
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self._cursor.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._cursor, name)
+
+    def execute(self, query: Any, *args: Any, **kwargs: Any) -> Any:
+        self._owner.executing = True
+        try:
+            if str(query).startswith("UNLISTEN"):
+                self._owner.unlisten_started.set()
+                if not self._owner.unlisten_release.wait(10.0):
+                    # Fail closed: never enter libpq while the closer may run.
+                    raise AssertionError("UNLISTEN gate was never released")
+            return self._cursor.execute(query, *args, **kwargs)
+        finally:
+            self._owner.executing = False
+
+
+class _OwnershipObservedConnection:
+    """Real listener connection that records each close and its thread.
+
+    libpq ``PQfinish`` from a thread other than the one running a statement on
+    the same connection frees it under that live call; the listener thread
+    alone may close it.
+    """
+
+    def __init__(
+        self,
+        conn: psycopg.Connection[Any],
+        unlisten_started: threading.Event,
+        unlisten_release: threading.Event,
+    ) -> None:
+        self._conn = conn
+        self.unlisten_started = unlisten_started
+        self.unlisten_release = unlisten_release
+        self.executing = False
+        self.close_calls: list[tuple[threading.Thread, bool]] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+    def cursor(self, *args: Any, **kwargs: Any) -> _HeldUnlistenCursor:
+        return _HeldUnlistenCursor(self, self._conn.cursor(*args, **kwargs))
+
+    def close(self) -> None:
+        self.close_calls.append((threading.current_thread(), self.executing))
+        self._conn.close()
+
+
+def test_last_waiter_close_leaves_listener_connection_to_its_thread(
+    pg_dsn: str,
+    pg_schema: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Releasing the last waiter must not close the listener's connection.
+
+    Waiter close requests the UNLISTEN batch and then releases the last
+    reference. The listener thread is held at that UNLISTEN; the releasing
+    thread must leave the connection to the listener thread, which closes it
+    after its statement returns.
+    """
+    started = threading.Event()
+    release = threading.Event()
+    observed: list[_OwnershipObservedConnection] = []
+    real_connect = psycopg.connect
+
+    def observed_connect(*args: Any, **kwargs: Any) -> Any:
+        conn = _OwnershipObservedConnection(
+            real_connect(*args, **kwargs), started, release
+        )
+        observed.append(conn)
+        return conn
+
+    monkeypatch.setattr(pg_runner_module.psycopg, "connect", observed_connect)
+    waiter = PostgresActivityWaiter(
+        pg_dsn,
+        schema=pg_schema,
+        queue_name="jobs",
+        stop_event=threading.Event(),
+    )
+    listener = waiter._listener
+    real_listener_close = listener.close
+
+    def close_once_unlisten_runs() -> None:
+        # Pin the production interleaving: the last release arrives while the
+        # listener thread runs the UNLISTEN this close just requested.
+        assert started.wait(5.0)
+        real_listener_close()
+
+    monkeypatch.setattr(listener, "close", close_once_unlisten_runs)
+    closer = threading.Thread(target=waiter.close, name="releasing-thread")
+    try:
+        closer.start()
+        assert started.wait(5.0)
+        # The release returns within the listener's bounded join while the
+        # UNLISTEN is still held before libpq; nothing closed the connection.
+        closer.join(timeout=5.0)
+        assert not closer.is_alive()
+        assert listener._stop_event.is_set()
+        [conn] = observed
+        assert conn.close_calls == []
+    finally:
+        release.set()
+        closer.join(timeout=10.0)
+        listener._thread.join(timeout=10.0)
+    assert not listener._thread.is_alive()
+    assert conn.close_calls
+    assert conn.close_calls == [(listener._thread, False)] * len(conn.close_calls)
+
+
 def test_waiter_construction_waits_for_its_queue_listen(
     pg_dsn: str,
     pg_schema: str,

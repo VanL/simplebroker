@@ -62,6 +62,9 @@ class _ScriptedPGConnection:
         self.execute_gate: threading.Event | None = None
         self.gated_prefix = ""
         self.gated_statement: str | None = None
+        self.gate_entered = threading.Event()
+        self.executing = False
+        self.close_calls: list[tuple[threading.Thread, bool]] = []
         self._readable, self._signal = socket.socketpair()
         self._readable.setblocking(False)
 
@@ -72,11 +75,18 @@ class _ScriptedPGConnection:
         return self._readable.fileno()
 
     def execute_statement(self, statement: str) -> None:
-        gate = self.execute_gate
-        if gate is not None and statement.startswith(self.gated_prefix):
-            self.gated_statement = statement
-            gate.wait(5.0)
-        self.statements.append(statement)
+        self.executing = True
+        try:
+            gate = self.execute_gate
+            if gate is not None and statement.startswith(self.gated_prefix):
+                self.gated_statement = statement
+                self.gate_entered.set()
+                if not gate.wait(5.0):
+                    # Fail closed: never let a held statement proceed unreleased.
+                    raise AssertionError("execute gate was never released")
+            self.statements.append(statement)
+        finally:
+            self.executing = False
 
     def _post(self, event: object) -> None:
         self.events.put(event)
@@ -112,6 +122,9 @@ class _ScriptedPGConnection:
         self._post(error)
 
     def close(self) -> None:
+        # Record every call: libpq PQfinish from a thread other than the one
+        # running a statement frees the connection under that live call.
+        self.close_calls.append((threading.current_thread(), self.executing))
         if self.closed:
             return
         self.closed = True
@@ -616,6 +629,65 @@ def _listener_close_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
         assert not listener._thread.is_alive()
 
 
+def _listener_close_leaves_transport_to_listener_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _started_listener(monkeypatch) as (listener, connection):
+        listener.register_queue("jobs")
+        gate = threading.Event()
+        connection.gated_prefix = "UNLISTEN"
+        connection.execute_gate = gate
+        listener.unregister_queue("jobs")
+        assert connection.gate_entered.wait(1.0)
+        closer = threading.Thread(target=listener.close, name="foreign-closer")
+        closer.start()
+        try:
+            # close() returns within its bounded join while the statement is
+            # still held, and nothing touched the transport meanwhile.
+            closer.join(timeout=3.0)
+            assert not closer.is_alive()
+            assert listener._stop_event.is_set()
+            assert connection.close_calls == []
+        finally:
+            gate.set()
+        listener._thread.join(timeout=2.0)
+        assert not listener._thread.is_alive()
+        assert connection.closed
+        # Only the listener thread, after its statement returned, closed it.
+        assert connection.close_calls == [(listener._thread, False)]
+
+
+class _RecordingWakeWriter:
+    """Wraps the listener's wake writer and counts sends after its close."""
+
+    def __init__(self, sock: socket.socket) -> None:
+        self._sock = sock
+        self.closed = False
+        self.sends_after_close = 0
+
+    def send(self, data: bytes) -> int:
+        if self.closed:
+            # The descriptor number may already belong to another file.
+            self.sends_after_close += 1
+        return self._sock.send(data)
+
+    def close(self) -> None:
+        self.closed = True
+        self._sock.close()
+
+
+def _listener_wake_after_stop_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _started_listener(monkeypatch) as (listener, _connection):
+        listener.register_queue("jobs")
+        writer = _RecordingWakeWriter(listener._wake_writer)
+        listener._wake_writer = writer  # type: ignore[assignment]
+        listener.close()
+        assert not listener._thread.is_alive()
+        assert writer.closed
+        listener.unregister_queue("jobs")
+        assert writer.sends_after_close == 0
+
+
 PG_LISTENER_TRANSITIONS = (
     TransitionCase(
         transition_id="START-READY",
@@ -826,6 +898,26 @@ PG_LISTENER_TRANSITIONS = (
         effects="sets stop, closes the transport, wakes waiters, and joins the worker",
         expected_result="blocked wait returns false and the thread exits",
         payload=_listener_close_stops_wait,
+    ),
+    TransitionCase(
+        transition_id="CLOSE-DURING-SUBSCRIPTION",
+        start_state="ready with an UNLISTEN batch executing on the listener thread",
+        event="listener closes from another thread",
+        guard="the subscription statement has not returned",
+        next_state="stopped",
+        effects="sets stop and wakes; the listener thread finishes its statement and closes its own transport",
+        expected_result="no thread but the listener thread closes the transport, never during a statement",
+        payload=_listener_close_leaves_transport_to_listener_thread,
+    ),
+    TransitionCase(
+        transition_id="WAKE-AFTER-STOP",
+        start_state="stopped with its wake writer closed by the listener thread",
+        event="a holder unregisters and wakes",
+        guard="the wake writer is closed",
+        next_state="stopped",
+        effects="the wake is a no-op",
+        expected_result="nothing is written to the closed wake descriptor",
+        payload=_listener_wake_after_stop_sends_nothing,
     ),
     TransitionCase(
         transition_id="CLOSE-IDEMPOTENT",

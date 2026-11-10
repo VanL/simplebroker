@@ -8,7 +8,7 @@ import selectors
 import socket
 import threading
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
@@ -338,8 +338,12 @@ class _SharedActivityListener:
         self._ready = threading.Event()
         self._conn: psycopg.Connection[Any] | None = None
         self._error: Exception | None = None
-        # The listener thread owns and closes both ends after it starts.
+        # The listener thread owns and closes both ends after it starts. Any
+        # thread may wake it, so sends and the writer's close are serialized:
+        # a send after close could reach a descriptor that reused the number.
         self._wake_reader, self._wake_writer = socket.socketpair()
+        self._wake_lock = threading.Lock()
+        self._wake_closed = False
         self._wake_reader.setblocking(False)
         self._wake_writer.setblocking(False)
         self._thread = threading.Thread(
@@ -351,7 +355,7 @@ class _SharedActivityListener:
             self._thread.start()
         except BaseException:
             self._wake_reader.close()
-            self._wake_writer.close()
+            self._close_wake_writer()
             raise
         if not self._ready.wait(timeout=startup_timeout):
             self.close()
@@ -414,11 +418,13 @@ class _SharedActivityListener:
             self._ready.set()
             if selector is not None:
                 selector.close()
+            # The listener thread alone executes statements on its connection,
+            # so it alone closes it, after any in-flight statement returned.
             if self._conn is not None:
                 with contextlib.suppress(Exception):
                     self._conn.close()
             self._wake_reader.close()
-            self._wake_writer.close()
+            self._close_wake_writer()
 
     def _apply_subscriptions(self, conn: psycopg.Connection[Any]) -> None:
         """Reconcile queue-channel LISTENs with registrations (listener thread)."""
@@ -450,9 +456,17 @@ class _SharedActivityListener:
 
     def _wake(self) -> None:
         # Coalescing and best effort: a full buffer already guarantees a wake,
-        # and a closed socket means the listener thread has exited.
-        with contextlib.suppress(OSError):
-            self._wake_writer.send(b"\0")
+        # and a closed writer means the listener thread has exited.
+        with self._wake_lock:
+            if self._wake_closed:
+                return
+            with contextlib.suppress(OSError):
+                self._wake_writer.send(b"\0")
+
+    def _close_wake_writer(self) -> None:
+        with self._wake_lock:
+            self._wake_closed = True
+            self._wake_writer.close()
 
     def _request_subscriptions_locked(self) -> int:
         self._subscription_requested += 1
@@ -672,11 +686,17 @@ class _SharedActivityListener:
             )
 
     def close(self) -> None:
+        """Stop the listener; its thread closes its own connection.
+
+        Never touches the connection: the listener thread may be inside a
+        LISTEN/UNLISTEN batch on it, and psycopg's ``close()`` frees the libpq
+        connection without taking the connection lock. The thread sees the
+        stop request after that statement returns and closes the connection in
+        ``_run``'s ``finally``; this call returns after the bounded join either
+        way. Plan: docs/plans/2026-11-10-backend-thread-ownership-plan.md (D1).
+        """
         self._stop_event.set()
         self._wake()
-        if self._conn is not None:
-            with contextlib.suppress(Exception):
-                self._conn.close()
         with self._lock:
             for condition in self._conditions.values():
                 condition.notify_all()
@@ -759,6 +779,22 @@ class _SharedActivityRegistry:
 _activity_registry = _SharedActivityRegistry()
 
 
+_INHERITED_WAITER_MESSAGE = (
+    "activity waiter was inherited across fork(); create a new waiter in this process"
+)
+
+
+def _raise_if_inherited(owner_pid: int) -> None:
+    """Refuse to wait on a listener that belongs to the parent process.
+
+    A forked child inherits the waiter and its listener object but not the
+    listener thread, and a lock a parent thread held at the fork stays held.
+    Plan: docs/plans/2026-11-10-fork-inherited-activity-waiter-plan.md (D3).
+    """
+    if os.getpid() != owner_pid:
+        raise OperationalError(_INHERITED_WAITER_MESSAGE)
+
+
 class PostgresActivityWaiter:
     """LISTEN/NOTIFY-backed wake-up waiter for pg watchers.
 
@@ -781,6 +817,7 @@ class PostgresActivityWaiter:
         self._stop_event = stop_event
         self._listener = _activity_registry.acquire(dsn, schema=schema)
         self._closed = False
+        self._pid = os.getpid()
         try:
             self._last_queue_version, self._last_wildcard_version = (
                 self._listener.register_queue(queue_name)
@@ -792,6 +829,7 @@ class PostgresActivityWaiter:
 
     def wait(self, timeout: float) -> bool:
         """Wait for a relevant queue notification until timeout expires."""
+        _raise_if_inherited(self._pid)
         try:
             previous_queue_version = self._last_queue_version
             previous_wildcard_version = self._last_wildcard_version
@@ -823,6 +861,10 @@ class PostgresActivityWaiter:
         if self._closed:
             return
         self._closed = True
+        if os.getpid() != self._pid:
+            # Inherited across fork(): abandon the parent's listener and
+            # registry entry instead of locking them (D2).
+            return
         _run_activity_waiter_cleanup(
             (
                 lambda: self._listener.unregister_queue(self._queue_name),
@@ -859,6 +901,7 @@ class PostgresMultiQueueActivityWaiter:
         self._stop_event = stop_event
         self._listener = _activity_registry.acquire(dsn, schema=schema)
         self._closed = False
+        self._pid = os.getpid()
         try:
             (
                 self._fan_in_id,
@@ -872,6 +915,7 @@ class PostgresMultiQueueActivityWaiter:
 
     def wait(self, timeout: float) -> bool:
         """Wait for any watched queue notification until timeout expires."""
+        _raise_if_inherited(self._pid)
         try:
             previous_queue_versions = dict(self._last_queue_versions)
             previous_wildcard_version = self._last_wildcard_version
@@ -910,6 +954,10 @@ class PostgresMultiQueueActivityWaiter:
         if self._closed:
             return
         self._closed = True
+        if os.getpid() != self._pid:
+            # Inherited across fork(): abandon the parent's listener and
+            # registry entry instead of locking them (D2).
+            return
         _run_activity_waiter_cleanup(
             (
                 lambda: self._listener.unregister_queue_set(self._fan_in_id),
@@ -1198,7 +1246,56 @@ class PostgresRunner:
         self._check_fork()
         return self._run(sql, params, fetch=fetch)
 
+    @contextlib.contextmanager
+    def _operation_scope(self) -> Iterator[None]:
+        """Own this thread's checkout from acquisition through its cleanup.
+
+        A ``release_thread_connection()`` or ``shutdown()`` that runs on this
+        thread while an operation is inside its scope (a finalizer, a callback,
+        a core closed re-entrantly) is deferred to the outermost scope's exit,
+        after the operation's own cleanup: before that the operation may be
+        between checkout and ``execute()``, inside a statement, or between the
+        statements of its transaction. Plan:
+        docs/plans/2026-11-10-backend-thread-ownership-plan.md (D3, D4).
+        """
+        depth = int(getattr(self._thread_local, "operation_depth", 0))
+        self._thread_local.operation_depth = depth + 1
+        try:
+            yield
+        finally:
+            if depth:
+                self._thread_local.operation_depth = depth
+            else:
+                del self._thread_local.operation_depth
+                self._run_deferred_thread_cleanup()
+
+    def _in_operation_scope(self) -> bool:
+        return bool(getattr(self._thread_local, "operation_depth", 0))
+
+    def _run_deferred_thread_cleanup(self) -> None:
+        releases = int(getattr(self._thread_local, "pending_releases", 0))
+        shutdown = bool(getattr(self._thread_local, "pending_shutdown", False))
+        for name in ("pending_releases", "pending_shutdown"):
+            if hasattr(self._thread_local, name):
+                delattr(self._thread_local, name)
+        for _ in range(releases):
+            self.release_thread_connection()
+        if shutdown:
+            self._return_calling_thread_checkouts()
+
     def _run(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+        *,
+        fetch: bool = False,
+    ) -> Iterable[tuple[Any, ...]]:
+        # Fork recovery replaces thread-local state, so it precedes the scope.
+        self._check_fork()
+        with self._operation_scope():
+            return self._run_in_scope(sql, params, fetch=fetch)
+
+    def _run_in_scope(
         self,
         sql: str,
         params: tuple[Any, ...] = (),
@@ -1253,6 +1350,16 @@ class PostgresRunner:
 
         Must not be called while this runner has an open transaction.
         """
+        # Fork recovery replaces thread-local state, so it precedes the scope.
+        self._check_fork()
+        with self._operation_scope():
+            return self._run_transaction_in_scope(statements)
+
+    def _run_transaction_in_scope(
+        self,
+        statements: Sequence[tuple[str, tuple[Any, ...]]],
+    ) -> list[list[tuple[Any, ...]]]:
+        """Body of :meth:`run_transaction`, inside its operation scope."""
         self._check_fork()
         if self._in_transaction():
             raise RuntimeError("run_transaction cannot join an open runner transaction")
@@ -1361,6 +1468,10 @@ class PostgresRunner:
 
     def begin_immediate(self) -> None:
         self._check_fork()
+        with self._operation_scope():
+            self._begin_immediate_in_scope()
+
+    def _begin_immediate_in_scope(self) -> None:
         conn, leased = self._checkout_begin_connection()
 
         try:
@@ -1384,6 +1495,10 @@ class PostgresRunner:
 
     def commit(self) -> None:
         self._check_fork()
+        with self._operation_scope():
+            self._commit_in_scope()
+
+    def _commit_in_scope(self) -> None:
         failed = False
         leased = self._transaction_uses_leased_connection()
         conn = self._get_thread_conn()
@@ -1410,6 +1525,10 @@ class PostgresRunner:
 
     def rollback(self) -> None:
         self._check_fork()
+        with self._operation_scope():
+            self._rollback_in_scope()
+
+    def _rollback_in_scope(self) -> None:
         failed = False
         leased = self._transaction_uses_leased_connection()
         conn = self._get_thread_conn()
@@ -1436,9 +1555,18 @@ class PostgresRunner:
                 self._finish_transaction(leased=leased)
 
     def release_thread_connection(self) -> None:
-        """Release this thread's lease, returning its checkout on last close."""
+        """Release this thread's lease, returning its checkout on last close.
+
+        Inside an operation scope on this thread the release is counted and
+        performed after that operation's own cleanup (D3).
+        """
 
         self._check_fork()
+        if self._in_operation_scope():
+            self._thread_local.pending_releases = (
+                int(getattr(self._thread_local, "pending_releases", 0)) + 1
+            )
+            return
         owner = threading.current_thread()
         with self._lease_lock:
             entry = self._lease_entries.get(owner)
@@ -1468,21 +1596,44 @@ class PostgresRunner:
         self.shutdown()
 
     def shutdown(self) -> None:
-        """Permanently close the connection pool and all connections."""
+        """Permanently close the connection pool and all connections.
+
+        A live thread's leased checkout stays with that thread: its own
+        ``release_thread_connection()`` returns it into the closed pool, which
+        closes it there. Leases of threads that have exited are returned here.
+        The calling thread's own checkouts are returned now, or after its
+        current operation when shutdown runs inside one (D4).
+        """
         self._check_fork()
+        current = threading.current_thread()
         with self._lease_lock:
-            leased_connections = [
-                entry.conn
-                for entry in self._lease_entries.values()
-                if entry.conn is not None
+            exited = [
+                owner
+                for owner in self._lease_entries
+                if owner is not current and not owner.is_alive()
             ]
-            self._lease_entries.clear()
-        for leased_conn in leased_connections:
-            with contextlib.suppress(Exception):
-                self._pool.putconn(leased_conn)
-        self._return_thread_conn()
+            orphaned = [self._lease_entries.pop(owner).conn for owner in exited]
+        for leased_conn in orphaned:
+            if leased_conn is not None:
+                with contextlib.suppress(Exception):
+                    self._pool.putconn(leased_conn)
+        if self._in_operation_scope():
+            self._thread_local.pending_shutdown = True
+        else:
+            self._return_calling_thread_checkouts()
         with contextlib.suppress(Exception):
             self._pool.close()
+
+    def _return_calling_thread_checkouts(self) -> None:
+        """Surrender this thread's lease and checkout to the pool."""
+
+        with self._lease_lock:
+            entry = self._lease_entries.pop(threading.current_thread(), None)
+        if entry is not None and entry.conn is not None:
+            with contextlib.suppress(Exception):
+                self._pool.putconn(entry.conn)
+        self._clear_transaction_state()
+        self._return_thread_conn()
 
     def __del__(self) -> None:
         if os.getpid() != getattr(self, "_pid", os.getpid()):

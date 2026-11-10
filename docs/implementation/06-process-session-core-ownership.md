@@ -370,7 +370,14 @@ subscription that is closing. Routing stays payload-based, so collisions and
 schema-channel traffic remain hints only. The listener thread is the only user
 of its connection and is woken by a private socket pair; registrants never
 execute on it, because psycopg's `notifies()` holds the connection lock for
-its whole wait. Narrowing channels cannot reduce PostgreSQL 18 server work:
+its whole wait. Final close follows the same rule: `close()` signals, wakes and
+joins, and the listener thread closes its own connection after any in-flight
+LISTEN/UNLISTEN batch returns. psycopg's `close()` frees the libpq connection
+without taking the connection lock, and every last-waiter close requests an
+UNLISTEN batch first, so closing from the releasing thread freed the connection
+under that statement (heap corruption). Wakes and the listener's close of its
+socket pair are serialized, so a wake after close writes nothing. Plan:
+`2026-11-10-backend-thread-ownership-plan.md`. Narrowing channels cannot reduce PostgreSQL 18 server work:
 through 18, every NOTIFY signals every listening session in the database and
 each runs a read transaction. PostgreSQL 19 signals only sessions listening on
 the notified channel. A schema-wide channel can never benefit, because every
@@ -422,6 +429,23 @@ applies to runner setup, timestamp cache reads and refresh, Redis core
 initialization and maintenance, and the backend activity registries. Checking
 after lock acquisition is not recovery: the child may already be waiting on a
 lock held by a vanished parent thread.
+
+Activity waiters apply the same rule to the listener they hold. A registry
+reset does not change the listener an inherited waiter already references, so
+each PostgreSQL and Redis waiter records its creating process ID. In another
+process, `close()` marks the waiter closed and returns without unregistering,
+releasing the registry reference, or taking the inherited listener lock;
+`wait()` raises `OperationalError` naming the fork before touching the
+listener. The parent's listener and registry entries stay the parent's, and a
+child's new waiter gets a new listener from the reset registry. Ownership
+follows each registration, not its newest wrapper: a Redis composite's
+shared-listener fast path requires every constituent from the composite's own
+process, so a composite built in a child from inherited waiters reaches each
+constituent's own refusal. This covers waiter operations only. An inherited
+`BaseWatcher` still takes its `_stop_lock` in `stop()`, which its
+interpreter-exit finalizer also calls, before any waiter cleanup, and an
+inherited SQL-backed Queue session rejects use; neither is recovered across
+`fork()`. Plan: `2026-11-10-fork-inherited-activity-waiter-plan.md`.
 
 The process-session registry checks PID before acquire, release, or shutdown
 takes its global lock. Child recovery retains the inherited entry graph without
@@ -491,12 +515,22 @@ It closes admission and waits before disposing cached cores, but core disposal
 still takes each core's operation lock and can wait for a slow operation. The
 caller therefore closes iterators before their owner. PostgreSQL operation
 checkout ownership does not add abandoned-iterator recovery or make concurrent
-standalone runner shutdown a supported cancellation mechanism.
+standalone runner shutdown a supported cancellation mechanism. A runner
+operation owns its checkout from acquisition through its own cleanup: a
+`release_thread_connection()` or `shutdown()` that runs re-entrantly on that
+thread is performed after the operation, and shutdown leaves a live thread's
+leased checkout to that thread, whose release returns it into the closed pool,
+which closes it there. Plan: `2026-11-10-backend-thread-ownership-plan.md`.
 
 Runner close is resource-scoped, not terminal. At its linearization point,
 `SQLiteRunner.close()` advances the connection generation and snapshots all
-connections then tracked by that runner. It closes that owned snapshot and
-keeps failed closes tracked so cleanup can be retried safely. The runner itself
+connections then tracked by that runner. Because it closes other threads'
+connections, a connection is configured before it is tracked, and every
+statement on a tracked connection outside a runner call holds the operation
+lock. The admission read also uses `owned_connection()` to take admission.
+Connection-level settings borrow only an existing connection from the current
+generation. If close invalidated it, restoring the settings leaves it closed.
+Close settles its owned snapshot and keeps failed closes tracked for retry. The runner itself
 remains reusable: an operation linearized later may acquire a distinct
 connection in the new generation, including when its acquisition overlapped
 the close but registered after the snapshot. Terminal operation admission
