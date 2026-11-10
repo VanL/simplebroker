@@ -29,29 +29,8 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-11-09-performance-branches-integration-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-11-08-pg-write-lock-hold-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-11-08-backend-plugin-resolution-cache-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-11-08-pg-notify-fanout-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-11-08-target-validation-once-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-11-08-pg-listener-failure-recovery-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-11-08-watcher-retry-streak-budget-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-11-08-redis-listener-failure-recovery-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-11-08-pg-quiet-process-connections-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-10-14-agent-theory-delta-wave-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-10-14-create-parent-adoption-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-10-14-core-finalizer-ownership-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dedicated deletion pass requires current-tree harvest verification |
-| 2026-10-14-deep-review-remediation-plan.md | retired-pending — soft-retired 2026-10-14; source `49f0519` is published; dedicated deletion pass still requires current-tree harvest verification |
-| 2026-10-13-ruff-default-drift-plan.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
-| 2026-10-13-python-315-support-plan.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
-| 2026-10-13-postgres-connection-attribution-plan.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
-| 2026-10-06-test-audit-remediation-plan.md | retired-pending — soft-retired 2026-10-14; source `49f0519` is published; dedicated deletion pass still requires current-tree harvest verification |
-| 2026-10-06-whole-test-surface-audit-plan.md | retired-pending — soft-retired 2026-10-14; source `49f0519` is published; dedicated deletion pass still requires current-tree harvest verification |
-| 2026-10-06-test-audit-tooling.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
-| 2026-10-06-test-audit-lifecycle.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
-| 2026-10-06-test-audit-backends.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
-| 2026-10-06-test-audit-operations.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
-| 2026-08-27-message-id-order-and-newest-selection-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dual-layout rejection owned by [ALT-IMPL09-002]; dedicated deletion pass still required |
+
+No active plan files. Archived plans remain in the Retired Plans ledger below.
 
 ## Retired Plans
 

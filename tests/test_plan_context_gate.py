@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECKER = REPO_ROOT / "bin" / "check-plan-context"
 
@@ -71,3 +73,27 @@ def test_plan_context_gate_reports_missing_root_as_invocation_error(
     assert result.returncode == 2, _result_detail(result)
     assert "invocation error" in result.stdout
     assert "Traceback" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("unindexed_plan", [False, True])
+def test_plan_context_gate_accepts_empty_index_only_without_plan_files(
+    tmp_path: Path, unindexed_plan: bool
+) -> None:
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "README.md").write_text(
+        "## Status Index\n\n| Plan | Status |\n|------|--------|\n\n## Retired Plans\n",
+        encoding="utf-8",
+    )
+    if unindexed_plan:
+        (plan_dir / "unindexed.md").write_text("# Unindexed plan\n")
+
+    result = _run_checker("--root", str(tmp_path))
+
+    if unindexed_plan:
+        assert result.returncode == 2, _result_detail(result)
+        assert "no parseable plan rows" in result.stdout
+    else:
+        assert result.returncode == 0, _result_detail(result)
+        assert "0 in-flight plan source declarations resolve" in result.stdout
+    assert result.stderr == ""

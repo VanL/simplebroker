@@ -253,7 +253,11 @@ def check_tree(root: Path) -> tuple[list[str], int]:
 
     index = extract_status_index(index_text)
     rows = INDEX_ROW_RE.findall(index)
-    if not rows:
+    # A completed retirement pass can legitimately leave only the index itself.
+    # Keep the error when an empty/unparseable index would hide a plan file.
+    if not rows and any(
+        path.name != "README.md" for path in (root / PLAN_DIR).glob("*.md")
+    ):
         raise InvocationError("status index contains no parseable plan rows")
     problems: list[str] = []
     checked = 0
