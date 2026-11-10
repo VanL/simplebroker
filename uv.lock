@@ -3,9 +3,9 @@ revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.15' and platform_machine != 'x86_64') or (python_full_version >= '3.15' and sys_platform != 'linux')",
     "python_full_version >= '3.12' and python_full_version < '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version < '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
-    "(python_full_version >= '3.15' and platform_machine != 'x86_64') or (python_full_version >= '3.15' and sys_platform != 'linux')",
     "(python_full_version < '3.15' and platform_machine != 'x86_64') or (python_full_version < '3.15' and sys_platform != 'linux')",
 ]
 
@@ -919,7 +919,7 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'dev'", specifier = ">=0.22.1" },
     { name = "aiosqlitepool", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.6.1" },
-    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.170.14" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.170.15" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4.1" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.3.8" },
     { name = "psycopg-pool", marker = "extra == 'dev'", specifier = ">=3.3.3" },
@@ -929,7 +929,7 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.3" },
     { name = "redis", marker = "extra == 'dev'", specifier = ">=8.1.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.3" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.4" },
     { name = "simplebroker-pg", marker = "extra == 'pg'", editable = "extensions/simplebroker_pg" },
     { name = "simplebroker-redis", marker = "extra == 'redis'", editable = "extensions/simplebroker_redis" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20261103" },

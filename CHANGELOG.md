@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Maintenance
+
+- Update the CodeQL init, analyze, and SARIF upload actions to 4.39.3.
+- Align development-tool minimums with the installed environment: uv 0.13.5,
+  Ruff 0.17.4, and Hypothesis 6.170.15; refresh all three lockfiles.
+
 ## [8.8.0] - 2026-11-09
 
 SimpleBroker 8.8.0, `simplebroker-pg` 4.8.0, and `simplebroker-redis` 4.8.0
