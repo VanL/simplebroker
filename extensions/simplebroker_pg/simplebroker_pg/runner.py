@@ -303,7 +303,7 @@ class _SharedActivityListener:
     LISTEN committed, so every write committed afterwards reaches this
     session. Routing stays payload-based, so channel collisions and
     schema-channel traffic cannot wake an unregistered queue.
-    Plan: docs/plans/2026-11-08-pg-notify-fanout-plan.md.
+    Plan: 2026-11-08-pg-notify-fanout-plan.md at 178822b.
     """
 
     def __init__(

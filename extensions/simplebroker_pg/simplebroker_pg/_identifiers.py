@@ -3,7 +3,7 @@
 Notification channel names are a cross-process wire protocol: writers compute
 them in SQL (``_sql.py``) and listeners compute them here, possibly in
 different client versions. Change them only with a planned transition.
-Plan: ``docs/plans/2026-11-08-pg-notify-fanout-plan.md``.
+Plan: ``2026-11-08-pg-notify-fanout-plan.md`` at ``178822b``.
 """
 
 from __future__ import annotations

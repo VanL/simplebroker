@@ -952,7 +952,8 @@ Local adoption record (soft-retired; not a live path claim):
 
 Local plans:
 
-- `docs/plans/2026-10-14-agent-theory-delta-wave-plan.md`
+- retired: 2026-10-14-agent-theory-delta-wave-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`
 - retired: 2026-10-13-ruff-default-drift-plan — source `1b42554`; see the
   ledger in `docs/plans/README.md`.
 

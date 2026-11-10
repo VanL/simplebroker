@@ -9,7 +9,7 @@ writers from deadlocking with broadcast.
 
 Spec: docs/specs/13-message-identity.md [SB-ID-1] through [SB-ID-4];
 docs/specs/14-timestamp-selection.md [SB-SELECT-5]. Plan:
-docs/plans/2026-11-08-pg-write-lock-hold-plan.md.
+2026-11-08-pg-write-lock-hold-plan.md at 178822b.
 """
 
 from __future__ import annotations

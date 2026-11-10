@@ -97,7 +97,7 @@ previous sequence held it across the `INSERT` and `COMMIT` round trips, and a
 stale candidate added a failed compare-and-advance, a `meta` read, and a second
 trip to the back of the lock queue. Measured on the evidence workload this made
 PostgreSQL write throughput flat in writer count; see
-`docs/plans/2026-11-08-pg-write-lock-hold-plan.md`.
+`2026-11-08-pg-write-lock-hold-plan.md` at `178822b`.
 
 What the row lock still guarantees, and why each piece of the shape exists:
 
@@ -397,7 +397,8 @@ contention, and no `deadlock detected` involving `meta` and `messages`.
 
 ## Related plan
 
-- active: [2026-11-08-pg-write-lock-hold-plan](../plans/2026-11-08-pg-write-lock-hold-plan.md)
+- retired: 2026-11-08-pg-write-lock-hold-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`
   — PostgreSQL server-allocated generated writes and their lock-order proof.
 
 - retired: 2026-09-11-keyset-peek-pagination-plan — source `3868d7a`;

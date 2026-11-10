@@ -205,7 +205,8 @@ message identity and delivery state with only the queue binding updated.
 
 ## Related Plans
 
-- active: [2026-11-08-pg-write-lock-hold-plan](../plans/2026-11-08-pg-write-lock-hold-plan.md)
+- retired: 2026-11-08-pg-write-lock-hold-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`
   — PostgreSQL ordinary writes realize [SB-ID-1], [SB-ID-2], and [SB-ID-4]
   with server-side allocation in one pipelined transaction; no contract change.
 

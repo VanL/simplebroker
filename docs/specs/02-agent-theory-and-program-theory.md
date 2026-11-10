@@ -207,5 +207,6 @@ concept → owner dialogue → draft theory → spec → implementation
 
 ## Related Plans
 
-- `docs/plans/2026-10-14-agent-theory-delta-wave-plan.md`
+- retired: 2026-10-14-agent-theory-delta-wave-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`
 - "2026-07-30-program-theory-and-module-theory.md" in `agent-theory`

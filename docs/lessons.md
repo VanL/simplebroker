@@ -97,6 +97,33 @@ pass; bootstrap source `2f93ee5`)
 
 ## Ledger
 
+- 2026-11-10: Dropping an inherited cache can run finalizers in the forked
+  child, even when the cache's own lock was replaced. A finalizer can block on
+  a lock held by a vanished parent thread. Child recovery must distinguish
+  abandoning inherited objects from releasing their last references; the
+  plugin-resolution cache retains the old mapping without reading it and
+  resolves afresh. Interpreter-exit finalization remains possible, so plugin
+  finalizers still need fork-safe PID ownership checks. (Harvested from
+  2026-11-08-backend-plugin-resolution-cache-plan.md at `178822b`.)
+
+- 2026-11-10: A retry streak needs a health witness past the failure boundary.
+  Successful restart and initial drain did not prove the listener could wait,
+  so repeated first-wait failures reset the count forever. The watcher ends a
+  streak only after a processing wait returns normally; a later failure starts
+  the next clock at that failure, not at the earlier healthy witness, so hours
+  of healthy operation do not consume the next failure budget. (Harvested from
+  2026-11-08-watcher-retry-streak-budget-plan.md at `178822b`.)
+
+- 2026-11-10: Replacing a failed shared listener must preserve the old holders'
+  failure and keep their releases from decrementing the replacement. Release
+  identifies the exact listener instance; old holders retain the stored error
+  and recover by reacquiring. Registry replacement must not close the failed
+  listener into a quiet state. Its worker owns eventual transport cleanup,
+  which may finish after replacement is handed out; the one-listener budget
+  is steady-state, not an instantaneous peak bound. (Harvested from
+  2026-11-08-pg-listener-failure-recovery-plan.md and
+  2026-11-08-redis-listener-failure-recovery-plan.md at `178822b`.)
+
 - 2026-11-08: Through PostgreSQL 18, every NOTIFY signals every listening
   session in the same database, whatever its channel, and each signaled
   session runs one read transaction. Narrower channels save only forwarding
@@ -104,7 +131,7 @@ pass; bootstrap source `2f93ee5`)
   server cost, and PostgreSQL 19 adds channel-targeted signaling. Measure
   `pg_stat_database.xact_commit` per NOTIFY against listeners on unrelated
   channels before claiming server-side savings from channel layout.
-  (PostgreSQL notify fan-out plan, `2026-11-08-pg-notify-fanout-plan.md`.)
+  (PostgreSQL notify fan-out plan, `2026-11-08-pg-notify-fanout-plan.md` at `178822b`.)
 
 - 2026-10-06: Coverage's merge API normalizes incoming paths to the host's
   native separators. Treat separators as local representation, not as a
@@ -119,12 +146,6 @@ pass; bootstrap source `2f93ee5`)
   changing cwd; verify normal child exit and saved execution lines under
   warnings-as-errors. Result-only assertions can miss a coverage-save failure
   that happens after the broker operation succeeds.
-
-- 2026-09-16: Run normal and acceptance test commands at the repository
-  harness's standard concurrency. Lower concurrency is permitted only to
-  diagnose a specific failure. A lower-concurrency pass is supplementary
-  evidence and never satisfies an acceptance gate because it can hide the
-  concurrency behavior the standard harness is meant to exercise.
 
 - 2026-09-15: A finalizer runs on the thread that performs collection, not
   necessarily the thread that used or owns a resource. Thread-local cleanup
@@ -347,11 +368,7 @@ Dated moment-tier entries (foldable after age floor and distillation).
   failures, not `assert`. Optimization removes assertions, so an assert-based
   release or repository gate can turn a failed invariant into success.
   (Harvested from maintainability remediation at `a490dcc4`.)
-- 2026-08-23: A documentation backlink can be a firing contract. When a live
-  plan path becomes a source-pinned retired citation, search tests as well as
-  docs and move the assertion in the same change. Documentation-only gates do
-  not replace the affected contract module or full suite. (Corrected during
-  the 2026-08-23 coalescing sweep.)
+
 - 2026-08-25: Fault injection belongs at module-owned seams, not shared
   stdlib attributes. Patching `time.*`, `random.*`, `threading.Event`,
   `os.*`, or `sys.platform` is observable by background threads,

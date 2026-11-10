@@ -8,7 +8,7 @@ units of work. (Promotion provenance lives in the guidance repo's plan
 This copy: adopted from agent-guidance @ `fc23eae` via retired plan
 `2026-07-16-agent-guidance-bootstrap-plan.md` at `197629e2`; synchronized
 with `agent-theory` @ `296a7cd` via
-`docs/plans/2026-10-14-agent-theory-delta-wave-plan.md`.
+`2026-10-14-agent-theory-delta-wave-plan.md` at `178822b`.
 
 ## Purpose
 

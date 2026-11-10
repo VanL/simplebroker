@@ -1469,38 +1469,46 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 
 ## Related Plans
 
-- [Backend plugin resolution cache](../plans/2026-11-08-backend-plugin-resolution-cache-plan.md):
+- retired: 2026-11-08-backend-plugin-resolution-cache-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`:
   adds once-per-process entry-point resolution to [SB-API-11]; failed lookups
   are not retained.
 
-- [PostgreSQL per-queue notification channels](../plans/2026-11-08-pg-notify-fanout-plan.md):
+- retired: 2026-11-08-pg-notify-fanout-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`:
   narrows PostgreSQL activity delivery under the existing [SB-API-6] waiter
   contract; no normative API change.
-- [Project-target validation once per process session](../plans/2026-11-08-target-validation-once-plan.md):
+- retired: 2026-11-08-target-validation-once-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`:
   [SB-API-11] project-target admission is recorded per process session
   instead of per persistent Queue; completed, owner accepted the behavior
   change 2026-11-08.
 
-- [PostgreSQL listener failure recovery](../plans/2026-11-08-pg-listener-failure-recovery-plan.md):
+- retired: 2026-11-08-pg-listener-failure-recovery-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`:
   a failed shared PostgreSQL listener is replaced instead of reused, so watcher
   retry recovers under the existing [SB-API-6] waiter contract; no normative
   API change.
 
-- completed: [Watcher retry limits per failure streak](../plans/2026-11-08-watcher-retry-streak-budget-plan.md):
+- retired: 2026-11-08-watcher-retry-streak-budget-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`:
   repairs `BaseWatcher` retry limits under [SB-API-6], which does not specify
   them; no normative API change.
 
-- [Redis listener failure recovery](../plans/2026-11-08-redis-listener-failure-recovery-plan.md):
+- retired: 2026-11-08-redis-listener-failure-recovery-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`:
   a failed shared Redis Pub/Sub listener is replaced instead of reused, so
   watcher retry recovers under the existing [SB-API-6] waiter contract; no
   normative API change.
 
-- [PostgreSQL quiet-process connections](../plans/2026-11-08-pg-quiet-process-connections-plan.md):
+- retired: 2026-11-08-pg-quiet-process-connections-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`:
   adds the [SB-API-6] waiter-declared safety-recheck interval and stated
   lost-notification bound, and the [SB-API-3] PostgreSQL idle-connection
   closing policy.
 
-- [Core finalizer cleanup ownership](../plans/2026-10-14-core-finalizer-ownership-plan.md):
+- retired: 2026-10-14-core-finalizer-ownership-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`:
   repair borrowed SQL cleanup under the existing [SB-API-3], [SB-API-7] and
   [SB-API-11] ownership
   contracts; no normative API change.

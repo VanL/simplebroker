@@ -169,7 +169,7 @@ its thread-release hook is a no-op. Its owning Queue/session shutdown paths
 remain intentional and are not affected by this SQL-core correction. Native
 regressions retain real driver checkouts and force collection, rather than
 assuming a later successful operation proves the original connection survived.
-See [core finalizer ownership plan](../plans/2026-10-14-core-finalizer-ownership-plan.md).
+See 2026-10-14-core-finalizer-ownership-plan.md at `178822b`.
 
 ### Suspended closeable Queue operations
 
@@ -284,7 +284,7 @@ own schema setup for the same lifetime, so the record adds no staleness window
 beyond the resource it describes. The trade is deliberate: a target dropped,
 replaced, or migrated by another process after admission is detected by the
 next session, not by a new handle on the live one (plan
-`docs/plans/2026-11-08-target-validation-once-plan.md`, difference row D1,
+`2026-11-08-target-validation-once-plan.md` at `178822b`, difference row D1,
 owner-accepted 2026-11-08). A Queue reused after `close()` re-acquires its
 lease before admission and keeps it if admission fails, the same ownership a
 newly constructed persistent Queue holds (row L1).
@@ -374,7 +374,7 @@ its whole wait. Narrowing channels cannot reduce PostgreSQL 18 server work:
 through 18, every NOTIFY signals every listening session in the database and
 each runs a read transaction. PostgreSQL 19 signals only sessions listening on
 the notified channel. A schema-wide channel can never benefit, because every
-listener listens on it. Plan: `2026-11-08-pg-notify-fanout-plan.md`.
+listener listens on it. Plan: `2026-11-08-pg-notify-fanout-plan.md` at `178822b`.
 
 The PostgreSQL registry never hands out a listener whose thread has published
 a failure (for example, the server ended its LISTEN session). The next acquire
@@ -391,7 +391,7 @@ waiters first, then closes its connection in `finally`, so a replacement may
 connect while that cleanup is still unwinding. In steady state each key still
 has one LISTEN connection. Closing the replaced listener from the registry
 would also turn the stored failure into quiet wait results for holders that
-have not observed it yet. Plan: `2026-11-08-pg-listener-failure-recovery-plan.md`.
+have not observed it yet. Plan: `2026-11-08-pg-listener-failure-recovery-plan.md` at `178822b`.
 
 The Redis registry never hands out a listener whose thread has published a
 failure (for example, the server closed its Pub/Sub connection). The next
@@ -411,7 +411,7 @@ the thread publishes the failure, then closes its Pub/Sub connection in its
 connection budget (one live listener per key) is unchanged. Closing it from the
 registry would turn the stored failure into quiet wait results for holders that
 have not observed it yet. Plan:
-`2026-11-08-redis-listener-failure-recovery-plan.md`.
+`2026-11-08-redis-listener-failure-recovery-plan.md` at `178822b`.
 
 ### Fork recovery before process-owned locks
 
@@ -823,18 +823,23 @@ real PostgreSQL in `extensions/simplebroker_pg/tests/test_pg_project_admission.p
 
 ## Related Plans
 
-- completed: 2026-11-08-pg-notify-fanout-plan — PostgreSQL per-queue
+- retired: 2026-11-08-pg-notify-fanout-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`; PostgreSQL per-queue
   notification channels and listener subscription reconciliation.
-- completed: [2026-11-08-target-validation-once-plan](../plans/2026-11-08-target-validation-once-plan.md)
+- retired: 2026-11-08-target-validation-once-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`
   — project-target admission recorded on the process session.
-- completed: 2026-11-08-pg-listener-failure-recovery-plan — the PostgreSQL
+- retired: 2026-11-08-pg-listener-failure-recovery-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`; the PostgreSQL
   activity registry replaces a failed shared listener instead of handing it
   out again; release is identity-checked.
-- completed: 2026-11-08-redis-listener-failure-recovery-plan — the Redis activity
+- retired: 2026-11-08-redis-listener-failure-recovery-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`; the Redis activity
   registry replaces a failed shared Pub/Sub listener instead of handing it out
   again.
 
-- [PostgreSQL quiet-process connections](../plans/2026-11-08-pg-quiet-process-connections-plan.md):
+- retired: 2026-11-08-pg-quiet-process-connections-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`:
   pool idle closing, waiter-declared safety-recheck interval, and the
   `[ALT-IMPL06-001]`/`[ALT-IMPL06-002]` dispositions.
 

@@ -1,6 +1,6 @@
 # Crystallize Program Theory
 
-Status: active — adopted from `agent-theory` @ `296a7cd` per `docs/plans/2026-10-14-agent-theory-delta-wave-plan.md`.
+Status: active — adopted from `agent-theory` @ `296a7cd` per `2026-10-14-agent-theory-delta-wave-plan.md` at `178822b`.
 
 ## Purpose
 
