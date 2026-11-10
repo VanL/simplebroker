@@ -370,7 +370,14 @@ subscription that is closing. Routing stays payload-based, so collisions and
 schema-channel traffic remain hints only. The listener thread is the only user
 of its connection and is woken by a private socket pair; registrants never
 execute on it, because psycopg's `notifies()` holds the connection lock for
-its whole wait. Narrowing channels cannot reduce PostgreSQL 18 server work:
+its whole wait. Final close follows the same rule: `close()` signals, wakes and
+joins, and the listener thread closes its own connection after any in-flight
+LISTEN/UNLISTEN batch returns. psycopg's `close()` frees the libpq connection
+without taking the connection lock, and every last-waiter close requests an
+UNLISTEN batch first, so closing from the releasing thread freed the connection
+under that statement (heap corruption). Wakes and the listener's close of its
+socket pair are serialized, so a wake after close writes nothing. Plan:
+`2026-11-10-backend-thread-ownership-plan.md`. Narrowing channels cannot reduce PostgreSQL 18 server work:
 through 18, every NOTIFY signals every listening session in the database and
 each runs a read transaction. PostgreSQL 19 signals only sessions listening on
 the notified channel. A schema-wide channel can never benefit, because every
@@ -491,11 +498,20 @@ It closes admission and waits before disposing cached cores, but core disposal
 still takes each core's operation lock and can wait for a slow operation. The
 caller therefore closes iterators before their owner. PostgreSQL operation
 checkout ownership does not add abandoned-iterator recovery or make concurrent
-standalone runner shutdown a supported cancellation mechanism.
+standalone runner shutdown a supported cancellation mechanism. A runner
+operation owns its checkout from acquisition through its own cleanup: a
+`release_thread_connection()` or `shutdown()` that runs re-entrantly on that
+thread is performed after the operation, and shutdown leaves a live thread's
+leased checkout to that thread, whose release returns it into the closed pool,
+which closes it there. Plan: `2026-11-10-backend-thread-ownership-plan.md`.
 
 Runner close is resource-scoped, not terminal. At its linearization point,
 `SQLiteRunner.close()` advances the connection generation and snapshots all
-connections then tracked by that runner. It closes that owned snapshot and
+connections then tracked by that runner. Because it closes other threads'
+connections, a connection is configured before it is tracked, and every
+statement on a tracked connection outside a runner call (the admission read,
+setup busy-timeout and optimization settings) runs through
+`owned_connection()`, under admission and the operation lock. It closes that owned snapshot and
 keeps failed closes tracked so cleanup can be retried safely. The runner itself
 remains reusable: an operation linearized later may acquire a distinct
 connection in the new generation, including when its acquisition overlapped

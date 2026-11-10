@@ -699,9 +699,13 @@ class _TrackingPool:
     def __init__(self, generation: int) -> None:
         self.generation = generation
         self.disconnect_calls = 0
+        self.close_waits: list[float] = []
 
     def disconnect(self) -> None:
         self.disconnect_calls += 1
+
+    def close_when_idle(self, timeout: float) -> None:
+        self.close_waits.append(timeout)
 
 
 class _TrackingClient:
@@ -846,7 +850,8 @@ def _runner_closes_owned_resources(monkeypatch: pytest.MonkeyPatch) -> None:
     assert runner._client is None
     assert runner._pool is None
     assert client.close_calls == 1
-    assert pool.disconnect_calls == 1
+    # The pool is closed once, after its checked-out connections (bounded).
+    assert pool.close_waits == [redis_runner_module.RUNNER_CLOSE_IN_FLIGHT_WAIT_SECONDS]
 
 
 def _runner_close_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -856,7 +861,7 @@ def _runner_close_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     runner.close()
     runner.close()
     assert client.close_calls == 1
-    assert pool.disconnect_calls == 1
+    assert len(pool.close_waits) == 1
 
 
 def _runner_recreates_after_close(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -935,7 +940,7 @@ REDIS_RUNNER_TRANSITIONS = (
         event="close is requested",
         guard="runner owns a client and pool",
         next_state="closed",
-        effects="clears slots before closing the client and disconnecting the pool",
+        effects="clears slots, closes the client, then closes the pool after its checked-out connections",
         expected_result="both resources close once",
         payload=_runner_closes_owned_resources,
     ),

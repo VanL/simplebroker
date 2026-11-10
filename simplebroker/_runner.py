@@ -353,7 +353,7 @@ class SQLiteRunner:
 
             # Create new connection for this thread with autocommit mode
             # This is crucial for proper transaction handling
-            self._thread_local.conn = sqlite3.connect(
+            conn = sqlite3.connect(
                 self._db_path,
                 isolation_level=None,
                 timeout=max(0, connect_timeout_ms) / 1000,
@@ -362,19 +362,24 @@ class SQLiteRunner:
                 # worker-thread connections after queue operations return.
                 check_same_thread=False,
             )
+            # Configure before publication: close() reaches only tracked
+            # connections, and Python's sqlite3 wrapper is not safe against a
+            # foreign close() during a statement. Plan:
+            # docs/plans/2026-11-10-backend-thread-ownership-plan.md (D8).
+            try:
+                self._apply_connection_settings(conn)
+                if getattr(self._thread_local, "setup_busy_timeout", False):
+                    self._apply_busy_timeout(conn, setup_busy_timeout_ms(self._config))
+            except BaseException:
+                with contextlib.suppress(sqlite3.Error):
+                    conn.close()
+                raise
 
             # Track the new connection for centralized cleanup
             with self._connections_lock:
-                self._all_connections.add(self._thread_local.conn)
+                self._all_connections.add(conn)
                 self._thread_local.conn_generation = self._connection_generation
-
-            # Apply per-connection settings
-            self._apply_connection_settings(self._thread_local.conn)
-            if getattr(self._thread_local, "setup_busy_timeout", False):
-                self._apply_busy_timeout(
-                    self._thread_local.conn,
-                    setup_busy_timeout_ms(self._config),
-                )
+            self._thread_local.conn = conn
         # Check if optimization phase was completed after connection was created
         elif SetupPhase.OPTIMIZATION in self._completed_phases and not hasattr(
             self._thread_local,
@@ -422,8 +427,44 @@ class SQLiteRunner:
         # Apply optimization settings to the current thread's connection
         # This ensures they take effect immediately after setup
         if hasattr(self._thread_local, "conn"):
-            self._apply_optimization_settings(self._thread_local.conn)
-            self._thread_local.optimization_applied = True
+            with self._settings_connection() as conn:
+                self._apply_optimization_settings(conn)
+                self._thread_local.optimization_applied = True
+
+    @contextlib.contextmanager
+    def owned_connection(self, operation: str) -> Iterator[sqlite3.Connection]:
+        """Yield this thread's connection under the runner's operation protocol.
+
+        Any statement on a tracked connection outside a runner call must run
+        here: ``close()`` may close every tracked connection from another
+        thread, and it does so under ``_operation_lock`` (SM-SQLITE-RUNNER).
+
+        Spec: [SB-API-11]. Plan: docs/plans/2026-11-10-backend-thread-ownership-plan.md (D8).
+        """
+        self._recover_after_fork_if_needed()
+        with (
+            self._admit_operation(operation, allow_unusable=True),
+            self._operation_lock,
+        ):
+            yield self.get_connection()
+
+    @contextlib.contextmanager
+    def _settings_connection(self) -> Iterator[sqlite3.Connection]:
+        """Yield this thread's connection for connection-level PRAGMAs.
+
+        Busy-timeout, cache and synchronous settings never take a database
+        lock, so the operation lock alone serializes them with ``close()``
+        without waiting for transaction admission.
+        """
+        with self._operation_lock:
+            yield self.get_connection()
+
+    def _apply_thread_busy_timeout(self, timeout_ms: int) -> None:
+        """Apply a busy timeout to this thread's existing connection, if any."""
+
+        if hasattr(self._thread_local, "conn"):
+            with self._settings_connection() as conn:
+                self._apply_busy_timeout(conn, timeout_ms)
 
     def _apply_optimization_settings(self, conn: sqlite3.Connection) -> None:
         """Apply optimization settings to a connection."""
@@ -435,12 +476,8 @@ class SQLiteRunner:
 
         previous = getattr(self._thread_local, "setup_busy_timeout", False)
         self._thread_local.setup_busy_timeout = True
-        if hasattr(self._thread_local, "conn"):
-            self._apply_busy_timeout(
-                self._thread_local.conn,
-                setup_busy_timeout_ms(self._config),
-            )
         try:
+            self._apply_thread_busy_timeout(setup_busy_timeout_ms(self._config))
             yield
         finally:
             if previous:
@@ -448,11 +485,7 @@ class SQLiteRunner:
             else:
                 with contextlib.suppress(AttributeError):
                     del self._thread_local.setup_busy_timeout
-            if hasattr(self._thread_local, "conn"):
-                self._apply_busy_timeout(
-                    self._thread_local.conn,
-                    int(self._config["BUSY_TIMEOUT"]),
-                )
+            self._apply_thread_busy_timeout(int(self._config["BUSY_TIMEOUT"]))
 
     def _apply_busy_timeout(self, conn: sqlite3.Connection, timeout_ms: int) -> None:
         """Apply only the SQLite busy timeout to an existing connection."""

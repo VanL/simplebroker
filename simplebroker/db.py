@@ -389,8 +389,8 @@ def _read_explicit_sqlite_magic_before_setup(
     runner: SQLiteRunner,
 ) -> _SQLiteAdmissionSnapshot:
     """Read scalar admission facts on the normal connection before setup writes."""
-    connection = runner.get_connection()
-    rows = _read_sqlite_admission_rows(connection)
+    with runner.owned_connection("admission read") as connection:
+        rows = _read_sqlite_admission_rows(connection)
     if isinstance(rows, _SQLiteAdmissionSnapshot):
         return rows
 
@@ -4219,10 +4219,13 @@ class BrokerCore:
     def close(self) -> None:
         """Close this handle's active connection state.
 
-        This releases the current thread's connection and performs any
-        backend-specific local cleanup, but it does not assume ownership of the
-        runner itself. Owners that created the underlying runner should call
-        :meth:`shutdown` instead.
+        For a runner with ``release_thread_connection`` this releases the
+        current thread's connection and performs any backend-specific local
+        cleanup, without assuming ownership of the runner. A caller-supplied
+        runner without that hook (``SQLiteRunner``) is closed instead, which
+        closes every thread's tracked connection under the runner's operation
+        lock. Owners that created the underlying runner should call
+        :meth:`shutdown`.
         """
         with self._lock:
             if self._session_managed and self._session_resources_released:
