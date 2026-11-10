@@ -1,8 +1,8 @@
 # Storage Schema and Claim Lifecycle
 
 Status: Active
-Boundary: SQLite storage layout, claim-based deletion rationale, and
-cross-process setup coordination. Exact delivery behavior is owned by
+Boundary: SQLite and PostgreSQL storage layouts, claim-based deletion rationale,
+and cross-process setup coordination. Exact delivery behavior is owned by
 [`docs/specs/11-delivery.md`](../specs/11-delivery.md) (`[SB-DELIVERY-*]`)
 and residual operations by [`docs/specs/17-ops.md`](../specs/17-ops.md)
 (`[SB-OPS-*]`); this document explains why the realization looks the way
@@ -416,6 +416,48 @@ representative legacy database sizes before adoption. A fired trigger reopens
 evaluation; it does not adopt the index.
 Promoted to: none
 
+### [ALT-IMPL09-002] Keep permanent legacy and fresh SQL layouts
+
+Disposition: rejected
+Owner: SimpleBroker product owner
+Governs: SQLite schema-v6 rebuild and PostgreSQL public-ID storage in this document
+Source record: none
+Candidate: Retain the private surrogate in upgraded databases as an ignored
+legacy column while fresh databases omit it, or stamp v6 only on fresh targets
+and leave existing v5 targets unmigrated.
+Why plausible: Keeping the legacy shape avoids an immediate table rebuild and
+can preserve old-client coexistence. It was the migration plan's original
+conservative choice.
+Evidence:
+- contemporaneous: The unstructured Alternatives Considered section of
+  2026-08-27-message-id-order-and-newest-selection-plan.md at `178822b`
+  records the owner's 2026-08-27 rejection of both permanent dual-layout
+  variants; it contains no structured ALT predecessor record.
+- contemporaneous: That decision cited a near-zero external installed base,
+  small queue databases in practice, and the release's required pre-open
+  backup. These are the decision's historical premises, not measurements of
+  today's deployments.
+- contemporaneous: `tests/test_sqlite_schema.py` and
+  `extensions/simplebroker_pg/tests/test_pg_message_id_order.py` cover fresh
+  and migrated storage, row/sidecar preservation, and migration failure paths.
+Reason: Permanent dual layouts would double the owned SQL test matrix, require
+layout-keyed fixtures and tolerance rules in validation and maintenance, and
+keep PostgreSQL allocating unused `order_id` values to satisfy a retained
+constraint. Under the recorded deployment premises, a one-time transactional
+rebuild was cheaper than maintaining both layouts indefinitely. Fresh-only v6
+would retain the same support burden for old-client coexistence that those
+premises did not justify.
+Current consequence: Fresh and upgraded broker-owned SQL storage converge on
+one supported surrogate-free v6 layout. Legacy v5 is migration input, not a
+second permanent supported layout. This decision does not broaden the existing
+migration boundary: caller-owned sidecars and unsupported additions inside
+reserved broker objects keep the distinct treatment described above.
+Reconsider when: Concrete deployment evidence shows that migration cost or a
+required old-client coexistence period invalidates the recorded economics.
+Such evidence reopens the owner's decision; it does not itself authorize a
+second permanent layout or weaken existing preservation and rollback rules.
+Promoted to: none
+
 ## Related Plans
 
 - retired: 2026-10-14-deep-review-remediation-plan — source `49f0519`;
@@ -426,7 +468,8 @@ Promoted to: none
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns
   single-connection admission, factual migration receipts, schema-proof
   caching, semantic timestamp uniqueness, and engine-order independence.
-- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-27-message-id-order-and-newest-selection-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`.
   — public-ID order, bounded newest selection, and surrogate-free SQL schemas
 - retired: 2026-08-25-verified-review-findings-remediation-plan — source
   `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns PostgreSQL

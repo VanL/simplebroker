@@ -370,7 +370,8 @@ _Implementation mapping_:
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It established
   engine-order independence; its private storage-FIFO rule is
   superseded by the completed message-ID order plan and [SB-SELECT-5]
-- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-27-message-id-order-and-newest-selection-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`.
   — preserves atomic move while changing deterministic result order to public ID
 - retired: 2026-08-25-verified-review-findings-remediation-plan — source
   `813dd7ce`; see the ledger in `docs/plans/README.md`. It owns handler-boundary

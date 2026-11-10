@@ -51,7 +51,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-10-06-test-audit-lifecycle.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
 | 2026-10-06-test-audit-backends.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
 | 2026-10-06-test-audit-operations.md | retired-pending — soft-retired 2026-10-14; source pin is published; dedicated deletion pass still requires one-wave harvest verification |
-| 2026-08-27-message-id-order-and-newest-selection-plan.md | completed - class 5+P; released core 8.0.0, PostgreSQL 4.0.0, and Redis 4.0.0 from exact tested SHA `194dea5bd4841f3c7be36be44f5657e9a20817e1`; re-contracts uniform retrieval as public-message-ID order, adds bounded Python `order="newest"` and CLI `--newest`, migrates fresh and v5 SQL targets to one supported surrogate-free v6 broker-owned layout while preserving caller sidecars, serializes PostgreSQL migration with an advisory lock and live version recheck, and records the owner-directed transfer of separate Weft/Taut adoption work |
+| 2026-08-27-message-id-order-and-newest-selection-plan.md | retired-pending — soft-retired 2026-11-10; published source `178822b`; dual-layout rejection owned by [ALT-IMPL09-002]; dedicated deletion pass still required |
 
 ## Retired Plans
 
@@ -62,6 +62,7 @@ an otherwise routine coalescing run.
 
 | Plan | Soft-retired | Outcome | Absorbed into | Source SHA |
 |------|--------------|---------|---------------|------------|
+| 2026-08-27-message-id-order-and-newest-selection-plan.md | 2026-11-10 | Released uniform public-ID ordering, bounded newest selection and one surrogate-free SQL v6 layout in core 8.0.0 / extensions 4.0.0. | [SB-CLI-*], [SB-DELIVERY-*], [SB-ID-*], [SB-SELECT-*], [SB-API-*]; implementation docs 08/09, [ALT-IMPL09-002], CHANGELOG and migration/ordering proofs; legacy-cutover exception remains documented, other surface alternatives are retained contract limits or plan-local | `178822b` |
 | 2026-11-09-performance-branches-integration-plan.md | 2026-11-10 | Integrated eight performance branches and completed the paired 36-cell benchmark with explicit uncertainty. | CHANGELOG 8.8.0; feature specs, implementation docs 06–08 and integrated regressions; benchmark pins/results remain source-pinned historical evidence, not standing performance guarantees | `178822b` |
 | 2026-11-08-pg-write-lock-hold-plan.md | 2026-11-10 | Pipelined PostgreSQL generated-ID allocation, insertion and notification while preserving atomicity and lock order. | [SB-ID-*]; implementation doc 08; 2026-11-08 CTE lock-order lesson and native proofs; further pipeline redesigns judged plan-local | `178822b` |
 | 2026-11-08-backend-plugin-resolution-cache-plan.md | 2026-11-10 | Memoized successful plugin resolution per process with fresh child resolution and retained inherited references. | [SB-API-11]; implementation doc 07; fork/resolution tests and 2026-11-10 inherited-finalizer lesson; factory reuse and duplicate diagnostics owner-accepted, other cache alternatives judged plan-local | `178822b` |

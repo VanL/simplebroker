@@ -225,7 +225,8 @@ message identity and delivery state with only the queue binding updated.
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It established
   engine-order independence; its private storage-FIFO rule is
   superseded by [SB-SELECT-5] and the completed message-ID order plan
-- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-27-message-id-order-and-newest-selection-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`.
   — owns public-ID retrieval order and the surrogate-free canonical SQL layout
 - retired: 2026-08-25-verified-review-findings-remediation-plan — source
   `813dd7ce`; see the ledger in `docs/plans/README.md`. It corrects message-ID

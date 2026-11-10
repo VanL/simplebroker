@@ -1570,7 +1570,8 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It aligns public,
   async-wrapper, watcher, sidecar, and runner examples.
-- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-27-message-id-order-and-newest-selection-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`.
   — owns bounded order, sidecar-safe SQL schema v6, backend API v8, and
   cross-surface parity
 - retired: 2026-08-25-postgres-connection-pressure-inspection-plan — source

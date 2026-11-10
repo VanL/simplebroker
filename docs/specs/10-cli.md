@@ -452,7 +452,8 @@ _Implementation mapping_:
 - retired: 2026-08-27-all-examples-correctness-and-contract-alignment-plan —
   source `813dd7ce`; see the ledger in `docs/plans/README.md`. It repairs shell
   example status, bound, rename, stats, and failure handling.
-- completed: [2026-08-27-message-id-order-and-newest-selection-plan](../plans/2026-08-27-message-id-order-and-newest-selection-plan.md)
+- retired: 2026-08-27-message-id-order-and-newest-selection-plan.md — source `178822b`;
+  see the ledger in `docs/plans/README.md`.
   — owns [SB-CLI-6], registered-token behavior, and the CLI/Python parity proof
 
 - retired: 2026-08-25-schema-and-representation-assumption-remediation-plan —
