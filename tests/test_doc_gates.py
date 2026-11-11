@@ -474,8 +474,20 @@ Class: 4
         / "2026-11-10-backend-thread-ownership-plan.md"
     )
     ownership_txt = ownership_plan_path.read_text(encoding="utf-8")
-    # Materialize stub files inside real_plan_root for non-docs code/test paths cited in Source Documents.
-    for match in re.finditer(r"`([^`\r\n]+)`", ownership_txt.split("## ", 2)[2]):
+    # Materialize stub files inside real_plan_root for non-docs code/test paths
+    # cited in Source Documents. Bound the fixture to that section: later
+    # command examples can contain path separators and are not source claims.
+    source_documents = re.search(
+        r"^## Source Documents[^\n]*\n(?P<body>.*?)(?=^## |\Z)",
+        ownership_txt,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert source_documents is not None
+    source_documents_txt = source_documents.group("body")
+    assert "uv run ./bin/pytest-pg" in ownership_txt
+    assert "uv run ./bin/pytest-pg" not in source_documents_txt
+    assert "`2026-11-08-pg-notify-fanout-plan.md`" in source_documents_txt
+    for match in re.finditer(r"`([^`\r\n]+)`", source_documents_txt):
         candidate = match.group(1).split("#", 1)[0].split(":", 1)[0]
         if "/" in candidate and not candidate.startswith("docs/"):
             stub = real_plan_root / candidate
