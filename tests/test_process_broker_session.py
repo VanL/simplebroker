@@ -1569,15 +1569,23 @@ def test_shared_acquisition_interruption_balances_only_its_operation(
             stop_event: threading.Event | None,
             *,
             lease_operation: bool = True,
+            lease_token: object | None = None,
         ) -> object:
-            real_get(stop_event, lease_operation=lease_operation)
+            real_get(
+                stop_event,
+                lease_operation=lease_operation,
+                lease_token=lease_token,
+            )
             raise _InjectedLifecycleAbort("after session get")
 
         monkeypatch.setattr(session, "get_connection", interrupted_get)
     else:
 
-        def interrupted_push(pushed_session: _ProcessBrokerSession) -> None:
-            real_push(pushed_session)
+        def interrupted_push(
+            pushed_session: _ProcessBrokerSession,
+            op_token: object,
+        ) -> None:
+            real_push(pushed_session, op_token)
             raise _InjectedLifecycleAbort("after stack push")
 
         monkeypatch.setattr(
@@ -1934,12 +1942,16 @@ def test_failure_release_argument_is_reentrant_without_tls_marker(
     assert session is not None
     release = session.release_current_thread_connection
 
-    def reentrant_release(*, active_failure: BaseException | None = None) -> None:
+    def reentrant_release(
+        *,
+        active_failure: BaseException | None = None,
+        lease_token: object | None = None,
+    ) -> None:
         observed.append(active_failure)
         if len(observed) == 1:
             connection.get_connection()
             connection.release_connection_after_use(active_failure=inner)
-        release(active_failure=active_failure)
+        release(active_failure=active_failure, lease_token=lease_token)
 
     session.release_current_thread_connection = reentrant_release  # type: ignore[method-assign]
     try:

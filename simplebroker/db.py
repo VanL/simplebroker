@@ -924,11 +924,18 @@ class DBConnection:
                 )
             raise RuntimeError(f"Failed to get database connection: {exc}") from exc
 
-    def get_connection(self, *, config: Config | None = None) -> BrokerConnection:
+    def get_connection(
+        self, *, config: Config | None = None, op_token: object | None = None
+    ) -> BrokerConnection:
         """Get a robust database connection with retry logic.
 
         Returns a borrowed `BrokerCore` when using an injected runner, or a
         thread-local `BrokerDB` when using the built-in SQLite backend.
+
+        ``op_token`` identifies one shared-session lease so that
+        ``release_connection_after_use(op_token=...)`` releases that lease even
+        when operations on this thread end out of order. Callers outside
+        ``_operation_connection`` omit it and release in LIFO order.
 
         Returns:
             BrokerCore or BrokerDB instance
@@ -944,7 +951,9 @@ class DBConnection:
         )
 
         if self._share_in_process:
-            return self._get_shared_connection(config=effective_config)
+            return self._get_shared_connection(
+                config=effective_config, op_token=op_token
+            )
 
         if self._external_runner:
             core = self.get_core()
@@ -1010,7 +1019,7 @@ class DBConnection:
         self._shared_released = False
 
     def _get_shared_connection(
-        self, *, config: Config | None = None
+        self, *, config: Config | None = None, op_token: object | None = None
     ) -> BrokerConnection:
         self._ensure_shared_process_owner()
         if self._stop_event.is_set():
@@ -1019,54 +1028,37 @@ class DBConnection:
         effective_config = (
             self._config if config is None else resolve_config(config=config)
         )
+        # One token names this lease in the manager stack and the session
+        # frames, so release removes exactly this operation's entries.
+        if op_token is None:
+            op_token = object()
 
         def open_connection() -> BrokerConnection:
             self._ensure_project_target_initialized()
             session = self._ensure_shared_session()
             operation_depth = session.current_thread_operation_depth()
             stack_depth = self._shared_operation_stack_depth()
-            op_token = getattr(self._thread_local, "active_op_token", None) or object()
             try:
-                with session._scoped_tls_token("pending_lease_token", op_token):
-                    connection = session.get_connection(self._configured_stop_event)
-                with self._scoped_op_token("pending_push_token", op_token):
-                    self._push_shared_operation_session(session)
+                connection = session.get_connection(
+                    self._configured_stop_event, lease_token=op_token
+                )
+                self._push_shared_operation_session(session, op_token)
                 return connection
             except BaseException as failure:
                 if self._shared_operation_stack_depth() > stack_depth:
-                    with self._scoped_op_token("releasing_op_token", op_token):
-                        self.release_connection_after_use(active_failure=failure)
+                    self.release_connection_after_use(
+                        active_failure=failure, op_token=op_token
+                    )
                 elif session.current_thread_operation_depth() > operation_depth:
-                    with session._scoped_tls_token("releasing_lease_token", op_token):
-                        session.release_current_thread_connection(
-                            active_failure=failure
-                        )
+                    session.release_current_thread_connection(
+                        active_failure=failure, lease_token=op_token
+                    )
                 raise
 
         return self._open_connection_with_retry(
             open_connection,
             config=effective_config,
         )
-
-    @contextmanager
-    def _scoped_op_token(self, attr: str, token: object) -> Iterator[None]:
-        has_prior = hasattr(self._thread_local, attr)
-        prior = getattr(self._thread_local, attr, None)
-        setattr(self._thread_local, attr, token)
-        try:
-            yield
-        finally:
-            if has_prior:
-                setattr(self._thread_local, attr, prior)
-            elif hasattr(self._thread_local, attr):
-                delattr(self._thread_local, attr)
-
-    def _consume_op_token(self, attr: str) -> object | None:
-        if not hasattr(self._thread_local, attr):
-            return None
-        token = getattr(self._thread_local, attr)
-        delattr(self._thread_local, attr)
-        return cast(object, token)
 
     def _shared_operation_stack_depth(self) -> int:
         """Return this manager's operation-session stack depth."""
@@ -1077,12 +1069,9 @@ class DBConnection:
         )
         return 0 if stack is None else len(stack)
 
-    def _push_shared_operation_session(self, session: "_ProcessBrokerSession") -> None:
-        op_token = (
-            self._consume_op_token("pending_push_token")
-            or getattr(self._thread_local, "active_op_token", None)
-            or object()
-        )
+    def _push_shared_operation_session(
+        self, session: "_ProcessBrokerSession", op_token: object
+    ) -> None:
         stack = cast(
             "list[tuple[object, _ProcessBrokerSession]] | None",
             getattr(self._thread_local, "shared_operation_sessions", None),
@@ -1093,9 +1082,8 @@ class DBConnection:
         stack.append((op_token, session))
 
     def _pop_shared_operation_session(
-        self,
+        self, op_token: object | None = None
     ) -> "tuple[object, _ProcessBrokerSession] | None":
-        operation_token = self._consume_op_token("releasing_op_token")
         stack = cast(
             "list[tuple[object, _ProcessBrokerSession]] | None",
             getattr(self._thread_local, "shared_operation_sessions", None),
@@ -1103,11 +1091,11 @@ class DBConnection:
         if not stack:
             return None
         entry: tuple[object, _ProcessBrokerSession] | None = None
-        if operation_token is None:
+        if op_token is None:
             entry = stack.pop()
         else:
             for idx in range(len(stack) - 1, -1, -1):
-                if stack[idx][0] is operation_token:
+                if stack[idx][0] is op_token:
                     entry = stack.pop(idx)
                     break
         if not stack:
@@ -1280,19 +1268,24 @@ class DBConnection:
         self,
         *,
         active_failure: BaseException | None = None,
+        op_token: object | None = None,
     ) -> None:
-        """Release transient pooled resources after one queue operation."""
+        """Release transient pooled resources after one queue operation.
+
+        With ``op_token``, release the lease acquired under that token; without
+        it, release this thread's newest lease.
+        """
 
         if self._share_in_process:
             if self._has_inherited_shared_session():
                 return
-            popped = self._pop_shared_operation_session()
+            popped = self._pop_shared_operation_session(op_token)
             if popped is not None:
                 popped_token, session = popped
-                with session._scoped_tls_token("releasing_lease_token", popped_token):
-                    session.release_current_thread_connection(
-                        active_failure=active_failure,
-                    )
+                session.release_current_thread_connection(
+                    active_failure=active_failure,
+                    lease_token=popped_token,
+                )
 
     _UNSET_STOP_EVENT = object()
 
@@ -1314,21 +1307,19 @@ class DBConnection:
                 cast("threading.Event | None", stop_event),
             )
         try:
-            with self._scoped_op_token("active_op_token", op_token):
-                connection = self.get_connection()
+            connection = self.get_connection(op_token=op_token)
             try:
                 yield connection
             except GeneratorExit:
-                with self._scoped_op_token("releasing_op_token", op_token):
-                    self.release_connection_after_use()
+                self.release_connection_after_use(op_token=op_token)
                 raise
             except BaseException as failure:
-                with self._scoped_op_token("releasing_op_token", op_token):
-                    self.release_connection_after_use(active_failure=failure)
+                self.release_connection_after_use(
+                    active_failure=failure, op_token=op_token
+                )
                 raise
             else:
-                with self._scoped_op_token("releasing_op_token", op_token):
-                    self.release_connection_after_use()
+                self.release_connection_after_use(op_token=op_token)
         finally:
             if override_applied:
                 self._remove_stop_override(op_token)

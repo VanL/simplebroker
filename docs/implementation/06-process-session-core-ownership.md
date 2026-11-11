@@ -148,6 +148,14 @@ remaining frame's `stop_event` (or the idle fallback when empty). This prevents
 either a failed nested acquisition or an out-of-order generator close from
 consuming or overwriting a sibling operation's cancellation token.
 
+The lease token travels as an explicit argument: `DBConnection` creates it in
+`_operation_connection`, passes it to `get_connection(op_token=...)` and
+`release_connection_after_use(op_token=...)`, and the session receives it as
+`lease_token`. It is not carried in thread-local state. Thread-local hand-off
+would add a second, implicit path for the same value and costs several
+microseconds on every queue operation. A caller that omits the token gets a
+private one and releases in LIFO order.
+
 Shared non-SQLite SQL cores carry a private successful-release latch inside
 `BrokerCore.close()`. Explicit repeated close therefore cannot
 surrender a replacement core's runner lease. A session-managed core calls a

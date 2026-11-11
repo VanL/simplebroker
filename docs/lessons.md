@@ -595,3 +595,16 @@ Dated moment-tier entries (foldable after age floor and distillation).
   2026-11-10 deep-dive remediation, where the gate list ran the SQLite
   cross-thread finalization probe and the Redis variant failed on the
   reviewed head.
+
+- 2026-11-11: Pass per-operation identity between layers as an explicit
+  argument, not through thread-local attributes, and change a test double's
+  signature rather than shape production code around it. A token handed from
+  `DBConnection` to the session through five thread-local attributes was
+  correct, but it existed to keep a few monkeypatched doubles working, gave one
+  value several implicit paths, and added about 7 microseconds to every
+  persistent-queue operation (`peek_one` 23.7 to 31.0 microseconds). Keyword
+  arguments restored the cost with the same behavior. Benchmark the cheapest
+  operation on the hot path before and after any change to per-operation
+  plumbing. Evidence: 2026-11-11 re-review of the pre-push remediation;
+  `tests/test_process_broker_session.py::test_failure_release_argument_is_reentrant_without_tls_marker`
+  records the same correction for an earlier thread-local marker.

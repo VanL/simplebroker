@@ -391,8 +391,12 @@ def test_injected_runner_peek_close_retains_runner_until_caller_cleanup(
         releases: list[None] = []
         real_release = manager.release_connection_after_use
 
-        def recording_release() -> None:
-            real_release()
+        def recording_release(
+            *,
+            active_failure: BaseException | None = None,
+            op_token: object | None = None,
+        ) -> None:
+            real_release(active_failure=active_failure, op_token=op_token)
             releases.append(None)
 
         monkeypatch.setattr(

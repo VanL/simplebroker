@@ -7,8 +7,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Protocol, cast
@@ -222,51 +221,23 @@ class _ProcessBrokerSession:
 
         self._project_target_admitted = True
 
-    @contextmanager
-    def _scoped_tls_token(self, attr: str, token: object) -> Iterator[None]:
-        has_prior = hasattr(self._thread_local, attr)
-        prior = getattr(self._thread_local, attr, None)
-        setattr(self._thread_local, attr, token)
-        try:
-            yield
-        finally:
-            if has_prior:
-                setattr(self._thread_local, attr, prior)
-            elif hasattr(self._thread_local, attr):
-                delattr(self._thread_local, attr)
-
-    def _consume_tls_token(self, attr: str) -> object | None:
-        if not hasattr(self._thread_local, attr):
-            return None
-        token = getattr(self._thread_local, attr)
-        delattr(self._thread_local, attr)
-        return cast(object, token)
-
     def get_connection(
         self,
         stop_event: threading.Event | None,
         *,
         lease_operation: bool = True,
+        lease_token: object | None = None,
     ) -> BrokerConnection:
-        """Return this thread's shared core, creating it if needed."""
+        """Return this thread's shared core, creating it if needed.
 
-        lease_token: object | None = None
-        if lease_operation:
-            lease_token = self._consume_tls_token("pending_lease_token") or object()
-        return self._get_connection_with_token(
-            stop_event,
-            lease_operation=lease_operation,
-            lease_token=lease_token,
-        )
+        ``lease_token`` names a leased operation's stop_event frame so that
+        ``release_current_thread_connection(lease_token=...)`` removes exactly
+        that frame. A caller that omits it gets a private token and releases
+        the newest frame.
+        """
 
-    def _get_connection_with_token(
-        self,
-        stop_event: threading.Event | None,
-        *,
-        lease_operation: bool,
-        lease_token: object | None,
-    ) -> BrokerConnection:
         if lease_operation:
+            lease_token = lease_token or object()
             self._begin_operation()
         creation_started = False
         try:
@@ -607,6 +578,7 @@ class _ProcessBrokerSession:
         self,
         *,
         active_failure: BaseException | None = None,
+        lease_token: object | None = None,
     ) -> None:
         """Release this operation while keeping the backend checkout cached.
 
@@ -617,7 +589,6 @@ class _ProcessBrokerSession:
         actual close lifecycle.
         """
 
-        lease_token = self._consume_tls_token("releasing_lease_token")
         self._end_operation(
             lease_token=lease_token,
             active_failure=active_failure,
