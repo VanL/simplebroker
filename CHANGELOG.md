@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.8.2] - 2026-11-11
+
+SimpleBroker 8.8.2, `simplebroker-pg` 4.8.2, and `simplebroker-redis` 4.8.2
+are the coordinated patch release set. Both extensions require SimpleBroker
+8.8.2 or newer, and the core `pg` and `redis` extras require the matching
+4.8.2 extension or newer.
+
 ### Fixed
 
 - CLI `--cleanup` on ordinary relative legacy SQLite `-f` targets now enforces
@@ -20,14 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `stop_event` state across sibling handles.
 - `BrokerCore` SQL alias reads now verify `alias_version` before and after
   snapshotting `_aliases` without exposing internal sentinel `-1` from
-  `get_alias_version()` (`add_alias`, `remove_alias`, and alias-retargeting
-  `rename_queue` advance `alias_version` monotonically while `get_alias_version`
-  and `_aliases` verify cache stability), `BrokerCore.insert_messages` publishes
-  the committed in-transaction `meta.last_ts` floor directly via
-  `_publish_committed_floor` instead of issuing a post-commit
-  `refresh_last_timestamp()` read inside the write-retry loop, and
-  `BrokerCore.status()` acquires the core operation lock before reading message
-  counts and connection size.
+  `get_alias_version()`. `add_alias`, `remove_alias`, and alias-retargeting
+  `rename_queue` advance the version monotonically, while readers verify cache
+  stability.
+- `BrokerCore.insert_messages` now publishes the committed in-transaction
+  `meta.last_ts` floor directly via `_publish_committed_floor` instead of
+  issuing a post-commit `refresh_last_timestamp()` read inside the write-retry
+  loop.
+- `BrokerCore.status()` now acquires the core operation lock before reading
+  message counts and connection size.
 - `BaseWatcher.start()` and `run_in_thread()` now synchronize worker-thread
   publication under `_stop_lock`, raising
   `RuntimeError("Watcher is already running")` on duplicate starts while a run
