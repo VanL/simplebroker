@@ -146,8 +146,12 @@ rejected under [SB-DELIVERY-3]. Unknown-option and namespace/schema errors
 raise the existing DatabaseError at construction, rather than first use.
 
 Project configuration is a trusted developer input. When the configured target
-string contains a recognized inline password, project-config loading emits a
-redacted advisory warning that does not include the password. SimpleBroker does
+string contains a recognized inline password (conninfo `password=` or
+`sslpassword=`, or a URL userinfo password — conservatively masking through the
+last `@` whenever `:` precedes `@` after `scheme://`), project-config loading
+emits a redacted advisory warning that does not include the password (suppressed
+during CLI invocations when global `--quiet` is active under `[SB-CLI-2]`, while
+emitted on direct Python `load_project_config()` calls). SimpleBroker does
 not inspect, warn on, or enforce project-config file mode, ownership,
 parent-directory permissions, or ACLs. Confidentiality and integrity of the
 config path are governed by the effective operating-system permissions across
@@ -160,7 +164,11 @@ only option schema before plugin dispatch. The plugin owns option validation
 and normalization and returns an ordinary options dictionary that remains
 lossless through `BrokerTarget` serialization. SQLite follows the same
 ownership rule and rejects or normalizes its options through its plugin rather
-than bypassing plugin validation. TOML date/time values reach the plugin as
+than bypassing plugin validation; PostgreSQL rejects unknown `backend_options`
+keys with `DatabaseError` across configuration initialization (`init_backend` /
+`verify_env`) and target, runner, and activity-waiter entry points
+(`require_schema_name`) before opening any database connection while keeping
+`Queue` construction lazy for non-Redis plugins. TOML date/time values reach the plugin as
 native values; a plugin must normalize them to lossless target transport values
 or reject them explicitly rather than relying on the core to coerce them.
 
@@ -1257,8 +1265,9 @@ timestamp bounds. Its accepted and rejected spellings are the three grammars in
 parameters already accept integer message IDs do not reparse those integers as
 strings.
 
-Backend API v8 adds the validated selection order to claim, peek, and move
-one/many operations. First-party plugins declare v8 exactly. SQL backend
+Backend API v8 added the validated selection order to claim, peek, and move
+one/many operations (see Backend API v9 below for the current first-party
+plugin version). SQL backend
 storage schema v6 has one supported canonical SimpleBroker-owned layout, where
 `ts` is the primary key and no private surrogate exists; the v6 migration
 rebuilds older layouts into it without mutating caller-owned sidecars.
@@ -1468,6 +1477,13 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 | [SB-API-15] | `extensions/simplebroker_pg/tests/test_connection_usage.py` (one population, marker grammar, fresh dictionaries, types, error forwarding, real shared owners, pool growth, listeners, transaction and role visibility); `extensions/simplebroker_pg/tests/test_connection_stats.py` (isolated cross-database totals and autovacuum workers); `tests/test_backend_probe.py` (materialization, retries, locking, fork and active-batch guards) |
 
 ## Related Plans
+
+- [Deep-dive review remediation](../plans/2026-11-10-deep-dive-review-remediation-plan.md):
+  clarifies [SB-API-2] inline-password detection/redaction (`HR-1` owner
+  sign-off) and PostgreSQL unknown-option rejection across plugin entry points,
+  aligns [SB-API-11] v8 historical wording with v9, and repairs same-thread
+  `_stop_event` restoration, SQL/Redis `alias_version` monotonicity, watcher
+  thread publication, and Redis `OperationalError` / Lua-`PUBLISH` parity.
 
 - [Backend thread ownership](../plans/2026-11-10-backend-thread-ownership-plan.md):
   only the owning context closes or uses a backend connection (PostgreSQL

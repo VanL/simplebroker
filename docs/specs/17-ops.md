@@ -192,7 +192,10 @@ CLI exit codes and streams follow `[SB-CLI-1]` / `[SB-CLI-2]`.
 SQLite `:memory:` and empty targets have no owned filesystem namespace; cleanup
 is a successful no-op and derives no filenames for them. For a SQLite filesystem
 target, one expanded, resolved path is frozen for validation and all owned-name
-derivation.
+derivation; when invoked through CLI ordinary relative legacy-SQLite path mode
+(`[SB-CLI-2]`), physical containment within the selected working directory is
+verified before freezing or unlinking any candidate, while an absent working
+directory or absent in-root target remains a `0`-exit no-op.
 
 For a SQLite filesystem target, cleanup owns the complete known SimpleBroker
 filesystem namespace: the resolved configured main path; names formed by
@@ -285,6 +288,11 @@ _Implementation mapping_:
 | [SB-OPS-7] | `tests/test_operations_contract_sb_ops.py::test_ops_language_core_promises`; `tests/test_cli_argument_parsing.py::test_cleanup_help_uses_backend_generic_target_wording`; `tests/test_cleanup.py::test_cleanup_removes_complete_owned_namespace_only`; `tests/test_cleanup.py::test_cleanup_nonexistent_database`; `tests/test_cleanup.py::test_cleanup_rejects_plain_file`; `tests/test_cleanup.py::test_cleanup_rejects_directory_main_before_deleting_sidecars`; `tests/test_cleanup.py::test_cleanup_rejects_unreadable_main_before_deleting_sidecars`; `tests/test_cleanup.py::test_cleanup_rejects_sqlite_db_with_wrong_magic`; `tests/test_cleanup.py::test_cleanup_removes_owned_orphans_when_main_is_absent`; `tests/test_cleanup.py::test_cleanup_attempts_every_later_path_after_each_unlink_failure`; `tests/test_cleanup.py::test_cleanup_unlinks_owned_symlinks_without_touching_targets`; `tests/test_cleanup.py::test_cleanup_observed_main_disappearance_still_counts_as_found`; `tests/test_cleanup.py::test_cleanup_enumerated_temp_disappearance_still_counts_as_found`; `tests/test_cleanup.py::test_cleanup_aggregates_multiple_cli_failures_and_json_error`; `tests/test_cleanup.py::test_cleanup_windows_open_handle_refusal_is_clean_and_nonrollback`; `tests/test_cleanup.py::test_cleanup_validates_literal_uri_metacharacters`; `tests/test_cleanup.py::test_cleanup_cli_rejects_percent_filename_without_mutation`; `tests/test_cleanup.py::test_cleanup_cli_retains_unsafe_metacharacter_rejection`; `tests/test_cleanup.py::test_cleanup_no_namespace_targets_are_noops_without_creation_or_open`; `tests/test_cleanup.py::test_cleanup_path_derivation_error_is_a_clean_database_error`; `tests/test_cleanup.py::test_cleanup_freezes_resolved_symlink_target_namespace`; `tests/test_cleanup.py::test_cleanup_main_lstat_failure_is_a_zero_delete_gate`; `tests/test_cleanup.py::test_cleanup_enumeration_failure_still_attempts_frozen_names_and_all_fixed`; `tests/test_cleanup.py::test_cleanup_reports_enumeration_before_ordered_unlink_failures`; `tests/test_cleanup.py::test_cleanup_multiple_temp_failures_are_reported_in_lexical_order`; `tests/test_cleanup.py::test_cleanup_with_quiet` |
 
 ## Related Plans
+
+- [Deep-dive review remediation](../plans/2026-11-10-deep-dive-review-remediation-plan.md):
+  aligns [SB-OPS-7] CLI relative legacy-SQLite cleanup containment with
+  [SB-CLI-2] (owner decision Q1) and repairs [SB-OPS-6] Redis multi-batch
+  `vacuum()` draining.
 
 - retired: 2026-09-02-write-keep-pending-window-plan — source `3418079`;
   see the ledger in `docs/plans/README.md`. It clarifies [SB-OPS-2],

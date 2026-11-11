@@ -89,10 +89,12 @@ written to **stdout**, never to stderr. Redirecting stdout captures the
 payload in full.
 
 Quiet mode suppresses human commentary on stderr. This includes the
-message-newline safety warning described below. Quiet never suppresses an error
-diagnostic, payload, or unrelated runtime warning, and never moves payload or
-errors to a different stream; implementations must suppress explicitly owned
-commentary rather than install a blanket runtime-warning filter.
+message-newline safety warning described below, the `move` batch-cap notice,
+and CLI project-config inline-password commentary. Quiet never suppresses an
+error diagnostic, payload, or unrelated runtime warning, and never moves
+payload or errors to a different stream; implementations must suppress
+explicitly owned commentary rather than install a blanket runtime-warning
+filter.
 
 A non-JSON `read`, `peek`, `move`, or `watch` invocation that emits one or more
 message bodies containing an embedded newline emits one newline-safety warning
@@ -101,9 +103,12 @@ on stderr, at the first such body. The rule is independent of selector mode and
 warning.
 
 Ordinary plain-text errors use the shared
-`simplebroker: error: <message>` dialect derived from `PROG_NAME`. A winning
-command-specific contract may define a narrower dialect; notably,
-`[SB-IO-4]` continues to own `broker load:` errors and
+`simplebroker: error: <message>` dialect derived from `PROG_NAME`. Plain-text
+CLI diagnostics and owned stderr warnings sanitize terminal control, escape,
+line-breaking, format, and lone-surrogate code points into safe single-line
+text so untrusted input cannot inject multi-line framing or terminal escape
+sequences. A winning command-specific contract may define a narrower dialect;
+notably, `[SB-IO-4]` continues to own `broker load:` errors and
 `broker load: warning:` diagnostics. Error text may include an actionable
 recovery sentence and is not otherwise frozen.
 
@@ -139,13 +144,18 @@ applies to the filename component, not the full directory path.
 
 For an ordinary relative legacy-SQLite target, the CLI must establish the
 target's physical containment within the selected working directory before
-backend command dispatch or a target-opening `--status`, `--vacuum`, or
-`--compact` action. If path or symlink resolution cannot establish that
-containment, the invocation emits one actionable error and exits `1`; it does
-not open a lexical fallback. The backend receives the same canonical target
-string that passed containment. Once argument parsing has established JSON
-mode, this failure uses `[SB-CLI-4]`'s JSON error object; otherwise it is a
-plain stderr error. Stdout remains empty and no traceback is shown.
+backend command dispatch, a target-opening `--status`, `--vacuum`, or
+`--compact` action, or `[SB-OPS-7]` `--cleanup` namespace freezing. For
+`--cleanup`, containment resolution does not require the selected working
+directory or target to exist (preserving `[SB-OPS-7]` absent-namespace `0`-exit
+no-ops and in-root symlink target cleanup). If path or symlink resolution
+cannot establish that containment, the invocation emits one actionable error
+and exits `1`; it does not open or unlink a lexical fallback. The backend
+receives the same canonical target string that passed containment. Once
+argument parsing has established JSON mode, this failure uses `[SB-CLI-4]`'s
+JSON error object (`INVALID_ARGUMENT` for rejected containment checks, `ERROR`
+when path/symlink resolution itself fails); otherwise it is a plain stderr
+error. Stdout remains empty and no traceback is shown.
 
 An explicitly supplied absolute `-f` target and a trusted project-config target
 are intentionally outside working-directory containment. Project targets may
@@ -166,8 +176,9 @@ Name validation remains on the selected database filename and optional
 compound-name subdirectory. Relative project-config names and prefixes
 retain their separate validation rules.
 
-`init` and `[SB-OPS-7]` cleanup retain their separately specified preparation
-and path behavior.
+`init` retains its current-directory initialization preparation, while
+`[SB-OPS-7]` cleanup shares relative-target physical containment without
+requiring existing directories.
 
 `load` warns on stderr when the dump header is physically ahead of local wall
 time. Global quiet mode suppresses that warning, including with `load --force`,
@@ -428,6 +439,12 @@ _Implementation mapping_:
 - `simplebroker/commands.py` (`cmd_write`)
 
 ## Related Plans
+
+- [Deep-dive review remediation](../plans/2026-11-10-deep-dive-review-remediation-plan.md):
+  extends [SB-CLI-2] relative legacy-SQLite physical containment to `--cleanup`
+  (owner decision Q1), specifies plain-text stderr control/escape sanitization
+  and `--quiet` suppression of `move` cap and CLI inline-password commentary,
+  and aligns `move -m --all --json` with [SB-CLI-4].
 
 - retired: 2026-09-16-deep-dive-review-remediation-plan — source `e7036bb`;
   see the ledger in `docs/plans/README.md`. Unit 6 changed complete-filename
