@@ -195,7 +195,7 @@ def _redis_listener_routes_queue(monkeypatch: pytest.MonkeyPatch) -> None:
 def _redis_listener_ignores_global(monkeypatch: pytest.MonkeyPatch) -> None:
     with _started_listener(monkeypatch) as (listener, pubsub, _client):
         registration = listener.register("jobs")
-        pubsub.send(listener._channel(None))
+        pubsub.send(listener._channel("jobs").replace(":q:jobs", ":all"))
         assert not listener.wait(
             registration,
             0.05,
@@ -1006,7 +1006,6 @@ def _write_script_protocol(
     sleeps: list[float] = []
     resyncs: list[None] = []
     refreshes: list[None] = []
-    publishes: list[str | None] = []
 
     def reserve(count: int) -> list[int]:
         assert count == 1
@@ -1044,7 +1043,6 @@ def _write_script_protocol(
         return 0
 
     monkeypatch.setattr(core._timestamp_gen, "refresh_last_ts", refresh_last_ts)
-    monkeypatch.setattr(core, "_publish", publishes.append)
 
     expectation = (
         pytest.raises(Exception, match=scenario.expected_error)
@@ -1067,13 +1065,13 @@ def _write_script_protocol(
         assert len(sleeps) == scenario.expected_sleeps
         assert len(resyncs) == scenario.expected_resyncs
         assert len(refreshes) == scenario.expected_refreshes
-        assert publishes == ([] if scenario.expected_error else ["jobs"])
         for call, candidate in zip(eval_calls, reserve_calls, strict=True):
             expected_tail: tuple[str, ...] = (
                 "jobs",
                 str(candidate),
                 encode_id(candidate),
                 "message",
+                core._keys.activity_queue("jobs"),
             )
             if scenario.keep_newest is not None:
                 expected_tail = (*expected_tail, str(scenario.keep_newest))
@@ -1363,7 +1361,6 @@ def test_redis_write_recovers_after_more_than_three_safe_conflicts(
     core = RedisBrokerCore(redis_runner)
     responses = iter(((-1,), (-6,), (-1,), (-6,), (1,)))
     eval_calls = 0
-    publishes: list[str | None] = []
     maintenance: list[int] = []
 
     def evaluate(script: str, *args: object) -> object:
@@ -1374,7 +1371,6 @@ def test_redis_write_recovers_after_more_than_three_safe_conflicts(
         return next(responses)
 
     monkeypatch.setattr(core._client, "eval", evaluate)
-    monkeypatch.setattr(core, "_publish", publishes.append)
     monkeypatch.setattr(core, "_record_maintenance_activity", maintenance.append)
     monkeypatch.setattr(core, "_resync_timestamp_generator", lambda: None)
     monkeypatch.setattr(core._timestamp_gen, "refresh_last_ts", lambda: 0)
@@ -1383,7 +1379,6 @@ def test_redis_write_recovers_after_more_than_three_safe_conflicts(
             assert core.write("jobs", "message") > 0
         assert eval_calls == 5
         assert core.get_conflict_metrics()["ts_conflict_count"] == 4
-        assert publishes == ["jobs"]
         assert maintenance == [1]
     finally:
         core.close()
@@ -1394,10 +1389,10 @@ def test_redis_atomic_broadcast_recovers_after_more_than_three_safe_conflicts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     core = RedisBrokerCore(redis_runner)
-    responses = iter(((-1,), (-3,), (-6,), (-1,), (1, "jobs")))
+    responses = iter(((-1,), (-3,), (-6,), (-1,), (1, "104", 1)))
     eval_calls = 0
     next_timestamp = 100
-    publishes: list[str | None] = []
+    published_floors: list[int] = []
     maintenance: list[int] = []
 
     def reserve(count: int) -> list[int]:
@@ -1415,17 +1410,18 @@ def test_redis_atomic_broadcast_recovers_after_more_than_three_safe_conflicts(
 
     monkeypatch.setattr(core._timestamp_gen, "_reserve_candidates", reserve)
     monkeypatch.setattr(core._client, "eval", evaluate)
-    monkeypatch.setattr(core, "_publish", publishes.append)
     monkeypatch.setattr(core, "_record_maintenance_activity", maintenance.append)
     monkeypatch.setattr(core, "_resync_timestamp_generator", lambda: None)
     monkeypatch.setattr(core._timestamp_gen, "refresh_last_ts", lambda: 0)
-    monkeypatch.setattr(core, "refresh_last_timestamp", lambda: 0)
+    monkeypatch.setattr(
+        core._timestamp_gen, "_publish_committed_floor", published_floors.append
+    )
     try:
         with remove_backoff():
             assert core.broadcast("message", queue_names=("jobs",)) == 1
         assert eval_calls == 5
         assert core.get_conflict_metrics()["ts_conflict_count"] == 4
-        assert publishes == ["jobs"]
+        assert published_floors == [104]
         assert maintenance == [1]
     finally:
         core.close()
@@ -1775,6 +1771,7 @@ def _broadcast_all_lua_rejects_stale_candidates_without_mutation(
             "1",
             "announcement",
             keys.key("q", ""),
+            keys.key("activity", "q", ""),
             "all",
             "0",
             encode_id(candidates[0]),
@@ -1933,7 +1930,6 @@ def _broadcast_script_protocol(
     sleeps: list[float] = []
     resyncs: list[None] = []
     refreshes: list[None] = []
-    success_refreshes: list[None] = []
 
     def eval_script(*args: object, **kwargs: object) -> list[object]:
         nonlocal eval_calls
@@ -1960,10 +1956,11 @@ def _broadcast_script_protocol(
         "refresh_last_ts",
         lambda: refreshes.append(None),
     )
+    published_floors: list[int] = []
     monkeypatch.setattr(
-        core,
-        "refresh_last_timestamp",
-        lambda: success_refreshes.append(None),
+        core._timestamp_gen,
+        "_publish_committed_floor",
+        published_floors.append,
     )
     call_kwargs = (
         {"queue_names": ("jobs",), "create_missing": True} if scenario.exact else {}
@@ -1985,7 +1982,7 @@ def _broadcast_script_protocol(
         assert len(sleeps) == scenario.expected_sleeps
         assert len(resyncs) == scenario.expected_resyncs
         assert len(refreshes) == scenario.expected_refreshes
-        assert len(success_refreshes) == (scenario.expected_count is not None)
+        assert len(published_floors) == int((scenario.expected_count or 0) > 0)
     finally:
         core.close()
 
@@ -2291,7 +2288,7 @@ REDIS_BROADCAST_TRANSITIONS = (
         expected_result="returns affected queue count",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((1, "jobs"),),
+                responses=((1, "100", 1),),
                 expected_count=1,
             )
         ),
@@ -2306,7 +2303,7 @@ REDIS_BROADCAST_TRANSITIONS = (
         expected_result="second Lua attempt succeeds",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-4, 20), (1,)),
+                responses=((-4, 20), (1, "", 0)),
                 exact=False,
                 expected_count=0,
             )
@@ -2322,7 +2319,7 @@ REDIS_BROADCAST_TRANSITIONS = (
         expected_result="third Lua attempt succeeds",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-4, 20), (-4, 40), (1,)),
+                responses=((-4, 20), (-4, 40), (1, "", 0)),
                 exact=False,
                 expected_count=0,
             )
@@ -2369,7 +2366,7 @@ REDIS_BROADCAST_TRANSITIONS = (
         expected_result="second attempt succeeds",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-1,), (1, "jobs")),
+                responses=((-1,), (1, "100", 1)),
                 expected_count=1,
                 expected_conflicts=1,
                 expected_sleeps=1,
@@ -2387,7 +2384,7 @@ REDIS_BROADCAST_TRANSITIONS = (
         expected_result="second attempt succeeds",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-3,), (1, "jobs")),
+                responses=((-3,), (1, "100", 1)),
                 expected_count=1,
                 expected_conflicts=1,
                 expected_sleeps=1,
@@ -2405,7 +2402,7 @@ REDIS_BROADCAST_TRANSITIONS = (
         expected_result="third attempt succeeds",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-1,), (-1,), (1, "jobs")),
+                responses=((-1,), (-1,), (1, "100", 1)),
                 expected_count=1,
                 expected_conflicts=2,
                 expected_sleeps=2,
@@ -2423,7 +2420,7 @@ REDIS_BROADCAST_TRANSITIONS = (
         expected_result="third attempt succeeds",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-3,), (-3,), (1, "jobs")),
+                responses=((-3,), (-3,), (1, "100", 1)),
                 expected_count=1,
                 expected_conflicts=2,
                 expected_sleeps=2,
@@ -2477,7 +2474,7 @@ REDIS_BROADCAST_TRANSITIONS = (
         expected_result="second attempt succeeds",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-6,), (1, "jobs")),
+                responses=((-6,), (1, "100", 1)),
                 expected_count=1,
                 expected_conflicts=1,
                 expected_refreshes=1,
@@ -2494,7 +2491,7 @@ REDIS_BROADCAST_TRANSITIONS = (
         expected_result="third attempt succeeds",
         payload=_protocol_case(
             _BroadcastProtocolScenario(
-                responses=((-6,), (-6,), (1, "jobs")),
+                responses=((-6,), (-6,), (1, "100", 1)),
                 expected_count=1,
                 expected_conflicts=2,
                 expected_refreshes=2,

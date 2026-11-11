@@ -72,8 +72,9 @@ remain deleted, while that reserved queue and later queues remain intact.
 
 Patternless `broadcast()` selects the current queue registry and inserts every
 copy in one Lua invocation. A queue cannot be missed or resurrected by a
-concurrent write or deletion that commits before that invocation. Activity
-notifications and maintenance accounting run after the atomic insert commits.
+concurrent write or deletion that commits before that invocation. Per-queue
+activity notifications publish atomically inside the Lua invocation, while
+maintenance accounting runs after the atomic insert commits.
 
 Exact-target `broadcast(..., queue_names=...)` also intersects the requested
 literal names with the registry and inserts all copies in one Lua invocation.

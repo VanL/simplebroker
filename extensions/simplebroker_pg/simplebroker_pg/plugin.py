@@ -43,6 +43,7 @@ from .validation import (
     connect,
     inspect_schema,
     quote_ident,
+    reject_unknown_backend_options,
     require_schema_name,
     validate_schema_inspection,
     validate_target,
@@ -286,6 +287,7 @@ def verify_env(
     """
 
     toml_opts = dict(toml_options) if toml_options else {}
+    reject_unknown_backend_options(toml_opts)
     cleaned_toml_target = _optional_text(toml_target, name="toml target")
     password = _password_text(
         config["BACKEND_PASSWORD"],
@@ -995,6 +997,7 @@ class PostgresBackendPlugin:
     ) -> ActivityWaiter | None:
         if not isinstance(stop_event, threading.Event):
             raise TypeError("Postgres activity waiter requires a threading.Event")
+        reject_unknown_backend_options(backend_options)
 
         if runner is not None:
             if not isinstance(runner, PostgresRunner):
@@ -1031,6 +1034,7 @@ class PostgresBackendPlugin:
         queue_names_tuple = tuple(queue_names)
         if not queue_names_tuple:
             raise ValueError("queue_names cannot be empty")
+        reject_unknown_backend_options(backend_options)
 
         if runner is not None:
             if not isinstance(runner, PostgresRunner):

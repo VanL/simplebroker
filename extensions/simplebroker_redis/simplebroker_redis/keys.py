@@ -74,9 +74,5 @@ class RedisKeys:
     def batch_meta(self, token: str) -> str:
         return self.key("batches", token, "meta")
 
-    @property
-    def activity_all(self) -> str:
-        return self.key("activity", "all")
-
     def activity_queue(self, queue: str) -> str:
         return self.key("activity", "q", queue)

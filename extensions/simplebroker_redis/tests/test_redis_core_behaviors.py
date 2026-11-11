@@ -7,6 +7,7 @@ import threading
 import time
 import warnings
 import weakref
+from collections.abc import Iterator
 from contextlib import ExitStack
 from typing import NoReturn
 
@@ -165,22 +166,31 @@ def test_keep_write_publish_failure_leaves_whole_unit_committed(
 ) -> None:
     core = RedisBrokerCore(redis_runner)
     observer = RedisBrokerCore(redis_runner)
+    waiter = get_backend_plugin().create_activity_waiter(
+        target=redis_runner.target,
+        backend_options={"namespace": redis_runner.namespace},
+        queue_name="jobs",
+        stop_event=threading.Event(),
+    )
+    assert waiter is not None
 
-    def fail_publish(_queue: str | None) -> NoReturn:
+    def fail_publish(*_args: object, **_kwargs: object) -> NoReturn:
         raise OperationalError("injected publish failure")
 
     try:
         core.write("jobs", "old-1")
         core.write("jobs", "old-2")
-        monkeypatch.setattr(core, "_publish", fail_publish)
+        assert waiter.wait(2.0) is True
+        monkeypatch.setattr(core._client, "publish", fail_publish)
 
-        with pytest.raises(OperationalError, match="injected publish failure"):
-            core.write("jobs", "new", keep_newest=1)
+        core.write("jobs", "new", keep_newest=1)
 
+        assert waiter.wait(2.0) is True
         assert observer.peek_many("jobs", limit=10, with_timestamps=False) == ["new"]
         stats = observer.get_queue_stat("jobs")
         assert (stats.pending, stats.claimed, stats.total) == (1, 2, 3)
     finally:
+        waiter.close()
         observer.close()
         core.close()
 
@@ -706,3 +716,324 @@ def test_queue_effective_namespace_matches_explicit_target(
         get_backend_plugin().cleanup_target(
             redis_url, backend_options={"namespace": redis_namespace}
         )
+
+
+def test_redis_vacuum_drains_multiple_batches_and_honors_stop_event(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from simplebroker._exceptions import StopException
+
+    stop_event = threading.Event()
+    core = RedisBrokerCore(
+        redis_runner,
+        config=resolve_config(override={"BROKER_AUTO_VACUUM": 0}),
+        stop_event=stop_event,
+    )
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core.insert_messages([("jobs", f"msg-{idx}", idx + 1) for idx in range(2500)])
+        assert len(core.claim_many("jobs", 2500, with_timestamps=False)) == 2500
+        assert core.count_claimed_messages() == 2500
+
+        core.vacuum()
+
+        assert core.count_claimed_messages() == 0
+        assert core.get_overall_stats() == (0, 0)
+        assert core._client.hlen(keys.bodies) == 0
+        assert core._client.zcard(keys.all_ids) == 0
+        assert "jobs" not in core._client.smembers(keys.queues)
+
+        core.insert_messages(
+            [("jobs", f"msg2-{idx}", 10_000 + idx) for idx in range(2500)]
+        )
+        assert len(core.claim_many("jobs", 2500, with_timestamps=False)) == 2500
+
+        real_eval = core._client.eval
+        vacuum_evals = 0
+
+        def stop_after_first_vacuum(script: str, numkeys: int, *args: object) -> object:
+            nonlocal vacuum_evals
+            result = real_eval(script, numkeys, *args)  # type: ignore[arg-type]
+            if script == redis_core_module.scripts.VACUUM_CLAIMED:
+                vacuum_evals += 1
+                if vacuum_evals == 1:
+                    stop_event.set()
+            return result
+
+        monkeypatch.setattr(core._client, "eval", stop_after_first_vacuum)
+        with pytest.raises(StopException):
+            core.vacuum()
+        stop_event.clear()
+        monkeypatch.setattr(core._client, "eval", real_eval)
+        assert core.count_claimed_messages() == 1500
+        core.vacuum()
+        assert core.count_claimed_messages() == 0
+    finally:
+        core.close()
+
+
+def _make_broken_redis_client(injected_exc: redis.RedisError) -> object:
+    from contextlib import nullcontext
+
+    class BrokenPipeTarget:
+        def zscore(self, *_: object, **__: object) -> None:
+            return None
+
+        def execute(self) -> NoReturn:
+            raise injected_exc
+
+    class BrokenClient:
+        def __getattr__(self, _name: str) -> object:
+            if _name == "pipeline":
+                return lambda *_, **__: nullcontext(BrokenPipeTarget())
+            if _name == "scan_iter":
+
+                def _broken_scan(*_: object, **__: object) -> Iterator[str]:
+                    raise injected_exc
+                    yield ""  # pragma: no cover
+
+                return _broken_scan
+
+            def _fail(*_: object, **__: object) -> NoReturn:
+                raise injected_exc
+
+            return _fail
+
+    return BrokenClient()
+
+
+@pytest.mark.parametrize(
+    ("injected_exc", "expected_retryable"),
+    [
+        (redis.ConnectionError("conn drop"), None),
+        (redis.BusyLoadingError("loading"), None),
+        (redis.TimeoutError("timed out"), None),
+        (redis.ResponseError("BUSY Redis is busy running a script"), True),
+    ],
+)
+def test_redis_core_translates_client_errors_preserving_transport_ambiguity(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    injected_exc: redis.RedisError,
+    expected_retryable: bool | None,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.write("jobs", "seed")
+        core.add_alias("alias", "jobs")
+        monkeypatch.setattr(
+            redis_runner, "_client", _make_broken_redis_client(injected_exc)
+        )
+        redis_runner._last_recovery_check_ns = 0
+
+        calls = (
+            core.list_queues,
+            core.get_queue_stats,
+            core.get_overall_stats,
+            core.count_claimed_messages,
+            core.get_alias_version,
+            core.list_aliases,
+            core.get_meta,
+            lambda: core.peek_one("jobs"),
+            lambda: core.peek_many("jobs", limit=5),
+            lambda: core.claim_one("jobs"),
+            lambda: core.find_message_ids("jobs", body_contains="seed"),
+            lambda: core.has_pending_messages("jobs"),
+            lambda: core.latest_pending_timestamp("jobs"),
+            lambda: core.recover_stale_batches(max_age_seconds=0),
+            lambda: core.resolve_alias("alias"),
+            lambda: core.has_alias("alias"),
+            lambda: core.remove_alias("alias"),
+            lambda: core.broadcast("msg"),
+        )
+        for call in calls:
+            redis_runner._last_recovery_check_ns = 0
+            with pytest.raises(OperationalError) as exc_info:
+                call()
+            assert getattr(exc_info.value, "retryable", None) is expected_retryable
+    finally:
+        core.close()
+
+
+def test_redis_generators_isolate_active_batches_across_threads_and_fork(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    gen_a = None
+    try:
+        core.insert_messages(
+            [
+                ("q_a", "a1", 10),
+                ("q_a", "a2", 20),
+                ("q_b", "b1", 30),
+                ("q_b", "b2", 40),
+            ]
+        )
+        gen_a = core.claim_generator(
+            "q_a",
+            delivery_guarantee="at_least_once",
+            batch_size=2,
+            with_timestamps=False,
+        )
+        assert next(gen_a) == "a1"
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"Queue\(\.\.\., persistent=False\), or an independent open_broker\(\)",
+        ):
+            core.write("q_a", "blocked_same_thread")
+
+        sibling_results: list[object] = []
+        sibling_error: list[BaseException] = []
+
+        def run_sibling() -> None:
+            try:
+                claimed = list(
+                    core.claim_generator(
+                        "q_b",
+                        delivery_guarantee="at_least_once",
+                        batch_size=2,
+                        with_timestamps=False,
+                    )
+                )
+                core.write("q_b", "from_sibling")
+                sibling_results.append(claimed)
+            except (
+                RuntimeError,
+                OperationalError,
+                AssertionError,
+            ) as exc:  # pragma: no cover
+                sibling_error.append(exc)
+
+        worker = threading.Thread(target=run_sibling)
+        worker.start()
+        worker.join(timeout=5.0)
+        assert not worker.is_alive()
+        assert sibling_error == []
+        assert sibling_results == [["b1", "b2"]]
+
+        # Sibling batch completion must NOT clear Thread A's active batch guard.
+        with pytest.raises(
+            RuntimeError,
+            match=r"at_least_once claim_generator batch is being yielded",
+        ):
+            core.write("q_a", "still_blocked_same_thread")
+
+        assert list(gen_a) == ["a2"]
+        gen_a = None
+
+        # Simulate fork while a parent batch entry exists: child clears inherited guards.
+        core._set_active_generator_batch("claim")
+        parent_pid = core._pid
+        monkeypatch.setattr("simplebroker_redis.core.os.getpid", lambda: parent_pid + 1)
+        core._check_fork_safety()
+        core._assert_no_reentrant_mutation_during_batch("write")
+    finally:
+        if gen_a is not None:
+            gen_a.close()
+        core.close()
+
+
+@pytest.mark.parametrize("bad_batch_size", [0, -1, True, "10"])
+@pytest.mark.parametrize("delivery", ["exactly_once", "at_least_once"])
+def test_redis_generator_batch_size_validation_and_defaults(
+    redis_runner: RedisRunner,
+    bad_batch_size: object,
+    delivery: str,
+) -> None:
+    core = RedisBrokerCore(
+        redis_runner,
+        config=resolve_config(override={"BROKER_GENERATOR_BATCH_SIZE": 2}),
+    )
+    try:
+        with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+            next(
+                core.claim_generator(
+                    "jobs",
+                    delivery_guarantee=delivery,  # type: ignore[arg-type]
+                    batch_size=bad_batch_size,  # type: ignore[arg-type]
+                )
+            )
+        with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+            next(
+                core.move_generator(
+                    "jobs",
+                    "dest",
+                    delivery_guarantee=delivery,  # type: ignore[arg-type]
+                    batch_size=bad_batch_size,  # type: ignore[arg-type]
+                )
+            )
+        with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+            next(
+                core.peek_generator(
+                    "jobs",
+                    batch_size=bad_batch_size,  # type: ignore[arg-type]
+                )
+            )
+    finally:
+        core.close()
+
+
+def test_redis_generator_batch_size_none_preserves_operation_defaults(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(
+        redis_runner,
+        config=resolve_config(override={"BROKER_GENERATOR_BATCH_SIZE": 2}),
+    )
+    observer = RedisBrokerCore(redis_runner)
+    gen = None
+    try:
+        core.insert_messages(
+            [("jobs", "m1", 10), ("jobs", "m2", 20), ("jobs", "m3", 30)]
+        )
+        assert len(list(core.peek_generator("jobs", batch_size=None))) == 3
+        gen = core.claim_generator(
+            "jobs",
+            delivery_guarantee="at_least_once",
+            batch_size=None,
+            with_timestamps=False,
+        )
+        assert next(gen) == "m1"
+        assert next(gen) == "m2"
+        # Batch 1 commits on advancing to batch 2
+        assert next(gen) == "m3"
+        assert observer.count_claimed_messages() == 2
+        gen.close()
+        gen = None
+        assert observer.count_claimed_messages() == 2
+    finally:
+        if gen is not None:
+            gen.close()
+        observer.close()
+        core.close()
+
+
+def test_redis_alias_mutations_increment_alias_version_monotonically_with_frozen_clock(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        assert "_alias_cache" not in core.__dict__
+        assert "_load_aliases_locked" not in RedisBrokerCore.__dict__
+
+        monkeypatch.setattr("simplebroker_redis.core.time.time_ns", lambda: 1_000_000)
+        v0 = core.get_alias_version()
+
+        core.add_alias("a1", "q_old")
+        v1 = core.get_alias_version()
+        assert v1 == v0 + 1
+
+        core.write("q_old", "payload")
+        core.rename_queue("q_old", "q_new")
+        v2 = core.get_alias_version()
+        assert v2 == v1 + 1
+
+        core.remove_alias("a1")
+        v3 = core.get_alias_version()
+        assert v3 == v2 + 1
+    finally:
+        core.close()

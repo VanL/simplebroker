@@ -50,8 +50,18 @@ class SchemaInspection:
     current_shape_ready: bool = False
 
 
+def reject_unknown_backend_options(backend_options: Mapping[str, Any] | None) -> None:
+    """Reject unknown keys in Postgres backend_options."""
+    if not backend_options:
+        return
+    unknown = sorted(str(key) for key in backend_options if key != "schema")
+    if unknown:
+        raise DatabaseError(f"Unknown Postgres backend option(s): {', '.join(unknown)}")
+
+
 def require_schema_name(backend_options: Mapping[str, Any] | None) -> str:
     """Extract and validate the configured schema name."""
+    reject_unknown_backend_options(backend_options)
     backend_options = backend_options or {}
     schema = backend_options.get("schema")
     if not isinstance(schema, str) or not schema:

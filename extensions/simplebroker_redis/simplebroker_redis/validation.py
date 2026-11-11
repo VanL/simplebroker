@@ -12,6 +12,7 @@ import redis
 
 from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError
+from simplebroker._targets import redact_backend_target
 
 from ._constants import DEFAULT_NAMESPACE, REDIS_SCHEMA_VERSION
 from .responses import response_dict
@@ -98,9 +99,24 @@ def is_namespace_key(prefix: str, key: object) -> bool:
 def connect(target: str) -> redis.Redis:
     try:
         client = redis.Redis.from_url(target, decode_responses=True)
+    except (redis.RedisError, ValueError) as exc:
+        raw_detail = str(exc)
+        safe_detail = redact_backend_target(raw_detail)
+        raise DatabaseError(
+            f"Could not connect to Valkey/Redis target: {safe_detail}"
+        ) from (None if safe_detail != raw_detail else exc)
+    try:
         client.ping()
     except redis.RedisError as exc:
-        raise DatabaseError(f"Could not connect to Valkey/Redis target: {exc}") from exc
+        client.close()
+        raw_detail = str(exc)
+        safe_detail = redact_backend_target(raw_detail)
+        raise DatabaseError(
+            f"Could not connect to Valkey/Redis target: {safe_detail}"
+        ) from (None if safe_detail != raw_detail else exc)
+    except BaseException:
+        client.close()
+        raise
     return client
 
 

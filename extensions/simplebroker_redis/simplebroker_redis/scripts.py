@@ -19,7 +19,6 @@ local aliases = KEYS[1]
 local meta = KEYS[2]
 local alias = ARGV[1]
 local target = ARGV[2]
-local alias_version = ARGV[3]
 if redis.call('HEXISTS', aliases, alias) == 1 then
   return -1
 end
@@ -33,7 +32,16 @@ for index = 2, #entries, 2 do
   end
 end
 redis.call('HSET', aliases, alias, target)
-redis.call('HSET', meta, 'alias_version', alias_version)
+redis.call('HINCRBY', meta, 'alias_version', 1)
+return 1
+"""
+
+REMOVE_ALIAS = """
+local aliases = KEYS[1]
+local meta = KEYS[2]
+local alias = ARGV[1]
+redis.call('HDEL', aliases, alias)
+redis.call('HINCRBY', meta, 'alias_version', 1)
 return 1
 """
 
@@ -49,15 +57,21 @@ local queue = ARGV[1]
 local raw_id = ARGV[2]
 local id = ARGV[3]
 local body = ARGV[4]
-local keep_raw = ARGV[5]
+local activity_channel = ARGV[5]
+local keep_raw = ARGV[6]
 local keep = nil
 local displaced = {}
+if activity_channel == nil or activity_channel == '' then
+  return {-5}
+end
 if keep_raw ~= nil then
   keep = tonumber(keep_raw)
-  if #KEYS ~= 7 or #ARGV ~= 5 or keep == nil or keep < 1
+  if #KEYS ~= 7 or #ARGV ~= 6 or keep == nil or keep < 1
       or keep > 9999 or keep ~= math.floor(keep) then
     return {-5}
   end
+elseif #KEYS ~= 5 or #ARGV ~= 5 then
+  return {-5}
 end
 if redis.call('HGET', meta, 'magic') == false then
   return {-2}
@@ -104,6 +118,7 @@ for _, displaced_id in ipairs(displaced) do
   redis.call('ZREM', pending, displaced_id)
   redis.call('ZADD', claimed, 0, displaced_id)
 end
+redis.call('PUBLISH', activity_channel, queue)
 return {1}
 """
 
@@ -114,12 +129,13 @@ local all_ids = KEYS[3]
 local queues = KEYS[4]
 local required_last_ts = ARGV[2]
 local count = tonumber(ARGV[3])
+local activity_prefix = ARGV[4]
 if redis.call('HGET', meta, 'magic') == false then
   return {-2}
 end
 local seen = {}
 for index = 1, count do
-  local arg_offset = 4 + ((index - 1) * 3)
+  local arg_offset = 5 + ((index - 1) * 3)
   local id = ARGV[arg_offset + 1]
   if seen[id] == true then
     return {-3}
@@ -133,13 +149,17 @@ local function pad19(value)
   local text = tostring(value or '0')
   return string.rep('0', 19 - string.len(text)) .. text
 end
-local current = pad19(redis.call('HGET', meta, 'last_ts') or '0')
+local raw_current = tostring(redis.call('HGET', meta, 'last_ts') or '0')
+local current = pad19(raw_current)
+local persisted_last_ts = raw_current
 if current < required_last_ts then
   redis.call('HSET', meta, 'last_ts', ARGV[1])
+  persisted_last_ts = ARGV[1]
 end
+local published = {}
 for index = 1, count do
   local key_offset = 4 + index
-  local arg_offset = 4 + ((index - 1) * 3)
+  local arg_offset = 5 + ((index - 1) * 3)
   local pending = KEYS[key_offset]
   local queue = ARGV[arg_offset]
   local id = ARGV[arg_offset + 1]
@@ -148,8 +168,12 @@ for index = 1, count do
   redis.call('ZADD', all_ids, 0, id)
   redis.call('ZADD', pending, 0, id)
   redis.call('SADD', queues, queue)
+  if not published[queue] then
+    published[queue] = true
+    redis.call('PUBLISH', activity_prefix .. queue, queue)
+  end
 end
-return {1}
+return {1, persisted_last_ts}
 """
 
 BROADCAST_MESSAGE = """
@@ -161,17 +185,19 @@ local required_last_ts = ARGV[2]
 local capacity = tonumber(ARGV[3])
 local body = ARGV[4]
 local pending_prefix = ARGV[5]
-local selector_mode = ARGV[6]
-local requested_count = tonumber(ARGV[7])
+local activity_prefix = ARGV[6]
+local selector_mode = ARGV[7]
+local requested_count = tonumber(ARGV[8])
 if capacity == nil or capacity < 0 or capacity ~= math.floor(capacity)
     or requested_count == nil or requested_count < 0
     or requested_count ~= math.floor(requested_count)
+    or activity_prefix == nil or activity_prefix == ''
     or (selector_mode ~= 'all' and selector_mode ~= 'exact'
         and selector_mode ~= 'exact_create')
     or (selector_mode == 'all' and requested_count ~= 0)
     or ((selector_mode == 'exact' or selector_mode == 'exact_create')
         and capacity ~= requested_count)
-    or #ARGV ~= 7 + requested_count + capacity then
+    or #ARGV ~= 8 + requested_count + capacity then
   return {-5}
 end
 if redis.call('HGET', meta, 'magic') == false then
@@ -186,18 +212,18 @@ if selector_mode == 'all' then
   end
 elseif selector_mode == 'exact' then
   for index = 1, requested_count do
-    local queue = ARGV[7 + index]
+    local queue = ARGV[8 + index]
     if redis.call('SISMEMBER', queues, queue) == 1 then
       table.insert(queue_names, queue)
     end
   end
 else
   for index = 1, requested_count do
-    table.insert(queue_names, ARGV[7 + index])
+    table.insert(queue_names, ARGV[8 + index])
   end
 end
 if #queue_names == 0 then
-  return {1}
+  return {1, '', 0}
 end
 if selector_mode == 'exact_create' then
   -- Type-preflight the queue registry before any message/high-water mutation.
@@ -206,7 +232,7 @@ if selector_mode == 'exact_create' then
 end
 local seen = {}
 for index = 1, #queue_names do
-  local id = ARGV[7 + requested_count + index]
+  local id = ARGV[8 + requested_count + index]
   if seen[id] == true then
     return {-3}
   end
@@ -221,26 +247,28 @@ local function pad19(value)
   local text = tostring(value or '0')
   return string.rep('0', 19 - string.len(text)) .. text
 end
-local current = pad19(redis.call('HGET', meta, 'last_ts') or '0')
-local first_id = ARGV[8 + requested_count]
+local raw_current = tostring(redis.call('HGET', meta, 'last_ts') or '0')
+local current = pad19(raw_current)
+local first_id = ARGV[9 + requested_count]
 if current >= first_id then
   return {-6}
 end
+local persisted_last_ts = raw_current
 if current < required_last_ts then
   redis.call('HSET', meta, 'last_ts', ARGV[1])
+  persisted_last_ts = ARGV[1]
 end
-local response = {1}
 for index, queue in ipairs(queue_names) do
-  local id = ARGV[7 + requested_count + index]
+  local id = ARGV[8 + requested_count + index]
   redis.call('HSET', bodies, id, body)
   redis.call('ZADD', all_ids, 0, id)
   redis.call('ZADD', pending_prefix .. queue .. ':pending', 0, id)
   if selector_mode == 'exact_create' then
     redis.call('SADD', queues, queue)
   end
-  table.insert(response, queue)
+  redis.call('PUBLISH', activity_prefix .. queue, queue)
 end
-return response
+return {1, persisted_last_ts, #queue_names}
 """
 
 CLAIM_MESSAGES = """
@@ -325,6 +353,7 @@ local maxb = ARGV[5]
 local exact_id = ARGV[6]
 local require_unclaimed = ARGV[7] == '1'
 local newest = ARGV[8] == 'newest'
+local target_activity_channel = ARGV[9]
 local out = {}
 local moved = 0
 local cursor = ''
@@ -418,6 +447,9 @@ for window = 1, 16 do
 end
 if redis.call('ZCARD', source_pending) == 0 and redis.call('ZCARD', source_claimed) == 0 and redis.call('ZCARD', source_reserved) == 0 then
   redis.call('SREM', queues, source_queue)
+end
+if moved > 0 then
+  redis.call('PUBLISH', target_activity_channel, target_queue)
 end
 local response = {cursor}
 for _, value in ipairs(out) do table.insert(response, value) end
@@ -580,7 +612,8 @@ local meta = KEYS[9]
 local old_queue = ARGV[1]
 local new_queue = ARGV[2]
 local retarget_aliases = ARGV[3] == '1'
-local alias_version = ARGV[4]
+local old_activity_channel = ARGV[4]
+local new_activity_channel = ARGV[5]
 
 if redis.call('ZCARD', old_reserved) > 0 then
   return {-1, 0, 0}
@@ -620,10 +653,12 @@ if retarget_aliases then
     end
   end
   if aliases_retargeted > 0 then
-    redis.call('HSET', meta, 'alias_version', alias_version)
+    redis.call('HINCRBY', meta, 'alias_version', 1)
   end
 end
 
+redis.call('PUBLISH', old_activity_channel, old_queue)
+redis.call('PUBLISH', new_activity_channel, new_queue)
 return {1, messages_renamed, aliases_retargeted}
 """
 
@@ -718,6 +753,7 @@ local queues = KEYS[6]
 local source_claimed = KEYS[7]
 local source_queue = ARGV[1]
 local target_queue = ARGV[2]
+local target_activity_channel = ARGV[3]
 if redis.call('HGET', batch_meta, 'op') ~= 'move' or redis.call('HGET', batch_meta, 'source') ~= source_queue or redis.call('HGET', batch_meta, 'target') ~= target_queue then
   return -1
 end
@@ -731,6 +767,9 @@ redis.call('SADD', queues, target_queue)
 redis.call('DEL', batch_ids, batch_meta)
 if redis.call('ZCARD', source_pending) == 0 and redis.call('ZCARD', source_claimed) == 0 and redis.call('ZCARD', source_reserved) == 0 then
   redis.call('SREM', queues, source_queue)
+end
+if #ids > 0 then
+  redis.call('PUBLISH', target_activity_channel, target_queue)
 end
 return #ids
 """

@@ -14,7 +14,7 @@ from collections import deque
 from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import AbstractContextManager
 from fnmatch import fnmatchcase
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar
 
 import redis
 
@@ -33,6 +33,7 @@ from simplebroker._exceptions import (
     OperationalError,
     QueueNameError,
     SidecarUnavailableError,
+    StopException,
     TimestampError,
 )
 from simplebroker._message_id import MessageIdInput, normalize_message_id
@@ -64,6 +65,7 @@ from simplebroker.db import (
     _literal_prefix_from_fnmatch,
     _validate_queue_name_cached,
     _validate_queue_prefix,
+    resolve_generator_batch_size,
 )
 from simplebroker.ext import (
     DeliveryGuarantee,
@@ -82,6 +84,7 @@ from .validation import is_namespace_key
 
 logger = logging.getLogger(__name__)
 
+P = ParamSpec("P")
 T = TypeVar("T")
 
 _CONFLICT_RETRY_MAX_ELAPSED = 30.0
@@ -215,7 +218,10 @@ class RedisBrokerCore:
     ) -> None:
         self._runner = runner
         self._config = resolve_config(config=config)
-        self._stop_event = stop_event or threading.Event()
+        self._default_stop_event = threading.Event()
+        self._stop_event = (
+            stop_event if stop_event is not None else self._default_stop_event
+        )
         self._lock = threading.RLock()
         self._write_lock = _write_lock_registry.get(runner.target, runner.namespace)
         self._pid = os.getpid()
@@ -225,13 +231,10 @@ class RedisBrokerCore:
         self._maintenance_schedule = MaintenanceSchedule(
             int(self._config["AUTO_VACUUM_INTERVAL"])
         )
-        self._active_generator_batch: Literal["claim", "move"] | None = None
-        self._active_generator_batch_owner: int | None = None
+        self._active_generator_batches: dict[int, Literal["claim", "move"]] = {}
         self._ts_conflict_count = 0
         self._ts_resync_count = 0
         self._backend_plugin = runner.backend_plugin
-        self._alias_cache: dict[str, str] = {}
-        self._alias_cache_version = -1
         runner._check_fork()
         with runner._init_lock:
             if not runner._target_initialized:
@@ -249,6 +252,25 @@ class RedisBrokerCore:
     def _client(self) -> redis.Redis:
         return self._runner.client
 
+    def _call_redis(
+        self, operation: Callable[P, T], *args: P.args, **kwargs: P.kwargs
+    ) -> T:
+        try:
+            return operation(*args, **kwargs)
+        except redis.RedisError as exc:
+            raise _translate_redis_error(exc) from exc
+
+    def _reserved_scores(
+        self, reserved_key: str, encoded_ids: Sequence[str]
+    ) -> list[Any]:
+        def _fetch() -> list[Any]:
+            with self._client.pipeline(transaction=False) as pipe:
+                for encoded in encoded_ids:
+                    pipe.zscore(reserved_key, encoded)
+                return response_list(pipe.execute())
+
+        return self._call_redis(_fetch)
+
     def _key(self, *parts: str) -> str:
         return self._keys.key(*parts)
 
@@ -261,25 +283,17 @@ class RedisBrokerCore:
             return self._keys.reserved(queue)
         return self._key("q", queue, state)
 
-    def _activity_channel(self, queue: str | None = None) -> str:
-        if queue is None:
-            return self._keys.activity_all
-        return self._keys.activity_queue(queue)
-
     def _queue_names(self) -> set[Any]:
-        return response_set(self._client.smembers(self._key("queues")))
-
-    def _publish(self, queue: str | None) -> None:
-        channel = self._activity_channel(queue)
-        self._client.publish(channel, "*" if queue is None else queue)
-        if queue is not None:
-            self._client.publish(self._activity_channel(None), queue)
+        return response_set(
+            self._call_redis(lambda: self._client.smembers(self._key("queues")))
+        )
 
     def _check_fork_safety(self) -> None:
         self._runner._check_fork()
         current_pid = os.getpid()
         if current_pid != self._pid:
             self._lock = threading.RLock()
+            self._active_generator_batches = {}
             self._pid = current_pid
             self._write_lock = _write_lock_registry.get(
                 self._runner.target,
@@ -287,7 +301,9 @@ class RedisBrokerCore:
             )
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
-        self._stop_event = stop_event or threading.Event()
+        self._stop_event = (
+            stop_event if stop_event is not None else self._default_stop_event
+        )
 
     def _validate_queue_name(self, queue: str) -> None:
         error = _validate_queue_name_cached(queue)
@@ -312,23 +328,24 @@ class RedisBrokerCore:
     def _set_active_generator_batch(
         self, operation: Literal["claim", "move"] | None
     ) -> None:
-        if operation is None:
-            self._active_generator_batch = None
-            self._active_generator_batch_owner = None
-            return
-        self._active_generator_batch = operation
-        self._active_generator_batch_owner = threading.get_ident()
+        ident = threading.get_ident()
+        with self._lock:
+            if operation is None:
+                self._active_generator_batches.pop(ident, None)
+            else:
+                self._active_generator_batches[ident] = operation
 
     def _assert_no_reentrant_mutation_during_batch(self, operation_name: str) -> None:
-        if self._active_generator_batch is None:
-            return
-        if self._active_generator_batch_owner != threading.get_ident():
+        ident = threading.get_ident()
+        with self._lock:
+            active_batch = self._active_generator_batches.get(ident)
+        if active_batch is None:
             return
         raise RuntimeError(
             f"Cannot perform {operation_name} while an at_least_once "
-            f"{self._active_generator_batch}_generator batch is being yielded from "
-            "this BrokerDB instance. Use delivery_guarantee='exactly_once' or a "
-            "separate BrokerDB/Queue instance."
+            f"{active_batch}_generator batch is being yielded from "
+            "this broker instance. Use delivery_guarantee='exactly_once', "
+            "Queue(..., persistent=False), or an independent open_broker() handle."
         )
 
     def generate_timestamp(self) -> int:
@@ -374,7 +391,6 @@ class RedisBrokerCore:
                 message,
                 keep_newest=validated_keep,
             )
-        self._publish(queue)
         self._record_maintenance_activity(1)
         return timestamp
 
@@ -394,6 +410,7 @@ class RedisBrokerCore:
             str(required_last_ts),
             encode_id(required_last_ts),
             str(len(normalized_records)),
+            self._key("activity", "q", ""),
         ]
         for queue, message, message_id in normalized_records:
             argv.extend((queue, encode_id(message_id), message))
@@ -416,9 +433,12 @@ class RedisBrokerCore:
 
         code = int(result[0])
         if code == 1:
-            self.refresh_last_timestamp()
-            for queue in {queue for queue, _, _ in normalized_records}:
-                self._publish(queue)
+            persisted_last_ts = (
+                int(str(result[1]))
+                if len(result) > 1 and str(result[1])
+                else required_last_ts
+            )
+            self._timestamp_gen._publish_committed_floor(persisted_last_ts)
             self._record_maintenance_activity(len(normalized_records))
             return
         if code == -1:
@@ -487,7 +507,13 @@ class RedisBrokerCore:
             self._keys.pending(queue),
             self._keys.queues,
         ]
-        arguments = [queue, str(timestamp), encode_id(timestamp), message]
+        arguments = [
+            queue,
+            str(timestamp),
+            encode_id(timestamp),
+            message,
+            self._keys.activity_queue(queue),
+        ]
         if keep_newest is not None:
             keys.extend(
                 (
@@ -540,14 +566,16 @@ class RedisBrokerCore:
     def _resync_timestamp_generator(self) -> None:
         max_ts = self._backend_plugin.read_last_ts(self._runner)
         raw = response_list(
-            self._client.execute_command(
-                "ZREVRANGEBYLEX",
-                self._keys.all_ids,
-                "+",
-                "-",
-                "LIMIT",
-                0,
-                1,
+            self._call_redis(
+                lambda: self._client.execute_command(
+                    "ZREVRANGEBYLEX",
+                    self._keys.all_ids,
+                    "+",
+                    "-",
+                    "LIMIT",
+                    0,
+                    1,
+                )
             )
         )
         if raw:
@@ -604,22 +632,27 @@ class RedisBrokerCore:
         )
         if normalized_exact_timestamp is not None:
             encoded = encode_id(normalized_exact_timestamp)
-            return [encoded] if self._client.zscore(zset, encoded) is not None else []
+            score = self._call_redis(lambda: self._client.zscore(zset, encoded))
+            return [encoded] if score is not None else []
         if order == "newest":
-            raw_ids = self._client.zrevrangebylex(
-                zset,
-                max_bound(before_timestamp),
-                min_bound(after_timestamp),
-                start=offset,
-                num=limit,
+            raw_ids = self._call_redis(
+                lambda: self._client.zrevrangebylex(
+                    zset,
+                    max_bound(before_timestamp),
+                    min_bound(after_timestamp),
+                    start=offset,
+                    num=limit,
+                )
             )
         else:
-            raw_ids = self._client.zrangebylex(
-                zset,
-                min_bound(after_timestamp),
-                max_bound(before_timestamp),
-                start=offset,
-                num=limit,
+            raw_ids = self._call_redis(
+                lambda: self._client.zrangebylex(
+                    zset,
+                    min_bound(after_timestamp),
+                    max_bound(before_timestamp),
+                    start=offset,
+                    num=limit,
+                )
             )
         return [str(encoded) for encoded in response_list(raw_ids)]
 
@@ -668,7 +701,9 @@ class RedisBrokerCore:
             ids = sorted(merged, reverse=order == "newest")[offset : offset + limit]
         if not ids:
             return []
-        bodies = response_list(self._client.hmget(self._key("bodies"), ids))
+        bodies = response_list(
+            self._call_redis(lambda: self._client.hmget(self._key("bodies"), ids))
+        )
         return [
             (str(body), decode_id(encoded))
             for encoded, body in zip(ids, bodies, strict=False)
@@ -780,6 +815,7 @@ class RedisBrokerCore:
                         else "",
                         "1" if require_unclaimed else "0",
                         order,
+                        self._keys.activity_queue(target_queue),
                     )
                 )
             except redis.RedisError as exc:
@@ -791,8 +827,6 @@ class RedisBrokerCore:
                 maxb = f"({cursor}"
             else:
                 minb = f"({cursor}"
-        if rows:
-            self._publish(target_queue)
         self._record_maintenance_activity(len(rows))
         return rows
 
@@ -804,6 +838,7 @@ class RedisBrokerCore:
         with_timestamps: bool = True,
         order: str = "oldest",
     ) -> tuple[str, int] | str | None:
+        self._check_fork_safety()
         self._validate_queue_name(queue)
         self._assert_no_reentrant_mutation_during_batch("claim operation")
         validated_order = validate_selection_order(order)
@@ -828,6 +863,7 @@ class RedisBrokerCore:
         before_timestamp: int | None = None,
         order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]:
+        self._check_fork_safety()
         validated_order = validate_selection_order(order)
         validate_delivery_guarantee(delivery_guarantee)
         if limit < 1:
@@ -855,8 +891,11 @@ class RedisBrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         config: Config | None = None,
     ) -> Generator[tuple[str, int] | str, None, None]:
+        self._check_fork_safety()
         validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         self._validate_queue_name(queue)
+        if batch_size is not None:
+            resolve_generator_batch_size(batch_size, default=1)
         if validated_delivery == "exactly_once":
             while True:
                 rows = self._claim_rows(
@@ -874,10 +913,8 @@ class RedisBrokerCore:
         effective_config = (
             self._config if config is None else resolve_config(config=config)
         )
-        effective_batch_size = (
-            batch_size
-            if batch_size is not None
-            else effective_config["GENERATOR_BATCH_SIZE"]
+        effective_batch_size = resolve_generator_batch_size(
+            batch_size, default=int(effective_config["GENERATOR_BATCH_SIZE"])
         )
         yield from self._claim_batch_generator(
             queue,
@@ -989,14 +1026,13 @@ class RedisBrokerCore:
                 self._keys.claimed(source_queue),
                 source_queue,
                 target_queue,
+                self._keys.activity_queue(target_queue),
             )
         except redis.RedisError as exc:
             raise _translate_redis_error(exc) from exc
         result_int = response_int(result)
         if result_int < 0:
             raise OperationalError("Cannot commit stale or invalid Redis move batch")
-        if result_int:
-            self._publish(target_queue)
 
     def _rollback_batch(
         self, queue: str, token: str, rows: list[tuple[str, int]]
@@ -1058,6 +1094,7 @@ class RedisBrokerCore:
         include_claimed: bool = False,
         order: str = "oldest",
     ) -> tuple[str, int] | str | None:
+        self._check_fork_safety()
         self._validate_queue_name(queue)
         validated_order = validate_selection_order(order)
         rows = self._peek_rows(
@@ -1123,6 +1160,7 @@ class RedisBrokerCore:
         include_claimed: bool = False,
         order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]:
+        self._check_fork_safety()
         validated_order = validate_selection_order(order)
         if limit < 1:
             raise ValueError("limit must be at least 1")
@@ -1148,8 +1186,11 @@ class RedisBrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
     ) -> Generator[tuple[str, int] | str, None, None]:
+        self._check_fork_safety()
         self._validate_queue_name(queue)
-        effective_batch_size = batch_size or PEEK_BATCH_SIZE
+        effective_batch_size = resolve_generator_batch_size(
+            batch_size, default=PEEK_BATCH_SIZE
+        )
         cursor = after_timestamp
         while True:
             rows = self._peek_rows(
@@ -1181,6 +1222,7 @@ class RedisBrokerCore:
         with_timestamps: bool = True,
         order: str = "oldest",
     ) -> tuple[str, int] | str | None:
+        self._check_fork_safety()
         validated_order = validate_selection_order(order)
         if source_queue == target_queue:
             raise ValueError("Source and target queues cannot be the same")
@@ -1212,6 +1254,7 @@ class RedisBrokerCore:
         require_unclaimed: bool = True,
         order: str = "oldest",
     ) -> list[tuple[str, int]] | list[str]:
+        self._check_fork_safety()
         validated_order = validate_selection_order(order)
         validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
@@ -1245,11 +1288,14 @@ class RedisBrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         config: Config | None = None,
     ) -> Generator[tuple[str, int] | str, None, None]:
+        self._check_fork_safety()
         validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
             raise ValueError("Source and target queues cannot be the same")
         self._validate_queue_name(source_queue)
         self._validate_queue_name(target_queue)
+        if batch_size is not None:
+            resolve_generator_batch_size(batch_size, default=1)
         if validated_delivery == "exactly_once":
             while True:
                 rows = self._move_rows(
@@ -1268,10 +1314,8 @@ class RedisBrokerCore:
         effective_config = (
             self._config if config is None else resolve_config(config=config)
         )
-        effective_batch_size = (
-            batch_size
-            if batch_size is not None
-            else effective_config["GENERATOR_BATCH_SIZE"]
+        effective_batch_size = resolve_generator_batch_size(
+            batch_size, default=int(effective_config["GENERATOR_BATCH_SIZE"])
         )
         while True:
             token, rows = self._begin_batch(
@@ -1328,16 +1372,30 @@ class RedisBrokerCore:
         ]
 
     def queue_exists(self, queue: str) -> bool:
+        self._check_fork_safety()
         self._validate_queue_name(queue)
         return bool(
-            response_int(self._client.zcard(self._qkey(queue, "pending")))
-            or response_int(self._client.zcard(self._qkey(queue, "claimed")))
+            response_int(
+                self._call_redis(
+                    lambda: self._client.zcard(self._qkey(queue, "pending"))
+                )
+            )
+            or response_int(
+                self._call_redis(
+                    lambda: self._client.zcard(self._qkey(queue, "claimed"))
+                )
+            )
         )
 
     def get_queue_stat(self, queue: str) -> QueueStats:
+        self._check_fork_safety()
         self._validate_queue_name(queue)
-        pending = response_int(self._client.zcard(self._qkey(queue, "pending")))
-        claimed = response_int(self._client.zcard(self._qkey(queue, "claimed")))
+        pending = response_int(
+            self._call_redis(lambda: self._client.zcard(self._qkey(queue, "pending")))
+        )
+        claimed = response_int(
+            self._call_redis(lambda: self._client.zcard(self._qkey(queue, "claimed")))
+        )
         return QueueStats(
             queue=queue, pending=pending, claimed=claimed, total=pending + claimed
         )
@@ -1348,6 +1406,7 @@ class RedisBrokerCore:
         prefix: str | None = None,
         pattern: str | None = None,
     ) -> list[QueueStats]:
+        self._check_fork_safety()
         if prefix is not None and pattern is not None:
             raise ValueError("prefix and pattern cannot be used together")
         if prefix is not None:
@@ -1397,6 +1456,7 @@ class RedisBrokerCore:
                 self._maintenance_schedule.mark_check_succeeded()
 
     def status(self) -> dict[str, int]:
+        self._check_fork_safety()
         _, total = self.get_overall_stats()
         return {
             "total_messages": total,
@@ -1412,7 +1472,9 @@ class RedisBrokerCore:
             else [str(item) for item in self._queue_names()]
         )
         for name in queues:
-            if response_int(self._client.zcard(self._qkey(name, "reserved"))):
+            if response_int(
+                self._call_redis(self._client.zcard, self._qkey(name, "reserved"))
+            ):
                 raise OperationalError(
                     "Cannot delete queue while an at_least_once batch is active"
                 )
@@ -1427,6 +1489,7 @@ class RedisBrokerCore:
         semantics. If a reservation appears between per-queue invocations, the
         operation raises after any earlier queues have already been deleted.
         """
+        self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("delete")
         self._refuse_reserved(queue)
         queues = (
@@ -1466,6 +1529,7 @@ class RedisBrokerCore:
     def delete_message_ids(
         self, queue: str, message_ids: Sequence[MessageIdInput]
     ) -> int:
+        self._check_fork_safety()
         self._validate_queue_name(queue)
         self._assert_no_reentrant_mutation_during_batch("delete_message_ids")
         if not message_ids:
@@ -1584,7 +1648,8 @@ class RedisBrokerCore:
                     old_queue,
                     new_queue,
                     "1" if retarget_aliases else "0",
-                    str(time.time_ns()),
+                    self._keys.activity_queue(old_queue),
+                    self._keys.activity_queue(new_queue),
                 )
             )
         except redis.RedisError as exc:
@@ -1602,9 +1667,6 @@ class RedisBrokerCore:
 
         messages_renamed = int(result[1])
         aliases_retargeted = int(result[2])
-        if messages_renamed > 0:
-            self._publish(old_queue)
-            self._publish(new_queue)
         return QueueRenameResult(
             old_queue=old_queue,
             new_queue=new_queue,
@@ -1649,12 +1711,14 @@ class RedisBrokerCore:
             ids = [
                 str(encoded)
                 for encoded in response_list(
-                    self._client.zrangebylex(
-                        source_key,
-                        source_bounds[source_key],
-                        maxb,
-                        start=0,
-                        num=BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE,
+                    self._call_redis(
+                        lambda: self._client.zrangebylex(
+                            source_key,
+                            source_bounds[source_key],
+                            maxb,
+                            start=0,
+                            num=BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE,
+                        )
                     )
                 )
             ]
@@ -1683,11 +1747,10 @@ class RedisBrokerCore:
             if not ordered_ids:
                 break
 
-            bodies = response_list(self._client.hmget(self._keys.bodies, ordered_ids))
-            with self._client.pipeline(transaction=False) as pipe:
-                for encoded in ordered_ids:
-                    pipe.zscore(reserved_key, encoded)
-                reserved_scores = response_list(pipe.execute())
+            bodies = response_list(
+                self._call_redis(self._client.hmget, self._keys.bodies, ordered_ids)
+            )
+            reserved_scores = self._reserved_scores(reserved_key, ordered_ids)
 
             for encoded, body, reserved_score in zip(
                 ordered_ids, bodies, reserved_scores, strict=False
@@ -1748,11 +1811,13 @@ class RedisBrokerCore:
         if selector_mode != self._BROADCAST_SELECTOR_ALL:
             timestamp_capacity = len(requested_queues)
         else:
-            queue_count = response_int(self._client.scard(self._keys.queues))
+            queue_count = response_int(
+                self._call_redis(lambda: self._client.scard(self._keys.queues))
+            )
             timestamp_capacity = queue_count + max(8, (queue_count // 4) + 1)
         growth_attempts = 0
 
-        def attempt() -> list[str]:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-021] exception
+        def attempt() -> tuple[int, int | None]:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-021] exception
             nonlocal growth_attempts, timestamp_capacity
             while True:
                 try:
@@ -1778,6 +1843,7 @@ class RedisBrokerCore:
                             str(timestamp_capacity),
                             message,
                             self._key("q", ""),
+                            self._key("activity", "q", ""),
                             selector_mode,
                             str(len(requested_queues)),
                             *requested_queues,
@@ -1789,7 +1855,7 @@ class RedisBrokerCore:
 
                 code = int(result[0])
                 if code == self._BROADCAST_RESULT_SUCCESS:
-                    return [str(queue) for queue in result[1:]]
+                    return self._parse_broadcast_success(result)
                 if code == self._BROADCAST_RESULT_CAPACITY:
                     if selector_mode != self._BROADCAST_SELECTOR_ALL:
                         raise OperationalError(
@@ -1823,18 +1889,31 @@ class RedisBrokerCore:
                     raise OperationalError("Malformed Redis broadcast script arguments")
                 raise OperationalError(f"Unexpected Redis broadcast result: {code}")
 
-        affected_queues = _execute_conflict_retry(
+        affected_count, persisted_last_ts = _execute_conflict_retry(
             attempt,
             exhaustion_message=(
                 "Failed to broadcast message after repeated timestamp conflicts"
             ),
             stop_event=self._stop_event,
         )
-        self.refresh_last_timestamp()
-        for queue in affected_queues:
-            self._publish(queue)
-        self._record_maintenance_activity(len(affected_queues))
-        return len(affected_queues)
+        self._apply_broadcast_floor(persisted_last_ts)
+        self._record_maintenance_activity(affected_count)
+        return affected_count
+
+    @staticmethod
+    def _parse_broadcast_success(result: list[Any]) -> tuple[int, int | None]:
+        if len(result) < 3:
+            raise OperationalError("Malformed Redis broadcast result")
+        affected_count = int(result[2])
+        raw_last_ts = str(result[1])
+        persisted_last_ts = (
+            int(raw_last_ts) if affected_count > 0 and raw_last_ts else None
+        )
+        return affected_count, persisted_last_ts
+
+    def _apply_broadcast_floor(self, persisted_last_ts: int | None) -> None:
+        if persisted_last_ts is not None:
+            self._timestamp_gen._publish_committed_floor(persisted_last_ts)
 
     _BROADCAST_SELECTOR_ALL = "all"
     _BROADCAST_SELECTOR_EXACT = "exact"
@@ -1887,6 +1966,7 @@ class RedisBrokerCore:
     def has_pending_messages(
         self, queue: str, after_timestamp: int | None = None
     ) -> bool:
+        self._check_fork_safety()
         self._validate_queue_name(queue)
         after_timestamp = validate_timestamp_bound("after_timestamp", after_timestamp)
         reserved = self._qkey(queue, "reserved")
@@ -1900,7 +1980,10 @@ class RedisBrokerCore:
             )
             if not ids:
                 return False
-            if any(self._client.zscore(reserved, encoded) is None for encoded in ids):
+            if any(
+                self._call_redis(self._client.zscore, reserved, encoded) is None
+                for encoded in ids
+            ):
                 return True
             offset += len(ids)
 
@@ -1916,7 +1999,8 @@ class RedisBrokerCore:
             ids = [
                 str(encoded)
                 for encoded in response_list(
-                    self._client.execute_command(
+                    self._call_redis(
+                        self._client.execute_command,
                         "ZREVRANGEBYLEX",
                         pending,
                         "+",
@@ -1930,10 +2014,7 @@ class RedisBrokerCore:
             if not ids:
                 return None
 
-            with self._client.pipeline(transaction=False) as pipe:
-                for encoded in ids:
-                    pipe.zscore(reserved, encoded)
-                reserved_scores = response_list(pipe.execute())
+            reserved_scores = self._reserved_scores(reserved, ids)
 
             for encoded, reserved_score in zip(ids, reserved_scores, strict=False):
                 if reserved_score is None:
@@ -1949,37 +2030,48 @@ class RedisBrokerCore:
         self._assert_no_reentrant_mutation_during_batch("vacuum")
         try:
             with self._lock:
-                batch_size = int(self._config["VACUUM_BATCH_SIZE"])
+                if self._stop_event.is_set():
+                    raise StopException
+                batch_size = max(1, int(self._config["VACUUM_BATCH_SIZE"]))
                 for queue in [str(item) for item in self._queue_names()]:
-                    self._client.eval(
-                        scripts.VACUUM_CLAIMED,
-                        6,
-                        self._keys.claimed(queue),
-                        self._keys.pending(queue),
-                        self._keys.reserved(queue),
-                        self._keys.bodies,
-                        self._keys.all_ids,
-                        self._keys.queues,
-                        queue,
-                        str(batch_size),
-                    )
+                    while True:
+                        if self._stop_event.is_set():
+                            raise StopException
+                        deleted = response_int(
+                            self._client.eval(
+                                scripts.VACUUM_CLAIMED,
+                                6,
+                                self._keys.claimed(queue),
+                                self._keys.pending(queue),
+                                self._keys.reserved(queue),
+                                self._keys.bodies,
+                                self._keys.all_ids,
+                                self._keys.queues,
+                                queue,
+                                str(batch_size),
+                            )
+                        )
+                        if deleted < batch_size:
+                            break
         except redis.RedisError as exc:
             raise _translate_redis_error(exc) from exc
 
     def recover_stale_batches(self, *, max_age_seconds: int) -> int:
+        self._check_fork_safety()
         if max_age_seconds < 0:
             return 0
         cutoff_ns = time.time_ns() - (max_age_seconds * 1_000_000_000)
         recovered = 0
         pattern = self._key("batches", "*", "meta")
-        for meta_key in list(self._client.scan_iter(pattern)):
+        meta_keys = self._call_redis(lambda: list(self._client.scan_iter(pattern)))
+        for meta_key in meta_keys:
             if not is_namespace_key(self._prefix, meta_key):
                 continue
             parts = str(meta_key).split(":")
             if len(parts) < 4:
                 continue
             token = parts[-2]
-            meta = response_dict(self._client.hgetall(meta_key))
+            meta = response_dict(self._call_redis(self._client.hgetall, meta_key))
             source = str(meta.get("source", ""))
             created_raw = meta.get("created_ns")
             if not source or created_raw is None:
@@ -1994,7 +2086,8 @@ class RedisBrokerCore:
             # [SB-DELIVERY-3]: revalidate ownership and release inside one command.
             # A Python ID snapshot could outlive rollback and clear a new batch.
             recovered += response_int(
-                self._client.eval(
+                self._call_redis(
+                    self._client.eval,
                     scripts.RECOVER_STALE_BATCH,
                     3,
                     self._keys.reserved(source),
@@ -2021,21 +2114,16 @@ class RedisBrokerCore:
             self._runner._last_recovery_check_ns = now_ns
             self.recover_stale_batches(max_age_seconds=max_age_seconds)
 
-    def _load_aliases_locked(self) -> None:
-        self._alias_cache = {
-            str(alias): str(target)
-            for alias, target in response_dict(
-                self._client.hgetall(self._key("aliases"))
-            ).items()
-        }
-        self._alias_cache_version = self.get_alias_version()
-
     def get_alias_version(self) -> int:
-        raw = self._client.hget(self._key("meta"), "alias_version")
+        self._check_fork_safety()
+        raw = self._call_redis(
+            lambda: self._client.hget(self._key("meta"), "alias_version")
+        )
         return response_int(raw or 0)
 
     def resolve_alias(self, alias: str) -> str | None:
-        value = self._client.hget(self._key("aliases"), alias)
+        self._check_fork_safety()
+        value = self._call_redis(lambda: self._client.hget(self._key("aliases"), alias))
         return str(value) if value is not None else None
 
     def canonicalize_queue(self, queue: str) -> str:
@@ -2043,13 +2131,17 @@ class RedisBrokerCore:
         return resolve_queue_operand(queue, self.resolve_alias)[0]
 
     def has_alias(self, alias: str) -> bool:
-        return bool(self._client.hexists(self._key("aliases"), alias))
+        self._check_fork_safety()
+        return bool(
+            self._call_redis(lambda: self._client.hexists(self._key("aliases"), alias))
+        )
 
     def list_aliases(self) -> list[tuple[str, str]]:
+        self._check_fork_safety()
         return sorted(
             (str(alias), str(target))
             for alias, target in response_dict(
-                self._client.hgetall(self._key("aliases"))
+                self._call_redis(lambda: self._client.hgetall(self._key("aliases")))
             ).items()
         )
 
@@ -2071,21 +2163,20 @@ class RedisBrokerCore:
         self._validate_queue_name(target)
 
     def add_alias(self, alias: str, target: str) -> None:
+        self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("add_alias")
         self._validate_alias_target(alias, target)
         shadows_existing_queue = self.queue_exists_and_has_messages(alias)
-        try:
-            raw_result = self._client.eval(
+        raw_result = self._call_redis(
+            lambda: self._client.eval(
                 scripts.ADD_ALIAS,
                 2,
                 self._key("aliases"),
                 self._key("meta"),
                 alias,
                 target,
-                str(time.time_ns()),
             )
-        except redis.RedisError as exc:
-            raise _translate_redis_error(exc) from exc
+        )
         result = response_int(raw_result)
         if result == -1:
             raise ValueError(f"Alias '{alias}' already exists")
@@ -2107,11 +2198,17 @@ class RedisBrokerCore:
             )
 
     def remove_alias(self, alias: str) -> None:
+        self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("remove_alias")
-        with self._client.pipeline(transaction=True) as pipe:
-            pipe.hdel(self._key("aliases"), alias)
-            pipe.hset(self._key("meta"), "alias_version", str(time.time_ns()))
-            pipe.execute()
+        self._call_redis(
+            lambda: self._client.eval(
+                scripts.REMOVE_ALIAS,
+                2,
+                self._key("aliases"),
+                self._key("meta"),
+                alias,
+            )
+        )
 
     def sidecar(
         self, *, transaction: bool = False
@@ -2123,7 +2220,10 @@ class RedisBrokerCore:
         )
 
     def get_meta(self) -> dict[str, int | str]:
-        meta = response_dict(self._client.hgetall(self._key("meta")))
+        self._check_fork_safety()
+        meta = response_dict(
+            self._call_redis(lambda: self._client.hgetall(self._key("meta")))
+        )
         return {
             "magic": str(meta.get("magic", "")),
             "schema_version": int(meta.get("schema_version", 0)),

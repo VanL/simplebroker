@@ -458,3 +458,93 @@ def test_valid_target_parser_preserves_target_and_password_override(
     assert pg_plugin_module._validated_target(target) == target
     result = pg_plugin_module._validated_target(target, password="SEPARATE_MARKER")
     assert conninfo_to_dict(result)["password"] == "SEPARATE_MARKER"
+
+
+def test_unknown_backend_options_rejected_across_plugin_entrypoints_before_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from simplebroker import BrokerTarget, Queue
+
+    dsn = "postgresql://audit@127.0.0.1:1/unreachable"
+    config = resolve_config(env={})
+    plugin = PostgresBackendPlugin()
+
+    def fail_connect(*args: object, **kwargs: object) -> object:
+        raise AssertionError("Postgres connection must not open for invalid options")
+
+    monkeypatch.setattr(pg_validation.psycopg, "connect", fail_connect)
+    monkeypatch.setattr(
+        pg_plugin_module,
+        "PostgresRunner",
+        lambda *args, **kwargs: fail_connect(*args, **kwargs),
+    )
+
+    with pytest.raises(
+        DatabaseError,
+        match=r"^Unknown Postgres backend option\(s\): schmea$",
+    ):
+        plugin.init_backend(
+            config, toml_target=dsn, toml_options={"schmea": "tenant_a"}
+        )
+
+    for call in (
+        lambda: plugin.create_runner(
+            dsn, backend_options={"schema": "tenant_a", "extra": 1}
+        ),
+        lambda: plugin.initialize_target(dsn, backend_options={"extra": 1}),
+        lambda: plugin.validate_target(dsn, backend_options={"extra": 1}),
+        lambda: plugin.cleanup_target(dsn, backend_options={"extra": 1}),
+        lambda: plugin.create_activity_waiter(
+            target=dsn,
+            backend_options={"extra": 1},
+            queue_name="jobs",
+            stop_event=threading.Event(),
+        ),
+        lambda: plugin.create_activity_waiter_for_queues(
+            target=dsn,
+            backend_options={"extra": 1},
+            queue_names=("jobs",),
+            stop_event=threading.Event(),
+        ),
+    ):
+        with pytest.raises(
+            DatabaseError,
+            match=r"^Unknown Postgres backend option\(s\): extra$",
+        ):
+            call()
+
+    valid_lazy_queue = Queue(
+        "tasks",
+        db_path=BrokerTarget(
+            "postgres",
+            dsn,
+            backend_options={"schema": "tenant_a"},
+        ),
+        persistent=False,
+    )
+    assert valid_lazy_queue.name == "tasks"
+
+    invalid_lazy_queue = Queue(
+        "tasks",
+        db_path=BrokerTarget(
+            "postgres",
+            dsn,
+            backend_options={"schema": "tenant_a", "extra": 1},
+        ),
+        persistent=False,
+    )
+    with pytest.raises(
+        DatabaseError,
+        match=r"^Unknown Postgres backend option\(s\): extra$",
+    ):
+        invalid_lazy_queue.create_activity_waiter(stop_event=threading.Event())
+
+    import simplebroker._retry_policy as retry_policy_module
+
+    monkeypatch.setattr(retry_policy_module, "interruptible_sleep", lambda *_: True)
+    with pytest.raises(
+        RuntimeError,
+        match=r"Unknown Postgres backend option\(s\): extra",
+    ) as peek_exc:
+        invalid_lazy_queue.peek()
+    assert isinstance(peek_exc.value.__cause__, DatabaseError)

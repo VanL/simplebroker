@@ -73,7 +73,6 @@ def _listener() -> Any:
     listener._conditions = {}
     listener._versions = {}
     listener._refcounts = {}
-    listener._wildcard_version = 0
     listener._error = None
     return listener
 
@@ -630,3 +629,156 @@ def test_queue_normalization_keeps_explicit_target_and_metadata_without_io(
         assert bound.used_project_scope is True
         assert target.backend_options == {"schema": "selected"}
         assert queue._config is config
+
+
+def test_redis_init_backend_ipv6_user_supplemental_password_and_redacted_errors() -> (
+    None
+):
+    import traceback
+
+    plugin = RedisBackendPlugin()
+
+    ipv6 = plugin.init_backend(
+        resolve_config(
+            env={},
+            override={
+                "BROKER_BACKEND_HOST": "::1",
+                "BROKER_BACKEND_PORT": "6379",
+                "BROKER_BACKEND_TARGET": "",
+            },
+        )
+    )
+    assert ipv6["target"] == "redis://[::1]:6379/0"
+
+    acl_ipv6 = plugin.init_backend(
+        resolve_config(
+            env={},
+            override={
+                "BROKER_BACKEND_HOST": "::1",
+                "BROKER_BACKEND_PORT": "6379",
+                "BROKER_BACKEND_USER": "acl_user",
+                "BROKER_BACKEND_PASSWORD": "s3cr3t!@#",
+                "BROKER_BACKEND_TARGET": "",
+            },
+        )
+    )
+    assert acl_ipv6["target"] == "redis://acl_user:s3cr3t%21%40%23@[::1]:6379/0"
+
+    supplemented_toml = plugin.init_backend(
+        resolve_config(
+            env={},
+            override={"BROKER_BACKEND_PASSWORD": "env:pw@1"},
+        ),
+        toml_target="redis://cache.internal:6379/2",
+    )
+    assert supplemented_toml["target"] == "redis://:env%3Apw%401@cache.internal:6379/2"
+
+    supplemented_acl_toml = plugin.init_backend(
+        resolve_config(
+            env={},
+            override={"BROKER_BACKEND_PASSWORD": "env:pw@1"},
+        ),
+        toml_target="redis://acl_user@cache.internal:6379/2",
+    )
+    assert (
+        supplemented_acl_toml["target"]
+        == "redis://acl_user:env%3Apw%401@cache.internal:6379/2"
+    )
+
+    supplemented_ipv6_env = plugin.init_backend(
+        resolve_config(
+            env={},
+            override={
+                "BROKER_BACKEND_TARGET": "redis://[::1]:6379/0",
+                "BROKER_BACKEND_PASSWORD": "pw",
+            },
+        )
+    )
+    assert supplemented_ipv6_env["target"] == "redis://:pw@[::1]:6379/0"
+
+    from redis.connection import parse_url as parse_redis_url
+
+    for compatible_url, expected_opts in (
+        ("redis://", {}),
+        ("redis:///2", {"db": 2}),
+        ("redis://?host=localhost&db=2", {"host": "localhost", "db": 2}),
+        ("unix:///tmp/redis.sock?db=1", {"path": "/tmp/redis.sock", "db": 1}),
+    ):
+        unchanged = plugin.init_backend(
+            resolve_config(env={}, override={}),
+            toml_target=compatible_url,
+        )
+        assert unchanged["target"] == compatible_url
+        parsed_unchanged = parse_redis_url(unchanged["target"])
+        for key, value in expected_opts.items():
+            assert parsed_unchanged[key] == value
+        assert "password" not in parsed_unchanged
+
+        supplemented = plugin.init_backend(
+            resolve_config(
+                env={},
+                override={"BROKER_BACKEND_PASSWORD": "supplemental:pw@1"},
+            ),
+            toml_target=compatible_url,
+        )
+        parsed_supplemented = parse_redis_url(supplemented["target"])
+        for key, value in expected_opts.items():
+            assert parsed_supplemented[key] == value
+        assert parsed_supplemented["password"] == "supplemental:pw@1"
+
+    for explicit_query_url in (
+        "redis://localhost/0?password=explicit",
+        "redis://?host=localhost&db=2&password=explicit",
+        "unix:///tmp/redis.sock?db=1&password=explicit",
+    ):
+        preserved = plugin.init_backend(
+            resolve_config(
+                env={},
+                override={"BROKER_BACKEND_PASSWORD": "fallback"},
+            ),
+            toml_target=explicit_query_url,
+        )
+        assert preserved["target"] == explicit_query_url
+        assert parse_redis_url(preserved["target"])["password"] == "explicit"
+
+    inline_secret = "FAKE_" + "PASSWORD"
+    separate_secret = "SEPARATE_" + "MARKER"
+    malformed_target = f"redis://audit:{inline_secret}@[bad/0"
+    with pytest.raises(DatabaseError, match="Invalid Redis target") as caught:
+        plugin.init_backend(
+            resolve_config(
+                env={},
+                override={"BROKER_BACKEND_PASSWORD": separate_secret},
+            ),
+            toml_target=malformed_target,
+        )
+    formatted = "".join(traceback.format_exception(caught.value))
+    assert inline_secret not in formatted
+    assert separate_secret not in formatted
+    assert caught.value.__cause__ is None
+
+
+def test_redis_validation_connect_closes_client_when_ping_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import redis as redis_lib
+    import simplebroker_redis.validation as redis_validation
+
+    closed: list[bool] = []
+
+    class BrokenClient:
+        def ping(self) -> None:
+            raise redis_lib.ConnectionError("ping refused")
+
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(
+        redis_validation.redis.Redis,
+        "from_url",
+        lambda *args, **kwargs: BrokenClient(),
+    )
+
+    with pytest.raises(DatabaseError, match="ping refused"):
+        redis_validation.connect("redis://example/0")
+    assert closed == [True]

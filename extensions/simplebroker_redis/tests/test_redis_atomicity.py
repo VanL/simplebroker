@@ -83,6 +83,7 @@ def test_write_script_rejects_stale_candidate_without_any_mutation(
             str(persisted),
             encode_id(persisted),
             "stale",
+            keys.activity_queue("jobs"),
         )
 
         assert result == [-6]
@@ -1262,6 +1263,7 @@ def test_broadcast_script_rejects_insufficient_timestamp_batch_atomically(
             "1",
             "announcement",
             keys.key("q", ""),
+            keys.key("activity", "q", ""),
             "all",
             "0",
             encode_id(timestamp),
@@ -1299,12 +1301,13 @@ def test_broadcast_script_selects_queues_at_atomic_insertion_point(
             "2",
             "announcement",
             keys.key("q", ""),
+            keys.key("activity", "q", ""),
             "all",
             "0",
             *(encode_id(timestamp) for timestamp in timestamps),
         )
 
-        assert result == [1, "alpha"]
+        assert result == [1, str(timestamps[-1]), 1]
         assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
             "seed-alpha",
             "announcement",
@@ -1317,13 +1320,15 @@ def test_broadcast_script_selects_queues_at_atomic_insertion_point(
 @pytest.mark.parametrize(
     "arguments",
     [
-        ["1", encode_id(1), "1", "body", "prefix", "exact", "1"],
+        ["1", encode_id(1), "1", "body", "prefix", "activity", "exact", "1"],
+        ["1", encode_id(1), "0", "body", "prefix", "", "all", "0"],
         [
             "1",
             encode_id(1),
             "1",
             "body",
             "prefix",
+            "activity",
             "all",
             "0",
             encode_id(1),
@@ -1335,41 +1340,45 @@ def test_broadcast_script_selects_queues_at_atomic_insertion_point(
             "1",
             "body",
             "prefix",
+            "activity",
             "all",
             "1",
             "jobs",
             encode_id(1),
         ],
-        ["1", encode_id(1), "-1", "body", "prefix", "all", "0"],
+        ["1", encode_id(1), "-1", "body", "prefix", "activity", "all", "0"],
         [
             "1",
             encode_id(1),
             "1.5",
             "body",
             "prefix",
+            "activity",
             "all",
             "0",
             encode_id(1),
         ],
-        ["1", encode_id(1), "0", "body", "prefix", "exact", "-1"],
+        ["1", encode_id(1), "0", "body", "prefix", "activity", "exact", "-1"],
         [
             "1",
             encode_id(1),
             "1",
             "body",
             "prefix",
+            "activity",
             "exact",
             "0.5",
             "jobs",
             encode_id(1),
         ],
-        ["1", encode_id(1), "0", "body", "prefix", "unknown", "0"],
+        ["1", encode_id(1), "0", "body", "prefix", "activity", "unknown", "0"],
         [
             "1",
             encode_id(1),
             "2",
             "body",
             "prefix",
+            "activity",
             "exact",
             "1",
             "jobs",
@@ -1382,6 +1391,7 @@ def test_broadcast_script_selects_queues_at_atomic_insertion_point(
             "2",
             "body",
             "prefix",
+            "activity",
             "exact_create",
             "1",
             "new",
@@ -1461,6 +1471,7 @@ def test_exact_broadcast_script_rejects_candidates_not_above_persisted_last_ts(
             "1",
             "announcement",
             keys.key("q", ""),
+            keys.key("activity", "q", ""),
             "exact",
             "1",
             "jobs",
@@ -1508,6 +1519,7 @@ def test_exact_create_script_rejects_candidate_conflicts_before_mutation(
             "2",
             "announcement",
             keys.key("q", ""),
+            keys.key("activity", "q", ""),
             "exact_create",
             "2",
             "new-a",
@@ -1554,6 +1566,7 @@ def test_exact_create_script_rejects_stale_candidates_before_mutation(
             "2",
             "announcement",
             keys.key("q", ""),
+            keys.key("activity", "q", ""),
             "exact_create",
             "2",
             "new-a",
@@ -1597,6 +1610,7 @@ def test_exact_create_script_rejects_uninitialized_namespace_before_mutation(
             "1",
             "announcement",
             keys.key("q", ""),
+            keys.key("activity", "q", ""),
             "exact_create",
             "1",
             "new",
@@ -1806,3 +1820,103 @@ def test_stale_recovery_cannot_release_a_new_batch(
         get_backend_plugin().cleanup_target(
             redis_url, backend_options={"namespace": redis_namespace}
         )
+
+
+def test_redis_mutating_operations_publish_in_lua_without_wildcard_or_post_commit_reads(
+    redis_url: str,
+    redis_namespace: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    import redis
+    from simplebroker_redis import get_backend_plugin
+
+    plugin = get_backend_plugin()
+    runner = RedisRunner(redis_url, namespace=redis_namespace)
+    core = RedisBrokerCore(runner)
+    keys = RedisKeys(redis_namespace)
+    sub_client = redis.Redis.from_url(redis_url, decode_responses=True)
+    pubsub = sub_client.pubsub(ignore_subscribe_messages=True)
+    waiter_q1 = plugin.create_activity_waiter(
+        target=redis_url,
+        backend_options={"namespace": redis_namespace},
+        queue_name="q1",
+        stop_event=threading.Event(),
+    )
+    assert waiter_q1 is not None
+    try:
+        assert "_publish" not in RedisBrokerCore.__dict__
+        assert "activity_all" not in RedisKeys.__dict__
+
+        pubsub.psubscribe(f"{keys.prefix}:activity:*")
+        # Drain subscription confirmation if any
+        pubsub.get_message(timeout=0.05)
+
+        def forbid_client_publish(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("standalone client.publish must not be called")
+
+        monkeypatch.setattr(core._client, "publish", forbid_client_publish)
+
+        # 1. write
+        core.write("q1", "m1")
+        assert waiter_q1.wait(2.0) is True
+
+        # 2. insert_messages (with hget stubbed to fail so post-commit read cannot run)
+        def forbid_hget(*_args: object, **_kwargs: object) -> None:
+            raise redis.ConnectionError("post-commit hget must not run")
+
+        high_floor = 500_000_000_000_000_001
+        monkeypatch.setattr(core._client, "hget", forbid_hget)
+        core.insert_messages([("q2", "m2", high_floor)])
+        assert core.get_cached_last_timestamp() >= high_floor
+
+        # 3. broadcast (still with hget stubbed to fail)
+        assert core.broadcast("bcast", queue_names=("q1", "q2")) == 2
+        assert core.get_cached_last_timestamp() > high_floor
+        monkeypatch.undo()
+        monkeypatch.setattr(core._client, "publish", forbid_client_publish)
+
+        # 4. move_one
+        assert core.move_one("q1", "q3", with_timestamps=False) == "m1"
+
+        # 5. move_generator (at_least_once commit)
+        assert list(
+            core.move_generator(
+                "q2",
+                "q4",
+                delivery_guarantee="at_least_once",
+                batch_size=2,
+                with_timestamps=False,
+            )
+        ) == ["m2", "bcast"]
+
+        # 6. rename_queue
+        rename_res = core.rename_queue("q3", "q5")
+        assert rename_res.messages_renamed == 1
+
+        channels: list[str] = []
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            msg = pubsub.get_message(timeout=0.05)
+            if msg is None:
+                if {
+                    keys.activity_queue("q1"),
+                    keys.activity_queue("q2"),
+                    keys.activity_queue("q3"),
+                    keys.activity_queue("q4"),
+                    keys.activity_queue("q5"),
+                }.issubset(channels):
+                    break
+                continue
+            channels.append(str(msg["channel"]))
+
+        assert f"{keys.prefix}:activity:all" not in channels
+        for expected_q in ("q1", "q2", "q3", "q4", "q5"):
+            assert keys.activity_queue(expected_q) in channels
+    finally:
+        waiter_q1.close()
+        pubsub.close()
+        sub_client.close()
+        core.shutdown()
+        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})

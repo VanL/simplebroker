@@ -858,3 +858,31 @@ def test_schema_failed_begin_never_rolls_back_outer_checkout(operation: str) -> 
             )
     assert caught.value is error
     assert runner.events == []
+
+
+@pytest.mark.parametrize(
+    ("options", "expected_names"),
+    [
+        ({"schema": "tenant_a", "schmea": "typo"}, "schmea"),
+        ({"schmea": "tenant_a"}, "schmea"),
+        ({"schema": "tenant_a", "zeta": 1, "alpha": 2}, "alpha, zeta"),
+    ],
+)
+def test_require_schema_name_and_verify_env_reject_unknown_backend_options(
+    options: dict[str, object],
+    expected_names: str,
+) -> None:
+    dsn = "postgresql://audit@localhost:5432/db"
+    config: Config = resolve_config(env={})
+
+    with pytest.raises(
+        DatabaseError,
+        match=rf"^Unknown Postgres backend option\(s\): {expected_names}$",
+    ):
+        require_schema_name(options)
+
+    with pytest.raises(
+        DatabaseError,
+        match=rf"^Unknown Postgres backend option\(s\): {expected_names}$",
+    ):
+        verify_env(config, toml_target=dsn, toml_options=options)

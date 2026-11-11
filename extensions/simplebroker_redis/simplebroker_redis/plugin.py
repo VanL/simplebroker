@@ -8,9 +8,10 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import redis
+from redis.connection import parse_url as parse_redis_url
 
 from simplebroker import Config, resolve_config
 from simplebroker._backend_plugins import (
@@ -22,7 +23,7 @@ from simplebroker._exceptions import DatabaseError, OperationalError
 
 from . import scripts
 from ._constants import DEFAULT_NAMESPACE, REDIS_SCHEMA_VERSION
-from .core import RedisBrokerCore
+from .core import RedisBrokerCore, _translate_redis_error
 from .keys import RedisKeys, encode_id
 from .pool import POOL_OPTION_KEYS, RedisPoolOptions, pool_options_from_config
 from .responses import response_int
@@ -87,13 +88,50 @@ def _database_number(value: object) -> int:
     return number
 
 
+def _validated_target(target: str, *, password: object = None) -> str:
+    try:
+        parsed = urlsplit(target)
+        _ = parsed.port
+        parsed_options = parse_redis_url(target)
+        has_password = (
+            parsed.password is not None or parsed_options.get("password") is not None
+        )
+        if password and not has_password:
+            encoded_pw = quote(str(password), safe="")
+            if "@" in parsed.netloc:
+                userinfo, hostinfo = parsed.netloc.rsplit("@", 1)
+                netloc = f"{userinfo}:{encoded_pw}@{hostinfo}"
+            else:
+                netloc = f":{encoded_pw}@{parsed.netloc}"
+            target = urlunsplit(
+                (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+            )
+            parse_redis_url(target)
+    except ValueError:
+        raise DatabaseError(
+            "Invalid Redis target: check the Redis URL syntax"
+        ) from None
+    return target
+
+
 def _target_from_parts(config: Config) -> str:
     host = _text(config.get("BACKEND_HOST"), "127.0.0.1")
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
     port = _text(config.get("BACKEND_PORT"), "6379")
+    raw_user = _text(config.get("BACKEND_USER"))
+    user = "" if raw_user == "postgres" else raw_user
     password = config.get("BACKEND_PASSWORD")
     db = _database_number(config.get("BACKEND_DATABASE"))
-    auth = f":{quote(str(password), safe='')}@" if password else ""
-    return f"redis://{auth}{host}:{port}/{db}"
+    if user and password:
+        auth = f"{quote(user, safe='')}:{quote(str(password), safe='')}@"
+    elif user:
+        auth = f"{quote(user, safe='')}@"
+    elif password:
+        auth = f":{quote(str(password), safe='')}@"
+    else:
+        auth = ""
+    return _validated_target(f"redis://{auth}{host}:{port}/{db}")
 
 
 def _namespace_from_options(
@@ -134,7 +172,6 @@ class _QueueWaiterRegistration:
     queue_name: str
     condition: threading.Condition
     version: int
-    wildcard_version: int
 
 
 class _SharedRedisActivityListener:
@@ -157,7 +194,6 @@ class _SharedRedisActivityListener:
         self._conditions: dict[str, threading.Condition] = {}
         self._versions: dict[str, int] = {}
         self._refcounts: dict[str, int] = {}
-        self._wildcard_version = 0
         self._error: Exception | None = None
         self._thread = threading.Thread(
             target=self._run,
@@ -172,9 +208,7 @@ class _SharedRedisActivityListener:
             self.close()
             raise OperationalError(str(self._error)) from self._error
 
-    def _channel(self, queue_name: str | None = None) -> str:
-        if queue_name is None:
-            return f"{self._prefix}:activity:all"
+    def _channel(self, queue_name: str) -> str:
         return f"{self._prefix}:activity:q:{queue_name}"
 
     def _run(self) -> None:
@@ -189,8 +223,6 @@ class _SharedRedisActivityListener:
                     continue
                 channel = str(message.get("channel", ""))
                 with self._lock:
-                    if channel == self._channel(None):
-                        continue
                     prefix = f"{self._prefix}:activity:q:"
                     if channel.startswith(prefix):
                         queue_name = channel[len(prefix) :]
@@ -222,7 +254,6 @@ class _SharedRedisActivityListener:
                 queue_name=queue_name,
                 condition=self._conditions[queue_name],
                 version=self._versions[queue_name],
-                wildcard_version=self._wildcard_version,
             )
 
     def unregister(self, queue_name: str) -> None:
@@ -481,7 +512,12 @@ class RedisBackendPlugin:
         toml_options: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         target = _text(toml_target) or _text(config.get("BACKEND_TARGET"))
-        if not target:
+        if target:
+            target = _validated_target(
+                target,
+                password=config.get("BACKEND_PASSWORD"),
+            )
+        else:
             target = _target_from_parts(config)
         backend_options, _ = _normalize_backend_options(config, toml_options)
         return {
@@ -656,7 +692,7 @@ class RedisBackendPlugin:
             raw = runner.client.hget(RedisKeys(runner.namespace).meta, "last_ts")
             return response_int(raw or 0)
         except redis.RedisError as exc:
-            raise OperationalError(str(exc)) from exc
+            raise _translate_redis_error(exc) from exc
 
     def advance_last_ts(self, runner: RedisRunner, *, new_ts: int) -> bool:
         try:
@@ -669,20 +705,20 @@ class RedisBackendPlugin:
             )
             return bool(result)
         except redis.RedisError as exc:
-            raise OperationalError(str(exc)) from exc
+            raise _translate_redis_error(exc) from exc
 
     def write_last_ts(self, runner: RedisRunner, ts: int) -> None:
         try:
             runner.client.hset(RedisKeys(runner.namespace).meta, "last_ts", str(ts))
         except redis.RedisError as exc:
-            raise OperationalError(str(exc)) from exc
+            raise _translate_redis_error(exc) from exc
 
     def read_alias_version(self, runner: RedisRunner) -> int:
         try:
             raw = runner.client.hget(RedisKeys(runner.namespace).meta, "alias_version")
             return response_int(raw or 0)
         except redis.RedisError as exc:
-            raise OperationalError(str(exc)) from exc
+            raise _translate_redis_error(exc) from exc
 
     def create_activity_waiter(
         self,

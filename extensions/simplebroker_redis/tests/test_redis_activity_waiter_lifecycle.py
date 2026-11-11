@@ -62,7 +62,6 @@ def _waiter(
         queue_name=queue_name,
         condition=threading.Condition(),
         version=0,
-        wildcard_version=0,
     )
     return redis_plugin_module.RedisActivityWaiter(
         listener,  # type: ignore[arg-type]
