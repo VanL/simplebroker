@@ -635,8 +635,10 @@ Dated moment-tier entries (foldable after age floor and distillation).
   full suite once with that state deliberately poisoned (here, a plugin that
   holds one managed connection per worker) to list every test that depends on
   a clean process, and add a per-test check that fails the test that leaves
-  the state dirty. Run the full default suite, not a module subset, on every
-  start-method family before push, and run new real-process tests once under
+  the state dirty. Run the full suite, not a module subset, on every
+  start-method family before push, including each marker selection the
+  release helper runs (the new check first fired in the `benchmark`
+  selection, during release preflight), and run new real-process tests once under
   the CI coverage settings: global fault injection (`sqlite3.connect` patches,
   audit hooks) also intercepts coverage.py's own SQLite files. Evidence:
   Test workflow run 43104726049; `tests/conftest.py`

@@ -789,10 +789,11 @@ def test_write_performance_not_regressed(workdir: Path) -> None:
 
 
 @pytest.fixture
-def broker(tmp_path: Path) -> BrokerDB:
+def broker(tmp_path: Path) -> Iterator[BrokerDB]:
     """Create a broker instance for testing."""
     db_path = tmp_path / "test.db"
-    return BrokerDB(str(db_path))
+    with BrokerDB(str(db_path)) as db:
+        yield db
 
 
 @pytest.mark.benchmark

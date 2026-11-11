@@ -1148,6 +1148,13 @@ documentation gates pass. The coverage failures were first reproduced locally
 (7 failed, 36 passed) and then passed (43) after the change. The Windows
 change could not be exercised here.
 
+Release preflight then stopped before any push: the new fixture flagged a
+third leak in the `benchmark` selection, which the default suite excludes and
+the verification above had not run. The `broker` fixture in
+`tests/test_performance.py` returned a `BrokerDB` and never closed it; it now
+closes at teardown. The `benchmark` (20 passed) and `nested_xdist` (1 passed)
+selections pass with the fixture.
+
 Review of these fixes: agy 1.5.6 / gemini-4-argon-medium with
 `--disable-slash-commands`, exit 0, status SUCCESS, no denied actions, 392.7s,
 working-tree status unchanged. Verdict PASS WITH FINDINGS; it judged the four
