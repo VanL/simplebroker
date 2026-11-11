@@ -33,6 +33,14 @@ To refresh this inventory:
 
 ## Current Observed Availability
 
+Session refresh (2026-11-11): Claude 2.1.293 completed a real repository
+review with only `Read`, `Grep`, and `Glob` exposed, no MCP servers, and a
+successful native `Read`; the restricted tool surface left no repository
+write path. Grok 1.0.77 completed the absolute-`--prompt-file` headless probe;
+native reads succeeded and an actual repository write was denied with `EPERM`,
+leaving the sentinel absent. Exact commands, completion checks, and the macOS
+OrbStack caveat are recorded in `skills/call-agent/SKILL.md`.
+
 Session refresh (2026-10-13): Claude liveness returned `PROBE-OK` with exit 0
 under a 120-second bound. The read-only PostgreSQL attribution plan review
 completed with exit 0 in 261.6 seconds under a 540-second bound, returning PASS
@@ -56,9 +64,9 @@ are recorded in
 
 | Agent family | Status | Notes |
 |--------------|--------|-------|
-| Claude | live, bounded plan and implementation reviews completed | harness-level containment probed 2026-07-14; remediation plan and implementation reviews completed within their 540-second bounds on 2026-09-13; the separate configuration implementation review timed out at 540 seconds without a verdict on 2026-09-12, so retain explicit bounds for long reviews |
+| Claude | live, review-eligible | 2.1.293 restricted-tool review verified 2026-11-11: only `Read`, `Grep`, and `Glob`, no MCP servers, real native read succeeded; harness-level tool restriction, not an OS sandbox |
 | Codex | live | OS-enforced read-only sandbox; probed 2026-07-14 |
-| Grok | live, degraded | Read-only sandbox held on 2026-07-29, but a long plan review inspected sources without producing a final verdict after bounded follow-ups; not currently suitable as the sole gate |
+| Grok | live, review-eligible with host caveat | 1.0.77 absolute-prompt-file probe verified 2026-11-11: native read succeeded, direct write denied with `EPERM`, sentinel absent; macOS OrbStack access remains outside the direct-write proof |
 | Qwen | blocked | API 404 / paid-slug config as of 2026-07-14 |
 | Kimi | probe incomplete | no headless containment mode found |
 | opencode | revoked | write-attempt probe failed 2026-07-14 |
