@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- SQLite refuses managed operations in a forked child when SimpleBroker had
+  a physical connection open or in flight at fork. A fresh Queue cannot make
+  inherited SQLite lock state safe. This prevents the reproduced loss of
+  acknowledged child writes when the parent closes its persistent Queue.
+  Close all SQLite resources before fork, or use spawn/exec or a clean forkserver.
+- Ordinary legacy SQLite CLI reads and other preflight commands accept a regular
+  zero-byte file through coordinated setup, avoiding false invalid-header errors
+  while the first writer initializes it. Nonempty invalid files remain errors.
+- `watch` stops after fatal stdout failures instead of continuing to claim
+  messages. Missing or closed startup streams fail before target acquisition;
+  dead stderr cannot replace the error with an interpreter-flush failure.
+  Closed downstream pipes retain clean exit 0, and committed claims/moves remain
+  committed when output subsequently fails.
+- Redis at-least-once claim and move iterators retain their original process
+  owner. A child's normal exit or iterator close cannot roll back the parent's
+  reserved batch; advancing the inherited iterator raises RuntimeError.
+- PostgreSQL rejects schema names longer than 63 ASCII bytes before opening
+  resources, preventing server truncation from merging distinct tenant names.
+
+### Changed
+
+- SQLite fork refusal is deliberately process-wide, including unrelated paths
+  and memory databases. It detects SimpleBroker-managed physical connections;
+  arbitrary external SQLite connections remain the application's responsibility.
+- Direct and structural PostgreSQL runner/waiter entry points now enforce the
+  same non-public schema rule as plugin configuration. Existing overlong or
+  `public` configurations require operator correction. Renaming configuration
+  cannot separate data that was already intermingled.
+
+### Documented
+
+- PostgreSQL cleanup ends the lifetime of every client of the physical schema.
+  Finish operations, stop watchers, close all owning sessions/runners across
+  processes, and construct fresh owners after recreation. The alias-version
+  counter introduced in 8.8.2 can reuse a version after recreation, leaving a
+  retained client's alias cache stale; the 8.8.1 timestamp version refreshed in
+  the reproduced case. This maintenance requirement narrows the support boundary;
+  it does not restore retained-client refresh across destructive replacement.
+- Built-in watcher retries are bounded by a processing-wait health witness,
+  three failures, 2/4-second delays, and a 300-second budget checked between
+  attempts. PostgreSQL listener expiry faster than a quiet 30–60-second wait can
+  exhaust that budget. Configure the broker DSN or role with a compatible idle
+  timeout (for example `options='-c idle_session_timeout=0'`); it covers LISTEN
+  and command connections. The library adds no heartbeat or server override.
+
 ## [8.8.2] - 2026-11-11
 
 SimpleBroker 8.8.2, `simplebroker-pg` 4.8.2, and `simplebroker-redis` 4.8.2

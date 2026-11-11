@@ -29,6 +29,7 @@ Quick pointers to the key guidance documents in this repository.
 | `simplebroker/sbqueue.py` | Public named-queue handle, backend identity, Queue operation leases, and activity-waiter binding |
 | `simplebroker/db.py` | Concrete process-session core factory, runner publication and checkout rollback, database operations, and the private first-party SQL probe |
 | `simplebroker/_retry_policy.py` | Retry and setup policy; pairs with `_retry.py`, which owns the retry mechanism |
+| `simplebroker/_sqlite_fork.py` | Managed SQLite physical-lifetime accounting and child fork admission, shared by runner and temporary open sites |
 | `simplebroker/_paths.py` | Filesystem path validation and project-database discovery |
 | `extensions/simplebroker_pg/simplebroker_pg/_connection_owner.py` | Process-wide binding and synchronized creation metadata, outside session identity |
 | `extensions/` | Optional extensions; PostgreSQL-only operational inspection lives in `extensions/simplebroker_pg/simplebroker_pg/connections.py` |

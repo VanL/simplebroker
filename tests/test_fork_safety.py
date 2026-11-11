@@ -47,7 +47,7 @@ def _wait_for_fork_child(pid: int, timeout: float = 5.0) -> int:
 @pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 @pytest.mark.parametrize("hold_guard", [False, True], ids=["control", "held-lock"])
-def test_fresh_queue_recovers_inherited_session_registry(
+def test_fresh_queue_refuses_after_recovering_inherited_session_registry(
     workdir: Path, hold_guard: bool
 ) -> None:
     from simplebroker import Queue
@@ -83,11 +83,15 @@ def test_fresh_queue_recovers_inherited_session_registry(
                 os.close(read_fd)
                 status = 1
                 try:
-                    with Queue(
-                        "child", db_path=str(workdir / "child.db"), persistent=True
-                    ) as child:
+                    with (
+                        Queue(
+                            "child", db_path=str(workdir / "child.db"), persistent=True
+                        ) as child,
+                        pytest.raises(
+                            RuntimeError, match="SQLite access is unsafe after fork"
+                        ),
+                    ):
                         child.write("child message")
-                        assert child.read_one() == "child message"
                     # Exercise the normal exit hook, which os._exit skips below.
                     _registry.close_all()
                     assert any(
@@ -372,37 +376,22 @@ def test_forked_child_queue_generate_timestamp_raises(workdir: Path) -> None:
 
 def _abandon_fork_child(runner: object, result_w: object) -> None:
     """Child target for the abandon-never-close test (top-level, picklable)."""
-    import sqlite3 as _sqlite3
-
     import simplebroker._runner as _runner_module
 
-    # Snapshot inherited connections BEFORE triggering the fallback.
     inherited = list(runner._all_connections)  # type: ignore[attr-defined]
     try:
-        # Trigger the pid-check fallback by using the inherited runner.
-        new_conn = runner.get_connection()  # type: ignore[attr-defined]
-
+        with pytest.raises(RuntimeError, match="SQLite access is unsafe after fork"):
+            runner.get_connection()  # type: ignore[attr-defined]
         abandoned = _runner_module._ABANDONED_FORK_CONNECTIONS
-        # All inherited connections abandoned exactly once (identity-deduped).
-        all_present = all(any(c is a for a in abandoned) for c in inherited)
-        counts_ok = all(sum(1 for a in abandoned if a is c) == 1 for c in inherited)
-        # New connection is live and distinct from every inherited one.
-        new_is_distinct = all(new_conn is not c for c in inherited)
-        # Abandoned (not closed): reading total_changes must NOT raise.
-        not_closed = True
-        for c in inherited:
-            try:
-                _ = c.total_changes
-            except _sqlite3.ProgrammingError:
-                not_closed = False
+        runner.close()  # type: ignore[attr-defined]
         result_w.send(  # type: ignore[attr-defined]
             {
                 "inherited_count": len(inherited),
-                "all_present": all_present,
-                "counts_ok": counts_ok,
-                "new_is_distinct": new_is_distinct,
-                "not_closed": not_closed,
-                "new_works": new_conn is not None,
+                "all_present": all(any(c is a for a in abandoned) for c in inherited),
+                "counts_ok": all(
+                    sum(1 for a in abandoned if a is c) == 1 for c in inherited
+                ),
+                "refused": True,
             }
         )
     except BaseException as exc:  # pragma: no cover - unexpected  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
@@ -417,8 +406,8 @@ def test_fork_fallback_abandons_without_close(workdir: Path) -> None:
     Pin the abandon-ALL requirement: before forking, create a SECOND tracked
     connection from another thread so _all_connections holds two inherited
     connections. The child triggers the fallback and asserts BOTH objects are
-    present in _ABANDONED_FORK_CONNECTIONS exactly once and neither raises on
-    total_changes (i.e., neither was closed).
+    present in _ABANDONED_FORK_CONNECTIONS exactly once. Revised [SB-API-11]
+    refuses fresh access while keeping inherited cleanup abandonment-only.
     """
     # Native thread deadlocks cannot be cancelled by Python. Own the complete
     # two-thread/fork topology in a process group, including failed readiness.
@@ -486,9 +475,8 @@ def _exercise_fork_fallback_abandons_without_close(workdir: Path) -> None:
         assert result["inherited_count"] == 2, result
         assert result["all_present"] is True, result
         assert result["counts_ok"] is True, result
-        assert result["new_is_distinct"] is True, result
-        assert result["not_closed"] is True, result
-        assert result["new_works"] is True, result
+        assert result["refused"] is True, result
+        assert list(runner.run("SELECT 1", fetch=True)) == [(1,)]
     finally:
         if read_r is not None:
             read_r.close()
@@ -540,7 +528,10 @@ def test_fork_recovery_does_not_block_on_inherited_locks(workdir: Path) -> None:
         try:
             # Routes through the fork-recovery branch; must not block on the
             # inherited (permanently held) lock.
-            runner.get_connection()
+            with pytest.raises(
+                RuntimeError, match="SQLite access is unsafe after fork"
+            ):
+                runner.get_connection()
             os._exit(0)
         except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             os._exit(1)
@@ -607,8 +598,11 @@ def test_fork_recovery_runs_before_operation_lock(workdir: Path) -> None:
     pid = os.fork()
     if pid == 0:  # child
         try:
-            rows = list(runner.run("SELECT 1", fetch=True))
-            os._exit(0 if rows == [(1,)] else 3)
+            with pytest.raises(
+                RuntimeError, match="SQLite access is unsafe after fork"
+            ):
+                runner.run("SELECT 1", fetch=True)
+            os._exit(0)
         except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             os._exit(1)
     else:
@@ -711,13 +705,17 @@ def test_inherited_queue_rejects_before_parent_session_lock(
                         queue.conn.cleanup()
                         queue.close()
                         assert not inherited_session._closed
-                        with Queue(
-                            "fresh",
-                            db_path=str(workdir / "fresh-child.db"),
-                            persistent=True,
-                        ) as fresh:
+                        with (
+                            Queue(
+                                "fresh",
+                                db_path=str(workdir / "fresh-child.db"),
+                                persistent=True,
+                            ) as fresh,
+                            pytest.raises(
+                                RuntimeError, match="SQLite access is unsafe after fork"
+                            ),
+                        ):
                             fresh.write("owned")
-                            assert fresh.read() == "owned"
                         os.write(write_fd, b"rejected and cleaned")
                         status = 0
                     finally:
@@ -803,11 +801,16 @@ def test_inherited_alias_meta_reject_before_parent_lock(
                             status = (
                                 2  # Distinguish rejection from fresh-child failure.
                             )
-                            with Queue(
-                                "fresh", db_path=str(workdir / "fresh.db")
-                            ) as fresh:
+                            with (
+                                Queue(
+                                    "fresh", db_path=str(workdir / "fresh.db")
+                                ) as fresh,
+                                pytest.raises(
+                                    RuntimeError,
+                                    match="SQLite access is unsafe after fork",
+                                ),
+                            ):
                                 fresh.write("child")
-                                assert fresh.read_one() == "child"
                             status = 0
                 finally:
                     os._exit(status)

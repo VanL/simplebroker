@@ -21,7 +21,7 @@ import warnings
 from collections.abc import Callable, Iterator, Sequence
 from functools import partial
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, NoReturn, cast
 
 from ._aliases import resolve_queue_operand
 from ._constants import (
@@ -77,6 +77,60 @@ class _StdoutClosed(Exception):
     """Internal control flow raised only by a failed stdout write."""
 
 
+class _WatchOutputFailure(Exception):
+    """Carry a CLI callback failure through the watcher's terminal path."""
+
+    def __init__(self, original: Exception) -> None:
+        super().__init__(str(original))
+        self.original = original
+
+
+_STREAM_ERRORS = (OSError, ValueError, AttributeError)
+
+
+def _retire_failed_standard_stream(name: Literal["stdout", "stderr"]) -> None:
+    """Retire a failed interpreter-owned buffer before allocating its sink.
+
+    A caller-owned stand-in stays open, and its healthy interpreter original
+    stays installed. External raw-descriptor closure/reuse is outside the
+    command's ownership contract. Spec: [SB-CLI-1].
+    """
+    stream = getattr(sys, name)
+    original_name = f"__{name}__"
+    owns_stream = stream is getattr(sys, original_name)
+    if owns_stream and stream is not None:
+        try:
+            stream.close()
+        except _STREAM_ERRORS:
+            # CPython closes the underlying buffer even when its flush fails.
+            # Do not drop a still-live buffer whose finalizer could flush later.
+            if not stream.closed:
+                raise
+    _replace_standard_stream_with_devnull(name, replace_original=owns_stream)
+
+
+def _check_watch_streams() -> None:
+    """Refuse unusable watch streams before any backend can acquire their fds."""
+    failure: OSError | None = None
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name)
+        if stream is None or getattr(stream, "closed", False):
+            _retire_failed_standard_stream(name)
+            if failure is None:
+                failure = OSError(
+                    errno.EBADF,
+                    f"{name} is unavailable; reopen it before watching",
+                )
+    if failure is not None:
+        raise failure
+
+
+def _raise_watch_output_failure(
+    error: Exception, _message: str, _timestamp: int
+) -> NoReturn:
+    raise _WatchOutputFailure(error) from error
+
+
 class _MessageNewlineWarning(RuntimeWarning):
     """Human commentary about ambiguous plain-text message framing."""
 
@@ -106,14 +160,19 @@ def _is_closed_pipe_error(error: OSError) -> bool:
     )
 
 
-def _replace_stdout_with_devnull() -> None:
-    """Replace a broken stdout wrapper when descriptor redirection is unavailable."""
+def _replace_standard_stream_with_devnull(
+    name: Literal["stdout", "stderr"], *, replace_original: bool = False
+) -> None:
+    """Install a retained sink after the caller has made buffering harmless."""
     try:
-        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 approved [DOM-10.1.1] [RUFF-SUP-002] exception
+        sink = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 approved [DOM-10.1.1] [RUFF-SUP-002] exception
     except OSError:
-        # Pipe shutdown is already in progress. There is no safer output sink
-        # if even the platform null device cannot be opened.
+        # Shutdown is already in progress. There is no safer output sink if
+        # even the platform null device cannot be opened.
         return
+    setattr(sys, name, sink)
+    if replace_original:
+        setattr(sys, f"__{name}__", sink)
 
 
 def _redirect_stdout_to_devnull() -> None:
@@ -122,13 +181,13 @@ def _redirect_stdout_to_devnull() -> None:
         stdout_fd = sys.stdout.fileno()
         devnull_fd = os.open(os.devnull, os.O_WRONLY)
     except (AttributeError, OSError, ValueError):
-        _replace_stdout_with_devnull()
+        _replace_standard_stream_with_devnull("stdout")
         return
     try:
         try:
             os.dup2(devnull_fd, stdout_fd)
         except OSError:
-            _replace_stdout_with_devnull()
+            _replace_standard_stream_with_devnull("stdout")
     finally:
         try:
             os.close(devnull_fd)
@@ -136,22 +195,28 @@ def _redirect_stdout_to_devnull() -> None:
             pass
 
 
-def _write_stdout(value: str, *, flush: bool = False) -> None:
+def _write_stdout(
+    value: str, *, flush: bool = False, retire_failed_stdout: bool = False
+) -> None:
     """Write stdout text, translating only a closed pipe into control flow."""
     try:
         sys.stdout.write(value)
         if flush:
             sys.stdout.flush()
-    except OSError as error:
-        if not _is_closed_pipe_error(error):
-            raise
-        _redirect_stdout_to_devnull()
-        raise _StdoutClosed from None
+    except _STREAM_ERRORS as error:
+        if isinstance(error, OSError) and _is_closed_pipe_error(error):
+            _redirect_stdout_to_devnull()
+            raise _StdoutClosed from None
+        if retire_failed_stdout:
+            _retire_failed_standard_stream("stdout")
+        raise
 
 
-def _print_stdout(value: str, *, flush: bool = True) -> None:
+def _print_stdout(
+    value: str, *, flush: bool = True, retire_failed_stdout: bool = False
+) -> None:
     """Print one value through the closed-pipe-aware stdout seam."""
-    _write_stdout(f"{value}\n", flush=flush)
+    _write_stdout(f"{value}\n", flush=flush, retire_failed_stdout=retire_failed_stdout)
 
 
 def _flush_stdout() -> None:
@@ -428,6 +493,7 @@ def _output_message(
     warned_newlines: bool,
     *,
     suppress_newline_warning: bool = False,
+    retire_failed_stdout: bool = False,
 ) -> bool:
     """Output a message with optional timestamp.
 
@@ -451,13 +517,18 @@ def _output_message(
     if json_output:
         # JSON output includes timestamp by default
         output = {"message": message, "timestamp": format_message_id(timestamp)}
-        _print_stdout(json.dumps(output, ensure_ascii=False))
+        _print_stdout(
+            json.dumps(output, ensure_ascii=False),
+            retire_failed_stdout=retire_failed_stdout,
+        )
     elif show_timestamps:
         # Include timestamp in plain output
-        _print_stdout(f"{timestamp}\t{message}")
+        _print_stdout(
+            f"{timestamp}\t{message}", retire_failed_stdout=retire_failed_stdout
+        )
     else:
         # Plain output
-        _print_stdout(message)
+        _print_stdout(message, retire_failed_stdout=retire_failed_stdout)
 
     return warned_newlines
 
@@ -1578,15 +1649,9 @@ def _watch_message_handler(
                 show_timestamps,
                 warned_newlines,
                 suppress_newline_warning=quiet,
+                retire_failed_stdout=True,
             )
         except _StdoutClosed:
-            raise StopWatching from None
-        try:
-            sys.stdout.flush()
-        except OSError as error:
-            if not _is_closed_pipe_error(error):
-                raise
-            _redirect_stdout_to_devnull()
             raise StopWatching from None
 
     return handle_message
@@ -1620,6 +1685,7 @@ def cmd_watch(
         Exit code
     """
     config = resolve_config(config=config)
+    _check_watch_streams()
     watch_inputs = _resolve_watch_inputs(
         db_path,
         queue_name,
@@ -1645,6 +1711,7 @@ def cmd_watch(
     )
 
     watcher: QueueWatcher | QueueMoveWatcher | None = None
+    failure: BaseException | None = None
 
     try:
         if canonical_move_to is not None:
@@ -1654,6 +1721,7 @@ def cmd_watch(
                 handle_message,
                 db=db_path,
                 config=resolved_config,
+                error_handler=_raise_watch_output_failure,
             )
         else:
             watcher = QueueWatcher(
@@ -1663,22 +1731,52 @@ def cmd_watch(
                 peek=peek,
                 after_timestamp=after_timestamp,
                 config=resolved_config,
+                error_handler=_raise_watch_output_failure,
             )
         watcher.run_forever()
+    except _WatchOutputFailure as carrier:
+        failure = carrier.original
+        # Cleanup notes belong to the original error, not its private carrier.
+        for note in getattr(carrier, "__notes__", ()):
+            failure.add_note(note)
     except KeyboardInterrupt:
-        return EXIT_SUCCESS
+        pass
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        try:
-            sys.stdout.flush()
-        except OSError as error:
-            if not _is_closed_pipe_error(error):
-                raise
-            _redirect_stdout_to_devnull()
-        sys.stderr.flush()
-        if watcher is not None:
-            watcher.stop()
+        failure = _finish_watch(watcher, failure)
 
+    # Outside the carrier handler: avoid a cause/context cycle back to itself.
+    if failure is not None:
+        raise failure
     return EXIT_SUCCESS
+
+
+def _finish_watch(
+    watcher: QueueWatcher | QueueMoveWatcher | None,
+    failure: BaseException | None,
+) -> BaseException | None:
+    """Always stop, retaining the original failure ahead of cleanup errors."""
+    try:
+        try:
+            sys.stderr.flush()
+        except _STREAM_ERRORS as error:
+            _retire_failed_standard_stream("stderr")
+            if failure is None:
+                failure = error
+            elif error is not failure:
+                failure.add_note(f"Watch stderr cleanup also failed: {error}")
+    finally:
+        if watcher is not None:
+            try:
+                watcher.stop()
+            except Exception as error:
+                if failure is None:
+                    raise
+                if error is not failure:
+                    failure.add_note(f"Watch cleanup also failed: {error}")
+    return failure
 
 
 def _reject_invalid_existing_database(

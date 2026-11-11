@@ -32,6 +32,20 @@ seam, stops producing further output, does not select new work after detection,
 and exits `0`. Selection or mutation already completed before the output seam
 remains completed; delivery effects are governed by `[SB-DELIVERY-*]`.
 
+For watch in consume, peek, and move modes, an output failure other than the
+recognized closed-pipe condition is terminal. After detecting it at the
+output boundary, the command admits no further message, releases its runtime
+resources, and exits 1. With writable stderr it emits the ordinary diagnostic;
+parsed JSON mode uses code ERROR and retryable false. Missing or closed stdout
+or stderr at startup is refused before target acquisition. If stderr is
+unavailable, the command exits 1
+without a diagnostic. For normal CLI-owned streams and streams absent or
+closed at launch, no interpreter-flush warning or exit status 120 may replace
+that result. This does not promise recovery after external code closes and
+reuses a raw stream descriptor while the command is running. A claim or move committed before detection remains
+committed; inspect state before retrying. This CLI policy does not change
+library watcher error-handler continuation.
+
 For every other stdout-producing command or global action, a downstream close
 is an output-delivery error. The command detects closure at the stdout write or
 explicit flush seam, emits the ordinary error diagnostic on stderr, and exits
@@ -141,6 +155,17 @@ or JSON error dialect. No existing database is renamed automatically.
 Choose a database name so that every complete filename, including any
 SimpleBroker sidecar suffix, is fewer than 255 characters long. This limit
 applies to the filename component, not the full directory path.
+
+Ordinary legacy-SQLite command preflight does not classify a regular
+zero-byte target as corrupt merely because a concurrent first writer has
+created the file but not initialized it. It defers that state to the normal
+coordinated initialization and admission path. This also applies to a regular
+zero-byte file created by the caller: read, peek, exists, move, list, stats,
+and root --vacuum may initialize it through that existing path. Nonempty invalid files and
+invalid path types retain their error behavior. This does not relax the
+initialized-target checks used by init, cleanup, or project discovery. Once
+admitted, read returns its ordinary message or empty result; it does not
+reserve visibility of a concurrent write.
 
 For an ordinary relative legacy-SQLite target, the CLI must establish the
 target's physical containment within the selected working directory before
@@ -441,6 +466,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- [Runtime boundaries and failure handling](../plans/2026-11-11-runtime-boundaries-and-failure-handling-plan.md): D4/D5 promoted on 2026-11-11; runtime implementation and qualification are tracked in the active plan.
+
 - retired: 2026-11-10-deep-dive-review-remediation-plan.md — source `d8d7c79`;
   see the ledger in `docs/plans/README.md`:
   extends [SB-CLI-2] relative legacy-SQLite physical containment to `--cleanup`
@@ -534,6 +561,9 @@ _Implementation mapping_:
   see the ledger in `docs/plans/README.md`
 
 ## Verification
+
+- `[SB-CLI-1]` / `[SB-CLI-2]` fatal watch output: `tests/test_cli_watch_output_failure.py` (real terminal hangup, launch-time absent/closed streams, error ownership and cleanup); `tests/test_watcher_transition_tables.py::test_cli_watch_fires_transition_table`.
+- `[SB-CLI-1]` / `[SB-CLI-2]` first-use admission: `tests/test_cli_first_use.py` (zero-file, header-before-schema, pre-commit barriers and unchanged invalid/absent controls).
 
 - `[SB-CLI-2]` filename admission and malformed-target diagnostics: `tests/test_malformed_target_diagnostics.py`; `tests/test_cli_validation.py`; `tests/test_cli_contract_sb_cli.py`; `tests/test_cleanup.py::test_cleanup_cli_rejects_percent_filename_without_mutation`.
 

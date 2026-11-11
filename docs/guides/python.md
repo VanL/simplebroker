@@ -176,6 +176,12 @@ with open_broker("src.db") as src, open_broker("dst.db") as dst:
     load_lines(dst, dump_lines(src, include=["tasks*"]))
 ```
 
+An at-least-once Redis claim or move iterator remains owned by the process
+where it started. Child close/finalization abandons its copy; child advancement
+raises RuntimeError. Construct a new iterator in the child. Same-process
+foreign-thread cleanup retains its existing behavior. See
+[SB-API-5](../specs/16-python-library-api.md).
+
 ## Finding and deleting messages by ID or content
 
 `Queue.delete()` with no arguments deliberately removes every row in that
@@ -447,6 +453,17 @@ handler to stop the watcher cleanly. Handlers that catch broad `Exception`
 must re-raise `StopWatching` and the internal `StopException`, which the
 watcher converts, so shutdown is not swallowed.
 
+Built-in infrastructure recovery is bounded. A normal processing wait resets
+the failure streak; successful startup or initial drain alone does not. The
+third failure is terminal, following delays of 2 and 4 seconds, with a
+300-second budget checked between attempts. A quiet PostgreSQL watcher may not
+return from its processing wait for 30–60 seconds. Repeated idle-session expiry
+inside that interval can exhaust the streak. Use an existing broker DSN option
+such as `options='-c idle_session_timeout=0'` or an appropriate role policy,
+covering both LISTEN and command connections. See [SB-API-6](../specs/16-python-library-api.md).
+The CLI applies a terminal policy to output failures; a library error callback
+may still explicitly choose continuation.
+
 ### Move mode
 
 `QueueMoveWatcher` (CLI: `broker watch --move DEST`) provides continuous
@@ -705,6 +722,13 @@ literal, case-sensitive substring. It does not delete or mutate messages.
 Timestamp bounds are strict: `after_timestamp` means `ts > after_timestamp` and
 `before_timestamp` means `ts < before_timestamp`. This is intentionally an
 API-only surface because it may require a full queue scan.
+
+PostgreSQL destructive cleanup is a target-lifetime boundary. Before cleanup,
+finish iterators and transactions, stop watchers, and close every owning Queue,
+BrokerSession, broker/sidecar scope, and injected runner across processes. Use
+fresh owners after recreation, including for aliases. Cleanup does not wait for
+or verify that maintenance precondition; retained clients are unsupported across
+replacement. See [SB-OPS-7](../specs/17-ops.md).
 
 ## Advanced: Custom Extensions
 
@@ -1116,7 +1140,14 @@ the same resolved target and configuration, `session.recycle_thread()` affects
 its cache on the calling thread too: there is one cache per process-session key
 and thread, not one per handle. Use `session.connection()` for broadcast,
 statistics, and alias operations that should share the same runner or pool.
-Create a fresh session in a forked child; inherited session handles reject use.
+Inherited session handles reject use. A fresh session or Queue is safe for
+SQLite only if every SQLite connection was closed before fork. SimpleBroker
+refuses managed SQLite work in a child that inherited a live managed connection,
+including temporary setup/validation connections; retrying or choosing another
+filename cannot clear that refusal. Prefer spawn/exec or a clean forkserver.
+An ephemeral Queue is safe only after its operation and physical close finish.
+Raw or third-party SQLite connections are outside detection. See
+[SB-API-11](../specs/16-python-library-api.md).
 Close all Queue iterators and exit all Queue or session connection contexts on
 the same process-session key before the session exits. This includes operations
 opened through a sibling handle or a directly constructed persistent Queue;

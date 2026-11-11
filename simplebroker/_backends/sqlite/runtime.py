@@ -10,6 +10,7 @@ from typing import Any, cast
 from ..._constants import Config
 from ..._exceptions import DatabaseError, OperationalError
 from ..._sql.sqlite import SELECT_SQLITE_VERSION, SET_AUTO_VACUUM_INCREMENTAL
+from ..._sqlite_fork import connect as _connect_sqlite
 from .validation import is_valid_database
 
 
@@ -32,7 +33,7 @@ def _fetchone_and_close(conn: sqlite3.Connection, sql: str) -> tuple[Any, ...] |
 
 def check_version() -> None:
     """Check the minimum SQLite version required by SimpleBroker."""
-    conn = sqlite3.connect(":memory:")
+    conn = _connect_sqlite(":memory:")
     try:
         version = _fetchone_and_close(conn, SELECT_SQLITE_VERSION)
         if version:
@@ -104,7 +105,7 @@ def setup_connection_phase(
     )
     setup_conn: sqlite3.Connection | None = None
     try:
-        setup_conn = sqlite3.connect(
+        setup_conn = _connect_sqlite(
             db_path,
             isolation_level=None,
             timeout=setup_busy_timeout / 1000,

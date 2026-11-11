@@ -763,6 +763,9 @@ def _fire_timestamp_clock_transition(
 def _assert_timestamp_fork_reset(core: BrokerDB, first: int) -> None:
     if not hasattr(os, "fork"):
         pytest.skip("real fork transition is unavailable on this platform")
+    # Timestamp PID reset is still valid when its physical SQLite resources
+    # were closed before fork. Live-resource child reload is refused by [SB-API-11].
+    core._runner.close()
     read_fd, write_fd = os.pipe()
     # xdist's receiver thread is present during this inherited-state proof.
     with warnings.catch_warnings():
@@ -1019,9 +1022,9 @@ SQLITE_RUNNER_TRANSITIONS = (
         "FORK_RESET",
         "parent connection open",
         "PID changes before get",
-        "child connection open",
-        "discard inherited connection and create a new one",
-        "new connection is distinct",
+        "child runner reset; SQLite admission refused",
+        "abandon the inherited connection without closing it",
+        "RuntimeError names the unsafe fork [SB-API-11]",
     ),
     _case(
         "PER_THREAD",
@@ -1099,7 +1102,7 @@ SQLITE_RUNNER_TRANSITIONS = (
         "FORK_ACTIVE_RESET",
         "parent transaction active",
         "child touches runner after fork",
-        "child idle with fresh connection",
+        "child idle; SQLite admission refused",
         "discard inherited owner and synchronization state",
         "child does not reuse or close the parent connection",
     ),
@@ -1140,10 +1143,12 @@ def _assert_runner_fork_reset(runner: SQLiteRunner) -> None:
     if pid == 0:
         try:
             os.close(read_fd)
-            connection = runner.get_connection()
+            with pytest.raises(
+                RuntimeError, match="SQLite access is unsafe after fork"
+            ):
+                runner.get_connection()
             state = (
-                connection.execute("SELECT 1").fetchone() == (1,)
-                and runner._pid == os.getpid()
+                runner._pid == os.getpid()
                 and runner._transaction_owner is None
                 and runner._transaction_admitted_operations == 0
             )

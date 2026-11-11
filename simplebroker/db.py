@@ -112,6 +112,7 @@ from ._runner import (
 from ._selection import SelectionOrder, validate_selection_order
 from ._sidecar import SidecarSession
 from ._sql import BackendSQLNamespace, RetrieveQuerySpec
+from ._sqlite_fork import ensure_sqlite_allowed
 from ._targets import BrokerTarget, normalize_sqlite_target
 from ._timestamp import (
     TimestampGenerator,
@@ -943,6 +944,12 @@ class DBConnection:
         Raises:
             RuntimeError: If connection cannot be established after retries
         """
+        if self._backend_plugin is sqlite_backend_plugin and not self._external_runner:
+            # Preserve inherited-object rejection, then reject a fresh unsafe
+            # child before connection acquisition's general three-attempt retry.
+            self._ensure_shared_process_owner()
+            ensure_sqlite_allowed()
+
         if self._stop_event.is_set():
             raise StopException("Connection interrupted")
 
@@ -1000,9 +1007,15 @@ class DBConnection:
         if not self._has_inherited_shared_session():
             return
         if not _is_direct_backend(self._backend_plugin):
+            advice = (
+                "Close all SQLite resources before forking, or use spawn or exec. "
+                "Creating a new Queue in this child does not make SQLite safe."
+                if self._backend_plugin.name == "sqlite"
+                else "Create a new Queue in the child process."
+            )
             raise RuntimeError(
                 "Queue used in forked process. SQL connections cannot be shared "
-                "across processes. Create a new Queue in the child process."
+                "across processes. " + advice
             )
 
         # The registry retains the inherited graph before replacing its locks.
@@ -1840,10 +1853,15 @@ class BrokerCore:
         """
         current_pid = os.getpid()
         if current_pid != self._pid:
+            advice = (
+                "Close all SQLite resources before forking, or use spawn or exec. "
+                "Creating a new BrokerDB in this child does not make SQLite safe."
+                if self._backend_plugin.name == "sqlite"
+                else "Create a new BrokerDB instance in the child process."
+            )
             raise RuntimeError(
                 f"BrokerDB instance used in forked process (pid {current_pid}). "
-                f"SQLite connections cannot be shared across processes. "
-                f"Create a new BrokerDB instance in the child process."
+                "SQL connections cannot be shared across processes. " + advice
             )
 
     def _validate_queue_name(self, queue: str) -> None:

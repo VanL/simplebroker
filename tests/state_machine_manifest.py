@@ -64,6 +64,7 @@ INVENTORY_STATE_MACHINE_IDS = (
     "SM-REDIS-WRITE",
     "SM-REDIS-ACTIVITY-LISTENER",
     "SM-SQLITE-RUNNER",
+    "SM-SQLITE-FORK-ADMISSION",
     "SM-REDIS-RUNNER",
     "SM-COVERAGE-SETTLEMENT",
     "SM-CLI-COVERAGE",
@@ -181,6 +182,14 @@ STATE_MACHINE_MANIFEST = (
         test_module="tests.test_watcher_transition_tables",
         table_name="CLI_WATCH_TRANSITIONS",
         firing_test_name="test_cli_watch_fires_transition_table",
+    ),
+    StateMachineEntry(
+        machine_id="SM-SQLITE-FORK-ADMISSION",
+        owner_module="simplebroker._sqlite_fork",
+        owner_name="ensure_sqlite_allowed",
+        test_module="tests.test_sqlite_fork_admission",
+        table_name="SQLITE_FORK_ADMISSION_TRANSITIONS",
+        firing_test_name="test_sqlite_fork_admission_fires_transition_table",
     ),
     StateMachineEntry(
         machine_id="SM-SQLITE-RUNNER",

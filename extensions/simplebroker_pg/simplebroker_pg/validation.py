@@ -64,6 +64,11 @@ def require_schema_name(backend_options: Mapping[str, Any] | None) -> str:
     reject_unknown_backend_options(backend_options)
     backend_options = backend_options or {}
     schema = backend_options.get("schema")
+    return validate_schema_name(schema)
+
+
+def validate_schema_name(schema: object) -> str:
+    """Validate one schema identity before backend resources exist [SB-API-2]."""
     if not isinstance(schema, str) or not schema:
         raise DatabaseError(
             "Postgres backend requires backend_options.schema or BROKER_BACKEND_SCHEMA"
@@ -72,6 +77,11 @@ def require_schema_name(backend_options: Mapping[str, Any] | None) -> str:
         raise DatabaseError("Postgres backend refuses to use schema 'public'")
     if not SCHEMA_NAME_RE.match(schema):
         raise DatabaseError("Postgres schema must match ^[A-Za-z_][A-Za-z0-9_]*$")
+    if len(schema) > 63:
+        raise DatabaseError(
+            "Postgres schema must contain at most 63 ASCII bytes; "
+            "choose a shorter schema name"
+        )
     return schema
 
 

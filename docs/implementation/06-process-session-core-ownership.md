@@ -554,8 +554,10 @@ SQL core alias and metadata entry points check their stored PID before any
 operation or poison-state mutex. The mutation re-entry check itself probes the
 poison mutex, so a fork guard placed only immediately before `with self._lock`
 would still be too late. Inherited SQL cores reject rather than recover;
-newly constructed child handles retain the normal acquisition path. The native
-fork probes hold both mutexes and exercise each alias/metadata entry point.
+newly constructed child handles remain subject to backend admission. SQLite
+refuses when managed physical state crossed fork, even for a fresh handle or
+another filename. The native fork probes hold both mutexes and exercise each
+alias/metadata entry point.
 
 Fork recovery deliberately retains inherited SQLite connections, PostgreSQL
 pools, and Redis client/pool references in the child. Dropping a reference can
@@ -568,6 +570,65 @@ references. A cap or cleanup policy would therefore trade a hypothetical
 nested-lineage memory cost for an unsafe finalization path; either requires
 measured harmful growth and a proven close-free disposal mechanism. A warning
 is also unjustified until that growth is observed.
+
+### SQLite physical lifetimes across fork
+
+Python object PID checks protect inherited objects, but a new sqlite3 connection
+still inherits SQLite's native per-process lock bookkeeping. OS file locks do
+not transfer with that bookkeeping. A parent can therefore checkpoint and
+unlink WAL beneath a child whose writes appear successful. Before-fork closure
+would require quiescing all threads/transactions; child cleanup itself can touch
+the parent's shared WAL. Neither is an automatic recovery mechanism here.
+
+The leaf `_sqlite_fork` owner tracks every managed physical lifetime, beginning
+before native connect and ending after successful close, including temporary
+setup, validation and version probes. Its child hook reads an active count
+without inherited locks, publishes a sticky unsafe-process flag and resets only
+Python synchronization. Built-in DBConnection admission checks before its
+connection retry loop; runner operations check after graph abandonment/PID
+recovery and before resource locks. This avoids wasting connection retries on
+known refusal while leaving watcher retry policy unchanged.
+
+An internal real-connection factory makes explicit close and creator-process GC
+share retirement accounting. A child retains the object before the base C
+deallocator can close it. A failed open retires only when the constructing thread
+saw the failed object finalized and a weak reference taken in that finalizer is
+dead: the object was destroyed, not retained, resurrected, or still closing on
+another thread. An error code is not that proof, because a callback can raise a
+cannot-open error while retaining a live connection; any other failed open stays
+counted. Counts do not keep parent connections alive.
+Process-wide refusal deliberately avoids incomplete filename/inode matching.
+Raw drivers, native/reentrant forks outside the hooks and interpreter teardown
+remain outside the detection/recovery guarantee. [SB-API-11] owns the contract.
+
+### Redis suspended batch ownership
+
+At-least-once claim/move generators capture a creator PID in their own suspended
+frame. Core recovery may replace mutable locks, clients and the core PID; it
+cannot transfer the existing server reservation. Each resume checks ownership
+before another yield or batch. A shared settlement helper checks it before the
+batch-guard lock, commit, rollback or maintenance. Child finalization simply
+abandons, while child advancement raises; the helper's early return is not a
+return from a generator finally block and cannot suppress its active exception.
+Same-process foreign-thread finalization remains legal. Real fork tests require
+both an independent consumer to see no released reservations and the parent to
+complete its original batch successfully. [SB-API-5] owns this boundary.
+
+### PostgreSQL physical target identity
+
+The schema validator is shared by public plugin, runner and waiter entrances,
+including structural runners, before any pool/listener/socket or attribution
+capture. The 63-byte portable cap prevents PostgreSQL truncation from sharing
+rows while the client still hashes different lock/notification identities.
+Generic identifier quoting does not inherit the schema-only public-name rule.
+
+Cleanup is a physical target-lifetime boundary, not live cache invalidation.
+The monotone alias counter is local to a target generation and can repeat after
+schema recreation. Finish and close all owners before cleanup and construct
+fresh owners afterward. A seed change could reduce alias ABA, but would not
+establish recovery for every retained admission/schema cache. The supported
+maintenance path is proved through real separate-process CLI cleanup and
+recreation. [SB-OPS-7] names the operator precondition and its limits.
 
 ### Quiet PostgreSQL processes and the safety recheck
 
@@ -597,6 +658,14 @@ A silent half-open connection or a write that bypasses notification still needs
 the data recheck. The waiter therefore declares the interval
 (`safety_recheck_interval`, [SB-API-6]); PostgreSQL declares 30 s
 (`_ACTIVITY_SAFETY_RECHECK_SECONDS`) and Redis keeps the strategy default.
+Repeated server idle-session expiry before the outer processing wait returns
+is one failure streak: reconnect/start/drain alone cannot reset it. The third
+failure terminates, after 2/4-second retry delays and subject to the 300-second
+between-attempt budget. Real server-timeout tests preserve this policy and use
+notification-only control traffic to prove healthy waits reset it. Operator DSN
+or role timeout policy must cover LISTEN and command connections; no new ping,
+separate listener DSN, or library server-setting override is introduced.
+
 The two PostgreSQL constants are coupled: the recheck interval must exceed two
 idle checks, enforced by
 `extensions/simplebroker_pg/tests/test_pg_quiet_connections.py`.
@@ -867,6 +936,8 @@ in `tests/test_process_broker_session.py` (`project_admission` tests) and on
 real PostgreSQL in `extensions/simplebroker_pg/tests/test_pg_project_admission.py`.
 
 ## Related Plans
+
+- [Runtime boundaries and failure handling](../plans/2026-11-11-runtime-boundaries-and-failure-handling-plan.md): physical fork admission, generator process ownership, schema identity and maintenance/retry boundaries.
 
 - retired: 2026-11-10-fork-inherited-activity-waiter-plan.md — source `0ac2cfc`;
   see the ledger in `docs/plans/README.md`; PostgreSQL and Redis activity

@@ -109,6 +109,13 @@ Direct command functions return integer codes for ordinary outcomes and raise
 Python exceptions for invalid input or operational failures; only the CLI
 translates those failures to diagnostics and exit `1`.
 Underscore-prefixed modules are implementation details and may change.
+Close all SQLite connections before `fork`, or use spawn/exec or a clean
+forkserver. A new child Queue cannot repair inherited SQLite lock state;
+SimpleBroker refuses detectable unsafe use. PostgreSQL schema names must be
+non-public ASCII identifiers of at most 63 bytes. After PostgreSQL `--cleanup`,
+use fresh owning sessions/runners across all processes. These support boundaries
+are specified in [SB-API-2/11](docs/specs/16-python-library-api.md) and
+[SB-OPS-7](docs/specs/17-ops.md).
 Specifications: `docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-15]`).
 
 ```python
@@ -122,6 +129,12 @@ with Queue("jobs") as queue:
 ```
 
 The keep-write call still returns only the new committed message ID.
+
+`watch` stops on fatal output errors and leaves later messages pending; a closed
+pipe remains a clean stop. PostgreSQL quiet watchers retain bounded retries, so
+server idle-session settings must permit a healthy processing wait. See the
+[Python watcher guide](docs/guides/python.md#watchers-in-depth) and
+[CLI contract](docs/specs/10-cli.md).
 
 Bounded read, peek, and move operations select the lowest public message ID
 first by default. `order="newest"` selects highest ID first. The option is not

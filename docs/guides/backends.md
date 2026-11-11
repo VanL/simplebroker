@@ -203,10 +203,16 @@ A deliberately shared `SQLiteRunner` serializes reads and writes behind its
 active transaction owner; foreign waits are bounded by the configured SQLite
 busy timeout.
 
-SQLite fork recovery assumes the child is single-threaded when a runner is
-first touched. If multiple child threads race that first touch, recovery can
-interleave. The bounded failure mode is an operation error or one extra
-abandoned inherited connection, not reuse of a parent SQLite connection.
+SQLite runner recovery abandons inherited objects; it does not repair SQLite's
+inherited native lock bookkeeping. Managed connections, including temporary
+setup and validation handles, participate in process-wide fork admission. A
+child that inherited a live managed lifetime refuses SQLite operations before
+driver access; fresh Queues and different filenames do not bypass the rule.
+Close all physical SQLite connections before fork or use a fresh process image
+(spawn/exec or a clean forkserver). External drivers and native/reentrant forks
+outside Python's hooks remain unsupported detection cases. The inherited graph
+is retained without driver cleanup; normal interpreter teardown is not promised
+safe. See [SB-API-11](../specs/16-python-library-api.md).
 
 ## Cross-backend benchmarking
 

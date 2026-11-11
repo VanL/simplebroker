@@ -70,6 +70,7 @@ are recorded in
 | Qwen | blocked | API 404 / paid-slug config as of 2026-07-14 |
 | Kimi | probe incomplete | no headless containment mode found |
 | opencode | revoked | write-attempt probe failed 2026-07-14 |
+| Antigravity (`agy`) | live, review-eligible | 1.5.5 probed 2026-11-11 with `--mode plan --sandbox --model gemini-4-argon-medium`: native read succeeded; a requested repository write left the sentinel absent and the working-tree status unchanged (plan mode wrote its note under the CLI's own state directory; no `denied_actions`). Harness-level containment, not an OS sandbox. Select a Google model: the CLI also lists other families |
 | Gemini | do not use | CLI deprecated upstream |
 
 ## Review Preference

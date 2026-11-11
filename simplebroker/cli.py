@@ -1708,17 +1708,17 @@ def _validate_legacy_sqlite_target(
     _validate_database_parent_directory(db_path)
     # ``--vacuum`` is a root action, not a subcommand: it arrives here with
     # ``args.command`` unset and gets the same existing-file validation.
-    if db_path.exists() and (
-        args.command
-        in {
-            "read",
-            "peek",
-            "exists",
-            "move",
-            "list",
-            "stats",
-        }
-        or getattr(args, "vacuum", False)
+    # A first writer can have created this regular file before publishing
+    # its SQLite header. Let the normal phase-locked setup admit that state;
+    # initialized-target validation remains strict for init/cleanup.
+    # Spec: [SB-CLI-2].
+    if (
+        db_path.exists()
+        and (
+            args.command in {"read", "peek", "exists", "move", "list", "stats"}
+            or getattr(args, "vacuum", False)
+        )
+        and not (db_path.is_file() and db_path.stat().st_size == 0)
     ):
         _validate_sqlite_database(db_path, verify_magic=False)
 
@@ -2138,6 +2138,9 @@ def _main(*, config: Config) -> int:
     args, status_json_output = invocation
 
     try:
+        if args.command == "watch":
+            commands._check_watch_streams()
+
         pre_target_result = _run_pre_target_action(
             args,
             status_json_output=status_json_output,
@@ -2182,16 +2185,35 @@ def _main(*, config: Config) -> int:
 
             _validate_command_target(args, resolved_target, config=config)
             return _dispatch_command(args, resolved_target, parser, config=config)
-    except commands._StdoutClosed:
-        raise
-    except InvalidConfigError:
+    except (commands._StdoutClosed, InvalidConfigError):
         raise
     except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
+        if args.command == "watch":
+            return _emit_watch_cli_error(e, args, status_json_output=status_json_output)
         return _emit_classified_cli_error(
             e,
             args,
             status_json_output=status_json_output,
         )
+
+
+def _emit_watch_cli_error(
+    error: BaseException,
+    args: argparse.Namespace,
+    *,
+    status_json_output: bool,
+) -> int:
+    """A failed watch diagnostic cannot replace its terminal exit status."""
+    if sys.stderr is None or getattr(sys.stderr, "closed", False):
+        commands._retire_failed_standard_stream("stderr")
+        return EXIT_ERROR
+    try:
+        return _emit_classified_cli_error(
+            error, args, status_json_output=status_json_output
+        )
+    except commands._STREAM_ERRORS:
+        commands._retire_failed_standard_stream("stderr")
+        return EXIT_ERROR
 
 
 def _resolve_process_config(config: Config | None) -> Config:

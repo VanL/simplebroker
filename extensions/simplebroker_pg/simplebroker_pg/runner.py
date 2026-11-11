@@ -24,7 +24,7 @@ from simplebroker._runner import SetupPhase
 from ._connection_owner import _owner
 from ._failure_order import capture_ordinary_pg_cleanup
 from ._identifiers import activity_channel_name, queue_activity_channel_name
-from .validation import quote_ident
+from .validation import quote_ident, validate_schema_name
 
 # The listener owns one separate connection, so the default bounds each active
 # process-session target to at most four PostgreSQL connections in total.
@@ -810,6 +810,7 @@ class PostgresActivityWaiter:
         queue_name: str,
         stop_event: threading.Event,
     ) -> None:
+        schema = validate_schema_name(schema)
         self.safety_recheck_interval = _ACTIVITY_SAFETY_RECHECK_SECONDS
         self._dsn = dsn
         self._schema = schema
@@ -894,6 +895,7 @@ class PostgresMultiQueueActivityWaiter:
     ) -> None:
         if not queue_names:
             raise ValueError("queue_names cannot be empty")
+        schema = validate_schema_name(schema)
         self.safety_recheck_interval = _ACTIVITY_SAFETY_RECHECK_SECONDS
         self._dsn = dsn
         self._schema = schema
@@ -981,6 +983,7 @@ class PostgresRunner:
         pool_min_size: int = _DEFAULT_MIN_SIZE,
         pool_max_size: int = _DEFAULT_MAX_SIZE,
     ):
+        schema = validate_schema_name(schema)
         self._dsn = dsn
         self._schema = schema
         self._pool_min_size = pool_min_size

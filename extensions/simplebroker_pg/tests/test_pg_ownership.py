@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 import threading
 import uuid
 from collections.abc import Callable
@@ -15,13 +18,14 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
-from simplebroker import _retry, _retry_policy, resolve_config
+from simplebroker import BrokerSession, _retry, _retry_policy, resolve_config
 from simplebroker._backend_plugins import BackendPlugin
 from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError, OperationalError
 from simplebroker._phaselock import PhaseLockService
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore, DBConnection, _initialize_project_backend_target
+from tests.helper_scripts import scale_timeout_for_ci
 from tests.helper_scripts.timing import drive_until
 
 pytestmark = [pytest.mark.pg_only]
@@ -522,3 +526,51 @@ def test_meta_schema_is_typed_singleton(
         0,
         0,
     )
+
+
+def test_fresh_session_resolves_alias_after_closed_owner_cleanup_recreation(
+    pg_dsn: str, pg_schema: str, pg_plugin: BackendPlugin, tmp_path: Path
+) -> None:
+    """Cleanup ends a target lifetime; fresh owners see the replacement alias.
+
+    Both the minted Queue and its explicit session lease finish before the
+    separate CLI processes destroy and recreate the schema. This deliberately
+    makes no promise about unsupported retained-client refresh.
+    """
+    target = BrokerTarget("postgres", pg_dsn, {"schema": pg_schema})
+    (tmp_path / ".broker.toml").write_text(
+        'version = 1\nbackend = "postgres"\n'
+        f"target = {json.dumps(pg_dsn)}\n[backend_options]\n"
+        f"schema = {json.dumps(pg_schema)}\n",
+        encoding="utf-8",
+    )
+    try:
+        with BrokerSession.connect(target) as old_scope:
+            old_scope.queue("old-target").write("old-lifetime")
+            with old_scope.connection() as connection:
+                connection.add_alias("route", "old-target")
+                assert connection.resolve_alias("route") == "old-target"
+
+        for arguments in (
+            ("--cleanup",),
+            ("init",),
+            ("alias", "add", "route", "new-target"),
+        ):
+            result = subprocess.run(
+                [sys.executable, "-m", "simplebroker", *arguments],
+                check=False,
+                capture_output=True,
+                text=True,
+                cwd=tmp_path,
+                timeout=scale_timeout_for_ci(30.0),
+            )
+            assert result.returncode == 0, (result.stdout, result.stderr)
+
+        with BrokerSession.connect(target) as fresh_scope:
+            with fresh_scope.connection() as connection:
+                assert connection.resolve_alias("route") == "new-target"
+            assert fresh_scope.queue("old-target").peek() is None
+            fresh_scope.queue("new-target").write("fresh-lifetime")
+            assert fresh_scope.queue("new-target").peek() == "fresh-lifetime"
+    finally:
+        pg_plugin.cleanup_target(pg_dsn, backend_options={"schema": pg_schema})

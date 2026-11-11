@@ -19,6 +19,7 @@ import simplebroker.db as db_module
 from simplebroker._constants import SCHEMA_VERSION, SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError
 from simplebroker._runner import SQLiteRunner
+from simplebroker._sqlite_fork import _ManagedConnection
 from simplebroker.db import BrokerCore, BrokerDB
 
 from .helper_scripts.sqlite_legacy_layouts import (
@@ -424,7 +425,9 @@ def test_schema_snapshot_cannot_mix_cookie_and_proof_across_external_ddl(
     real_connect = cast(Callable[..., sqlite3.Connection], sqlite3.connect)
     ddl_ran = False
 
-    class RacingConnection(sqlite3.Connection):
+    # Production opens through the managed factory [SB-API-11]; the racing
+    # class replaces it, so it must remain a managed physical lifetime.
+    class RacingConnection(_ManagedConnection):
         def execute(self, sql, parameters=(), /):
             nonlocal ddl_ran
             normalized = " ".join(str(sql).lower().split())
@@ -443,7 +446,8 @@ def test_schema_snapshot_cannot_mix_cookie_and_proof_across_external_ddl(
             return super().execute(sql, parameters)
 
     def racing_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
-        return real_connect(*args, **kwargs, factory=RacingConnection)
+        kwargs["factory"] = RacingConnection
+        return real_connect(*args, **kwargs)
 
     monkeypatch.setattr(sqlite3, "connect", racing_connect)
 

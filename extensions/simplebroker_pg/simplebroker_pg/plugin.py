@@ -46,6 +46,7 @@ from .validation import (
     reject_unknown_backend_options,
     require_schema_name,
     validate_schema_inspection,
+    validate_schema_name,
     validate_target,
 )
 
@@ -646,7 +647,7 @@ class PostgresBackendPlugin:
         *,
         run_with_retry: Callable[[Callable[[], Any]], Any],
     ) -> None:
-        schema_name = cast("_SchemaAwareRunner", runner).schema
+        schema_name = validate_schema_name(cast("_SchemaAwareRunner", runner).schema)
         initialize_database(
             runner,
             schema=schema_name,

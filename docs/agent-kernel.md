@@ -116,6 +116,10 @@ Normative: `docs/specs/10-cli.md` [SB-CLI-1]–[SB-CLI-4].
 - **Global options before the command:**  
   `broker -f /path/to.db read tasks`  
   not `broker read tasks -f ...`.
+- `watch` output failures other than a closed pipe are terminal error `1`;
+  it stops taking messages after detection. A missing/closed startup stream
+  refuses before target acquisition. Already committed claims/moves remain
+  committed; inspect state before retrying (`[SB-CLI-1]`).
 - Closed downstream pipes on streaming commands: clean shutdown (do not keep
   claiming forever) — `[SB-DELIVERY-7]`.
 - Closed downstream pipes on finite stdout output: error `1`, never an
@@ -243,7 +247,10 @@ it attempts the main database and the known `-journal`, `-wal`, `-shm`,
 `.lock`, `.status`, `.status.tmp.<pid>.<time_ns>`, and `.vacuum.lock` names.
 Concurrent SimpleBroker or raw SQLite activity has undefined storage and client
 outcomes. Stop all such activity and make any required backup first. Exact
-attempt, error, and exit semantics are `[SB-OPS-7]`.
+attempt, error, and exit semantics are `[SB-OPS-7]`. For PostgreSQL, finish all
+operations, stop watchers, close every owning session/runner across processes,
+and use fresh owners after cleanup/recreation. Retained alias clients are not
+supported across target replacement.
 
 ## Dump / load boundaries
 
@@ -507,3 +514,19 @@ default; optional shared backends do not turn SimpleBroker into a broker fleet
 or application runtime. Everything else—context objects, multi-queue runtimes,
 history policies, sidecars—is embedding on those primitives, not a second
 product.**
+
+## Process and quiet-watcher boundaries
+
+Before `fork`, close every physical SQLite connection. A new Queue in the child
+does not repair inherited SQLite state; managed unsafe use is refused process-wide.
+Use spawn/exec or a clean forkserver when parent resources must stay live. Raw
+external SQLite handles are outside detection. Inherited Redis at-least-once
+iterators cannot advance or settle parent batches; create child-owned iterators.
+See `[SB-API-5/11]` in `docs/specs/16-python-library-api.md`.
+
+PostgreSQL schema names must be non-public ASCII identifiers of at most 63 bytes.
+For quiet watchers, align the server idle-session policy with the 30–60-second
+processing wait. Three failures before a successful processing wait exhaust the
+retry streak. An existing DSN option such as `options='-c idle_session_timeout=0'`
+covers LISTEN and command connections; there is no new listener-only setting.
+See `[SB-API-2/6]` in `docs/specs/16-python-library-api.md`.

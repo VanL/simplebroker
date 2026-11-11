@@ -148,6 +148,9 @@ Aliases map an alternate **name** to a **canonical queue name**.
   `@name` like the CLI; `Queue` construction uses literal names only
   (`[SB-API-12]`).
 
+PostgreSQL aliases and retained client scopes are subject to the destructive
+target-lifetime boundary in [SB-OPS-7]; use fresh owners after recreation.
+
 _Implementation mapping_:
 - `simplebroker/db.py` alias store
 - `simplebroker/commands.py` (`cmd_alias_*`)
@@ -188,6 +191,22 @@ Global `--cleanup` is an explicitly destructive request to delete the
 configured backend target state and exit. It is not a backup, rollback, or
 quiescent-maintenance operation. Backend-specific effects are authoritative;
 CLI exit codes and streams follow `[SB-CLI-1]` / `[SB-CLI-2]`.
+
+For PostgreSQL, destructive target cleanup ends the lifetime of existing
+clients of the physical schema. Predictable cleanup requires quiescing target
+activity across processes, finishing iterators and transactions, stopping
+watchers, and closing every owning Queue, BrokerSession, open_broker/sidecar
+scope, and caller-owned injected runner. Closing one Queue while another
+owner retains the session is insufficient; thread-cache recycling does not
+replace ending the target lifetime. The rule applies even when different
+DSNs or options name the same physical target.
+
+After recreation, construct fresh owners. Retained clients across target
+destruction/recreation are unsupported, including their alias resolution,
+admission caches, and schema state. Cleanup neither waits for nor verifies
+quiescence. There is no live-client cache-invalidation or target-replacement
+recovery guarantee. SQLite's more detailed unsafe-overlap rules below remain
+in force; this paragraph does not add a new Redis cleanup guarantee.
 
 SQLite `:memory:` and empty targets have no owned filesystem namespace; cleanup
 is a successful no-op and derives no filenames for them. For a SQLite filesystem
@@ -252,6 +271,8 @@ _Implementation mapping_:
 - `simplebroker/_backends/sqlite/plugin.py` (`cleanup_target`)
 - `simplebroker/_backends/sqlite/validation.py` (ownership validation)
 - `simplebroker/cli.py` (exit, quiet, JSON, and diagnostics)
+- `extensions/simplebroker_pg/simplebroker_pg/plugin.py` (PostgreSQL
+  `cleanup_target`)
 
 ## What this family does not own
 
@@ -277,6 +298,8 @@ _Implementation mapping_:
 
 ## Verification
 
+- `[SB-OPS-7]` supported PostgreSQL replacement lifecycle: `extensions/simplebroker_pg/tests/test_pg_ownership.py::test_fresh_session_resolves_alias_after_closed_owner_cleanup_recreation` (all owners close before CLI cleanup/recreation, then fresh alias resolution).
+
 | Clause | Firing evidence |
 |--------|-----------------|
 | [SB-OPS-1] | `tests/test_operations_contract_sb_ops.py`; `tests/test_queue_metadata.py::test_vacuum_removes_claimed_only_queue_existence` |
@@ -288,6 +311,8 @@ _Implementation mapping_:
 | [SB-OPS-7] | `tests/test_operations_contract_sb_ops.py::test_ops_language_core_promises`; `tests/test_cli_argument_parsing.py::test_cleanup_help_uses_backend_generic_target_wording`; `tests/test_cleanup.py::test_cleanup_removes_complete_owned_namespace_only`; `tests/test_cleanup.py::test_cleanup_nonexistent_database`; `tests/test_cleanup.py::test_cleanup_rejects_plain_file`; `tests/test_cleanup.py::test_cleanup_rejects_directory_main_before_deleting_sidecars`; `tests/test_cleanup.py::test_cleanup_rejects_unreadable_main_before_deleting_sidecars`; `tests/test_cleanup.py::test_cleanup_rejects_sqlite_db_with_wrong_magic`; `tests/test_cleanup.py::test_cleanup_removes_owned_orphans_when_main_is_absent`; `tests/test_cleanup.py::test_cleanup_attempts_every_later_path_after_each_unlink_failure`; `tests/test_cleanup.py::test_cleanup_unlinks_owned_symlinks_without_touching_targets`; `tests/test_cleanup.py::test_cleanup_observed_main_disappearance_still_counts_as_found`; `tests/test_cleanup.py::test_cleanup_enumerated_temp_disappearance_still_counts_as_found`; `tests/test_cleanup.py::test_cleanup_aggregates_multiple_cli_failures_and_json_error`; `tests/test_cleanup.py::test_cleanup_windows_open_handle_refusal_is_clean_and_nonrollback`; `tests/test_cleanup.py::test_cleanup_validates_literal_uri_metacharacters`; `tests/test_cleanup.py::test_cleanup_cli_rejects_percent_filename_without_mutation`; `tests/test_cleanup.py::test_cleanup_cli_retains_unsafe_metacharacter_rejection`; `tests/test_cleanup.py::test_cleanup_relative_symlink_escape_rejected_without_deleting_external_db`; `tests/test_cleanup.py::test_cleanup_relative_symlink_in_root_and_loop_semantics`; `tests/test_cleanup.py::test_cleanup_no_namespace_targets_are_noops_without_creation_or_open`; `tests/test_cleanup.py::test_cleanup_path_derivation_error_is_a_clean_database_error`; `tests/test_cleanup.py::test_cleanup_freezes_resolved_symlink_target_namespace`; `tests/test_cleanup.py::test_cleanup_main_lstat_failure_is_a_zero_delete_gate`; `tests/test_cleanup.py::test_cleanup_enumeration_failure_still_attempts_frozen_names_and_all_fixed`; `tests/test_cleanup.py::test_cleanup_reports_enumeration_before_ordered_unlink_failures`; `tests/test_cleanup.py::test_cleanup_multiple_temp_failures_are_reported_in_lexical_order`; `tests/test_cleanup.py::test_cleanup_with_quiet` |
 
 ## Related Plans
+
+- [Runtime boundaries and failure handling](../plans/2026-11-11-runtime-boundaries-and-failure-handling-plan.md): D6 promoted on 2026-11-11; runtime implementation and qualification are tracked in the active plan.
 
 - retired: 2026-11-10-deep-dive-review-remediation-plan.md — source `d8d7c79`;
   see the ledger in `docs/plans/README.md`:

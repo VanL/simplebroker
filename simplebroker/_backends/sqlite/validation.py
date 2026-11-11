@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ..._constants import SIMPLEBROKER_MAGIC
 from ..._exceptions import DatabaseError
+from ..._sqlite_fork import connect as _connect_sqlite
 
 
 def validate_database(file_path: Path, verify_magic: bool = True) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
@@ -51,7 +52,7 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:  # no
     cursor: sqlite3.Cursor | None = None
     try:
         database_uri = file_path.resolve().as_uri()
-        conn = sqlite3.connect(f"{database_uri}?mode=ro", uri=True)
+        conn = _connect_sqlite(f"{database_uri}?mode=ro", uri=True)
         cursor = conn.cursor()
         try:
             cursor.execute("PRAGMA schema_version")

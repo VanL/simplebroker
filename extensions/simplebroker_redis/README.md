@@ -133,6 +133,15 @@ newest-N set does not conflict. The server is blocked for the script; measured
 100k/220k displaced rows took about 166/377 ms on Valkey 7.2. Cost is linear in
 displaced rows and has no bounded-time guarantee.
 
+## Forked batch iterators
+
+An at-least-once claim or move iterator belongs to the process where iteration
+began. Closing or finalizing its copy in a forked child abandons it without
+releasing the parent's reservations, including on normal child exit. Advancing
+that inherited iterator raises RuntimeError; create a new iterator in the child.
+Core reconnection does not transfer a suspended batch. Same-process
+foreign-thread close remains supported. See [SB-API-5](../../docs/specs/16-python-library-api.md).
+
 ## Core Compatibility
 
 This first-party extension declares a minimum supported SimpleBroker core

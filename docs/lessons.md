@@ -608,3 +608,20 @@ Dated moment-tier entries (foldable after age floor and distillation).
   plumbing. Evidence: 2026-11-11 re-review of the pre-push remediation;
   `tests/test_process_broker_session.py::test_failure_release_argument_is_reentrant_without_tls_marker`
   records the same correction for an earlier thread-local marker.
+
+- 2026-11-11: Parallel implementation lanes that each pass a focused suite
+  have not qualified the combined tree. Integrating the SQLite fork-admission
+  lane, green on 153 focused tests, exposed four failures no lane had run. A
+  test passing `factory=` through a patched `sqlite3.connect` collided with
+  the new production factory. A doc-gate fixture that copies the live `docs/`
+  tree assumed no real plan was in flight. The tests type-check cohort had
+  never seen the new module. An assertion about weak references to a
+  resurrected object held on CPython 3.11–3.14 and failed on 3.15. Before a
+  slice goes to review, run the full default suite, every mypy cohort, and
+  the supported interpreter matrix on the combined tree, and rerun the matrix
+  after any revision to finalizer or GC logic. Assert the contract (the
+  reference taken in the finalizer observes resurrection), not the interpreter
+  mechanism that motivated it. A fixture that copies live repository state
+  must neutralize the rows it is not testing. Evidence: 2026-11-11
+  runtime-boundaries plan integration; `tests/test_sqlite_admission.py`,
+  `tests/test_doc_gates.py`, `tests/test_sqlite_fork_admission.py`.

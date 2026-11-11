@@ -46,6 +46,8 @@ from ._retry_policy import (
     execute_setup_with_retry,
     setup_busy_timeout_ms,
 )
+from ._sqlite_fork import connect as _connect_sqlite
+from ._sqlite_fork import ensure_sqlite_allowed
 from ._targets import normalize_sqlite_target
 
 # A file below the 16-byte SQLite magic header cannot be a database.
@@ -92,7 +94,8 @@ class SQLRunner(Protocol):
       whose messages do not contain SQLite's lock/busy phrases must set
       OperationalError.retryable = True on contention errors (see
       simplebroker._exceptions.OperationalError)
-    - Must be fork-safe (recreate connections after os.fork())
+    - Must be fork-safe: never use an inherited connection in a child;
+      recreate connections, or refuse where that is unsafe ([SB-API-11])
     - Must handle connection lifecycle (open/close)
 
     Optional hooks (probed via getattr, no-op if absent):
@@ -333,6 +336,7 @@ class SQLiteRunner:
         multi-threaded applications.
         """
         self._recover_after_fork_if_needed()
+        ensure_sqlite_allowed()
 
         if hasattr(self._thread_local, "conn"):
             conn_generation = getattr(self._thread_local, "conn_generation", None)
@@ -353,7 +357,7 @@ class SQLiteRunner:
 
             # Create new connection for this thread with autocommit mode
             # This is crucial for proper transaction handling
-            conn = sqlite3.connect(
+            conn = _connect_sqlite(
                 self._db_path,
                 isolation_level=None,
                 timeout=max(0, connect_timeout_ms) / 1000,
@@ -442,6 +446,7 @@ class SQLiteRunner:
         Spec: [SB-API-11]. Plan: 2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (D8).
         """
         self._recover_after_fork_if_needed()
+        ensure_sqlite_allowed()
         with (
             self._admit_operation(operation, allow_unusable=True),
             self._operation_lock,
@@ -457,6 +462,7 @@ class SQLiteRunner:
         new connection applies its settings before publishing it.
         """
         self._recover_after_fork_if_needed()
+        ensure_sqlite_allowed()
         with self._operation_lock:
             conn = getattr(self._thread_local, "conn", None)
             generation = getattr(self._thread_local, "conn_generation", None)
@@ -676,6 +682,7 @@ class SQLiteRunner:
     ) -> Iterable[tuple[Any, ...]]:
         """Execute SQL and optionally return rows."""
         self._recover_after_fork_if_needed()
+        ensure_sqlite_allowed()
         with self._admit_operation("run"), self._operation_lock:
             try:
                 conn = self.get_connection()
@@ -699,6 +706,7 @@ class SQLiteRunner:
     def begin_immediate(self) -> None:
         """Start an immediate transaction."""
         self._recover_after_fork_if_needed()
+        ensure_sqlite_allowed()
         claimed = self._claim_transaction()
         succeeded = False
         try:
@@ -723,6 +731,7 @@ class SQLiteRunner:
     def commit(self) -> None:
         """Commit the current transaction."""
         self._recover_after_fork_if_needed()
+        ensure_sqlite_allowed()
         current_thread = threading.current_thread()
         with self._admit_terminal_operation("commit") as owns_transaction:
             with self._operation_lock:
@@ -743,6 +752,7 @@ class SQLiteRunner:
     def rollback(self) -> None:
         """Rollback the current transaction."""
         self._recover_after_fork_if_needed()
+        ensure_sqlite_allowed()
         current_thread = threading.current_thread()
         with self._admit_terminal_operation("rollback") as owns_transaction:
             with self._operation_lock:
@@ -909,6 +919,7 @@ class SQLiteRunner:
         phase had already been completed by this or another process.
         """
         self._recover_after_fork_if_needed()
+        ensure_sqlite_allowed()
         service = self._phase_lock_service()
         phase_name = self._phase_marker_name(phase)
 

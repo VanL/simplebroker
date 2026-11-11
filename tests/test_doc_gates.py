@@ -504,6 +504,14 @@ Class: 4
         ownership_plan_path.write_text(ownership_txt, encoding="utf-8")
     probe_readme_path = real_plan_root / "docs" / "plans" / "README.md"
     original_probe_readme = probe_readme_path.read_text(encoding="utf-8")
+    # This probe checks one real plan. Rows the live index currently holds
+    # in flight are not its subject, and their sources are not stubbed here.
+    original_probe_readme = re.sub(
+        r"^(\|\s*[^|\s]+\.md\s*\|\s*)(?:draft|active|status-review)\b[^|]*(\|)",
+        r"\1completed \2",
+        original_probe_readme,
+        flags=re.MULTILINE,
+    )
     updated_probe_readme, count = re.subn(
         r"^(\|\s*2026-11-10-backend-thread-ownership-plan\.md\s*\|\s*)[^|]+(\|)",
         r"\1active — class 4 \2",

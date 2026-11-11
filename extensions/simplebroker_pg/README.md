@@ -261,6 +261,16 @@ terminal before cleanup; every later call is a no-op, including when the first
 call raised. The waiter owns registrations, not the runner or shared listener,
 and does not expose `shutdown()`.
 
+Built-in watcher recovery ends after the third failure in one streak (2/4-second
+retry delays; 300-second budget checked between attempts). A processing wait
+must return normally to reset the streak; connecting and draining alone do not
+prove recovery. Repeated server idle-session expiry during a quiet 30–60-second
+wait can therefore stop the watcher. Configure the existing broker DSN/libpq
+option `options='-c idle_session_timeout=0'` or a broker-role policy when quiet
+continuous watching is required. That policy applies to LISTEN and command
+connections; there is no separate listener DSN. Client-pool idle reaping remains
+in effect. No server setting is changed by the library.
+
 ### Notification channels
 
 Each write, move target, rename (old and new name) and broadcast target sends
@@ -336,3 +346,22 @@ Notes:
 - Missing backend/plugin errors are distinct from target/auth errors. Invalid schema names,
   bad passwords, malformed targets, and missing databases are reported as validation or
   connection failures, not as "backend not available" errors.
+
+## Schema identity and destructive maintenance
+
+Schema names use the existing ASCII identifier grammar, must not be `public`,
+and must fit within 63 bytes. All public plugin, runner and waiter entrances
+validate before creating resources. SimpleBroker rejects rather than truncates
+long names: PostgreSQL truncation can merge tenant storage while client lock and
+notification names differ. Correct existing invalid configurations explicitly;
+configuration changes cannot split data already mixed in one physical schema.
+
+Destructive `--cleanup` ends the physical schema's client lifetime. Finish all
+iterators/transactions, stop watchers, close every owning session/runner across
+processes, then clean up and recreate. Construct fresh owners afterward. This
+applies even when different DSNs name the same target. Cleanup does not verify
+quiescence. Retained clients, including alias caches, are unsupported across
+replacement; the alias-version counter can restart at the same value. Ordinary
+alias mutation within a target lifetime retains its freshness guarantee.
+See [SB-API-2/3](../../docs/specs/16-python-library-api.md) and
+[SB-OPS-7](../../docs/specs/17-ops.md).

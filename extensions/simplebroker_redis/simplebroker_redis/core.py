@@ -93,6 +93,15 @@ _CONFLICT_RETRY_FACTOR = 0.001
 _retry_sleep = interruptible_sleep
 
 
+def _require_generator_process(owner_pid: int) -> None:
+    """A recovered core cannot acquire its parent's suspended reservation."""
+    if os.getpid() != owner_pid:
+        raise RuntimeError(
+            "Redis at_least_once iterator used in a forked process. "
+            "Create a new iterator in the child process."
+        )
+
+
 class _RedisConflict(Exception):
     """A script result that guarantees the attempted mutation did not occur."""
 
@@ -1071,6 +1080,31 @@ class RedisBrokerCore:
         except redis.RedisError as exc:
             raise _translate_redis_error(exc) from exc
 
+    def _finish_generator_batch(
+        self,
+        owner_pid: int,
+        guard: object,
+        queue: str,
+        token: str,
+        rows: list[tuple[str, int]],
+        *,
+        completed: bool,
+        target_queue: str | None = None,
+    ) -> None:
+        # [SB-API-5]: even ordinary child exit abandons before taking the
+        # inherited lock or releasing a reservation owned by the parent.
+        if os.getpid() != owner_pid:
+            return
+        self._exit_generator_batch(guard)
+        if completed:
+            if target_queue is None:
+                self._commit_claim_batch(queue, token, rows)
+            else:
+                self._commit_move_batch(queue, target_queue, token, rows)
+            self._record_maintenance_activity(len(rows))
+        else:
+            self._rollback_batch(queue, token, rows)
+
     def _claim_batch_generator(
         self,
         queue: str,
@@ -1081,6 +1115,7 @@ class RedisBrokerCore:
         before_timestamp: int | None,
         exact_timestamp: MessageIdInput | None,
     ) -> Generator[tuple[str, int] | str, None, None]:
+        owner_pid = os.getpid()
         self._validate_queue_name(queue)
         while True:
             token, rows = self._begin_batch(
@@ -1098,14 +1133,12 @@ class RedisBrokerCore:
             try:
                 for row in rows:
                     yield row if with_timestamps else row[0]
+                    _require_generator_process(owner_pid)
                 completed = True
             finally:
-                self._exit_generator_batch(batch_guard)
-                if completed:
-                    self._commit_claim_batch(queue, token, rows)
-                    self._record_maintenance_activity(len(rows))
-                else:
-                    self._rollback_batch(queue, token, rows)
+                self._finish_generator_batch(
+                    owner_pid, batch_guard, queue, token, rows, completed=completed
+                )
 
     def peek_one(
         self,
@@ -1310,6 +1343,7 @@ class RedisBrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         config: Config | None = None,
     ) -> Generator[tuple[str, int] | str, None, None]:
+        owner_pid = os.getpid()
         self._check_fork_safety()
         validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
@@ -1356,14 +1390,18 @@ class RedisBrokerCore:
             try:
                 for row in rows:
                     yield row if with_timestamps else row[0]
+                    _require_generator_process(owner_pid)
                 completed = True
             finally:
-                self._exit_generator_batch(batch_guard)
-                if completed:
-                    self._commit_move_batch(source_queue, target_queue, token, rows)
-                    self._record_maintenance_activity(len(rows))
-                else:
-                    self._rollback_batch(source_queue, token, rows)
+                self._finish_generator_batch(
+                    owner_pid,
+                    batch_guard,
+                    source_queue,
+                    token,
+                    rows,
+                    completed=completed,
+                    target_queue=target_queue,
+                )
 
     def list_queues(
         self,

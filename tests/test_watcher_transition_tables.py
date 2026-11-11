@@ -797,12 +797,12 @@ CLI_WATCH_TRANSITIONS = (
         "clean POSIX exit or terminal Windows status with one warning",
     ),
     _case(
-        "CALLBACK_ERROR_CONTINUES",
+        "CALLBACK_ERROR_TERMINAL",
         "watching two messages",
-        "first output callback fails and second reaches a closed pipe",
+        "first output callback fails",
         "stopped",
-        "continue after handler error, then translate broken pipe to stop",
-        "both callback attempts occur and command exits zero",
+        "stop admission and propagate the original output error",
+        "only first callback is attempted and the original error escapes",
     ),
     _case(
         "FLUSH_FAILURE",
@@ -906,7 +906,7 @@ def test_cli_watch_fires_transition_table(
             return
 
         queue.write("first")
-        if transition_case.payload == "CALLBACK_ERROR_CONTINUES":
+        if transition_case.payload == "CALLBACK_ERROR_TERMINAL":
             queue.write("second")
         result_path = tmp_path / f"{transition_case.payload}.result"
         error_marker = tmp_path / f"{transition_case.payload}.error"
@@ -942,12 +942,16 @@ class FaultyStdout:
             raise BrokenPipeError()
 
 sys.stdout = FaultyStdout()
-result = cmd_watch(db_path, "jobs", quiet=True)
-pathlib.Path(result_path).write_text(str(result), encoding="utf-8")
+try:
+    result = cmd_watch(db_path, "jobs", quiet=True)
+except RuntimeError as error:
+    pathlib.Path(result_path).write_text(type(error).__name__, encoding="utf-8")
+else:
+    pathlib.Path(result_path).write_text(str(result), encoding="utf-8")
 """
         mode = (
             "callback"
-            if transition_case.payload == "CALLBACK_ERROR_CONTINUES"
+            if transition_case.payload == "CALLBACK_ERROR_TERMINAL"
             else "flush"
         )
         with managed_subprocess(
@@ -964,11 +968,11 @@ pathlib.Path(result_path).write_text(str(result), encoding="utf-8")
         ) as process:
             return_code = process.proc.wait(timeout=5)
             assert return_code == 0
-            assert result_path.read_text(encoding="utf-8") == "0"
             if mode == "callback":
-                assert error_marker.read_text(encoding="utf-8") == (
-                    "callback failed\nsecond callback reached"
-                )
+                assert result_path.read_text(encoding="utf-8") == "RuntimeError"
+                assert error_marker.read_text(encoding="utf-8") == "callback failed"
+            else:
+                assert result_path.read_text(encoding="utf-8") == "0"
         queue.close()
         probe = Queue("after", db_path=path)
         probe.write("watcher cleaned")
