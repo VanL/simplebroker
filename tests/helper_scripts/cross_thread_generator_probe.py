@@ -140,6 +140,7 @@ def _execute_probe(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-029] exception
         generator_box["generator"] = generator
         try:
             state["first_yield"] = next(generator)
+            state["active_batch_before_foreign_close"] = core._active_generator_batch
         except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             state["owner_error"] = f"{type(exc).__name__}: {exc}"
         finally:
@@ -154,11 +155,7 @@ def _execute_probe(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-029] exception
             )
         else:
             state["owner_transaction_after_foreign_close"] = None
-        state["active_batch_after_foreign_close"] = getattr(
-            core,
-            "_active_generator_batch",
-            None,
-        )
+        state["active_batch_after_foreign_close"] = core._active_generator_batch
         try:
             core.get_meta()
             state["owner_error_after_poison"] = None

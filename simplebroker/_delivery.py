@@ -40,12 +40,7 @@ def validate_keep_newest(value: object) -> int | None:
 
 def resolve_generator_batch_size(batch_size: int | None, *, default: int) -> int:
     """Validate an explicit generator batch_size or return the operation default."""
-    if batch_size is None:
-        return default
-    if (
-        isinstance(batch_size, bool)
-        or not isinstance(batch_size, int)
-        or batch_size < 1
-    ):
+    candidate = default if batch_size is None else batch_size
+    if isinstance(candidate, bool) or not isinstance(candidate, int) or candidate < 1:
         raise ValueError("batch_size must be a positive integer")
-    return batch_size
+    return candidate

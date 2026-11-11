@@ -303,3 +303,33 @@ def test_sql_alias_monotonic_version_commit_rollback_and_retry(
     finally:
         db1.shutdown()
         db2.shutdown()
+
+
+def test_get_alias_version_never_exposes_negative_sentinel_after_three_torn_passes(
+    tmp_path,
+) -> None:
+    from simplebroker.db import BrokerDB
+
+    db_file = str(tmp_path / "alias-torn-seqlock.db")
+    writer = BrokerDB(db_file)
+    reader = BrokerDB(db_file)
+    try:
+        writer.add_alias("alpha", "target_a")
+        real_read_version = reader._current_alias_version_locked
+        version_reads = 0
+
+        def torn_read_version() -> int:
+            nonlocal version_reads
+            version_reads += 1
+            return version_reads
+
+        reader._current_alias_version_locked = torn_read_version  # type: ignore[method-assign]
+        try:
+            version = reader.get_alias_version()
+            assert version >= 1
+            assert reader._alias_cache_version == -1
+        finally:
+            reader._current_alias_version_locked = real_read_version  # type: ignore[method-assign]
+    finally:
+        reader.shutdown()
+        writer.shutdown()

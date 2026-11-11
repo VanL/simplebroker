@@ -1037,3 +1037,62 @@ def test_redis_alias_mutations_increment_alias_version_monotonically_with_frozen
         assert v3 == v2 + 1
     finally:
         core.close()
+
+
+@pytest.mark.parametrize("operation", ["claim", "move"])
+def test_redis_foreign_thread_generator_close_unblocks_owner_thread(
+    redis_runner: RedisRunner,
+    operation: str,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    gen = None
+    try:
+        core.insert_messages([("src", "m1", 10), ("src", "m2", 20)])
+        gen = (
+            core.claim_generator(
+                "src",
+                delivery_guarantee="at_least_once",
+                batch_size=2,
+                with_timestamps=False,
+            )
+            if operation == "claim"
+            else core.move_generator(
+                "src",
+                "dst",
+                delivery_guarantee="at_least_once",
+                batch_size=2,
+                with_timestamps=False,
+            )
+        )
+        assert next(gen) == "m1"
+
+        close_errors: list[Exception] = []
+
+        def close_from_foreign_thread() -> None:
+            try:
+                assert gen is not None
+                gen.close()
+            except (
+                AssertionError,
+                LookupError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as exc:  # pragma: no cover - captured for assertion
+                close_errors.append(exc)
+
+        closer = threading.Thread(target=close_from_foreign_thread)
+        closer.start()
+        closer.join(timeout=5.0)
+        assert not closer.is_alive()
+        assert close_errors == []
+        gen = None
+
+        new_ts = core.write("src", "m3")
+        assert isinstance(new_ts, int) and new_ts > 20
+        assert core._active_generator_batch is None
+    finally:
+        if gen is not None:
+            gen.close()
+        core.close()

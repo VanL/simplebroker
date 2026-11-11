@@ -43,6 +43,7 @@ def test_redis_cross_thread_generator_probe(
         assert result["owner_mutation_error_after_poison"] is None
         assert result["owner_close_error"] is None
         assert result["owner_shutdown_error"] is None
+        assert result["active_batch_before_foreign_close"] == "claim"
         assert result["active_batch_after_foreign_close"] is None
         assert result["core_lock_available_after_close"] is True
     finally:

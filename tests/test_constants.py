@@ -467,12 +467,40 @@ class TestLoadConfig:
                 },
             )
 
-        # Invalid floats should raise ValueError
+            # Invalid floats should raise ValueError
         with (
             patch.dict(os.environ, {"BROKER_JITTER_FACTOR": "invalid"}),
             pytest.raises(ValueError),
         ):
             resolve_config(env=os.environ)
+
+    @pytest.mark.parametrize("bad_value", [0, -1])
+    def test_generator_batch_size_rejects_non_positive_values_on_both_paths(
+        self,
+        bad_value: int,
+    ) -> None:
+        with (
+            patch.dict(
+                os.environ,
+                {"BROKER_GENERATOR_BATCH_SIZE": str(bad_value)},
+                clear=True,
+            ),
+            pytest.raises(
+                ValueError, match="expected a positive integer message count"
+            ),
+        ):
+            resolve_config(env=os.environ)
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            pytest.raises(
+                ValueError, match="expected a positive integer message count"
+            ),
+        ):
+            resolve_config(
+                env=os.environ,
+                override={"BROKER_GENERATOR_BATCH_SIZE": bad_value},
+            )
 
     def test_all_config_keys_present(self) -> None:
         """Test that all expected configuration keys are present."""

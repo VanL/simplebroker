@@ -231,7 +231,9 @@ class RedisBrokerCore:
         self._maintenance_schedule = MaintenanceSchedule(
             int(self._config["AUTO_VACUUM_INTERVAL"])
         )
-        self._active_generator_batches: dict[int, Literal["claim", "move"]] = {}
+        self._active_generator_batches: dict[
+            object, tuple[int, Literal["claim", "move"]]
+        ] = {}
         self._ts_conflict_count = 0
         self._ts_resync_count = 0
         self._backend_plugin = runner.backend_plugin
@@ -325,20 +327,40 @@ class RedisBrokerCore:
                 f"({self._max_message_size} bytes). Adjust BROKER_MAX_MESSAGE_SIZE if needed."
             )
 
+    @property
+    def _active_generator_batch(self) -> Literal["claim", "move"] | None:
+        ident = threading.get_ident()
+        with self._lock:
+            active: Literal["claim", "move"] | None = None
+            for owner_ident, operation in self._active_generator_batches.values():
+                if owner_ident == ident:
+                    active = operation
+            return active
+
+    def _enter_generator_batch(self, operation: Literal["claim", "move"]) -> object:
+        guard = object()
+        ident = threading.get_ident()
+        with self._lock:
+            self._active_generator_batches[guard] = (ident, operation)
+        return guard
+
+    def _exit_generator_batch(self, guard: object) -> None:
+        with self._lock:
+            self._active_generator_batches.pop(guard, None)
+
     def _set_active_generator_batch(
         self, operation: Literal["claim", "move"] | None
     ) -> None:
         ident = threading.get_ident()
         with self._lock:
-            if operation is None:
-                self._active_generator_batches.pop(ident, None)
-            else:
-                self._active_generator_batches[ident] = operation
+            for guard, (owner_ident, _) in list(self._active_generator_batches.items()):
+                if owner_ident == ident:
+                    self._active_generator_batches.pop(guard, None)
+            if operation is not None:
+                self._active_generator_batches[object()] = (ident, operation)
 
     def _assert_no_reentrant_mutation_during_batch(self, operation_name: str) -> None:
-        ident = threading.get_ident()
-        with self._lock:
-            active_batch = self._active_generator_batches.get(ident)
+        active_batch = self._active_generator_batch
         if active_batch is None:
             return
         raise RuntimeError(
@@ -1072,13 +1094,13 @@ class RedisBrokerCore:
             if not rows:
                 return
             completed = False
-            self._set_active_generator_batch("claim")
+            batch_guard = self._enter_generator_batch("claim")
             try:
                 for row in rows:
                     yield row if with_timestamps else row[0]
                 completed = True
             finally:
-                self._set_active_generator_batch(None)
+                self._exit_generator_batch(batch_guard)
                 if completed:
                     self._commit_claim_batch(queue, token, rows)
                     self._record_maintenance_activity(len(rows))
@@ -1330,13 +1352,13 @@ class RedisBrokerCore:
             if not rows:
                 return
             completed = False
-            self._set_active_generator_batch("move")
+            batch_guard = self._enter_generator_batch("move")
             try:
                 for row in rows:
                     yield row if with_timestamps else row[0]
                 completed = True
             finally:
-                self._set_active_generator_batch(None)
+                self._exit_generator_batch(batch_guard)
                 if completed:
                     self._commit_move_batch(source_queue, target_queue, token, rows)
                     self._record_maintenance_activity(len(rows))

@@ -238,9 +238,8 @@ do not. Default ephemeral Queue operations and one-command CLI use often do not
 reach the interval, so schedule `broker --vacuum` when those workflows need
 bounded retention.
 
-SQLite and Postgres drain an eligible claimed backlog in configured batches
-during one pass. Redis/Valkey removes at most one configured batch per queue per
-pass. They share scheduling and eligibility, not per-pass deletion volume.
+SQLite, Postgres, and Redis/Valkey drain an eligible claimed backlog in
+configured batches during one pass.
 
 **Watcher Tuning:**
 - `BROKER_INITIAL_CHECKS` - Number of checks with zero delay (default: 100)
@@ -250,7 +249,7 @@ pass. They share scheduling and eligibility, not per-pass deletion volume.
 - `BROKER_SKIP_IDLE_CHECK` - Skip the idle-queue optimization check (default: false; leave unset unless diagnosing watcher behavior)
 
 **Generator Batching:**
-- `BROKER_GENERATOR_BATCH_SIZE` - Rows fetched per batch by generator methods such as `read_generator()` (default: 100)
+- `BROKER_GENERATOR_BATCH_SIZE` - Rows fetched per batch by generator methods such as `read_generator()` (default: 100; positive integer)
 
 **Persistence load safety:**
 - `BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS` - Maximum physical time by which a

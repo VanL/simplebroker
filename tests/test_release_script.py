@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -2701,6 +2701,57 @@ def test_github_api_get_raises_runtime_error_after_exhausting_transient_retries(
         raise TimeoutError("socket read timed out")
 
     monkeypatch.setattr(gate_mod.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match="GitHub API request failed"):
+        gate_mod.github_api_get("https://api.github.com/test", token="tok")
+    assert len(sleeps) >= 2
+
+
+def test_github_api_get_retries_dropped_connections_and_truncated_bodies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import http.client
+    import io
+
+    gate_mod = _load_require_green_workflows_module()
+    sleeps: list[float] = []
+    monkeypatch.setattr(gate_mod.time, "sleep", sleeps.append)
+
+    class _DroppingStream:
+        def __init__(self, exc: BaseException) -> None:
+            self._exc = exc
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            raise self._exc
+
+    outcomes: list[Any] = [
+        _DroppingStream(http.client.IncompleteRead(b'{"workflow_', 42)),
+        _DroppingStream(ConnectionResetError("connection reset mid-body")),
+        io.BytesIO(b'{"workflow_runs": ['),
+        io.BytesIO(b'{"workflow_runs": [{"id": 1}]}'),
+    ]
+
+    def fake_urlopen(request: Any, timeout: float = 30) -> Any:
+        del request, timeout
+        return outcomes.pop(0)
+
+    monkeypatch.setattr(gate_mod.urllib.request, "urlopen", fake_urlopen)
+    payload = gate_mod.github_api_get("https://api.github.com/test", token="tok")
+    assert payload == {"workflow_runs": [{"id": 1}]}
+    assert len(sleeps) == 3
+
+    # Persistent truncated JSON fails closed with RuntimeError after exhausting retries.
+    sleeps.clear()
+    monkeypatch.setattr(
+        gate_mod.urllib.request,
+        "urlopen",
+        lambda _req, timeout=30: io.BytesIO(b'{"truncated": '),
+    )
     with pytest.raises(RuntimeError, match="GitHub API request failed"):
         gate_mod.github_api_get("https://api.github.com/test", token="tok")
     assert len(sleeps) >= 2

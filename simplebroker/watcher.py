@@ -288,6 +288,20 @@ class _WatcherLifecycleState(Enum):
     RELEASED = auto()
 
 
+class _WatcherThread(threading.Thread):
+    """Daemon worker thread that marks completion as soon as ``run_forever`` exits."""
+
+    def __init__(self, *, target: Callable[[], object]) -> None:
+        super().__init__(target=target, daemon=True)
+        self._watcher_finished = False
+
+    def run(self) -> None:
+        try:
+            super().run()
+        finally:
+            self._watcher_finished = True
+
+
 class _ErrorHandlerFailure(Exception):
     """Private carrier that bypasses watcher retry before public propagation."""
 
@@ -1280,10 +1294,12 @@ class BaseWatcher(ABC):
             state = self._lifecycle_state_locked()
             prior_thread = self._thread() if self._thread is not None else None
             if state is _WatcherLifecycleState.RUN_OWNED or (
-                prior_thread is not None and prior_thread.is_alive()
+                prior_thread is not None
+                and prior_thread.is_alive()
+                and not getattr(prior_thread, "_watcher_finished", False)
             ):
                 raise RuntimeError("Watcher is already running")
-            thread = threading.Thread(target=self.run_forever, daemon=True)
+            thread = _WatcherThread(target=self.run_forever)
             previous_ref = self._thread
             if state is not _WatcherLifecycleState.STOP_OWNED or previous_ref is None:
                 self._thread = weakref.ref(thread)

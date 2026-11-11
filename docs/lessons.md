@@ -106,12 +106,21 @@ pass; bootstrap source `2f93ee5`)
   credentials overwrites query parameters on re-parse. (Harvested from
   2026-11-10-deep-dive-review-remediation-plan.md at `7b1ae07`.)
 
-- 2026-11-10: Re-entrant same-thread operations on a shared session core
-  (`_ProcessBrokerSession`) must push and restore per-operation `stop_event`
-  tokens on a thread-local stack rather than resetting to `None` on exit, or an
-  inner un-cancelled helper operation (`outbox.write(...)` inside
-  `inbox.read_generator()`) silently strips cancellation from the outer caller.
+- 2026-11-10: Per-thread generator guards must capture a unique lease token and
+  the starting thread's identity on entry and delete that exact token in
+  `finally` rather than re-reading `threading.get_ident()` on close. Python
+  generators can be closed or garbage-collected on a foreign thread, so keying
+  cleanup by the closer's thread identity strands the starter thread forever.
   (Harvested from 2026-11-10-deep-dive-review-remediation-plan.md at `7b1ae07`.)
+
+- 2026-11-10: (revised 2026-11-10; was: push and pop per-operation `stop_event`
+  tokens on a LIFO thread-local stack): Same-thread leased operations on a
+  shared session core (`_ProcessBrokerSession`) or `DBConnection` must record
+  `(lease_token, stop_event)` frames and remove the closing lease's own token on
+  exit before restoring `frames[-1]`. Generators on one thread are not strictly
+  nested and can close out of order; a LIFO pop removes the wrong handle's
+  `stop_event`. (Harvested from
+  2026-11-10-deep-dive-review-remediation-plan.md at `7b1ae07`.)
 
 - 2026-11-10: Process-ownership guards across `fork()` must follow each
   underlying registration, not only the newest wrapper. A composite waiter
@@ -560,3 +569,29 @@ Dated moment-tier entries (foldable after age floor and distillation).
   backend hook, not through `write()`: the lock-contention retry silently
   absorbs `deadlock detected`. Evidence: PostgreSQL write-lock-hold plan,
   prototype deadlock and mutation of the pipelined write.
+
+- 2026-11-10: State registered by an owner must be released by a key captured
+  at registration, never by re-deriving the owner's identity at release time.
+  Release code runs wherever the lifetime ends: another thread closing or
+  finalizing a generator, or an operation that exits out of order. Three fixes
+  made the same mistake in different forms: a PostgreSQL lease keyed by
+  reusable thread ident, a Redis generator guard registered under the starting
+  thread but removed under the closing thread, and a stop-event stack that
+  popped its top frame instead of the ending lease's frame. Capture a token
+  (the `Thread` object, a per-generator or per-lease token) when the entry is
+  created and remove exactly that entry in `finally`. Test the release path
+  from a foreign thread and in non-LIFO order; same-thread LIFO tests pass
+  with the wrong key. Evidence: 2026-09-16 and 2026-11-10 deep-dive
+  remediation reviews; Redis foreign-close and same-thread out-of-order
+  generator probes.
+
+- 2026-11-10: A completed-work gate must run every opt-in probe on every
+  backend the change touches, not one representative. An opt-in probe that
+  only CI enables is invisible to a local gate list, so a regression it
+  detects can pass plan review and two completed-work review rounds and
+  still turn CI red on push. When a plan's gate list names a probe for one
+  backend, name its siblings for the others in the same list, and derive the
+  list from the workflows that set the probe's environment variable. Evidence:
+  2026-11-10 deep-dive remediation, where the gate list ran the SQLite
+  cross-thread finalization probe and the Redis variant failed on the
+  reviewed head.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -229,14 +230,18 @@ def github_api_get(url: str, *, token: str) -> dict[str, object]:
     for attempt in range(1, GITHUB_API_MAX_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                payload = json.load(response)
+                raw_body = response.read()
+            payload = json.loads(raw_body.decode("utf-8"))
             break
         except urllib.error.HTTPError as exc:
             retry_after = (
                 exc.headers.get("Retry-After") if exc.headers is not None else None
             )
+            detail = ""
             try:
                 detail = exc.read().decode("utf-8", errors="replace")
+            except (http.client.HTTPException, OSError):
+                detail = "<response body unreadable>"
             finally:
                 exc.close()
             if (
@@ -248,7 +253,14 @@ def github_api_get(url: str, *, token: str) -> dict[str, object]:
             raise RuntimeError(
                 f"GitHub API request failed: {exc.code} {detail}"
             ) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            http.client.HTTPException,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
             if attempt < GITHUB_API_MAX_ATTEMPTS:
                 time.sleep(_retry_delay_seconds(attempt, None))
                 continue

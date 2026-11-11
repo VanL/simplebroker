@@ -136,12 +136,22 @@ def reachable_commits(remote_ref: str | None, *, repo: Path | None = None) -> se
     return set(result.stdout.splitlines())
 
 
-def retained_ref_commits(*, repo: Path | None = None) -> set[str]:
-    """Return commits reachable from HEAD or retained branch/tag/remote refs."""
-    result = git("rev-list", "HEAD", "--branches", "--tags", "--remotes", repo=repo)
-    if result.returncode != 0:
-        return set()
-    return set(result.stdout.splitlines())
+def retained_ref_commits(
+    remote_ref: str | None = None, *, repo: Path | None = None
+) -> set[str]:
+    """Return commits reachable from HEAD or the default published remote branch.
+
+    Arbitrary local branches (``--branches``) and tags (``--tags``) are
+    deliberately excluded so an unpublished pre-rebase commit held only by a
+    local side ref cannot masquerade as verified history.
+    """
+    commits: set[str] = set()
+    head_res = git("rev-list", "HEAD", repo=repo)
+    if head_res.returncode == 0:
+        commits.update(head_res.stdout.splitlines())
+    if remote_ref is not None:
+        commits.update(reachable_commits(remote_ref, repo=repo))
+    return commits
 
 
 def in_local_checkout(sha: str) -> str | None:
@@ -160,15 +170,15 @@ def in_local_checkout(sha: str) -> str | None:
     return None
 
 
-def resolve_remote_ref() -> str | None:
+def resolve_remote_ref(*, repo: Path | None = None) -> str | None:
     """Resolve the default remote branch via origin/HEAD, falling back to origin/main."""
-    sym = git("symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD")
+    sym = git("symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD", repo=repo)
     if sym.returncode == 0 and sym.stdout.strip():
         cand = sym.stdout.strip()
-        if git("rev-parse", "--verify", cand).returncode == 0:
+        if git("rev-parse", "--verify", cand, repo=repo).returncode == 0:
             return cand
     for fallback in ("origin/main", "origin/HEAD"):
-        if git("rev-parse", "--verify", fallback).returncode == 0:
+        if git("rev-parse", "--verify", fallback, repo=repo).returncode == 0:
             return fallback
     return None
 
@@ -227,9 +237,10 @@ def _classify_local_commit(
         if allow_local_only:
             local_only.append(sha)
         else:
+            target_desc = f"HEAD or {remote_ref}" if remote_ref else "HEAD"
             broken.append(
-                f"`{sha}` resolves only to an unreachable loose Git object "
-                "(not reachable from HEAD or any retained ref)"
+                f"`{sha}` is not reachable from {target_desc} "
+                "(unpublished local object or side ref)"
             )
         return
     if remote_ref and full_sha not in remote_commits:
@@ -305,8 +316,10 @@ def broken_retrieval_cues(
             broken.append(f"cue `git show {sha}:{path}` does not resolve here")
             continue
         if commit[0] not in retained_commits and not allow_local_only:
+            target_desc = f"HEAD or {remote_ref}" if remote_ref else "HEAD"
             broken.append(
-                f"cue `git show {sha}:{path}` relies on unreachable loose commit `{sha}`"
+                f"cue `git show {sha}:{path}` relies on commit `{sha}` "
+                f"not reachable from {target_desc}"
             )
             continue
         if sha not in seen:
@@ -379,20 +392,9 @@ def report_results(
     return 0
 
 
-def self_test() -> int:
-    """Firing self-tests for reachable ancestry and foreign attribution."""
+def _self_test_git_reachability() -> list[str]:
+    """Run temporary-repository reachability self-tests."""
     failures: list[str] = []
-    if attributed_repo("In simplebroker commit ", 23) is not None:
-        failures.append("self-repo marker 'simplebroker' was treated as foreign")
-    if attributed_repo("source agent-theory @ `296a7cd`; landed ", 40) is not None:
-        failures.append("foreign marker leaked across semicolon clause boundary")
-    if attributed_repo("source agent-theory @ ", 22) != "agent-theory":
-        failures.append("explicit 'agent-theory @' prefix did not attribute")
-    if attributed_repo("source agent-theory @ `296a7cd` (via ", 37) != "agent-theory":
-        failures.append(
-            "explicit 'agent-theory @ <sha> (via ' prefix did not attribute"
-        )
-
     with tempfile.TemporaryDirectory(prefix="coalesce-check-") as td:
         repo = Path(td)
         git_env = {
@@ -451,6 +453,43 @@ def self_test() -> int:
         if broken_allowed or local_allowed != [loose]:
             failures.append("--allow-local-only did not classify loose commit cleanly")
 
+        run_git("update-ref", "refs/remotes/origin/main", v1)
+        run_git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        run_git("branch", "local-side-branch", loose)
+        run_git("tag", "local-hold-tag", loose)
+        remote_ref_probe = resolve_remote_ref(repo=repo)
+        remote_probe_commits = reachable_commits(remote_ref_probe, repo=repo)
+        retained_with_local_refs = retained_ref_commits(remote_ref_probe, repo=repo)
+        _, broken_local_ref, _, _ = classify_sha_claims(
+            sample,
+            remote_ref=remote_ref_probe,
+            object_info=info,
+            remote_commits=remote_probe_commits,
+            retained_commits=retained_with_local_refs,
+            allow_local_only=False,
+        )
+        if not broken_local_ref:
+            failures.append(
+                "unpublished commit held by local branch/tag passed without --allow-local-only"
+            )
+    return failures
+
+
+def self_test() -> int:
+    """Firing self-tests for reachable ancestry and foreign attribution."""
+    failures: list[str] = []
+    if attributed_repo("In simplebroker commit ", 23) is not None:
+        failures.append("self-repo marker 'simplebroker' was treated as foreign")
+    if attributed_repo("source agent-theory @ `296a7cd`; landed ", 40) is not None:
+        failures.append("foreign marker leaked across semicolon clause boundary")
+    if attributed_repo("source agent-theory @ ", 22) != "agent-theory":
+        failures.append("explicit 'agent-theory @' prefix did not attribute")
+    if attributed_repo("source agent-theory @ `296a7cd` (via ", 37) != "agent-theory":
+        failures.append(
+            "explicit 'agent-theory @ <sha> (via ' prefix did not attribute"
+        )
+    failures.extend(_self_test_git_reachability())
+
     if failures:
         for f in failures:
             print(f"coalesce-check self-test FAIL: {f}")
@@ -508,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
     remote_commits = reachable_commits(remote_ref)
-    retained_commits = retained_ref_commits()
+    retained_commits = retained_ref_commits(remote_ref)
     seen, broken, local_only, foreign = classify_sha_claims(
         text,
         remote_ref=remote_ref,

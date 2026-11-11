@@ -38,26 +38,32 @@ When this plan is complete:
 1. Clean clones (`git clone --no-local`) and GitHub Actions CI (`fetch-depth: 0`
    on doc gates) pass `bin/coalesce-check`, `bin/check-doc-paths`,
    `bin/check-plan-context`, and `bin/check-dom15-fixtures` with zero dangling
-   SHAs and zero false-pass blind spots; `require_green_workflows.py`
-   (`github_api_get`) tolerates transient GitHub REST API `429`/`5xx`/transport
-   blips during release gating.
+   SHAs (rejecting local-only branch/tag refs unless `--allow-local-only` is
+   passed), house-style sibling-plan citation support, and zero false-pass blind
+   spots; `require_green_workflows.py` (`github_api_get`) tolerates transient
+   GitHub REST API `429`/`5xx`/transport and truncated-body blips during release
+   gating.
 2. Same-thread process-session `Queue` / `BrokerSession` sharing preserves each
-   nested caller's cooperative `_stop_event` via stack save/restore instead of
-   clobbering it with a newly allocated unset `threading.Event()` (restoring
-   ~`50 ms` cooperative stop under contention instead of stalling `30 s`).
+   nested and out-of-order caller's cooperative `_stop_event` via token-keyed
+   per-lease frames instead of clobbering it with a newly allocated unset
+   `threading.Event()` or popping a live sibling lease's frame (restoring ~`50 ms`
+   cooperative stop under contention instead of stalling `30 s`).
 3. SQL `BrokerCore` alias caching uses an optimistic seqlock (`v1 -> rows -> v2`)
-   with monotonic `alias_version` increments, `_run_with_retry` wrapping, and
+   with monotonic `alias_version` increments (never returning internal `-1`
+   sentinels from `get_alias_version()`), `_run_with_retry` wrapping, and
    rollback cache invalidation; `BrokerCore.insert_messages` publishes the
    in-transaction `meta.last_ts` floor without post-commit SQL queries; and
    `BrokerCore.status` reads `database_size_bytes` under `_lock` and
    `_run_with_retry`.
 4. `BaseWatcher.run_in_thread` synchronizes `_thread` publication and duplicate
-   active-run detection (`_lifecycle_state_locked()`) under `_stop_lock` while
-   preserving `[SB-API-6]` stop-before-start semantics, and removes the
-   superseded legacy `BaseWatcher.__del__` method; low-level generator
-   `batch_size` (`None` preserving `effective_config["GENERATOR_BATCH_SIZE"]`
-   for `claim_generator`/`move_generator` per `[SB-API-4]` and `PEEK_BATCH_SIZE`
-   for `peek_generator`, or explicit `>= 1` `int`) and re-entrancy diagnostics
+   active-run detection (`_lifecycle_state_locked()`, using `_WatcherThread`
+   completion marking so immediate restart after an unhandled crash succeeds
+   even inside `threading.excepthook`) under `_stop_lock` while preserving
+   `[SB-API-6]` stop-before-start semantics, and removes the superseded legacy
+   `BaseWatcher.__del__` method; low-level generator `batch_size` (`None`
+   preserving validated positive `effective_config["GENERATOR_BATCH_SIZE"]` for
+   `claim_generator`/`move_generator` per `[SB-API-4]` and `PEEK_BATCH_SIZE` for
+   `peek_generator`, or explicit `>= 1` `int`) and re-entrancy diagnostics
    behave consistently across SQLite, PostgreSQL, and Valkey/Redis.
 5. Destructive CLI `--cleanup` (landed first in Slice 2) enforces `[SB-CLI-2]`
    physical containment on ordinary relative legacy-SQLite targets (blocking
@@ -78,16 +84,18 @@ When this plan is complete:
    and core-only CI).
 7. `simplebroker_redis` loops `VACUUM_CLAIMED` until claimed rows are drained
    (`int(deleted) == batch_size`, honoring `_stop_event`, `[SB-OPS-6]`); embeds
-   queue `PUBLISH` (via `ARGV` for Redis/Valkey Cluster slot safety),
+   post-loop best-effort `redis.pcall('PUBLISH', ...)` queue notifications (via
+   `ARGV` for Redis/Valkey Cluster slot safety and channel-ACL tear immunity),
    `persisted_last_ts` return, and monotonic `HINCRBY meta alias_version 1`
    (`ADD_ALIAS`, `RENAME_QUEUE`, and new `REMOVE_ALIAS`) inside Lua scripts
    while removing post-commit `_publish`, dead `activity:all` / `_wildcard_version`,
    and dead `_alias_cache`; translates `redis.RedisError` via
    `_translate_redis_error(exc)` across every remaining `RedisBrokerCore`
    operation while preserving `TRANSPORT-AMBIGUOUS` non-replay (`[SB-API-3]`,
-   `[SB-API-6]`); keys active generator batches per thread under `_lock` and
-   clears inherited state on fork; and closes parity gaps in `init_backend` /
-   `validation.connect`.
+   `[SB-API-6]`); keys active generator batches per lease token with captured
+   owner thread ID under `_lock` (so foreign-thread close/GC removes the lease
+   without stranding the owner thread) and clears inherited state on fork; and
+   closes parity gaps in `init_backend` / `validation.connect`.
 8. Canonical specs, implementation docs, guides, `README.md`, `CONTRIBUTING.md`,
    `CHANGELOG.md`, and standalone `examples/` (`sqlite_connect.py` URI
    validation and `dead_letter_queue.sh` JSON object envelope checks) match live
@@ -580,10 +588,10 @@ comprehension checks from the source without guessing:
        `f78612e` -> `2b9f7dd`) and convert `docs/program-theory.md` line 209 to
        `2daa2fb48dd478fee5c01bec86add53793d55940:docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md`.
      - Update `bin/coalesce-check`: remove `"simplebroker"` from
-       `FOREIGN_MARKERS`, require reachable ancestry (`git merge-base --is-ancestor`
-       against `HEAD` or `git for-each-ref --contains` non-empty) unless
-       `--allow-local-only` is passed, and tighten foreign-marker matching to
-       explicit foreign repo prefixes.
+       `FOREIGN_MARKERS`, require reachable ancestry from `HEAD` or the default
+       published `remote_ref` (`origin/main`) — never arbitrary local branches
+       or tags — unless `--allow-local-only` is passed, and tighten
+       foreign-marker matching to explicit foreign repo prefixes.
      - Update `bin/check-doc-paths`: require `target.exists()` (rejecting
        dangling symlinks), add `docs/program-theory.md` to `SCAN_FILES` and
        `docs/implementation` to `SCAN_DIRS`, and strip `#fragment`, `:line(-end)`,
@@ -1104,8 +1112,10 @@ Every command below must exit `0` before completion is claimed:
    - `uv run --frozen pytest`
    - `SIMPLEBROKER_REQUIRE_FULL_MANIFEST=1 uv run --frozen pytest tests/test_state_machine_policy.py`
    - `SIMPLEBROKER_RUN_FINALIZATION_PROBE=1 uv run --frozen pytest tests/test_cross_thread_generator_probe.py`
-   - `uv run --project extensions/simplebroker_pg pytest extensions/simplebroker_pg/tests`
-   - `uv run --project extensions/simplebroker_redis pytest extensions/simplebroker_redis/tests`
+   - `SIMPLEBROKER_RUN_FINALIZATION_PROBE=1 uv run --frozen ./bin/pytest-pg --fast -n0 -q extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`
+   - `SIMPLEBROKER_RUN_FINALIZATION_PROBE=1 uv run --frozen ./bin/pytest-redis --fast -n0 -q extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py`
+   - `./bin/pytest-pg`
+   - `./bin/pytest-redis`
 
 ## Out of Scope
 
@@ -1193,6 +1203,19 @@ Every command below must exit `0` before completion is claimed:
   `extensions/simplebroker_redis/simplebroker_redis/plugin.py`,
   `extensions/simplebroker_redis/tests/test_redis_plugin_contract_edges.py`, and
   `CHANGELOG.md`) and verified **`PASS`** in Round 2.
+- `2026-11-10` (v6 — pre-push review remediation + Codex review loop): Remediated
+  all owner pre-push review findings (`P1` lease-keyed Redis generator guard +
+  non-vacuous finalization probe assertion; `P2` token-keyed out-of-order
+  `stop_event` frames in `_ProcessBrokerSession` and `DBConnection`; `P2`
+  post-loop `redis.pcall('PUBLISH', ...)` across all 7 Lua publish sites; `P2`
+  `CHANGELOG.md` `[Unreleased]` accuracy; `P2` `bin/coalesce-check`
+  `HEAD`/`origin/main` reachability and `bin/check-plan-context` house-style
+  sibling-plan resolution; plus `require_green_workflows.py` dropped-connection
+  / truncated-body retry, `_WatcherThread` immediate post-crash restart,
+  `BROKER_GENERATOR_BATCH_SIZE` positive config validation, `get_alias_version`
+  `-1` sentinel guard, discriminating Lua/stop-event tests, and SQLite/PG/Redis
+  finalization probe gate list), resolved Codex Round-1 findings `F1`–`F4`, and
+  verified **`PASS`** in Round 2.
 
 ## Independent Review Loop
 
@@ -1241,3 +1264,19 @@ Every command below must exit `0` before completion is claimed:
 
 - **Scope**: Scoped verification of accepted findings `F1`, `F2`, and `F3` (`thread_id=01a1c829-135b-72f1-9a58-b9265ac49f8d`).
 - **Result**: **`PASS`** (`F1`, `F2`, and `F3` verified against targeted tests, 48 URL/source/password combinations including `rediss://`, and the landed implementation; zero new defects).
+
+### Pre-Push Remediation Review — Round 1 (`2026-11-10`, Verdict: `blocker: F1, F2` -> `F1`–`F4` addressed)
+
+- **Unit under review**: 28-file pre-push remediation delta over `12ddb4d` in context of `93d2aec..HEAD` (`thread_id=01a1c888-6259-7151-9a92-bf96f29b5e34`).
+
+| ID | Severity | Location | Summary | Disposition |
+| :--- | :---: | :--- | :--- | :--- |
+| `F1` | `[P2]` | `bin/check-plan-context:333`, `tests/test_doc_gates.py` | Exemption for `docs/plans/<retired-plan>.md` checked membership in `retired_plan_names` without checking `not target.exists() and not target.is_symlink()`, so an existing escaping symlink at that path would bypass `_resolves_within_root`. | **Accepted — fixed (`PASS` in Round 2).** Added `not target.exists() and not target.is_symlink()` to the retired slash-path exemption in `bin/check-plan-context` and added regression assertion `# 3b` in `tests/test_doc_gates.py` proving missing retired `docs/plans/...` passes while an escaping symlink fails. |
+| `F2` | `[P2]` | `tests/test_watcher_cleanup.py:556` | `CrashOnceWatcher` could enter `threading.excepthook` before the caller completed `first_thread = watcher.run_in_thread()`, risking `NameError` under thread scheduling jitter. | **Accepted — fixed (`PASS` in Round 2).** Initialized `first_thread: threading.Thread | None = None` and gated `CrashOnceWatcher._drain_queue` on a `first_thread_stored` `threading.Event` set immediately after `watcher.run_in_thread()` returns. |
+| `F3` | `[P3]` | `tests/test_doc_gates.py:495` | `# 4` real-plan probe called `.replace("completed — class 4", ...)` on a `retired-pending` row (a silent no-op checking 0 active plans). | **Accepted — fixed (`PASS` in Round 2).** Replaced with `re.subn(..., count=1, flags=re.MULTILINE)`, asserted `count == 1`, and asserted `"1 in-flight plan source declarations resolve" in res_real_plan.stdout`. |
+| `F4` | `[P3]` | `CHANGELOG.md:36` | Changelog entry conflated explicit `batch_size` non-`int`/`bool` rejection with `BROKER_GENERATOR_BATCH_SIZE` config validation (which uses standard `[SB-API-2]` integer coercion before enforcing `>= 1`). | **Accepted — fixed (`PASS` in Round 2).** Updated `CHANGELOG.md` to distinguish explicit `batch_size` `ValueError` validation from `BROKER_GENERATOR_BATCH_SIZE` positive-after-coercion `InvalidConfigError` validation. |
+
+### Pre-Push Remediation Review — Round 2 (`2026-11-10`, Verdict: `PASS`)
+
+- **Scope**: Scoped verification of accepted findings `F1`–`F4` (`thread_id=01a1c890-6ad8-7b90-936f-59d4b292fe37`).
+- **Result**: **`PASS`** (`F1`–`F4` verified against live `bin/check-plan-context`, `[SB-API-2]`, and 13 read-only validation probes; zero new defects).

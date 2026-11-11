@@ -118,7 +118,7 @@ for _, displaced_id in ipairs(displaced) do
   redis.call('ZREM', pending, displaced_id)
   redis.call('ZADD', claimed, 0, displaced_id)
 end
-redis.call('PUBLISH', activity_channel, queue)
+redis.pcall('PUBLISH', activity_channel, queue)
 return {1}
 """
 
@@ -157,6 +157,7 @@ if current < required_last_ts then
   persisted_last_ts = ARGV[1]
 end
 local published = {}
+local publish_queues = {}
 for index = 1, count do
   local key_offset = 4 + index
   local arg_offset = 5 + ((index - 1) * 3)
@@ -170,8 +171,11 @@ for index = 1, count do
   redis.call('SADD', queues, queue)
   if not published[queue] then
     published[queue] = true
-    redis.call('PUBLISH', activity_prefix .. queue, queue)
+    table.insert(publish_queues, queue)
   end
+end
+for _, queue in ipairs(publish_queues) do
+  redis.pcall('PUBLISH', activity_prefix .. queue, queue)
 end
 return {1, persisted_last_ts}
 """
@@ -266,7 +270,9 @@ for index, queue in ipairs(queue_names) do
   if selector_mode == 'exact_create' then
     redis.call('SADD', queues, queue)
   end
-  redis.call('PUBLISH', activity_prefix .. queue, queue)
+end
+for _, queue in ipairs(queue_names) do
+  redis.pcall('PUBLISH', activity_prefix .. queue, queue)
 end
 return {1, persisted_last_ts, #queue_names}
 """
@@ -449,7 +455,7 @@ if redis.call('ZCARD', source_pending) == 0 and redis.call('ZCARD', source_claim
   redis.call('SREM', queues, source_queue)
 end
 if moved > 0 then
-  redis.call('PUBLISH', target_activity_channel, target_queue)
+  redis.pcall('PUBLISH', target_activity_channel, target_queue)
 end
 local response = {cursor}
 for _, value in ipairs(out) do table.insert(response, value) end
@@ -657,8 +663,8 @@ if retarget_aliases then
   end
 end
 
-redis.call('PUBLISH', old_activity_channel, old_queue)
-redis.call('PUBLISH', new_activity_channel, new_queue)
+redis.pcall('PUBLISH', old_activity_channel, old_queue)
+redis.pcall('PUBLISH', new_activity_channel, new_queue)
 return {1, messages_renamed, aliases_retargeted}
 """
 
@@ -769,7 +775,7 @@ if redis.call('ZCARD', source_pending) == 0 and redis.call('ZCARD', source_claim
   redis.call('SREM', queues, source_queue)
 end
 if #ids > 0 then
-  redis.call('PUBLISH', target_activity_channel, target_queue)
+  redis.pcall('PUBLISH', target_activity_channel, target_queue)
 end
 return #ids
 """

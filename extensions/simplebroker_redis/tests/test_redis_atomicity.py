@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import threading
 from typing import Any
 
@@ -1838,19 +1839,32 @@ def test_redis_mutating_operations_publish_in_lua_without_wildcard_or_post_commi
     keys = RedisKeys(redis_namespace)
     sub_client = redis.Redis.from_url(redis_url, decode_responses=True)
     pubsub = sub_client.pubsub(ignore_subscribe_messages=True)
-    waiter_q1 = plugin.create_activity_waiter(
+    waiter_w = plugin.create_activity_waiter(
         target=redis_url,
         backend_options={"namespace": redis_namespace},
-        queue_name="q1",
+        queue_name="w_q",
         stop_event=threading.Event(),
     )
-    assert waiter_q1 is not None
+    assert waiter_w is not None
+
+    def drain_channels(expected_count: int) -> list[str]:
+        collected: list[str] = []
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            msg = pubsub.get_message(timeout=0.05)
+            if msg is None:
+                if len(collected) >= expected_count:
+                    break
+                continue
+            collected.append(str(msg["channel"]))
+        assert f"{keys.prefix}:activity:all" not in collected
+        return collected
+
     try:
         assert "_publish" not in RedisBrokerCore.__dict__
         assert "activity_all" not in RedisKeys.__dict__
 
         pubsub.psubscribe(f"{keys.prefix}:activity:*")
-        # Drain subscription confirmation if any
         pubsub.get_message(timeout=0.05)
 
         def forbid_client_publish(*_args: object, **_kwargs: object) -> None:
@@ -1858,65 +1872,192 @@ def test_redis_mutating_operations_publish_in_lua_without_wildcard_or_post_commi
 
         monkeypatch.setattr(core._client, "publish", forbid_client_publish)
 
-        # 1. write
-        core.write("q1", "m1")
-        assert waiter_q1.wait(2.0) is True
+        # Site 1/7: WRITE_MESSAGE
+        core.write("w_q", "m1")
+        assert waiter_w.wait(2.0) is True
+        assert drain_channels(1) == [keys.activity_queue("w_q")]
 
-        # 2. insert_messages (with hget stubbed to fail so post-commit read cannot run)
+        # Site 2/7: INSERT_MESSAGES (with hget stubbed so post-commit read cannot run)
         def forbid_hget(*_args: object, **_kwargs: object) -> None:
             raise redis.ConnectionError("post-commit hget must not run")
 
         high_floor = 500_000_000_000_000_001
         monkeypatch.setattr(core._client, "hget", forbid_hget)
-        core.insert_messages([("q2", "m2", high_floor)])
-        assert core.get_cached_last_timestamp() >= high_floor
+        core.insert_messages(
+            [
+                ("ins_a", "ia1", high_floor),
+                ("ins_b", "ib1", high_floor + 1),
+                ("ins_a", "ia2", high_floor + 2),
+            ]
+        )
+        assert core.get_cached_last_timestamp() >= high_floor + 2
+        assert sorted(drain_channels(2)) == sorted(
+            [keys.activity_queue("ins_a"), keys.activity_queue("ins_b")]
+        )
 
-        # 3. broadcast (still with hget stubbed to fail)
-        assert core.broadcast("bcast", queue_names=("q1", "q2")) == 2
-        assert core.get_cached_last_timestamp() > high_floor
+        # Site 3/7: BROADCAST_MESSAGE (setup queues drained before broadcast)
+        monkeypatch.undo()
+        monkeypatch.setattr(core._client, "publish", forbid_client_publish)
+        core.write("bc_a", "seed_a")
+        core.write("bc_b", "seed_b")
+        assert sorted(drain_channels(2)) == sorted(
+            [keys.activity_queue("bc_a"), keys.activity_queue("bc_b")]
+        )
+        monkeypatch.setattr(core._client, "hget", forbid_hget)
+        prior_floor = core.get_cached_last_timestamp()
+        assert core.broadcast("bcast", queue_names=("bc_a", "bc_b")) == 2
+        assert core.get_cached_last_timestamp() > prior_floor
+        assert sorted(drain_channels(2)) == sorted(
+            [keys.activity_queue("bc_a"), keys.activity_queue("bc_b")]
+        )
         monkeypatch.undo()
         monkeypatch.setattr(core._client, "publish", forbid_client_publish)
 
-        # 4. move_one
-        assert core.move_one("q1", "q3", with_timestamps=False) == "m1"
+        # Site 4/7: MOVE_MESSAGES
+        core.write("mv_src", "mv_payload")
+        assert drain_channels(1) == [keys.activity_queue("mv_src")]
+        assert core.move_one("mv_src", "mv_dst", with_timestamps=False) == "mv_payload"
+        assert drain_channels(1) == [keys.activity_queue("mv_dst")]
 
-        # 5. move_generator (at_least_once commit)
+        # Site 5/7: COMMIT_MOVE_BATCH
+        core.write("mvg_src", "mvg_1")
+        core.write("mvg_src", "mvg_2")
+        assert drain_channels(2) == [
+            keys.activity_queue("mvg_src"),
+            keys.activity_queue("mvg_src"),
+        ]
         assert list(
             core.move_generator(
-                "q2",
-                "q4",
+                "mvg_src",
+                "mvg_dst",
                 delivery_guarantee="at_least_once",
                 batch_size=2,
                 with_timestamps=False,
             )
-        ) == ["m2", "bcast"]
+        ) == ["mvg_1", "mvg_2"]
+        assert drain_channels(1) == [keys.activity_queue("mvg_dst")]
 
-        # 6. rename_queue
-        rename_res = core.rename_queue("q3", "q5")
+        # Sites 6/7 and 7/7: RENAME_QUEUE (old_activity_channel + new_activity_channel)
+        core.write("ren_old", "ren_payload")
+        assert drain_channels(1) == [keys.activity_queue("ren_old")]
+        rename_res = core.rename_queue("ren_old", "ren_new")
         assert rename_res.messages_renamed == 1
-
-        channels: list[str] = []
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            msg = pubsub.get_message(timeout=0.05)
-            if msg is None:
-                if {
-                    keys.activity_queue("q1"),
-                    keys.activity_queue("q2"),
-                    keys.activity_queue("q3"),
-                    keys.activity_queue("q4"),
-                    keys.activity_queue("q5"),
-                }.issubset(channels):
-                    break
-                continue
-            channels.append(str(msg["channel"]))
-
-        assert f"{keys.prefix}:activity:all" not in channels
-        for expected_q in ("q1", "q2", "q3", "q4", "q5"):
-            assert keys.activity_queue(expected_q) in channels
+        assert sorted(drain_channels(2)) == sorted(
+            [keys.activity_queue("ren_old"), keys.activity_queue("ren_new")]
+        )
     finally:
-        waiter_q1.close()
+        waiter_w.close()
         pubsub.close()
         sub_client.close()
         core.shutdown()
+        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_redis_lua_publish_noperm_does_not_tear_or_fail_committed_writes(
+    redis_url: str,
+    redis_namespace: str,
+) -> None:
+    from urllib.parse import urlparse, urlunparse
+
+    import redis
+    from simplebroker_redis import get_backend_plugin
+
+    plugin = get_backend_plugin()
+    admin_client = redis.Redis.from_url(redis_url, decode_responses=True)
+    acl_user = f"sb_nopub_{redis_namespace[-12:]}"
+    acl_pass = "sb_nopub_secret"
+    parsed = urlparse(redis_url)
+    host_port = parsed.hostname or "localhost"
+    if parsed.port is not None:
+        host_port = f"{host_port}:{parsed.port}"
+    restricted_url = urlunparse(
+        parsed._replace(netloc=f"{acl_user}:{acl_pass}@{host_port}")
+    )
+
+    admin_client.execute_command(
+        "ACL",
+        "SETUSER",
+        acl_user,
+        "on",
+        f">{acl_pass}",
+        "~*",
+        "+@all",
+        "resetchannels",
+    )
+    restricted_probe = redis.Redis.from_url(restricted_url, decode_responses=True)
+    runner = RedisRunner(restricted_url, namespace=redis_namespace)
+    core = RedisBrokerCore(runner)
+    try:
+        # Prove the ACL user genuinely cannot PUBLISH on activity channels.
+        with pytest.raises(redis.ResponseError, match="NOPERM|permission"):
+            restricted_probe.publish(
+                RedisKeys(redis_namespace).activity_queue("probe"), "1"
+            )
+
+        # 1. Single write commits cleanly without raising NOPERM after commit.
+        ts_single = core.write("acl_single", "single-body")
+        assert core.peek_many("acl_single", limit=10, with_timestamps=True) == [
+            ("single-body", ts_single)
+        ]
+
+        # 2. Multi-queue insert_messages commits to all three queues without tearing.
+        core.insert_messages(
+            [
+                ("acl_q1", "ins-1", ts_single + 10),
+                ("acl_q2", "ins-2", ts_single + 20),
+                ("acl_q3", "ins-3", ts_single + 30),
+            ]
+        )
+        for idx, qname in enumerate(("acl_q1", "acl_q2", "acl_q3"), start=1):
+            assert core.peek_many(qname, limit=10, with_timestamps=False) == [
+                f"ins-{idx}"
+            ]
+
+        # 3. Broadcast to three queues commits to all three without tearing.
+        assert (
+            core.broadcast("bcast-body", queue_names=("acl_q1", "acl_q2", "acl_q3"))
+            == 3
+        )
+        for idx, qname in enumerate(("acl_q1", "acl_q2", "acl_q3"), start=1):
+            assert core.peek_many(qname, limit=10, with_timestamps=False) == [
+                f"ins-{idx}",
+                "bcast-body",
+            ]
+
+        # 4. move_one commits cleanly without raising after commit.
+        assert (
+            core.move_one("acl_single", "acl_moved", with_timestamps=False)
+            == "single-body"
+        )
+        assert core.peek_many("acl_moved", limit=10, with_timestamps=False) == [
+            "single-body"
+        ]
+
+        # 5. move_generator(at_least_once) commits cleanly without raising.
+        assert list(
+            core.move_generator(
+                "acl_q1",
+                "acl_mvg_dest",
+                delivery_guarantee="at_least_once",
+                batch_size=2,
+                with_timestamps=False,
+            )
+        ) == ["ins-1", "bcast-body"]
+        assert core.peek_many("acl_mvg_dest", limit=10, with_timestamps=False) == [
+            "ins-1",
+            "bcast-body",
+        ]
+
+        # 6. rename_queue commits cleanly without raising on either channel publish.
+        renamed = core.rename_queue("acl_moved", "acl_renamed")
+        assert renamed.messages_renamed == 1
+        assert core.peek_many("acl_renamed", limit=10, with_timestamps=False) == [
+            "single-body"
+        ]
+    finally:
+        core.shutdown()
+        restricted_probe.close()
+        with contextlib.suppress(Exception):
+            admin_client.execute_command("ACL", "DELUSER", acl_user)
+        admin_client.close()
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})

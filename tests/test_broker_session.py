@@ -1210,34 +1210,31 @@ def test_inherited_handle_rejects_use_and_close_is_silent(tmp_path: Path) -> Non
     assert holder_failures == []
 
 
-@pytest.mark.parametrize("use_injected_runner", [False, True])
+@pytest.mark.parametrize("via_session", [False, True])
 def test_same_thread_nested_persistent_queue_preserves_outer_stop_event(
     tmp_path: Path,
-    use_injected_runner: bool,
+    via_session: bool,
 ) -> None:
-    db_file = tmp_path / f"nested-stop-event-{use_injected_runner}.db"
+    db_file = tmp_path / f"nested-stop-event-{via_session}.db"
     cfg = resolve_config(override={"BROKER_BUSY_TIMEOUT": 50})
     stop_event = threading.Event()
-    inbox_runner = (
-        SQLiteRunner(str(db_file), config=cfg) if use_injected_runner else None
-    )
-    outbox_runner = (
-        SQLiteRunner(str(db_file), config=cfg) if use_injected_runner else None
-    )
-    inbox = Queue(
-        "inbox",
-        db_path=str(db_file),
-        persistent=True,
-        runner=inbox_runner,
-        config=cfg,
-    )
-    outbox = Queue(
-        "outbox",
-        db_path=str(db_file),
-        persistent=True,
-        runner=outbox_runner,
-        config=cfg,
-    )
+    session = BrokerSession.connect(str(db_file), config=cfg) if via_session else None
+    if session is not None:
+        inbox = session.queue("inbox")
+        outbox = session.queue("outbox")
+    else:
+        inbox = Queue(
+            "inbox",
+            db_path=str(db_file),
+            persistent=True,
+            config=cfg,
+        )
+        outbox = Queue(
+            "outbox",
+            db_path=str(db_file),
+            persistent=True,
+            config=cfg,
+        )
     inbox.set_stop_event(stop_event)
 
     try:
@@ -1270,10 +1267,107 @@ def test_same_thread_nested_persistent_queue_preserves_outer_stop_event(
     finally:
         outbox.close()
         inbox.close()
-        if outbox_runner is not None:
-            outbox_runner.close()
-        if inbox_runner is not None:
-            inbox_runner.close()
+        if session is not None:
+            session.close()
+
+
+@pytest.mark.parametrize("share_in_process", [True, False])
+@pytest.mark.parametrize(
+    "arrangement", ["first_has_stop_event", "second_has_stop_event"]
+)
+def test_out_of_order_generator_close_preserves_remaining_handle_stop_event(
+    tmp_path: Path,
+    share_in_process: bool,
+    arrangement: str,
+) -> None:
+    db_file = tmp_path / f"ooo-stop-{share_in_process}-{arrangement}.db"
+    cfg = resolve_config(override={"BROKER_BUSY_TIMEOUT": 50})
+    stop_event = threading.Event()
+    first_stop = stop_event if arrangement == "first_has_stop_event" else None
+    second_stop = stop_event if arrangement == "second_has_stop_event" else None
+
+    q1: Queue | None = None
+    q2: Queue | None = None
+    if share_in_process:
+        q1 = Queue("q1", db_path=str(db_file), persistent=True, config=cfg)
+        q2 = Queue("q2", db_path=str(db_file), persistent=True, config=cfg)
+        q1.set_stop_event(first_stop)
+        q2.set_stop_event(second_stop)
+        q1.write("q1-1")
+        q1.write("q1-2")
+        q2.write("q2-1")
+        q2.write("q2-2")
+        gen1 = q1.read_generator()
+        gen2 = q2.read_generator()
+        private_conn: DBConnection | None = None
+        private_runner: SQLiteRunner | None = None
+    else:
+        private_runner = SQLiteRunner(str(db_file), config=cfg)
+        private_conn = DBConnection(
+            str(db_file),
+            runner=private_runner,
+            config=cfg,
+            share_in_process=False,
+        )
+        with private_conn._operation_connection(stop_event=None) as seed_core:
+            seed_core.write("q1", "q1-1")
+            seed_core.write("q1", "q1-2")
+            seed_core.write("q2", "q2-1")
+            seed_core.write("q2", "q2-2")
+
+        def _private_gen(qname: str, ev: threading.Event | None) -> Any:
+            assert private_conn is not None
+            with private_conn._operation_connection(stop_event=ev) as core:
+                yield from core.claim_generator(qname, with_timestamps=False)
+
+        gen1 = _private_gen("q1", first_stop)
+        gen2 = _private_gen("q2", second_stop)
+
+    try:
+        assert next(gen1) == "q1-1"
+        assert next(gen2) == "q2-1"
+
+        if arrangement == "first_has_stop_event":
+            stop_event.set()
+            gen1.close()
+            assert next(gen2) == "q2-2"
+            gen2.close()
+            if share_in_process:
+                assert q2 is not None
+                assert q2.peek_one() is None
+            else:
+                assert private_conn is not None
+                with private_conn._operation_connection(stop_event=None) as post_core:
+                    assert post_core.peek_one("q2", with_timestamps=False) is None
+        else:
+            gen1.close()
+            lock_conn = sqlite3.connect(str(db_file), timeout=0.0, isolation_level=None)
+            try:
+                lock_conn.execute("BEGIN IMMEDIATE")
+                timer = threading.Timer(0.05, stop_event.set)
+                timer.start()
+                started = os.times().elapsed
+                try:
+                    with pytest.raises(StopException):
+                        next(gen2)
+                finally:
+                    timer.cancel()
+                    elapsed = os.times().elapsed - started
+                assert elapsed < scale_timeout_for_ci(1.0)
+            finally:
+                lock_conn.rollback()
+                lock_conn.close()
+    finally:
+        gen1.close()
+        gen2.close()
+        if q2 is not None:
+            q2.close()
+        if q1 is not None:
+            q1.close()
+        if private_conn is not None:
+            private_conn.close()
+        if private_runner is not None:
+            private_runner.close()
 
 
 @pytest.mark.parametrize("share_in_process", [True, False])

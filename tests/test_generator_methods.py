@@ -454,3 +454,20 @@ class TestGeneratorMethods:
             )
         )
         assert claimed == ["m0", "m1", "m2", "m3", "m4"]
+
+        from simplebroker._delivery import resolve_generator_batch_size
+
+        with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+            resolve_generator_batch_size(None, default=0)
+        with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+            resolve_generator_batch_size(None, default=-5)
+        with (
+            pytest.warns(UserWarning, match="BROKER_GENERATOR_BATCH_SIZE=0"),
+            pytest.raises(
+                ValueError, match="expected a positive integer message count"
+            ),
+        ):
+            resolve_config(
+                config=custom_cfg,
+                override={"BROKER_GENERATOR_BATCH_SIZE": 0},
+            )

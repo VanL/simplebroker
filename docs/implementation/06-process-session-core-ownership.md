@@ -139,11 +139,14 @@ Ordinary failures participate in exception-note priority; non-ordinary
 After terminal timeout, a late operation exit clears its local bookkeeping
 without disposing the core that terminal shutdown already claimed.
 
-Operation acquisition publishes two ownership facts: session operation depth
-and the manager's operation-session stack entry. Rollback snapshots both. A
-failure before stack publication releases only a newly acquired session
-operation; a failure after publication pops and releases that exact operation.
-This prevents a failed nested acquisition from consuming its outer operation.
+Operation acquisition publishes three ownership facts: session operation depth,
+a unique per-lease `stop_event` frame on the session's thread-local frame list,
+and the manager's token-keyed operation-session entry. Rollback snapshots depth
+and removes the exact lease token on failure or exit (including when two
+generators opened on the same thread close out of order), restoring the newest
+remaining frame's `stop_event` (or the idle fallback when empty). This prevents
+either a failed nested acquisition or an out-of-order generator close from
+consuming or overwriting a sibling operation's cancellation token.
 
 Shared non-SQLite SQL cores carry a private successful-release latch inside
 `BrokerCore.close()`. Explicit repeated close therefore cannot

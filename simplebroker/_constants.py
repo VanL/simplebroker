@@ -657,7 +657,9 @@ DEFAULT_CONFIG: Final[Mapping[str, ConfigField]] = MappingProxyType(
             _positive_int,
         ),
         "GENERATOR_BATCH_SIZE": ConfigField(
-            DEFAULT_GENERATOR_BATCH_SIZE, "an integer message count", int
+            DEFAULT_GENERATOR_BATCH_SIZE,
+            "a positive integer message count",
+            _positive_int,
         ),
         "LOAD_MAX_FUTURE_SKEW_SECONDS": ConfigField(
             DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS,

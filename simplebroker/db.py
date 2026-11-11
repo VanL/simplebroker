@@ -743,6 +743,7 @@ class DBConnection:
         self._core: BrokerConnection | None = None
         self._thread_local = threading.local()
         self._default_stop_event = threading.Event()
+        self._base_stop_event: threading.Event | None = None
         self._configured_stop_event: threading.Event | None = None
         self._stop_event = self._default_stop_event
         self._project_setup_lock = threading.Lock()
@@ -1024,15 +1025,22 @@ class DBConnection:
             session = self._ensure_shared_session()
             operation_depth = session.current_thread_operation_depth()
             stack_depth = self._shared_operation_stack_depth()
+            op_token = getattr(self._thread_local, "active_op_token", None) or object()
             try:
-                connection = session.get_connection(self._configured_stop_event)
-                self._push_shared_operation_session(session)
+                with session._scoped_tls_token("pending_lease_token", op_token):
+                    connection = session.get_connection(self._configured_stop_event)
+                with self._scoped_op_token("pending_push_token", op_token):
+                    self._push_shared_operation_session(session)
                 return connection
             except BaseException as failure:
                 if self._shared_operation_stack_depth() > stack_depth:
-                    self.release_connection_after_use(active_failure=failure)
+                    with self._scoped_op_token("releasing_op_token", op_token):
+                        self.release_connection_after_use(active_failure=failure)
                 elif session.current_thread_operation_depth() > operation_depth:
-                    session.release_current_thread_connection(active_failure=failure)
+                    with session._scoped_tls_token("releasing_lease_token", op_token):
+                        session.release_current_thread_connection(
+                            active_failure=failure
+                        )
                 raise
 
         return self._open_connection_with_retry(
@@ -1040,36 +1048,71 @@ class DBConnection:
             config=effective_config,
         )
 
+    @contextmanager
+    def _scoped_op_token(self, attr: str, token: object) -> Iterator[None]:
+        has_prior = hasattr(self._thread_local, attr)
+        prior = getattr(self._thread_local, attr, None)
+        setattr(self._thread_local, attr, token)
+        try:
+            yield
+        finally:
+            if has_prior:
+                setattr(self._thread_local, attr, prior)
+            elif hasattr(self._thread_local, attr):
+                delattr(self._thread_local, attr)
+
+    def _consume_op_token(self, attr: str) -> object | None:
+        if not hasattr(self._thread_local, attr):
+            return None
+        token = getattr(self._thread_local, attr)
+        delattr(self._thread_local, attr)
+        return cast(object, token)
+
     def _shared_operation_stack_depth(self) -> int:
         """Return this manager's operation-session stack depth."""
 
         stack = cast(
-            "list[_ProcessBrokerSession] | None",
+            "list[tuple[object, _ProcessBrokerSession]] | None",
             getattr(self._thread_local, "shared_operation_sessions", None),
         )
         return 0 if stack is None else len(stack)
 
     def _push_shared_operation_session(self, session: "_ProcessBrokerSession") -> None:
+        op_token = (
+            self._consume_op_token("pending_push_token")
+            or getattr(self._thread_local, "active_op_token", None)
+            or object()
+        )
         stack = cast(
-            "list[_ProcessBrokerSession] | None",
+            "list[tuple[object, _ProcessBrokerSession]] | None",
             getattr(self._thread_local, "shared_operation_sessions", None),
         )
         if stack is None:
             stack = []
             self._thread_local.shared_operation_sessions = stack
-        stack.append(session)
+        stack.append((op_token, session))
 
-    def _pop_shared_operation_session(self) -> "_ProcessBrokerSession | None":
+    def _pop_shared_operation_session(
+        self,
+    ) -> "tuple[object, _ProcessBrokerSession] | None":
+        operation_token = self._consume_op_token("releasing_op_token")
         stack = cast(
-            "list[_ProcessBrokerSession] | None",
+            "list[tuple[object, _ProcessBrokerSession]] | None",
             getattr(self._thread_local, "shared_operation_sessions", None),
         )
         if not stack:
             return None
-        session = stack.pop()
+        entry: tuple[object, _ProcessBrokerSession] | None = None
+        if operation_token is None:
+            entry = stack.pop()
+        else:
+            for idx in range(len(stack) - 1, -1, -1):
+                if stack[idx][0] is operation_token:
+                    entry = stack.pop(idx)
+                    break
         if not stack:
             delattr(self._thread_local, "shared_operation_sessions")
-        return session
+        return entry
 
     def get_core(self) -> BrokerConnection:
         """Get or create the BrokerCore instance.
@@ -1243,11 +1286,13 @@ class DBConnection:
         if self._share_in_process:
             if self._has_inherited_shared_session():
                 return
-            session = self._pop_shared_operation_session()
-            if session is not None:
-                session.release_current_thread_connection(
-                    active_failure=active_failure,
-                )
+            popped = self._pop_shared_operation_session()
+            if popped is not None:
+                popped_token, session = popped
+                with session._scoped_tls_token("releasing_lease_token", popped_token):
+                    session.release_current_thread_connection(
+                        active_failure=active_failure,
+                    )
 
     _UNSET_STOP_EVENT = object()
 
@@ -1259,36 +1304,42 @@ class DBConnection:
     ) -> Iterator[BrokerConnection]:
         """Yield one operation connection and balance its session lease."""
 
+        if self._share_in_process:
+            self._ensure_shared_process_owner()
+        op_token = object()
         override_applied = stop_event is not self._UNSET_STOP_EVENT
-        prior_stop_event = self._configured_stop_event
         if override_applied:
-            self.set_stop_event(cast("threading.Event | None", stop_event))
+            self._push_stop_override(
+                op_token,
+                cast("threading.Event | None", stop_event),
+            )
         try:
-            connection = self.get_connection()
+            with self._scoped_op_token("active_op_token", op_token):
+                connection = self.get_connection()
             try:
                 yield connection
             except GeneratorExit:
-                self.release_connection_after_use()
+                with self._scoped_op_token("releasing_op_token", op_token):
+                    self.release_connection_after_use()
                 raise
             except BaseException as failure:
-                self.release_connection_after_use(active_failure=failure)
+                with self._scoped_op_token("releasing_op_token", op_token):
+                    self.release_connection_after_use(active_failure=failure)
                 raise
             else:
-                self.release_connection_after_use()
+                with self._scoped_op_token("releasing_op_token", op_token):
+                    self.release_connection_after_use()
         finally:
             if override_applied:
-                self.set_stop_event(prior_stop_event)
+                self._remove_stop_override(op_token)
 
-    def set_stop_event(self, stop_event: threading.Event | None) -> None:
-        """Set the stop event used for interruptible retries."""
-
+    def _apply_effective_stop_event(self, stop_event: threading.Event | None) -> None:
         self._configured_stop_event = stop_event
         if stop_event is None:
             self._stop_event = self._default_stop_event
         else:
             self._stop_event = stop_event
 
-        # Update existing thread-local connection if present
         if hasattr(self._thread_local, "db"):
             try:
                 self._thread_local.db.set_stop_event(self._stop_event)
@@ -1296,6 +1347,47 @@ class DBConnection:
                 pass
         if self._core is not None:
             self._core.set_stop_event(self._stop_event)
+
+    def _push_stop_override(
+        self,
+        op_token: object,
+        stop_event: threading.Event | None,
+    ) -> None:
+        frames = cast(
+            "list[tuple[object, threading.Event | None]] | None",
+            getattr(self._thread_local, "stop_override_frames", None),
+        )
+        if frames is None:
+            frames = []
+            self._thread_local.stop_override_frames = frames
+        frames.append((op_token, stop_event))
+        self._apply_effective_stop_event(stop_event)
+
+    def _remove_stop_override(self, op_token: object) -> None:
+        frames = cast(
+            "list[tuple[object, threading.Event | None]] | None",
+            getattr(self._thread_local, "stop_override_frames", None),
+        )
+        if frames:
+            for idx in range(len(frames) - 1, -1, -1):
+                if frames[idx][0] is op_token:
+                    frames.pop(idx)
+                    break
+            if not frames:
+                delattr(self._thread_local, "stop_override_frames")
+        effective = frames[-1][1] if frames else self._base_stop_event
+        self._apply_effective_stop_event(effective)
+
+    def set_stop_event(self, stop_event: threading.Event | None) -> None:
+        """Set the stop event used for interruptible retries."""
+
+        self._base_stop_event = stop_event
+        frames = cast(
+            "list[tuple[object, threading.Event | None]] | None",
+            getattr(self._thread_local, "stop_override_frames", None),
+        )
+        if not frames:
+            self._apply_effective_stop_event(stop_event)
 
     def close(self) -> None:
         """Release this manager's process-session lease."""
@@ -4102,9 +4194,10 @@ class BrokerCore:
         self._assert_no_reentrant_mutation_during_batch("vacuum")
         self._vacuum_claimed_messages(compact=compact)
 
-    def _load_aliases_locked(self) -> None:
+    def _load_aliases_locked(self) -> int:
         """Refresh alias cache using a bounded version seqlock. Caller must hold self._lock."""
         rows: list[tuple[Any, ...]] = []
+        v2 = 0
         for _ in range(3):
             v1 = self._current_alias_version_locked()
             rows = list(self._runner.run(self._sql.SELECT_ALIASES, fetch=True))
@@ -4112,27 +4205,27 @@ class BrokerCore:
             if v1 == v2:
                 self._alias_cache = dict(rows)
                 self._alias_cache_version = v2
-                return
+                return v2
         self._alias_cache = dict(rows)
         self._alias_cache_version = -1
+        return v2
 
     def _current_alias_version_locked(self) -> int:
         return self._backend_plugin.read_alias_version(self._runner)
 
-    def _refresh_alias_cache_if_needed_locked(self) -> None:
+    def _refresh_alias_cache_if_needed_locked(self) -> int:
         if self._alias_cache_version < 0:
-            self._load_aliases_locked()
-            return
+            return self._load_aliases_locked()
 
         current_version = self._current_alias_version_locked()
         if current_version != self._alias_cache_version:
-            self._load_aliases_locked()
+            return self._load_aliases_locked()
+        return self._alias_cache_version
 
     def get_alias_version(self) -> int:
         self._check_fork_safety()
         with self._lock:
-            self._refresh_alias_cache_if_needed_locked()
-            return self._alias_cache_version
+            return self._refresh_alias_cache_if_needed_locked()
 
     def resolve_alias(self, alias: str) -> str | None:
         self._check_fork_safety()

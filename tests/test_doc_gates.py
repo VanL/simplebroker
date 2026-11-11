@@ -178,6 +178,34 @@ def test_coalesce_check_rejects_unreachable_loose_sha_and_simplebroker_marker(
     )
     assert res_allowed.returncode == 0, _result_detail(res_allowed)
 
+    # 1b. Unpublished SHA held by a local branch or tag (while origin/main is at base)
+    # must ALSO fail by default — local refs are not published history.
+    git("update-ref", "refs/remotes/origin/main", base_sha)
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    git("branch", "local-side-branch", dangling_sha)
+    git("tag", "local-hold-tag", dangling_sha)
+
+    res_local_refs = subprocess.run(
+        [sys.executable, str(script_copy)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_local_refs.returncode == 1, _result_detail(res_local_refs)
+    assert dangling_sha in res_local_refs.stdout
+
+    res_local_refs_allowed = subprocess.run(
+        [sys.executable, str(script_copy), "--allow-local-only"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_local_refs_allowed.returncode == 0, _result_detail(
+        res_local_refs_allowed
+    )
+
     # 2. Broken SHA near the word "simplebroker" must fail, never skip as foreign.
     (repo / "docs" / "coalescing.md").write_text(
         "In simplebroker commit `deadbeef1` we changed behavior.\n",
@@ -330,6 +358,152 @@ Class: 3
     res_mixed = _run([sys.executable, str(checker), "--root", str(tmp_path)])
     assert res_mixed.returncode == 1, _result_detail(res_mixed)
     assert "broken-second-path.md" in res_mixed.stdout
+
+    # 3. House style in active plans: bare live/retired sibling plan filenames,
+    # convention tokens, and git branch names pass; typoed dated plan filename fails.
+    (plan_dir / "2026-11-08-sibling-plan.md").write_text(
+        """# Sibling
+Class: 3
+
+## Source Documents
+
+- `docs/specs/valid.md`
+""",
+        encoding="utf-8",
+    )
+    (plan_dir / "README.md").write_text(
+        """## Status Index
+
+| Plan | Status |
+|------|--------|
+| 2026-11-08-sibling-plan.md | completed — class 3 |
+| 2026-11-10-house-style-plan.md | active — class 4 |
+
+## Retired Plans
+
+- `2026-10-01-retired-plan.md` — `abc1234` — retired 2026-11-01
+""",
+        encoding="utf-8",
+    )
+    (plan_dir / "2026-11-10-house-style-plan.md").write_text(
+        """# House Style
+Class: 4
+
+## Source Documents
+
+- `docs/specs/valid.md`
+- `2026-11-08-sibling-plan.md` (live sibling plan by bare filename)
+- `2026-10-01-retired-plan.md` (retired sibling plan by bare filename)
+- Conventions like `MODULE-THEORY.md`, `.broker.toml`, `writing-plans.md`, and branch `perf/sb-listener-recovery`
+
+## Independent Review Loop
+
+- Author family: Claude
+- Reviewer family: OpenAI Codex
+- Review invocation: `codex exec -s read-only`
+""",
+        encoding="utf-8",
+    )
+    res_house = _run([sys.executable, str(checker), "--root", str(tmp_path)])
+    assert res_house.returncode == 0, _result_detail(res_house)
+
+    # Typoed dated sibling plan filename still fails.
+    (plan_dir / "2026-11-10-house-style-plan.md").write_text(
+        """# House Style Broken
+Class: 4
+
+## Source Documents
+
+- `docs/specs/valid.md`
+- `2026-11-09-typo-missing-plan.md`
+
+## Independent Review Loop
+
+- Author family: Claude
+- Reviewer family: OpenAI Codex
+- Review invocation: `codex exec -s read-only`
+""",
+        encoding="utf-8",
+    )
+    res_typo_plan = _run([sys.executable, str(checker), "--root", str(tmp_path)])
+    assert res_typo_plan.returncode == 1, _result_detail(res_typo_plan)
+    assert "2026-11-09-typo-missing-plan.md" in res_typo_plan.stdout
+
+    # 3b. Missing retired plan path under docs/plans/ passes, while an escaping symlink at that path is rejected.
+    (plan_dir / "2026-11-10-house-style-plan.md").write_text(
+        """# Retired Slash Path Probe
+Class: 4
+
+## Source Documents
+
+- `docs/specs/valid.md`
+- `docs/plans/2026-10-01-retired-plan.md`
+
+## Independent Review Loop
+
+- Author family: Claude
+- Reviewer family: OpenAI Codex
+- Review invocation: `codex exec -s read-only`
+""",
+        encoding="utf-8",
+    )
+    res_missing_retired = _run([sys.executable, str(checker), "--root", str(tmp_path)])
+    assert res_missing_retired.returncode == 0, _result_detail(res_missing_retired)
+
+    escaping_target = tmp_path.parent / "outside-repo-plan.md"
+    escaping_target.write_text("# outside\n", encoding="utf-8")
+    retired_symlink = plan_dir / "2026-10-01-retired-plan.md"
+    retired_symlink.symlink_to(escaping_target)
+    try:
+        res_escape = _run([sys.executable, str(checker), "--root", str(tmp_path)])
+        assert res_escape.returncode == 1, _result_detail(res_escape)
+        assert "docs/plans/2026-10-01-retired-plan.md" in res_escape.stdout
+    finally:
+        retired_symlink.unlink(missing_ok=True)
+        escaping_target.unlink(missing_ok=True)
+
+    # 4. Real repository sibling plan marked active passes without house-style false positives.
+    import shutil
+
+    real_plan_root = tmp_path / "real-repo-plan-probe"
+    shutil.copytree(REPO_ROOT / "docs", real_plan_root / "docs")
+    ownership_plan_path = (
+        real_plan_root
+        / "docs"
+        / "plans"
+        / "2026-11-10-backend-thread-ownership-plan.md"
+    )
+    ownership_txt = ownership_plan_path.read_text(encoding="utf-8")
+    # Materialize stub files inside real_plan_root for non-docs code/test paths cited in Source Documents.
+    for match in re.finditer(r"`([^`\r\n]+)`", ownership_txt.split("## ", 2)[2]):
+        candidate = match.group(1).split("#", 1)[0].split(":", 1)[0]
+        if "/" in candidate and not candidate.startswith("docs/"):
+            stub = real_plan_root / candidate
+            stub.parent.mkdir(parents=True, exist_ok=True)
+            if not stub.exists():
+                stub.write_text("# stub\n", encoding="utf-8")
+    if "## Independent Review Loop" not in ownership_txt:
+        ownership_txt += (
+            "\n## Independent Review Loop\n\n"
+            "- Author family: Claude\n"
+            "- Reviewer family: OpenAI Codex\n"
+            "- Review invocation: `codex exec -s read-only`\n"
+        )
+        ownership_plan_path.write_text(ownership_txt, encoding="utf-8")
+    probe_readme_path = real_plan_root / "docs" / "plans" / "README.md"
+    original_probe_readme = probe_readme_path.read_text(encoding="utf-8")
+    updated_probe_readme, count = re.subn(
+        r"^(\|\s*2026-11-10-backend-thread-ownership-plan\.md\s*\|\s*)[^|]+(\|)",
+        r"\1active — class 4 \2",
+        original_probe_readme,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    assert count == 1
+    probe_readme_path.write_text(updated_probe_readme, encoding="utf-8")
+    res_real_plan = _run([sys.executable, str(checker), "--root", str(real_plan_root)])
+    assert res_real_plan.returncode == 0, _result_detail(res_real_plan)
+    assert "1 in-flight plan source declarations resolve" in res_real_plan.stdout
 
 
 @pytest.mark.parametrize(

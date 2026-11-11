@@ -7,7 +7,8 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Protocol, cast
@@ -221,6 +222,26 @@ class _ProcessBrokerSession:
 
         self._project_target_admitted = True
 
+    @contextmanager
+    def _scoped_tls_token(self, attr: str, token: object) -> Iterator[None]:
+        has_prior = hasattr(self._thread_local, attr)
+        prior = getattr(self._thread_local, attr, None)
+        setattr(self._thread_local, attr, token)
+        try:
+            yield
+        finally:
+            if has_prior:
+                setattr(self._thread_local, attr, prior)
+            elif hasattr(self._thread_local, attr):
+                delattr(self._thread_local, attr)
+
+    def _consume_tls_token(self, attr: str) -> object | None:
+        if not hasattr(self._thread_local, attr):
+            return None
+        token = getattr(self._thread_local, attr)
+        delattr(self._thread_local, attr)
+        return cast(object, token)
+
     def get_connection(
         self,
         stop_event: threading.Event | None,
@@ -229,7 +250,24 @@ class _ProcessBrokerSession:
     ) -> BrokerConnection:
         """Return this thread's shared core, creating it if needed."""
 
-        operation_depth = self._begin_operation() if lease_operation else 0
+        lease_token: object | None = None
+        if lease_operation:
+            lease_token = self._consume_tls_token("pending_lease_token") or object()
+        return self._get_connection_with_token(
+            stop_event,
+            lease_operation=lease_operation,
+            lease_token=lease_token,
+        )
+
+    def _get_connection_with_token(
+        self,
+        stop_event: threading.Event | None,
+        *,
+        lease_operation: bool,
+        lease_token: object | None,
+    ) -> BrokerConnection:
+        if lease_operation:
+            self._begin_operation()
         creation_started = False
         try:
             with self._operation_condition:
@@ -245,7 +283,7 @@ class _ProcessBrokerSession:
                         core,
                         stop_event,
                         lease_operation=lease_operation,
-                        operation_depth=operation_depth,
+                        lease_token=lease_token,
                     )
                     return core
 
@@ -263,7 +301,7 @@ class _ProcessBrokerSession:
                         core,
                         stop_event,
                         lease_operation=lease_operation,
-                        operation_depth=operation_depth,
+                        lease_token=lease_token,
                     )
                     return core
 
@@ -271,7 +309,10 @@ class _ProcessBrokerSession:
             raise RuntimeError("Broker session is closed")
         except Exception as failure:
             if lease_operation:
-                self._end_operation(active_failure=failure)
+                self._end_operation(
+                    lease_token=lease_token,
+                    active_failure=failure,
+                )
             raise
         finally:
             if creation_started:
@@ -292,52 +333,59 @@ class _ProcessBrokerSession:
         stop_event: threading.Event | None,
         *,
         lease_operation: bool,
-        operation_depth: int,
+        lease_token: object | None,
     ) -> None:
         """Bind stop_event for a leased operation or idle core borrow."""
 
         if lease_operation:
+            assert lease_token is not None
             core.set_stop_event(stop_event)
-            stack = cast(
-                list[tuple[int, threading.Event | None]] | None,
-                getattr(self._thread_local, "stop_event_stack", None),
+            frames = cast(
+                list[tuple[object, threading.Event | None]] | None,
+                getattr(self._thread_local, "stop_event_frames", None),
             )
-            if stack is None:
-                stack = []
-                self._thread_local.stop_event_stack = stack
-            stack.append((operation_depth, stop_event))
+            if frames is None:
+                frames = []
+                self._thread_local.stop_event_frames = frames
+            frames.append((lease_token, stop_event))
             return
 
         self._thread_local.idle_stop_event = stop_event
         if self.current_thread_operation_depth() == 0:
             core.set_stop_event(stop_event)
 
-    def _pop_stop_event_for_depth_locked(self, depth: int) -> bool:
-        """Pop any stop_event frames recorded at or above ``depth``."""
+    def _remove_stop_event_frame_locked(self, lease_token: object | None) -> bool:
+        """Remove one leased operation's stop_event frame (supporting out-of-order close)."""
 
-        stack = cast(
-            list[tuple[int, threading.Event | None]] | None,
-            getattr(self._thread_local, "stop_event_stack", None),
+        frames = cast(
+            list[tuple[object, threading.Event | None]] | None,
+            getattr(self._thread_local, "stop_event_frames", None),
         )
-        if not stack:
+        if not frames:
             return False
-        popped = False
-        while stack and stack[-1][0] >= depth:
-            stack.pop()
-            popped = True
-        if not stack:
-            delattr(self._thread_local, "stop_event_stack")
-        return popped
+        removed = False
+        if lease_token is None:
+            frames.pop()
+            removed = True
+        else:
+            for idx in range(len(frames) - 1, -1, -1):
+                if frames[idx][0] is lease_token:
+                    frames.pop(idx)
+                    removed = True
+                    break
+        if not frames:
+            delattr(self._thread_local, "stop_event_frames")
+        return removed
 
     def _current_stop_event_locked(self) -> threading.Event | None:
-        """Return the active outer operation stop_event or idle fallback."""
+        """Return the active top operation stop_event or idle fallback."""
 
-        stack = cast(
-            list[tuple[int, threading.Event | None]] | None,
-            getattr(self._thread_local, "stop_event_stack", None),
+        frames = cast(
+            list[tuple[object, threading.Event | None]] | None,
+            getattr(self._thread_local, "stop_event_frames", None),
         )
-        if stack:
-            return stack[-1][1]
+        if frames:
+            return frames[-1][1]
         return cast(
             threading.Event | None,
             getattr(self._thread_local, "idle_stop_event", None),
@@ -354,7 +402,12 @@ class _ProcessBrokerSession:
             self._thread_local.operation_depth = depth
             return depth
 
-    def _end_operation(self, *, active_failure: BaseException | None = None) -> None:
+    def _end_operation(
+        self,
+        *,
+        lease_token: object | None = None,
+        active_failure: BaseException | None = None,
+    ) -> None:
         """Release one active queue operation lease."""
 
         claim = _CoreDisposalClaim()
@@ -368,10 +421,10 @@ class _ProcessBrokerSession:
                 if depth is None or self._active_operations <= 0:
                     return
                 release_operation = True
-                popped_stop_event = self._pop_stop_event_for_depth_locked(depth)
+                removed_stop_event = self._remove_stop_event_frame_locked(lease_token)
                 if depth == 1:
                     self._claim_pending_cleanup_locked(claim)
-                if claim.core is None and popped_stop_event:
+                if claim.core is None and removed_stop_event:
                     restore_core = cast(
                         BrokerConnection | None,
                         getattr(self._thread_local, "core", None),
@@ -431,8 +484,8 @@ class _ProcessBrokerSession:
             return
         claim.core = core
         delattr(self._thread_local, "core")
-        if hasattr(self._thread_local, "stop_event_stack"):
-            delattr(self._thread_local, "stop_event_stack")
+        if hasattr(self._thread_local, "stop_event_frames"):
+            delattr(self._thread_local, "stop_event_frames")
         if hasattr(self._thread_local, "idle_stop_event"):
             delattr(self._thread_local, "idle_stop_event")
         self._cores.discard(core)
@@ -564,7 +617,11 @@ class _ProcessBrokerSession:
         actual close lifecycle.
         """
 
-        self._end_operation(active_failure=active_failure)
+        lease_token = self._consume_tls_token("releasing_lease_token")
+        self._end_operation(
+            lease_token=lease_token,
+            active_failure=active_failure,
+        )
 
     def close_all(self) -> None:
         """Close all owned resources for this session."""

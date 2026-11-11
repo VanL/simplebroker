@@ -40,6 +40,22 @@ ROOT_FILE_CLAIM_RE = re.compile(
     r"^[A-Za-z0-9._-]+(?:\.(?:md|py|rst|txt|toml|yaml|yml|json|sh|cfg|ini))$",
     re.IGNORECASE,
 )
+DATED_PLAN_NAME_RE = re.compile(r"^20\d{2}-\d{2}-\d{2}-.*\.md$", re.IGNORECASE)
+KNOWN_REPO_TOP_DIRS = frozenset(
+    {
+        "docs",
+        "simplebroker",
+        "tests",
+        "extensions",
+        "skills",
+        "bin",
+        "examples",
+        ".github",
+        ".claude",
+        "fuzz",
+        "benchmarks",
+    }
+)
 EXTENSIONLESS_ROOT_FILES = frozenset({"LICENSE", "Makefile", "Dockerfile"})
 SOURCE_WAIVER_RE = re.compile(
     r"^[ \t]*(?:[-*+][ \t]+)?Source spec:[ \t]+None[ \t]+—[ \t]+\S[^\r\n]*$",
@@ -123,6 +139,18 @@ def extract_status_index(text: str) -> str:
         raise InvocationError(
             "status index must contain ## Status Index and ## Retired Plans"
         ) from exc
+
+
+def extract_retired_plan_names(text: str) -> frozenset[str]:
+    """Return plan filenames recorded under ``## Retired Plans``."""
+    unfenced = strip_fenced_blocks(text)
+    parts = unfenced.split("## Retired Plans", 1)
+    if len(parts) < 2:
+        return frozenset()
+    retired_tail = parts[1]
+    next_h2 = re.search(r"^##\s+", retired_tail, re.MULTILINE)
+    section = retired_tail[: next_h2.start()] if next_h2 else retired_tail
+    return frozenset(re.findall(r"[A-Za-z0-9._-]+\.md", section))
 
 
 def primary_status(status_cell: str) -> str:
@@ -235,7 +263,54 @@ def _normalize_repo_path_claim(raw_claim: str) -> str | None:
     return None
 
 
-def inspect_source_paths(section: str, root: Path) -> tuple[int, list[str]]:
+def _resolves_inside_root(target: Path, resolved_root: Path) -> bool:
+    try:
+        target.resolve(strict=True).relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
+def _is_slash_repo_path_claim(claim_path: Path, stripped: str, root: Path) -> bool:
+    if claim_path.is_absolute():
+        return True
+    if stripped.startswith(("./", "../", ".\\", "..\\")) or ".." in claim_path.parts:
+        return True
+    top = claim_path.parts[0] if claim_path.parts else ""
+    if top in KNOWN_REPO_TOP_DIRS:
+        return True
+    top_target = root / top
+    if top_target.exists() or top_target.is_symlink():
+        return True
+    return ROOT_FILE_CLAIM_RE.match(claim_path.name) is not None
+
+
+def _classify_bare_source_claim(
+    normalized: str,
+    claim_path: Path,
+    root: Path,
+    resolved_root: Path,
+    retired_plans: frozenset[str],
+) -> tuple[bool, bool]:
+    """Return ``(resolved, broken)`` for a bare filename claim."""
+    root_target = root / claim_path
+    if root_target.exists() or root_target.is_symlink():
+        ok = _resolves_inside_root(root_target, resolved_root)
+        return ok, not ok
+    plan_target = root / PLAN_DIR / claim_path
+    if plan_target.exists() or plan_target.is_symlink():
+        ok = _resolves_inside_root(plan_target, resolved_root)
+        return ok, not ok
+    if normalized in retired_plans:
+        return False, False
+    return False, DATED_PLAN_NAME_RE.match(normalized) is not None
+
+
+def inspect_source_paths(
+    section: str,
+    root: Path,
+    retired_plans: frozenset[str] = frozenset(),
+) -> tuple[int, list[str]]:
     """Return ``(resolving_count, broken_claims)`` across all concrete path claims."""
     resolved_root = root.resolve()
     resolving_count = 0
@@ -246,21 +321,44 @@ def inspect_source_paths(section: str, root: Path) -> tuple[int, list[str]]:
         if normalized is None:
             continue
         claim_path = Path(normalized)
-        if claim_path.is_absolute():
-            broken_claims.append(raw_claim)
+        if "/" in normalized or "\\" in normalized:
+            if not _is_slash_repo_path_claim(claim_path, normalized, root):
+                continue
+            if claim_path.is_absolute():
+                broken_claims.append(raw_claim)
+                continue
+            target = root / claim_path
+            if _resolves_inside_root(target, resolved_root):
+                resolving_count += 1
+            elif not (
+                not target.exists()
+                and not target.is_symlink()
+                and claim_path.parent == PLAN_DIR
+                and claim_path.name in retired_plans
+            ):
+                broken_claims.append(raw_claim)
             continue
-        target = root / claim_path
-        try:
-            target.resolve(strict=True).relative_to(resolved_root)
-        except (OSError, RuntimeError, ValueError):
+
+        resolved, broken = _classify_bare_source_claim(
+            normalized,
+            claim_path,
+            root,
+            resolved_root,
+            retired_plans,
+        )
+        if resolved:
+            resolving_count += 1
+        elif broken:
             broken_claims.append(raw_claim)
-            continue
-        resolving_count += 1
     return resolving_count, broken_claims
 
 
 def check_plan_text(
-    plan_name: str, status_cell: str, plan_text: str, root: Path
+    plan_name: str,
+    status_cell: str,
+    plan_text: str,
+    root: Path,
+    retired_plans: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Validate one in-flight plan's Source Documents and Independent Review Loop."""
     section = extract_source_documents(plan_text)
@@ -268,7 +366,11 @@ def check_plan_text(
         return [f"{plan_name}: missing ## Source Documents* section"]
 
     problems: list[str] = []
-    resolving_count, broken_claims = inspect_source_paths(section, root)
+    resolving_count, broken_claims = inspect_source_paths(
+        section,
+        root,
+        retired_plans=retired_plans,
+    )
     if resolving_count == 0 and not SOURCE_WAIVER_RE.search(section):
         problems.append(
             f"{plan_name}: Source Documents has no resolving backticked repo "
@@ -303,6 +405,7 @@ def check_tree(root: Path) -> tuple[list[str], int]:
         ) from exc
 
     index = extract_status_index(index_text)
+    retired_plans = extract_retired_plan_names(index_text)
     rows = INDEX_ROW_RE.findall(index)
     # A completed retirement pass can legitimately leave only the index itself.
     # Keep the error when an empty/unparseable index would hide a plan file.
@@ -328,7 +431,15 @@ def check_tree(root: Path) -> tuple[list[str], int]:
             )
             continue
 
-        problems.extend(check_plan_text(plan_name, status_cell, plan_text, root))
+        problems.extend(
+            check_plan_text(
+                plan_name,
+                status_cell,
+                plan_text,
+                root,
+                retired_plans=retired_plans,
+            )
+        )
     return problems, checked
 
 
@@ -763,6 +874,12 @@ def mutation_probe_failures(root: Path) -> list[str]:
             "- `docs/specs/source.md`",
             "- `docs/specs/source.md`\n- `docs/specs/missing-second.md`",
             "missing-second.md` does not resolve",
+        ),
+        "broken dated sibling plan filename": (
+            "active.md",
+            "- `docs/specs/source.md`",
+            "- `docs/specs/source.md`\n- `2026-11-99-missing-plan.md`",
+            "2026-11-99-missing-plan.md` does not resolve",
         ),
     }
     for name, (plan_name, old, new, expected) in mutations.items():

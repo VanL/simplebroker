@@ -523,3 +523,68 @@ class TestWatcherCleanup:
             assert len(started_holder) == 1
             started_holder[0].join(timeout=scale_timeout_for_ci(5.0))
             assert not started_holder[0].is_alive()
+
+    def test_watcher_immediate_restart_after_crashed_run_succeeds(
+        self,
+        broker_target: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        runs = 0
+        first_thread_stored = threading.Event()
+        second_run_started = threading.Event()
+        release_second_run = threading.Event()
+        hook_done = threading.Event()
+        hook_errors: list[BaseException] = []
+        restarted_threads: list[threading.Thread] = []
+
+        class CrashOnceWatcher(QueueWatcher):
+            def _run_with_retries(self, max_retries: int = 3) -> None:
+                nonlocal runs
+                del max_retries
+                runs += 1
+                if runs == 1:
+                    assert first_thread_stored.wait(timeout=scale_timeout_for_ci(5.0))
+                    raise RuntimeError("boom on first run")
+                second_run_started.set()
+                release_second_run.wait(timeout=scale_timeout_for_ci(5.0))
+
+        watcher = CrashOnceWatcher(
+            "crash_restart_queue",
+            lambda _m, _t: None,
+            db=broker_target,
+        )
+        first_thread: threading.Thread | None = None
+
+        def on_unhandled_thread_exc(args: threading.ExceptHookArgs) -> None:
+            if first_thread is not None and args.thread is first_thread:
+                try:
+                    # Crash thread is STILL is_alive() right here inside excepthook!
+                    assert first_thread.is_alive()
+                    restarted_threads.append(watcher.run_in_thread())
+                except (
+                    AssertionError,
+                    LookupError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                ) as exc:  # pragma: no cover - captured for assertion
+                    hook_errors.append(exc)
+                finally:
+                    hook_done.set()
+
+        monkeypatch.setattr(threading, "excepthook", on_unhandled_thread_exc)
+        first_thread = watcher.run_in_thread()
+        first_thread_stored.set()
+        try:
+            assert hook_done.wait(timeout=scale_timeout_for_ci(5.0))
+            assert hook_errors == []
+            assert len(restarted_threads) == 1
+            assert second_run_started.wait(timeout=scale_timeout_for_ci(5.0))
+            first_thread.join(timeout=scale_timeout_for_ci(5.0))
+        finally:
+            release_second_run.set()
+            watcher.stop(join=True, timeout=scale_timeout_for_ci(5.0))
+            for t in restarted_threads:
+                t.join(timeout=scale_timeout_for_ci(5.0))
+                assert not t.is_alive()
