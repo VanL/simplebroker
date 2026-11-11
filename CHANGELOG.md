@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- CLI `--cleanup` on ordinary relative legacy SQLite `-f` targets now enforces
+  the same `[SB-CLI-2]` physical directory containment as other SQLite target
+  admission paths, refusing symlinked filenames or symlinked parent components
+  that resolve outside the containing directory before unlinking any main or
+  `-wal` / `-shm` / `-journal` files.
+- `Queue` same-thread nested `stop_event` scopes now restore the outer
+  cancellation token on exit instead of clearing `_stop_event` to `None`, and
+  `BrokerCore._execute_with_retry` now routes lock acquisition and SQLite busy
+  waits through `_stop_event` so `BaseWatcher.stop()` can interrupt blocked
+  callers within bounded latency.
+- `BrokerCore` SQL alias reads now verify `alias_version` before and after
+  snapshotting `_aliases` (`add_alias`, `remove_alias`, and alias-retargeting
+  `rename_queue` advance `alias_version` monotonically while `get_alias_version`
+  and `_aliases` verify cache stability), and `BrokerCore.insert_messages`
+  publishes the committed in-transaction `meta.last_ts` floor directly via
+  `_publish_committed_floor` instead of issuing a post-commit
+  `refresh_last_timestamp()` read inside the write-retry loop.
+- `BaseWatcher` now publishes `_run_thread` under `_stop_lock` before clearing
+  `_stop_event` and synchronizes `_strategy` installation/detachment so
+  concurrent `stop()` / `run_in_thread()` transitions remain race-free; Python
+  `BROKER_MESSAGE_NEWLINE_WARN_ONCE` warning state now uses an internal boolean
+  latch instead of mutating process-global `warnings.filters`.
+- Backend target display redaction and inline-password detection now cover
+  PostgreSQL `sslpassword=` conninfo parameters, neutralize control characters,
+  and honor `--quiet` when loading `.broker.toml` targets with inline
+  credentials; CLI error diagnostics sanitize terminal escape/control sequences
+  on `stderr`, `broker move -m <id> --all --json` preserves `--json` error
+  envelopes, and `broker init --json` includes canonical `project_root` /
+  `config_path` fields across `.broker.toml` modes.
+- `simplebroker-pg`: `verify_env`, `init_backend`, `require_schema_name`,
+  `create_runner`, `initialize_target`, `validate_target`, `cleanup_target`, and
+  `create_activity_waiter` now reject unknown `backend_options` keys (matching
+  `PostgresRunner`), and `BrokerConnection.status()` acquires the core operation
+  lock before reading message counts and connection size.
+- `simplebroker-redis`: `vacuum()` now drains claimed messages to quiescence
+  across batches rather than stopping after one `batch_size` slice; mutating Lua
+  scripts publish per-queue activity notifications atomically at commit time
+  (eliminating post-commit Python `PUBLISH` round-trips and the unused wildcard
+  channel) and return committed `last_ts` strings from `insert_messages` /
+  `broadcast`; `alias_version` advances monotonically on `add_alias`,
+  `remove_alias`, and alias-retargeting `rename_queue`; `init_backend` handles
+  IPv6 literals, ACL usernames with `BROKER_BACKEND_PASSWORD`, and redacted
+  error formatting; `RedisBrokerCore` translates `redis.RedisError` uniformly to
+  `OperationalError` while preserving transport-outcome ambiguity and enforces
+  `resolve_generator_batch_size` bounds on `claim_generator` / `move_generator`.
+
 ## [8.8.1] - 2026-11-10
 
 SimpleBroker 8.8.1, `simplebroker-pg` 4.8.1, and `simplebroker-redis` 4.8.1

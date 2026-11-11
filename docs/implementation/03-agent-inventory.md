@@ -41,9 +41,11 @@ seconds under the same bound, returning PASS for all nine accepted fixes.
 Findings and author dispositions are in retired plan
 `00b837f:docs/plans/2026-10-13-postgres-connection-attribution-plan.md`; see
 the ledger in `docs/plans/README.md`. Native Codex
-independent review also returned PASS. Other families were not re-probed. The implementation review exited0 in246.6
-seconds under the same540-second bound, returning no blocker with seven P3
-findings; author dispositions are in the same plan.
+independent review (`codex exec -s read-only ... -c 'model_reasoning_effort="high"'`
+per `skills/call-agent/SKILL.md`) also returned PASS. Other families were not
+re-probed. The implementation review exited 0 in 246.6 seconds under the same
+540-second bound, returning no blocker with seven P3 findings; author
+dispositions are in the same plan.
 
 Last refreshed: 2026-09-13 (Claude completed the six-finding remediation plan
 review and scoped verification read-only in 296.4 and 127.6 seconds, both PASS;

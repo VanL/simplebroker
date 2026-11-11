@@ -47,7 +47,7 @@ repository's existing `E`, `W`, `F`, `I`, `B`, `C4`, and `UP` families. Lint
 discovery covers all tracked Python files and Python-shebang tools. Formatting
 keeps the explicit path boundary shown above and does not format Markdown.
 
-CI installs the latest uv release. Local development requires uv 0.12.0 or
+CI installs the latest uv release. Local development requires uv 0.13.5 or
 newer, without an upper bound. Dependency ranges use floors; add an upper bound
 only for a known, unresolved incompatibility and document the reason.
 

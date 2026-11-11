@@ -54,10 +54,13 @@ finally:
 When persistent queues resolve their backend from a path or project config, handles
 for the same resolved backend target share process-local backend session state.
 For Postgres this prevents the number of queue handles in one process from
-allocating one runner or pool each. Backends that support retained thread
-checkouts, including Postgres, keep one checked-out backend connection per
-persistent reactor thread until the queue/session is cleaned up. Transient queue
-handles still return their checkouts after each operation.
+allocating one runner or pool each. Backends that retain per-thread core
+checkouts (such as SQLite) keep one backend connection per persistent reactor
+thread until that thread or session is cleaned up, whereas Postgres leases
+pooled connections per operation (`lease_session_core_connection() -> False`)
+and reaps idle connections on quiet processes rather than retaining one
+checked-out connection per persistent reactor thread. Transient queue handles
+also return their checkouts after each operation.
 
 An explicitly injected `runner=` remains caller-owned. Reuse the same runner
 object yourself when you want several queues to share an injected backend.

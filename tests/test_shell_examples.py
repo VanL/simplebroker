@@ -1614,3 +1614,78 @@ def test_retry_snapshot_is_removed_when_signal_interrupts_peek(
 
     assert result.returncode != 0
     _assert_retry_snapshot_removed(retry_env)
+
+
+@pytest.mark.parametrize(
+    ("raw_payload", "expected_envelope"),
+    [
+        ("false", {"message": "false", "retry_count": 1}),
+        ("true", {"message": "true", "retry_count": 1}),
+        ("null", {"message": "null", "retry_count": 1}),
+        ("0", {"message": "0", "retry_count": 1}),
+        ("[1,2]", {"message": "[1,2]", "retry_count": 1}),
+        ('"str"', {"message": '"str"', "retry_count": 1}),
+        ("-n", {"message": "-n", "retry_count": 1}),
+        (
+            '-e {"message":"sneaky","retry_count":9}',
+            {
+                "message": '-e {"message":"sneaky","retry_count":9}',
+                "retry_count": 1,
+            },
+        ),
+        (
+            '{"message": "x", "retry_count": 1}',
+            {"message": "x", "retry_count": 2},
+        ),
+    ],
+)
+def test_dlq_with_retry_count_wraps_non_object_json_and_dash_flags(
+    raw_payload: str,
+    expected_envelope: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    _require_shell_tools()
+    env = _real_broker_env(tmp_path)
+    peek_counter = tmp_path / "peek-count"
+    env["DLQ_PEEK_COUNT"] = str(peek_counter)
+    db_path = tmp_path / ".broker.db"
+    with Queue("tasks", db_path=str(db_path)) as tasks:
+        tasks.write(raw_payload)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """source "$1"
+eval "orig_$(declare -f peek_one_json)"
+peek_one_json() {
+    local count=0
+    if [ -f "$DLQ_PEEK_COUNT" ]; then count=$(cat "$DLQ_PEEK_COUNT"); fi
+    count=$((count + 1))
+    printf '%s\\n' "$count" > "$DLQ_PEEK_COUNT"
+    if [ "$count" -gt 1 ]; then return 7; fi
+    orig_peek_one_json "$@"
+}
+process_message() {
+    return 1
+}
+dlq_with_retry_count
+""",
+            "dlq-envelope-test",
+            str(DEAD_LETTER_QUEUE),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 7, result.stderr
+    assert "jq:" not in result.stderr
+    with Queue("tasks", db_path=str(db_path)) as tasks:
+        assert tasks.stats().pending == 1
+        requeued = tasks.peek_one(with_timestamps=False)
+    assert isinstance(requeued, str)
+    assert json.loads(requeued) == expected_envelope

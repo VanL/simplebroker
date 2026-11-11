@@ -275,7 +275,7 @@ def load_lines(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
     error, so retry a failed load into a clean database.
 
     Args:
-        broker: Current backend-v7 broker connection.
+        broker: Current backend-v9 broker connection.
         lines: Iterable of v1 NDJSON records.
         force: Bypass only excessive future-skew refusal; warnings still fire.
         config: Resolved configuration snapshot; omitted config uses defaults.

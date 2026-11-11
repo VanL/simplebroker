@@ -88,7 +88,7 @@ may rebuild only reserved broker objects and leaves caller-owned sidecar schema
 and state unchanged on success or failure. Additions to `messages`, `meta`, the
 aliases table, or broker-owned indexes are reserved-object changes, not
 sidecars, and are unsupported. See
-[`SB-API-7`](docs/specs/16-python-library-api.md#backend-packaging-and-sidecar-boundary-sb-api-7).
+[`SB-API-7`](docs/specs/16-python-library-api.md#sidecar-sb-api-7).
 
 ## The SimpleBroker API
 
@@ -441,7 +441,7 @@ recommended). Bounds are strict open intervals after parse
 - `2` - Queue empty or no matching messages
 - `130` - An unhandled keyboard interrupt reached the outer CLI wrapper
 
-Normative specifications: `docs/specs/10-cli.md` ([SB-CLI-1]–[SB-CLI-5]).
+Normative specifications: `docs/specs/10-cli.md` ([SB-CLI-1]–[SB-CLI-7]).
 
 `watch` exits `0` when stopped by SIGINT/SIGTERM or when its stdout consumer
 closes the pipe (see [Pipe behavior](#pipe-behavior)). Other commands return
@@ -641,7 +641,7 @@ Retrying in 5 seconds...
 used as the lower-bound origin so rows moved into a queue or inserted via the API can
 be inspected and cleaned up. 
 
-Normative specifications: `[SB-SELECT-2]` and (`[SB-SELECT-3]`. Full rules:
+Normative specifications: `[SB-SELECT-2]` and `[SB-SELECT-3]`. Full rules:
 `docs/specs/14-timestamp-selection.md`.
 
 ```bash

@@ -463,7 +463,7 @@ def validate_database_path(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-026] e
     conn: sqlite3.Connection | None = None
     cursor: sqlite3.Cursor | None = None
     try:
-        conn = sqlite3.connect(f"file:{file_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"{file_path.resolve().as_uri()}?mode=ro", uri=True)
         cursor = conn.cursor()
         try:
             cursor.execute("PRAGMA schema_version")

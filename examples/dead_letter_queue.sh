@@ -149,15 +149,15 @@ dlq_with_retry_count() {
         # Extract message and timestamp
         local raw_msg
         local timestamp
-        raw_msg=$(echo "$msg_data" | jq -r '.message')
-        timestamp=$(echo "$msg_data" | jq -r '.timestamp')
+        raw_msg=$(printf '%s\n' "$msg_data" | jq -r '.message')
+        timestamp=$(printf '%s\n' "$msg_data" | jq -r '.timestamp')
         
         # Parse retry count from JSON message (default to 0)
         local retry_count=0
         local msg_content="$raw_msg"
-        if echo "$raw_msg" | jq -e . >/dev/null 2>&1; then
-            retry_count=$(echo "$raw_msg" | jq -r '.retry_count // 0')
-            msg_content=$(echo "$raw_msg" | jq -r '.message // .')
+        if printf '%s\n' "$raw_msg" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            retry_count=$(printf '%s\n' "$raw_msg" | jq -r '.retry_count // 0')
+            msg_content=$(printf '%s\n' "$raw_msg" | jq -r '.message // .')
         fi
         
         # Process the message
@@ -166,9 +166,9 @@ dlq_with_retry_count() {
             if [ "$retry_count" -lt "$MAX_RETRIES" ]; then
                 # Create new message with incremented retry count
                 local new_msg
-                if echo "$raw_msg" | jq -e . >/dev/null 2>&1; then
+                if printf '%s\n' "$raw_msg" | jq -e 'type == "object"' >/dev/null 2>&1; then
                     # Message is already JSON - update retry count
-                    new_msg=$(echo "$raw_msg" | jq ".retry_count = $((retry_count + 1))")
+                    new_msg=$(printf '%s\n' "$raw_msg" | jq ".retry_count = $((retry_count + 1))")
                 else
                     # Convert to JSON with retry count
                     new_msg=$(jq -n --arg msg "$raw_msg" '{message: $msg, retry_count: 1}')

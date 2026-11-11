@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -70,3 +72,26 @@ def test_example_validation_preserves_live_wal_locks(tmp_path: Path) -> None:
         assert holder.read_one() == "two"
     finally:
         holder.close()
+
+
+def test_example_validation_handles_uri_special_characters_in_path(
+    tmp_path: Path,
+) -> None:
+    """Validator URI construction must escape '#', '?', '%', and spaces."""
+
+    special_dir = tmp_path / "dir #1?mode=rw%20"
+    special_dir.mkdir(parents=True)
+    db_file = special_dir / "guarded #2?x=1%20.db"
+    with contextlib.closing(sqlite3.connect(db_file)) as seed_conn:
+        seed_conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        seed_conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('magic', 'simplebroker-v1')"
+        )
+        seed_conn.commit()
+
+    validate_database_path(
+        db_file,
+        check_magic=True,
+        magic_string="simplebroker-v1",
+    )
+    assert [entry.name for entry in tmp_path.iterdir()] == [special_dir.name]

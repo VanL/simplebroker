@@ -104,7 +104,7 @@ iterator was suspended, this outermost operation exit also completes the
 deferred caller-thread release. Closing the Queue releases its lease; it does
 not request thread-cache cleanup. Message settlement still follows
 the selected delivery mode. For peek, cleanup does not acknowledge messages or
-turn live offset paging into a snapshot.
+turn live keyset cursor paging into a snapshot.
 
 An explicit `cleanup_connections()` request remains pending until that
 outermost operation exits. A failed nested Queue acquisition never closes or
@@ -582,7 +582,7 @@ class AsyncQueue:
 
     async def write(self, message: str) -> int:
         """Write message asynchronously."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _write():
             with Queue(self.queue_name, db_path=self.db_path) as q:
@@ -592,7 +592,7 @@ class AsyncQueue:
 
     async def read(self) -> str | None:
         """Read message asynchronously."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _read():
             with Queue(self.queue_name, db_path=self.db_path) as q:
