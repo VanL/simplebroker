@@ -10,9 +10,12 @@ from typing import Any
 
 from ._backend_plugins import get_backend_plugin
 from ._constants import (
+    _MESSAGE_NEWLINE_WARNING_SUPPRESSED,
     DEFAULT_PROJECT_CONFIG_NAME,
     MAX_PROJECT_TRAVERSAL_DEPTH,
+    PROG_NAME,
     Config,
+    _sanitize_terminal_text,
     _validate_sqlite_filename,
     resolve_config,
 )
@@ -32,9 +35,12 @@ def _same_filesystem(current: Path, parent: Path) -> bool:
 
 def _warn_for_inline_project_config_password(config_path: Path, target: str) -> None:
     """Warn about a recognized inline password without exposing its value."""
+    if _MESSAGE_NEWLINE_WARNING_SUPPRESSED.get():
+        return
     if _backend_target_has_password(target):
+        safe_path = _sanitize_terminal_text(str(config_path))
         print(
-            f"simplebroker: warning: {config_path} embeds a backend password; "
+            f"{PROG_NAME}: warning: {safe_path} embeds a backend password; "
             "store secrets in BROKER_BACKEND_PASSWORD or another environment variable",
             file=sys.stderr,
         )

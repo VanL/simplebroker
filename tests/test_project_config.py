@@ -156,6 +156,24 @@ def test_project_config_warns_for_inline_conninfo_password(
     assert "inline-secret" not in warning
 
 
+def test_project_config_warns_for_inline_conninfo_sslpassword(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    _write_project_config(
+        config_path,
+        backend="postgres",
+        target="host=db.example.com user=app sslpassword='inline-ssl-secret'",
+    )
+    config_path.chmod(0o600)
+
+    load_project_config(config_path)
+
+    warning = capsys.readouterr().err
+    assert "BROKER_BACKEND_PASSWORD" in warning
+    assert "inline-ssl-secret" not in warning
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
 def test_project_config_does_not_judge_group_or_other_mode_bits(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]

@@ -20,6 +20,7 @@ from ._constants import (
     Config,
     InvalidConfigError,
     _db_name_path,
+    _sanitize_terminal_text,
     _validate_sqlite_filename,
     resolve_config,
 )
@@ -88,6 +89,18 @@ def _validate_selection_filters_before_target(args: argparse.Namespace) -> int |
         commands._emit_error(
             "--newest cannot be used with --all; remove --newest for ascending "
             "all-message traversal or remove --all for newest-first bounded selection",
+            json_output=bool(getattr(args, "json", False)),
+            code="INVALID_ARGUMENT",
+        )
+        return EXIT_ERROR
+
+    if (
+        command == "move"
+        and getattr(args, "message_id", None) is not None
+        and bool(getattr(args, "all", False))
+    ):
+        commands._emit_error(
+            "--message cannot be used with --all, --after, or --before",
             json_output=bool(getattr(args, "json", False)),
             code="INVALID_ARGUMENT",
         )
@@ -631,11 +644,8 @@ def _build_cli_parser(
     )
     add_argument(move_parser, "source_queue", help="source queue name")
     add_argument(move_parser, "dest_queue", help="destination queue name")
-
-    # Create mutually exclusive group for -m and --all
-    move_exclusive = move_parser.add_mutually_exclusive_group()
     add_argument(
-        move_exclusive,
+        move_parser,
         "-m",
         "--message",
         type=str,
@@ -644,7 +654,7 @@ def _build_cli_parser(
         help="move specific message by timestamp/ID",
     )
     add_argument(
-        move_exclusive,
+        move_parser,
         "--all",
         action="store_true",
         help="move all messages from source to destination",
@@ -1931,7 +1941,7 @@ def _run_load_command(
         raise
     except IntegrityError as error:
         print(
-            f"broker load: {error} (load targets a fresh database; "
+            f"broker load: {_sanitize_terminal_text(str(error))} (load targets a fresh database; "
             "duplicate message IDs are never overwritten)",
             file=sys.stderr,
         )
@@ -1943,10 +1953,13 @@ def _run_load_command(
             if error.outcome_ambiguous
             else "correct the failure and retry into a clean destination"
         )
-        print(f"broker load: {error} ({recovery})", file=sys.stderr)
+        print(
+            f"broker load: {_sanitize_terminal_text(str(error))} ({recovery})",
+            file=sys.stderr,
+        )
         return EXIT_ERROR
     except ValueError as error:
-        print(f"broker load: {error}", file=sys.stderr)
+        print(f"broker load: {_sanitize_terminal_text(str(error))}", file=sys.stderr)
         return EXIT_ERROR
 
 
@@ -2045,7 +2058,10 @@ def _read_invocation(
     try:
         parsed = _parse_cli_args(bundle)
     except ArgumentParserError as error:
-        print(f"{PROG_NAME}: error: {error}", file=sys.stderr)
+        print(
+            f"{PROG_NAME}: error: {_sanitize_terminal_text(str(error))}",
+            file=sys.stderr,
+        )
         return EXIT_ERROR
     except SystemExit as error:
         return _system_exit_code(error)
@@ -2135,36 +2151,36 @@ def _main(*, config: Config) -> int:
         if selection_error is not None:
             return selection_error
 
-        resolved_target = _resolve_target(args, config=config)
-
-        action_result = _run_preparation_exempt_target_action(
-            args,
-            resolved_target,
-            parser,
-            status_json_output=status_json_output,
-            config=config,
-        )
-        if action_result is not None:
-            return action_result
-
-        resolved_target = _validate_legacy_sqlite_target(
-            args,
-            resolved_target,
-            config=config,
-        )
-
-        action_result = _run_target_action(
-            args,
-            resolved_target,
-            parser,
-            status_json_output=status_json_output,
-            config=config,
-        )
-        if action_result is not None:
-            return action_result
-
-        _validate_command_target(args, resolved_target, config=config)
         with commands._message_newline_warning_policy(quiet=args.quiet):
+            resolved_target = _resolve_target(args, config=config)
+
+            action_result = _run_preparation_exempt_target_action(
+                args,
+                resolved_target,
+                parser,
+                status_json_output=status_json_output,
+                config=config,
+            )
+            if action_result is not None:
+                return action_result
+
+            resolved_target = _validate_legacy_sqlite_target(
+                args,
+                resolved_target,
+                config=config,
+            )
+
+            action_result = _run_target_action(
+                args,
+                resolved_target,
+                parser,
+                status_json_output=status_json_output,
+                config=config,
+            )
+            if action_result is not None:
+                return action_result
+
+            _validate_command_target(args, resolved_target, config=config)
             return _dispatch_command(args, resolved_target, parser, config=config)
     except commands._StdoutClosed:
         raise
@@ -2186,7 +2202,10 @@ def _resolve_process_config(config: Config | None) -> Config:
             return resolve_config(env=os.environ, config=config)
         finally:
             for warning in caught:
-                print(f"{PROG_NAME}: warning: {warning.message}", file=sys.stderr)
+                print(
+                    f"{PROG_NAME}: warning: {_sanitize_terminal_text(str(warning.message))}",
+                    file=sys.stderr,
+                )
 
 
 def main(*, config: Config | None = None) -> int:
@@ -2194,7 +2213,10 @@ def main(*, config: Config | None = None) -> int:
     try:
         return _main(config=_resolve_process_config(config))
     except InvalidConfigError as error:
-        print(f"{PROG_NAME}: {error}", file=sys.stderr)
+        print(
+            f"{PROG_NAME}: {_sanitize_terminal_text(str(error))}",
+            file=sys.stderr,
+        )
         return EXIT_ERROR
     except commands._StdoutClosed:
         return commands._stdout_delivery_error(json_output=False)

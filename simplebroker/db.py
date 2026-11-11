@@ -62,6 +62,7 @@ from ._constants import (
 )
 from ._delivery import (
     DeliveryGuarantee,
+    resolve_generator_batch_size,
     validate_delivery_guarantee,
     validate_keep_newest,
 )
@@ -741,7 +742,9 @@ class DBConnection:
             )
         self._core: BrokerConnection | None = None
         self._thread_local = threading.local()
-        self._stop_event = threading.Event()
+        self._default_stop_event = threading.Event()
+        self._configured_stop_event: threading.Event | None = None
+        self._stop_event = self._default_stop_event
         self._project_setup_lock = threading.Lock()
         self._project_setup_complete = False
         self._shared_key: _SessionKey | None = None
@@ -1022,7 +1025,7 @@ class DBConnection:
             operation_depth = session.current_thread_operation_depth()
             stack_depth = self._shared_operation_stack_depth()
             try:
-                connection = session.get_connection(self._stop_event)
+                connection = session.get_connection(self._configured_stop_event)
                 self._push_shared_operation_session(session)
                 return connection
             except BaseException as failure:
@@ -1082,7 +1085,7 @@ class DBConnection:
         if self._share_in_process:
             session = self._ensure_shared_session()
             core = session.get_connection(
-                self._stop_event,
+                self._configured_stop_event,
                 lease_operation=False,
             )
             return core
@@ -1246,27 +1249,42 @@ class DBConnection:
                     active_failure=active_failure,
                 )
 
+    _UNSET_STOP_EVENT = object()
+
     @contextmanager
-    def _operation_connection(self) -> Iterator[BrokerConnection]:
+    def _operation_connection(
+        self,
+        *,
+        stop_event: object = _UNSET_STOP_EVENT,
+    ) -> Iterator[BrokerConnection]:
         """Yield one operation connection and balance its session lease."""
 
-        connection = self.get_connection()
+        override_applied = stop_event is not self._UNSET_STOP_EVENT
+        prior_stop_event = self._configured_stop_event
+        if override_applied:
+            self.set_stop_event(cast("threading.Event | None", stop_event))
         try:
-            yield connection
-        except GeneratorExit:
-            self.release_connection_after_use()
-            raise
-        except BaseException as failure:
-            self.release_connection_after_use(active_failure=failure)
-            raise
-        else:
-            self.release_connection_after_use()
+            connection = self.get_connection()
+            try:
+                yield connection
+            except GeneratorExit:
+                self.release_connection_after_use()
+                raise
+            except BaseException as failure:
+                self.release_connection_after_use(active_failure=failure)
+                raise
+            else:
+                self.release_connection_after_use()
+        finally:
+            if override_applied:
+                self.set_stop_event(prior_stop_event)
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Set the stop event used for interruptible retries."""
 
+        self._configured_stop_event = stop_event
         if stop_event is None:
-            self._stop_event = threading.Event()
+            self._stop_event = self._default_stop_event
         else:
             self._stop_event = stop_event
 
@@ -1401,7 +1419,8 @@ class BrokerCore:
 
         # Stop event to allow interruptible retries, including setup work run
         # during construction.
-        self._stop_event = stop_event or threading.Event()
+        self._default_stop_event = threading.Event()
+        self._stop_event = stop_event or self._default_stop_event
 
         self._maintenance_schedule = MaintenanceSchedule(
             int(config["AUTO_VACUUM_INTERVAL"])
@@ -1463,7 +1482,9 @@ class BrokerCore:
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Propagate stop event to retryable operations."""
 
-        self._stop_event = stop_event or threading.Event()
+        self._stop_event = (
+            self._default_stop_event if stop_event is None else stop_event
+        )
 
     def _setup_runner_phase(self, phase: SetupPhase) -> None:
         """Run a backend setup phase with cancellation when it is supported."""
@@ -1846,8 +1867,8 @@ class BrokerCore:
         raise RuntimeError(
             f"Cannot perform {operation_name} while an at_least_once "
             f"{self._active_generator_batch}_generator batch is being yielded from "
-            "this BrokerDB instance. Use delivery_guarantee='exactly_once' or a "
-            "separate BrokerDB/Queue instance."
+            "this broker instance. Use delivery_guarantee='exactly_once', "
+            "Queue(..., persistent=False), or an independent open_broker() handle."
         )
 
     def generate_timestamp(self) -> int:
@@ -2131,13 +2152,13 @@ class BrokerCore:
         if not normalized_records or required_last_ts is None:
             return
 
-        self._run_with_retry(
+        persisted_last_ts = self._run_with_retry(
             lambda: self._do_insert_messages_transaction(
                 normalized_records,
                 required_last_ts,
             )
         )
-        self.refresh_last_timestamp()
+        self._timestamp_gen._publish_committed_floor(persisted_last_ts)
         self._record_maintenance_activity(len(normalized_records))
 
     def _log_ts_conflict(self, conflict_type: str, attempt: int) -> None:
@@ -2342,7 +2363,7 @@ class BrokerCore:
         self,
         records: Sequence[NormalizedMessageInsertRecord],
         required_last_ts: int,
-    ) -> None:
+    ) -> int:
         """Insert exact-ID messages and advance last_ts in one transaction."""
         with self._lock:
             self._runner.begin_immediate()
@@ -2351,12 +2372,18 @@ class BrokerCore:
                     self._runner,
                     new_ts=required_last_ts,
                 )
+                persisted_last_ts = self._backend_plugin.read_last_ts(self._runner)
                 for queue, message, message_id in records:
                     self._runner.run(
                         self._sql.INSERT_MESSAGE,
                         (queue, message, message_id),
                     )
                 self._runner.commit()
+                return (
+                    required_last_ts
+                    if persisted_last_ts is None
+                    else max(required_last_ts, int(persisted_last_ts))
+                )
             except BaseException:
                 with contextlib.suppress(BaseException):
                     self._runner.rollback()
@@ -2848,6 +2875,8 @@ class BrokerCore:
             RuntimeError: If called from a forked process
         """
         validated_delivery = validate_delivery_guarantee(delivery_guarantee)
+        if batch_size is not None:
+            resolve_generator_batch_size(batch_size, default=1)
         if validated_delivery == "exactly_once":
             # Safe mode: process one message at a time
             while True:
@@ -2870,10 +2899,9 @@ class BrokerCore:
             effective_config = (
                 self._config if config is None else resolve_config(config=config)
             )
-            effective_batch_size = (
-                batch_size
-                if batch_size is not None
-                else effective_config["GENERATOR_BATCH_SIZE"]
+            effective_batch_size = resolve_generator_batch_size(
+                batch_size,
+                default=int(effective_config["GENERATOR_BATCH_SIZE"]),
             )
             yield from self._yield_transactional_batches(
                 queue,
@@ -3019,7 +3047,10 @@ class BrokerCore:
             ValueError: If queue name is invalid
             RuntimeError: If called from a forked process
         """
-        effective_batch_size = batch_size if batch_size is not None else PEEK_BATCH_SIZE
+        effective_batch_size = resolve_generator_batch_size(
+            batch_size,
+            default=PEEK_BATCH_SIZE,
+        )
         cursor = after_timestamp
         while True:
             # [SB-DELIVERY-4]: seek past the previous page without rescanning it.
@@ -3211,6 +3242,8 @@ class BrokerCore:
         validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
             raise ValueError("Source and target queues cannot be the same")
+        if batch_size is not None:
+            resolve_generator_batch_size(batch_size, default=1)
 
         if validated_delivery == "exactly_once":
             # Safe mode: process one message at a time
@@ -3235,10 +3268,9 @@ class BrokerCore:
             effective_config = (
                 self._config if config is None else resolve_config(config=config)
             )
-            effective_batch_size = (
-                batch_size
-                if batch_size is not None
-                else effective_config["GENERATOR_BATCH_SIZE"]
+            effective_batch_size = resolve_generator_batch_size(
+                batch_size,
+                default=int(effective_config["GENERATOR_BATCH_SIZE"]),
             )
             yield from self._yield_transactional_batches(
                 source_queue,
@@ -3535,7 +3567,7 @@ class BrokerCore:
         """
         self._check_fork_safety()
 
-        def _do_status() -> tuple[int, int]:
+        def _do_status() -> dict[str, int]:
             with self._lock:
                 total_rows = list(
                     self._runner.run(self._sql.GET_TOTAL_MESSAGE_COUNT, fetch=True)
@@ -3543,15 +3575,14 @@ class BrokerCore:
 
                 total_messages = int(total_rows[0][0]) if total_rows else 0
                 last_timestamp = self._backend_plugin.read_last_ts(self._runner)
-                return total_messages, last_timestamp
+                db_size = self._backend_plugin.database_size_bytes(self._runner)
+                return {
+                    "total_messages": total_messages,
+                    "last_timestamp": last_timestamp,
+                    "db_size": db_size,
+                }
 
-        total_messages, last_timestamp = self._run_with_retry(_do_status)
-
-        return {
-            "total_messages": total_messages,
-            "last_timestamp": last_timestamp,
-            "db_size": self._backend_plugin.database_size_bytes(self._runner),
-        }
+        return self._run_with_retry(_do_status)
 
     def delete(self, queue: str | None = None) -> int:
         """Delete messages from queue(s).
@@ -3775,6 +3806,7 @@ class BrokerCore:
                         aliases_retargeted=aliases_retargeted,
                     )
                 except BaseException:
+                    self._alias_cache_version = -1
                     with contextlib.suppress(BaseException):
                         self._runner.rollback()
                     raise
@@ -4071,10 +4103,18 @@ class BrokerCore:
         self._vacuum_claimed_messages(compact=compact)
 
     def _load_aliases_locked(self) -> None:
-        """Refresh alias cache. Caller must hold self._lock."""
-        rows = list(self._runner.run(self._sql.SELECT_ALIASES, fetch=True))
+        """Refresh alias cache using a bounded version seqlock. Caller must hold self._lock."""
+        rows: list[tuple[Any, ...]] = []
+        for _ in range(3):
+            v1 = self._current_alias_version_locked()
+            rows = list(self._runner.run(self._sql.SELECT_ALIASES, fetch=True))
+            v2 = self._current_alias_version_locked()
+            if v1 == v2:
+                self._alias_cache = dict(rows)
+                self._alias_cache_version = v2
+                return
         self._alias_cache = dict(rows)
-        self._alias_cache_version = self._current_alias_version_locked()
+        self._alias_cache_version = -1
 
     def _current_alias_version_locked(self) -> int:
         return self._backend_plugin.read_alias_version(self._runner)
@@ -4132,7 +4172,8 @@ class BrokerCore:
             return dict(self._backend_plugin.select_meta_items(self._runner))
 
     def _increment_alias_version_locked(self) -> None:
-        new_version = time.time_ns()
+        current = self._backend_plugin.read_alias_version(self._runner)
+        new_version = current + 1
         self._backend_plugin.write_alias_version(self._runner, new_version)
         self._alias_cache_version = new_version
 
@@ -4162,59 +4203,75 @@ class BrokerCore:
         self._assert_no_reentrant_mutation_during_batch("add_alias")
         self._validate_alias_target(alias, target)
         should_warn = self.queue_exists_and_has_messages(alias)
+        warned = False
 
-        with self._lock:
-            self._runner.begin_immediate()
-            try:
-                prepare_alias_mutation = getattr(
-                    self._backend_plugin, "prepare_alias_mutation", None
-                )
-                if callable(prepare_alias_mutation):
-                    prepare_alias_mutation(self._runner)
-                self._load_aliases_locked()
-                self._validate_alias_invariants_locked(alias, target)
-
-                if should_warn and not _ALIAS_SHADOW_WARNING_SUPPRESSED.get():
-                    warnings.warn(
-                        (
-                            f"Queue '{alias}' already exists with messages. "
-                            f"The alias @{alias} will redirect to '{target}' while "
-                            f"the queue {alias} remains accessible directly."
-                        ),
-                        _AliasShadowsQueueWarning,
-                        stacklevel=3,
+        def _do_add_alias() -> None:
+            nonlocal warned
+            with self._lock:
+                self._runner.begin_immediate()
+                try:
+                    prepare_alias_mutation = getattr(
+                        self._backend_plugin, "prepare_alias_mutation", None
                     )
-                self._runner.run(self._sql.INSERT_ALIAS, (alias, target))
-                self._increment_alias_version_locked()
-                self._load_aliases_locked()
-                self._runner.commit()
-            except BaseException:
-                with contextlib.suppress(BaseException):
-                    self._runner.rollback()
-                raise
+                    if callable(prepare_alias_mutation):
+                        prepare_alias_mutation(self._runner)
+                    self._load_aliases_locked()
+                    self._validate_alias_invariants_locked(alias, target)
+
+                    if (
+                        should_warn
+                        and not warned
+                        and not _ALIAS_SHADOW_WARNING_SUPPRESSED.get()
+                    ):
+                        warned = True
+                        warnings.warn(
+                            (
+                                f"Queue '{alias}' already exists with messages. "
+                                f"The alias @{alias} will redirect to '{target}' while "
+                                f"the queue {alias} remains accessible directly."
+                            ),
+                            _AliasShadowsQueueWarning,
+                            stacklevel=4,
+                        )
+                    self._runner.run(self._sql.INSERT_ALIAS, (alias, target))
+                    self._increment_alias_version_locked()
+                    self._load_aliases_locked()
+                    self._runner.commit()
+                except BaseException:
+                    self._alias_cache_version = -1
+                    with contextlib.suppress(BaseException):
+                        self._runner.rollback()
+                    raise
+
+        self._run_with_retry(_do_add_alias)
 
     def remove_alias(self, alias: str) -> None:
         self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("remove_alias")
-        with self._lock:
-            if self._alias_cache_version < 0:
-                self._load_aliases_locked()
 
-            self._runner.begin_immediate()
-            try:
-                prepare_alias_mutation = getattr(
-                    self._backend_plugin, "prepare_alias_mutation", None
-                )
-                if callable(prepare_alias_mutation):
-                    prepare_alias_mutation(self._runner)
-                self._runner.run(self._sql.DELETE_ALIAS, (alias,))
-                self._increment_alias_version_locked()
-                self._load_aliases_locked()
-                self._runner.commit()
-            except BaseException:
-                with contextlib.suppress(BaseException):
-                    self._runner.rollback()
-                raise
+        def _do_remove_alias() -> None:
+            with self._lock:
+                if self._alias_cache_version < 0:
+                    self._load_aliases_locked()
+
+                self._runner.begin_immediate()
+                try:
+                    prepare_alias_mutation = getattr(
+                        self._backend_plugin, "prepare_alias_mutation", None
+                    )
+                    if callable(prepare_alias_mutation):
+                        prepare_alias_mutation(self._runner)
+                    self._runner.run(self._sql.DELETE_ALIAS, (alias,))
+                    self._increment_alias_version_locked()
+                    self._load_aliases_locked()
+                    self._runner.commit()
+                except BaseException:
+                    self._alias_cache_version = -1
+                    with contextlib.suppress(BaseException):
+                        self._runner.rollback()
+                    raise
+
+        self._run_with_retry(_do_remove_alias)
 
     def close(self) -> None:
         """Close this handle's active connection state.

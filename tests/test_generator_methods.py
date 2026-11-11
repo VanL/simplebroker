@@ -333,7 +333,10 @@ class TestGeneratorMethods:
         try:
             assert next(gen) == "message1"
 
-            with pytest.raises(RuntimeError, match="separate BrokerDB/Queue instance"):
+            with pytest.raises(
+                RuntimeError,
+                match=r"delivery_guarantee='exactly_once'.*Queue\(\.\.\., persistent=False\).*open_broker\(\)",
+            ):
                 broker.write("other_queue", "nested")
         finally:
             gen.close()
@@ -362,7 +365,10 @@ class TestGeneratorMethods:
         try:
             assert next(gen) == "message1"
 
-            with pytest.raises(RuntimeError, match="separate BrokerDB/Queue instance"):
+            with pytest.raises(
+                RuntimeError,
+                match=r"delivery_guarantee='exactly_once'.*Queue\(\.\.\., persistent=False\).*open_broker\(\)",
+            ):
                 broker.write("other_queue", "nested")
         finally:
             gen.close()
@@ -378,3 +384,73 @@ class TestGeneratorMethods:
         assert source_remaining == ["message1", "message2", "message3"]
         assert dest_messages == []
         assert other_messages == []
+
+    @pytest.mark.parametrize("bad_batch_size", [0, -1, True, "10"])
+    @pytest.mark.parametrize("delivery", ["exactly_once", "at_least_once"])
+    def test_generators_reject_invalid_explicit_batch_size(
+        self,
+        broker,
+        bad_batch_size,
+        delivery,
+    ) -> None:
+        broker.write("batch_q", "msg1")
+
+        with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+            next(
+                broker.claim_generator(
+                    "batch_q",
+                    delivery_guarantee=delivery,
+                    batch_size=bad_batch_size,
+                )
+            )
+
+        with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+            next(
+                broker.move_generator(
+                    "batch_q",
+                    "dest_q",
+                    delivery_guarantee=delivery,
+                    batch_size=bad_batch_size,
+                )
+            )
+
+        if delivery == "exactly_once":
+            with pytest.raises(
+                ValueError, match="batch_size must be a positive integer"
+            ):
+                next(broker.peek_generator("batch_q", batch_size=bad_batch_size))
+
+    def test_generators_preserve_default_batch_size_when_none(self, broker) -> None:
+        from simplebroker import resolve_config
+
+        for idx in range(5):
+            broker.write("default_batch_q", f"m{idx}")
+
+        assert list(
+            broker.peek_generator(
+                "default_batch_q", with_timestamps=False, batch_size=None
+            )
+        ) == ["m0", "m1", "m2", "m3", "m4"]
+
+        custom_cfg = resolve_config(override={"BROKER_GENERATOR_BATCH_SIZE": 2})
+        moved = list(
+            broker.move_generator(
+                "default_batch_q",
+                "default_dest_q",
+                with_timestamps=False,
+                delivery_guarantee="at_least_once",
+                batch_size=None,
+                config=custom_cfg,
+            )
+        )
+        assert moved == ["m0", "m1", "m2", "m3", "m4"]
+        claimed = list(
+            broker.claim_generator(
+                "default_dest_q",
+                with_timestamps=False,
+                delivery_guarantee="at_least_once",
+                batch_size=None,
+                config=custom_cfg,
+            )
+        )
+        assert claimed == ["m0", "m1", "m2", "m3", "m4"]

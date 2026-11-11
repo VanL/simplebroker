@@ -165,3 +165,47 @@ def test_malformed_url_redaction_remains_display_safe(raw_target: str) -> None:
 @pytest.mark.parametrize("target", ["postgresql://[bad/db", "postgresql://bad]/db", ""])
 def test_malformed_password_free_target_redaction_is_total(target: str) -> None:
     assert redact_backend_target(target) == target
+
+
+@pytest.mark.parametrize(
+    ("raw_target", "expected"),
+    [
+        (
+            "host=db.example.com user=app sslpassword=mysecret",
+            "host=db.example.com user=app sslpassword=***",
+        ),
+        (
+            r"host=db.example.com sslpassword='sec\'ret value' sslmode=require",
+            "host=db.example.com sslpassword=*** sslmode=require",
+        ),
+        (
+            'host=db.example.com SSLPASSWORD="quoted secret"',
+            "host=db.example.com SSLPASSWORD=***",
+        ),
+    ],
+)
+def test_redact_backend_target_redacts_conninfo_sslpassword(
+    raw_target: str,
+    expected: str,
+) -> None:
+    from simplebroker._targets import _backend_target_has_password
+
+    assert redact_backend_target(raw_target) == expected
+    assert _backend_target_has_password(raw_target) is True
+
+
+@pytest.mark.parametrize(
+    ("raw_target", "secret_marker"),
+    [
+        ("postgresql://user:secret@localhost:5432/mydb?app=worker@prod", "secret"),
+        ("postgresql://user:1234/secret@host/db", "1234/secret"),
+        ("postgresql://audit:FAKE_PASSWORD extra@[bad/db", "FAKE_PASSWORD"),
+    ],
+)
+def test_redact_backend_target_preserves_fail_closed_last_at_url_masking(
+    raw_target: str,
+    secret_marker: str,
+) -> None:
+    redacted = redact_backend_target(raw_target)
+    assert secret_marker not in redacted
+    assert "***" in redacted

@@ -349,8 +349,9 @@ class Queue:
         """
         if self.conn is not None:
             assert self.conn is not None  # Type guard for mypy
-            self.conn.set_stop_event(self._stop_event)
-            with self.conn._operation_connection() as connection:
+            with self.conn._operation_connection(
+                stop_event=self._stop_event
+            ) as connection:
                 yield connection
         else:
             with DBConnection(self._db_path, self._runner, config=self._config) as conn:

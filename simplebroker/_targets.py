@@ -11,7 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 from ._key_material import snapshot_key_material
 
 _CONNINFO_PASSWORD_RE = re.compile(
-    r"(?i)(\bpassword\s*=\s*)(?:"
+    r"(?i)(\b(?:ssl)?password\s*=\s*)(?:"
     r"'(?:\\(?:.|$)|[^'\\])*(?:'|$)"
     r'|"(?:\\(?:.|$)|[^"\\])*(?:"|$)'
     r"|(?:\\(?:.|$)|[^\s\\])+"

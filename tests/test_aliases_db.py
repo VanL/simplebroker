@@ -192,3 +192,114 @@ def test_alias_add_warns_on_existing_queue(broker) -> None:
     broker.write("existing", "message")
     with pytest.warns(RuntimeWarning, match=r"Queue 'existing' already exists"):
         broker.add_alias("existing", "redirect")
+
+
+def test_sql_alias_seqlock_retries_interleaved_update_without_caching_stale_map(
+    tmp_path,
+) -> None:
+    from simplebroker.db import BrokerDB
+
+    db_file = str(tmp_path / "seqlock.db")
+    reader = BrokerDB(db_file)
+    writer = BrokerDB(db_file)
+    try:
+        writer.add_alias("alpha", "v1_target")
+        assert reader.resolve_alias("alpha") == "v1_target"
+
+        # Now writer adds a second alias so version advances
+        writer.add_alias("beta", "v2_target")
+
+        # Simulate writer committing a third alias right between SELECT_ALIASES
+        # and the trailing read_alias_version check inside reader._load_aliases_locked().
+        real_run = reader._runner.run
+        interleaved_once = False
+
+        def interleaving_run(sql: str, params=(), *, fetch: bool = False):
+            nonlocal interleaved_once
+            result = (
+                list(real_run(sql, params, fetch=fetch))
+                if fetch
+                else real_run(sql, params, fetch=fetch)
+            )
+            if fetch and sql == reader._sql.SELECT_ALIASES and not interleaved_once:
+                interleaved_once = True
+                writer.add_alias("gamma", "v3_target")
+            return result
+
+        reader._runner.run = interleaving_run  # type: ignore[method-assign]
+        try:
+            assert reader.resolve_alias("gamma") == "v3_target"
+        finally:
+            reader._runner.run = real_run  # type: ignore[method-assign]
+
+        assert reader.resolve_alias("gamma") == "v3_target"
+        assert reader.get_alias_version() == writer.get_alias_version()
+    finally:
+        reader.shutdown()
+        writer.shutdown()
+
+
+def test_sql_alias_monotonic_version_commit_rollback_and_retry(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import simplebroker.db as db_mod
+    from simplebroker._exceptions import OperationalError
+    from simplebroker.db import BrokerDB
+
+    db_file = str(tmp_path / "alias-monotonic.db")
+    db1 = BrokerDB(db_file)
+    db2 = BrokerDB(db_file)
+    try:
+        # 1. Frozen time.time_ns() still advances alias_version monotonically (+1)
+        monkeypatch.setattr(db_mod.time, "time_ns", lambda: 1_700_000_000_000_000_000)
+        v0 = db1.get_alias_version()
+        db1.add_alias("a1", "target1")
+        v1 = db1.get_alias_version()
+        assert v1 == v0 + 1
+        assert db2.resolve_alias("a1") == "target1"
+
+        db1.remove_alias("a1")
+        v2 = db1.get_alias_version()
+        assert v2 == v1 + 1
+        assert db2.resolve_alias("a1") is None
+
+        # 2. Simulated commit failure invalidates _alias_cache_version so uncommitted alias is never cached
+        real_commit = db1._runner.commit
+
+        def failing_commit() -> None:
+            raise RuntimeError("simulated commit failure")
+
+        monkeypatch.setattr(db1._runner, "commit", failing_commit)
+        with pytest.raises(RuntimeError, match="simulated commit failure"):
+            db1.add_alias("ghost", "target1")
+        monkeypatch.setattr(db1._runner, "commit", real_commit)
+        assert db1._alias_cache_version == -1
+        assert db1.resolve_alias("ghost") is None
+
+        # 3. Transient retryable OperationalError on add_alias / remove_alias retries via _run_with_retry
+        real_begin = db1._runner.begin_immediate
+        attempts = 0
+
+        def flaky_begin() -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                err = OperationalError("database is locked")
+                err.retryable = True
+                raise err
+            real_begin()
+
+        monkeypatch.setattr(db1._runner, "begin_immediate", flaky_begin)
+        db1.add_alias("retried", "target1")
+        assert attempts == 2
+        assert db1.resolve_alias("retried") == "target1"
+
+        attempts = 0
+        db1.remove_alias("retried")
+        assert attempts == 2
+        assert db1.resolve_alias("retried") is None
+        monkeypatch.setattr(db1._runner, "begin_immediate", real_begin)
+    finally:
+        db1.shutdown()
+        db2.shutdown()

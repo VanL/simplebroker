@@ -229,8 +229,7 @@ class _ProcessBrokerSession:
     ) -> BrokerConnection:
         """Return this thread's shared core, creating it if needed."""
 
-        if lease_operation:
-            self._begin_operation()
+        operation_depth = self._begin_operation() if lease_operation else 0
         creation_started = False
         try:
             with self._operation_condition:
@@ -242,7 +241,12 @@ class _ProcessBrokerSession:
                     getattr(self._thread_local, "core", None),
                 )
                 if core is not None:
-                    core.set_stop_event(stop_event)
+                    self._apply_stop_event_locked(
+                        core,
+                        stop_event,
+                        lease_operation=lease_operation,
+                        operation_depth=operation_depth,
+                    )
                     return core
 
                 self._active_core_creations += 1
@@ -255,7 +259,12 @@ class _ProcessBrokerSession:
                 if not discard_core:
                     self._thread_local.core = core
                     self._cores.add(core)
-                    core.set_stop_event(stop_event)
+                    self._apply_stop_event_locked(
+                        core,
+                        stop_event,
+                        lease_operation=lease_operation,
+                        operation_depth=operation_depth,
+                    )
                     return core
 
             self._factory.close_core(core)
@@ -277,15 +286,73 @@ class _ProcessBrokerSession:
                         cleanup_failure,
                     )
 
-    def _begin_operation(self) -> None:
+    def _apply_stop_event_locked(
+        self,
+        core: BrokerConnection,
+        stop_event: threading.Event | None,
+        *,
+        lease_operation: bool,
+        operation_depth: int,
+    ) -> None:
+        """Bind stop_event for a leased operation or idle core borrow."""
+
+        if lease_operation:
+            core.set_stop_event(stop_event)
+            stack = cast(
+                list[tuple[int, threading.Event | None]] | None,
+                getattr(self._thread_local, "stop_event_stack", None),
+            )
+            if stack is None:
+                stack = []
+                self._thread_local.stop_event_stack = stack
+            stack.append((operation_depth, stop_event))
+            return
+
+        self._thread_local.idle_stop_event = stop_event
+        if self.current_thread_operation_depth() == 0:
+            core.set_stop_event(stop_event)
+
+    def _pop_stop_event_for_depth_locked(self, depth: int) -> bool:
+        """Pop any stop_event frames recorded at or above ``depth``."""
+
+        stack = cast(
+            list[tuple[int, threading.Event | None]] | None,
+            getattr(self._thread_local, "stop_event_stack", None),
+        )
+        if not stack:
+            return False
+        popped = False
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+            popped = True
+        if not stack:
+            delattr(self._thread_local, "stop_event_stack")
+        return popped
+
+    def _current_stop_event_locked(self) -> threading.Event | None:
+        """Return the active outer operation stop_event or idle fallback."""
+
+        stack = cast(
+            list[tuple[int, threading.Event | None]] | None,
+            getattr(self._thread_local, "stop_event_stack", None),
+        )
+        if stack:
+            return stack[-1][1]
+        return cast(
+            threading.Event | None,
+            getattr(self._thread_local, "idle_stop_event", None),
+        )
+
+    def _begin_operation(self) -> int:
         """Retain the session while a queue operation is using a core."""
 
         with self._operation_condition:
             if self._closed or self._closing:
                 raise RuntimeError("Broker session is closed")
             self._active_operations += 1
-            depth = int(getattr(self._thread_local, "operation_depth", 0))
-            self._thread_local.operation_depth = depth + 1
+            depth = int(getattr(self._thread_local, "operation_depth", 0)) + 1
+            self._thread_local.operation_depth = depth
+            return depth
 
     def _end_operation(self, *, active_failure: BaseException | None = None) -> None:
         """Release one active queue operation lease."""
@@ -293,17 +360,37 @@ class _ProcessBrokerSession:
         claim = _CoreDisposalClaim()
         release_operation = False
         cleanup_failure: Exception | None = None
+        restore_core: BrokerConnection | None = None
+        restore_stop_event: threading.Event | None = None
         try:
             with self._operation_condition:
                 depth = self._pop_operation_depth_locked()
                 if depth is None or self._active_operations <= 0:
                     return
                 release_operation = True
+                popped_stop_event = self._pop_stop_event_for_depth_locked(depth)
                 if depth == 1:
                     self._claim_pending_cleanup_locked(claim)
+                if claim.core is None and popped_stop_event:
+                    restore_core = cast(
+                        BrokerConnection | None,
+                        getattr(self._thread_local, "core", None),
+                    )
+                    restore_stop_event = self._current_stop_event_locked()
+
+            if restore_core is not None:
+                cleanup_failure = _capture_process_session_cleanup(
+                    cleanup_failure,
+                    partial(restore_core.set_stop_event, restore_stop_event),
+                )
 
             if claim.core is not None:
-                cleanup_failure = self._dispose_claimed_core(claim)
+                disposed_failure = self._dispose_claimed_core(claim)
+                if disposed_failure is not None:
+                    cleanup_failure = _retain_cleanup_failure(
+                        cleanup_failure,
+                        disposed_failure,
+                    )
         finally:
             self._restore_claimed_core(claim)
             if release_operation:
@@ -344,6 +431,10 @@ class _ProcessBrokerSession:
             return
         claim.core = core
         delattr(self._thread_local, "core")
+        if hasattr(self._thread_local, "stop_event_stack"):
+            delattr(self._thread_local, "stop_event_stack")
+        if hasattr(self._thread_local, "idle_stop_event"):
+            delattr(self._thread_local, "idle_stop_event")
         self._cores.discard(core)
 
     def _claim_pending_cleanup_locked(self, claim: _CoreDisposalClaim) -> None:

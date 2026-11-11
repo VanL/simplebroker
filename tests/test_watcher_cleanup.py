@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from simplebroker import Queue
-from simplebroker.watcher import QueueWatcher, _finalize_watcher_lifecycle
+from simplebroker.watcher import BaseWatcher, QueueWatcher, _finalize_watcher_lifecycle
 
 # Import cleanup helper
 from .helper_scripts.cleanup import WatcherTracker, register_watcher
@@ -441,3 +441,85 @@ class TestWatcherCleanup:
             if thread.is_alive():
                 watcher.stop()
                 thread.join(timeout=scale_timeout_for_ci(5.0))
+
+    def test_base_watcher_has_no_del_destructor(self) -> None:
+        assert "__del__" not in BaseWatcher.__dict__
+
+    def test_run_in_thread_synchronizes_publication_stop_and_duplicate_calls(
+        self,
+        broker_target: Any,
+    ) -> None:
+        # 1. STOP_OWNED before run_in_thread exits cleanly without acquiring runtime resources
+        runtime_acquired = False
+
+        class GuardedWatcher(QueueWatcher):
+            def _start_strategy(self) -> None:
+                nonlocal runtime_acquired
+                runtime_acquired = True
+                super()._start_strategy()
+
+        pre_stopped = GuardedWatcher(
+            "pre_stopped_queue",
+            lambda _m, _t: None,
+            db=broker_target,
+        )
+        pre_stopped.stop(join=False)
+        stopped_thread = pre_stopped.run_in_thread()
+        stopped_thread.join(timeout=scale_timeout_for_ci(5.0))
+        assert not stopped_thread.is_alive()
+        assert not runtime_acquired
+
+        # 2. Duplicate run_in_thread while RUN_OWNED raises RuntimeError without overwriting _thread
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingWatcher(QueueWatcher):
+            def _run_with_retries(self, max_retries: int = 3) -> None:
+                del max_retries
+                entered.set()
+                release.wait(timeout=scale_timeout_for_ci(5.0))
+
+        running_watcher = BlockingWatcher(
+            "dup_run_queue",
+            lambda _m, _t: None,
+            db=broker_target,
+        )
+        first_thread = running_watcher.run_in_thread()
+        try:
+            assert entered.wait(timeout=scale_timeout_for_ci(5.0))
+            assert running_watcher._thread is not None
+            assert running_watcher._thread() is first_thread
+            with pytest.raises(RuntimeError, match="Watcher is already running"):
+                running_watcher.run_in_thread()
+            assert running_watcher._thread() is first_thread
+        finally:
+            release.set()
+            running_watcher.stop(join=True, timeout=scale_timeout_for_ci(5.0))
+            assert not first_thread.is_alive()
+
+        # 3. Concurrent run_in_thread vs stop(join=True) never misses thread join
+        for iteration in range(15):
+            barrier = threading.Barrier(2)
+            race_watcher = QueueWatcher(
+                f"race_queue_{iteration}",
+                lambda _m, _t: None,
+                db=broker_target,
+            )
+            started_holder: list[threading.Thread] = []
+
+            def start_worker(
+                b: threading.Barrier = barrier,
+                w: QueueWatcher = race_watcher,
+                holder: list[threading.Thread] = started_holder,
+            ) -> None:
+                b.wait(timeout=scale_timeout_for_ci(5.0))
+                holder.append(w.run_in_thread())
+
+            starter = threading.Thread(target=start_worker)
+            starter.start()
+            barrier.wait(timeout=scale_timeout_for_ci(5.0))
+            race_watcher.stop(join=True, timeout=scale_timeout_for_ci(5.0))
+            starter.join(timeout=scale_timeout_for_ci(5.0))
+            assert len(started_holder) == 1
+            started_holder[0].join(timeout=scale_timeout_for_ci(5.0))
+            assert not started_holder[0].is_alive()

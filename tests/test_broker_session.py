@@ -18,7 +18,8 @@ from typing import Any, Self, cast
 import pytest
 
 from simplebroker import BrokerSession, BrokerTarget, Queue, resolve_config
-from simplebroker.db import BrokerDB, SQLiteRunner
+from simplebroker._exceptions import StopException
+from simplebroker.db import BrokerDB, DBConnection, SQLiteRunner
 from tests.helper_scripts import drive_until, scale_timeout_for_ci
 
 
@@ -1207,3 +1208,106 @@ def test_inherited_handle_rejects_use_and_close_is_silent(tmp_path: Path) -> Non
 
     assert not holder.is_alive()
     assert holder_failures == []
+
+
+@pytest.mark.parametrize("use_injected_runner", [False, True])
+def test_same_thread_nested_persistent_queue_preserves_outer_stop_event(
+    tmp_path: Path,
+    use_injected_runner: bool,
+) -> None:
+    db_file = tmp_path / f"nested-stop-event-{use_injected_runner}.db"
+    cfg = resolve_config(override={"BROKER_BUSY_TIMEOUT": 50})
+    stop_event = threading.Event()
+    inbox_runner = (
+        SQLiteRunner(str(db_file), config=cfg) if use_injected_runner else None
+    )
+    outbox_runner = (
+        SQLiteRunner(str(db_file), config=cfg) if use_injected_runner else None
+    )
+    inbox = Queue(
+        "inbox",
+        db_path=str(db_file),
+        persistent=True,
+        runner=inbox_runner,
+        config=cfg,
+    )
+    outbox = Queue(
+        "outbox",
+        db_path=str(db_file),
+        persistent=True,
+        runner=outbox_runner,
+        config=cfg,
+    )
+    inbox.set_stop_event(stop_event)
+
+    try:
+        inbox.write("msg-1")
+        inbox.write("msg-2")
+
+        gen = inbox.read_generator()
+        try:
+            assert next(gen) == "msg-1"
+            outbox.write("forwarded-msg-1")
+
+            lock_conn = sqlite3.connect(str(db_file), timeout=0.0, isolation_level=None)
+            try:
+                lock_conn.execute("BEGIN IMMEDIATE")
+                timer = threading.Timer(0.05, stop_event.set)
+                timer.start()
+                started = os.times().elapsed
+                try:
+                    with pytest.raises(StopException):
+                        next(gen)
+                finally:
+                    timer.cancel()
+                    elapsed = os.times().elapsed - started
+                assert elapsed < scale_timeout_for_ci(1.0)
+            finally:
+                lock_conn.rollback()
+                lock_conn.close()
+        finally:
+            gen.close()
+    finally:
+        outbox.close()
+        inbox.close()
+        if outbox_runner is not None:
+            outbox_runner.close()
+        if inbox_runner is not None:
+            inbox_runner.close()
+
+
+@pytest.mark.parametrize("share_in_process", [True, False])
+def test_nested_stop_event_scopes_restore_outer_event_on_normal_and_error_exit(
+    tmp_path: Path,
+    share_in_process: bool,
+) -> None:
+    db_file = tmp_path / f"nested-scope-{share_in_process}.db"
+    outer_event = threading.Event()
+    inner_event = threading.Event()
+    runner = None if share_in_process else SQLiteRunner(str(db_file))
+    conn = DBConnection(
+        str(db_file),
+        runner=runner,
+        share_in_process=share_in_process,
+    )
+    try:
+        with conn._operation_connection(stop_event=outer_event) as outer_core:
+            assert cast(BrokerDB, outer_core)._stop_event is outer_event
+
+            with conn._operation_connection(stop_event=None) as inner_core:
+                assert cast(BrokerDB, inner_core)._stop_event is not outer_event
+
+            assert cast(BrokerDB, outer_core)._stop_event is outer_event
+
+            with (
+                pytest.raises(ValueError, match="boom"),
+                conn._operation_connection(stop_event=inner_event) as failing_core,
+            ):
+                assert cast(BrokerDB, failing_core)._stop_event is inner_event
+                raise ValueError("boom")
+
+            assert cast(BrokerDB, outer_core)._stop_event is outer_event
+    finally:
+        conn.close()
+        if runner is not None:
+            runner.close()

@@ -854,3 +854,148 @@ def test_sqlite_filename_policy_allows_absolute_parent_punctuation(tmp_path):
     code, out, err = run_cli("-f", path, "read", "jobs", cwd=tmp_path)
     assert code == 0, err
     assert out == "payload"
+
+
+def test_sb_cli_move_message_and_all_conflict_emits_json_error(workdir: Path) -> None:
+    rc, out, err = run_cli(
+        "move",
+        "source",
+        "dest",
+        "-m",
+        "1000000000000000000",
+        "--all",
+        "--json",
+        cwd=workdir,
+    )
+    assert rc == EXIT_ERROR
+    assert out == ""
+    payload = json.loads(err)
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert payload["retryable"] is False
+    assert "--message cannot be used with --all" in payload["message"]
+
+
+def test_sb_cli_plain_stderr_sanitizes_terminal_control_and_newline_injection(
+    workdir: Path,
+) -> None:
+    hostile_name = "bad\x1b[31m\nforged: line\u202e.db"
+    rc, out, err = run_cli("-f", hostile_name, "list", cwd=workdir)
+    assert rc == EXIT_ERROR
+    assert out == ""
+    assert "\x1b" not in err
+    assert "\u202e" not in err
+    lines = err.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("simplebroker: error: ")
+    assert "\\x1b" in lines[0]
+    assert "\\n" in lines[0]
+
+
+@pytest.mark.sqlite_only
+def test_sb_cli_quiet_suppresses_move_cap_and_project_config_password_commentary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import simplebroker.commands as commands_mod
+    from simplebroker._constants import PROG_NAME
+    from simplebroker._project_config import load_project_config
+
+    db_file = tmp_path / "cap.db"
+    monkeypatch.setattr(commands_mod, "_MOVE_ALL_LIMIT", 2)
+    with Queue("src", db_path=str(db_file)) as q:
+        q.write("m1")
+        q.write("m2")
+        q.write("m3")
+
+    # Without --quiet: cap commentary uses PROG_NAME
+    with commands_mod._message_newline_warning_policy(quiet=False):
+        rc = commands_mod.cmd_move(str(db_file), "src", "dst", all_messages=True)
+    assert rc == EXIT_SUCCESS
+    captured = capsys.readouterr()
+    assert f"{PROG_NAME} move --all: capped at 2 messages" in captured.err
+
+    # With --quiet: cap commentary is suppressed
+    with Queue("src2", db_path=str(db_file)) as q2:
+        q2.write("a1")
+        q2.write("a2")
+    with commands_mod._message_newline_warning_policy(quiet=True):
+        rc_quiet = commands_mod.cmd_move(
+            str(db_file), "src2", "dst2", all_messages=True
+        )
+    assert rc_quiet == EXIT_SUCCESS
+    assert capsys.readouterr().err == ""
+
+    # CLI -q suppresses .broker.toml inline-password commentary, while direct load_project_config keeps it
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    cfg_path = proj_dir / ".broker.toml"
+    cfg_path.write_text(
+        'version = 1\nbackend = "postgres"\ntarget = "postgresql://u:secret@127.0.0.1:1/db"\n',
+        encoding="utf-8",
+    )
+    cfg_path.chmod(0o600)
+
+    load_project_config(cfg_path)
+    direct_err = capsys.readouterr().err
+    assert "BROKER_BACKEND_PASSWORD" in direct_err
+
+    rc_cli, _out_cli, err_cli = run_cli("-q", "--version", cwd=proj_dir)
+    assert rc_cli == EXIT_SUCCESS
+    assert "BROKER_BACKEND_PASSWORD" not in err_cli
+
+    rc_init, _out_init, err_init = run_cli("-q", "list", "--json", cwd=proj_dir)
+    assert rc_init == EXIT_ERROR
+    assert "BROKER_BACKEND_PASSWORD" not in err_init
+    assert json.loads(err_init)["error"] in {"ERROR", "INVALID_ARGUMENT"}
+
+
+@pytest.mark.sqlite_only
+def test_broker_core_insert_messages_in_tx_floor_and_locked_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from simplebroker._exceptions import OperationalError
+    from simplebroker.db import BrokerDB
+
+    db_file = tmp_path / "insert-floor.db"
+    db = BrokerDB(str(db_file))
+    peer = BrokerDB(str(db_file))
+    try:
+        competing_floor = 1_900_000_000_000_000_000
+        peer.advance_last_timestamp(competing_floor)
+
+        def forbidden_post_commit_refresh() -> int:
+            raise AssertionError(
+                "insert_messages must not call post-commit refresh_last_timestamp"
+            )
+
+        monkeypatch.setattr(db, "refresh_last_timestamp", forbidden_post_commit_refresh)
+        db.insert_messages([("jobs", "restored", 1_800_000_000_000_000_000)])
+        assert db.get_cached_last_timestamp() >= competing_floor
+
+        # status() must execute database_size_bytes inside self._lock and self._run_with_retry
+        size_calls = 0
+        real_size = db._backend_plugin.database_size_bytes
+
+        def checked_size(runner):
+            nonlocal size_calls
+            size_calls += 1
+            # Prove self._lock is held by current thread (RLock._is_owned() in CPython)
+            is_owned = getattr(db._lock._lock, "_is_owned", None)
+            if callable(is_owned):
+                assert is_owned()
+            if size_calls == 1:
+                err = OperationalError("transient size lock")
+                err.retryable = True
+                raise err
+            return real_size(runner)
+
+        monkeypatch.setattr(db._backend_plugin, "database_size_bytes", checked_size)
+        metrics = db.status()
+        assert size_calls == 2
+        assert metrics["total_messages"] == 1
+        assert metrics["db_size"] > 0
+    finally:
+        peer.shutdown()
+        db.shutdown()

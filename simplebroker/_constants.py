@@ -15,6 +15,7 @@ import tomllib
 import unicodedata
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextvars import ContextVar
 from copy import copy
 from dataclasses import dataclass
 from pathlib import PurePath
@@ -1166,3 +1167,46 @@ def deserialize_config(
         defaults=defaults,
         override={prefix + "_" + key: value for key, value in values.items()},
     )
+
+
+# Context-scoped flag suppressing Queue.write newline warnings for CLI callers.
+_MESSAGE_NEWLINE_WARNING_SUPPRESSED: ContextVar[bool] = ContextVar(
+    "simplebroker_message_newline_warning_suppressed",
+    default=False,
+)
+
+# Unicode general categories escaped before plain-text stderr rendering.
+_UNSAFE_TERMINAL_CATEGORIES: Final[frozenset[str]] = frozenset(
+    {"Cc", "Cf", "Cs", "Zl", "Zp"}
+)
+# Inclusive UTF-16 surrogate code point bounds and hex-escape width thresholds.
+_SURROGATE_MIN: Final[int] = 0xD800
+_SURROGATE_MAX: Final[int] = 0xDFFF
+_LATIN1_LIMIT: Final[int] = 0x100
+_BMP_MAX: Final[int] = 0xFFFF
+
+
+def _sanitize_terminal_text(text: str) -> str:
+    """Escape control, format, separator, and surrogate code points for plain stderr."""
+    out: list[str] = []
+    for ch in text:
+        codepoint = ord(ch)
+        if ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif (
+            _SURROGATE_MIN <= codepoint <= _SURROGATE_MAX
+            or unicodedata.category(ch) in _UNSAFE_TERMINAL_CATEGORIES
+        ):
+            if codepoint < _LATIN1_LIMIT:
+                out.append(f"\\x{codepoint:02x}")
+            elif codepoint <= _BMP_MAX:
+                out.append(f"\\u{codepoint:04x}")
+            else:
+                out.append(f"\\U{codepoint:08x}")
+        else:
+            out.append(ch)
+    return "".join(out)

@@ -1276,11 +1276,23 @@ class BaseWatcher(ABC):
         Returns:
             The thread running the watcher
         """
-        thread = threading.Thread(target=self.run_forever, daemon=True)
-        thread.start()
-        # Store weak reference for the finalizer
-        self._thread = weakref.ref(thread)
-        return thread
+        with self._stop_lock:
+            state = self._lifecycle_state_locked()
+            prior_thread = self._thread() if self._thread is not None else None
+            if state is _WatcherLifecycleState.RUN_OWNED or (
+                prior_thread is not None and prior_thread.is_alive()
+            ):
+                raise RuntimeError("Watcher is already running")
+            thread = threading.Thread(target=self.run_forever, daemon=True)
+            previous_ref = self._thread
+            if state is not _WatcherLifecycleState.STOP_OWNED or previous_ref is None:
+                self._thread = weakref.ref(thread)
+            try:
+                thread.start()
+            except BaseException:
+                self._thread = previous_ref
+                raise
+            return thread
 
     def start(self) -> threading.Thread:
         """Start the watcher in a background thread.
@@ -1344,25 +1356,6 @@ class BaseWatcher(ABC):
             _finalize_watcher_lifecycle,
             weakref.ref(self),
         )
-
-    def __del__(self) -> None:
-        """Destructor warns if watcher wasn't properly stopped."""
-        if hasattr(self, "_thread") and self._thread is not None:
-            thread = self._thread()
-            if thread is not None and thread.is_alive():
-                # Resource leak detected
-                import warnings
-
-                warnings.warn(
-                    f"{self.__class__.__name__} instance was not properly stopped. "
-                    "This will leak threads and database connections. "
-                    "Always call stop() or use a context manager.",
-                    ResourceWarning,
-                    stacklevel=2,
-                )
-                # Attempt cleanup
-                with contextlib.suppress(Exception):
-                    self.stop(join=False)
 
 
 class SignalHandlerContext:

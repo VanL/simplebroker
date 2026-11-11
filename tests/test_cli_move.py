@@ -954,7 +954,7 @@ class TestMutualExclusivity:
             "move", "source", "dest", "--all", "-m", "not-a-message-id", cwd=workdir
         )
         assert rc == 1
-        assert "not allowed with argument --all" in err
+        assert "--message cannot be used with --all" in err
         assert "invalid message ID" not in err
 
     def test_after_works_with_and_without_all(self, workdir):

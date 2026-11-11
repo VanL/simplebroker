@@ -279,6 +279,14 @@ class TimestampGenerator:
         with self._lock:
             self._last_ts = max(self._last_ts, timestamp)
 
+    def _publish_committed_floor(self, persisted_last_ts: int) -> None:
+        """Publish an already-committed durable ``meta.last_ts`` floor locally."""
+
+        self._ensure_pid()
+        with self._lock:
+            self._last_ts = max(self._last_ts, persisted_last_ts)
+            self._initialized = True
+
     # -- internal helpers -------------------------------------
 
     def get_cached_last_ts(self) -> int:

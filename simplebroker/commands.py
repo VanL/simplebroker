@@ -19,19 +19,20 @@ import sys
 import time
 import warnings
 from collections.abc import Callable, Iterator, Sequence
-from contextvars import ContextVar
 from functools import partial
 from pathlib import Path
 from typing import Literal, cast
 
 from ._aliases import resolve_queue_operand
 from ._constants import (
+    _MESSAGE_NEWLINE_WARNING_SUPPRESSED,
     ALIAS_PREFIX,
     EXIT_ERROR,
     EXIT_QUEUE_EMPTY,
     EXIT_SUCCESS,
     PROG_NAME,
     Config,
+    _sanitize_terminal_text,
     resolve_config,
 )
 from ._delivery import validate_keep_newest
@@ -78,12 +79,6 @@ class _StdoutClosed(Exception):
 
 class _MessageNewlineWarning(RuntimeWarning):
     """Human commentary about ambiguous plain-text message framing."""
-
-
-_MESSAGE_NEWLINE_WARNING_SUPPRESSED: ContextVar[bool] = ContextVar(
-    "simplebroker_message_newline_warning_suppressed",
-    default=False,
-)
 
 
 @contextlib.contextmanager
@@ -169,7 +164,7 @@ def _status(message: str, *, quiet: bool = False) -> None:
 
     if quiet:
         return
-    print(message, file=sys.stderr)
+    print(_sanitize_terminal_text(message), file=sys.stderr)
     sys.stderr.flush()
 
 
@@ -196,7 +191,7 @@ def _emit_error(
             file=sys.stderr,
         )
     else:
-        print(f"{PROG_NAME}: error: {text}", file=sys.stderr)
+        print(f"{PROG_NAME}: error: {_sanitize_terminal_text(text)}", file=sys.stderr)
     sys.stderr.flush()
 
 
@@ -1221,9 +1216,12 @@ def _move_all_messages(
                 warned_newlines,
             )
 
-        if len(results) == _MOVE_ALL_LIMIT:
+        if (
+            len(results) == _MOVE_ALL_LIMIT
+            and not _MESSAGE_NEWLINE_WARNING_SUPPRESSED.get()
+        ):
             print(
-                "broker move --all: capped at "
+                f"{PROG_NAME} move --all: capped at "
                 f"{_MOVE_ALL_LIMIT} messages; messages may remain "
                 "in the source queue",
                 file=sys.stderr,
@@ -1475,7 +1473,10 @@ def cmd_load(
 
         def show_clock_skew(message: str) -> None:
             if not quiet:
-                print(f"broker load: warning: {message}", file=sys.stderr)
+                print(
+                    f"broker load: warning: {_sanitize_terminal_text(message)}",
+                    file=sys.stderr,
+                )
 
         with _load_clock_skew_warning_sink(show_clock_skew):
             load_lines(broker, sys.stdin, force=force, config=resolved_config)
