@@ -104,14 +104,14 @@ pass; bootstrap source `2f93ee5`)
   defaults (`redis://`, `redis:///2`), query-supplied hosts (`?host=localhost`),
   and query-supplied credentials (`?password=explicit`), and injecting userinfo
   credentials overwrites query parameters on re-parse. (Harvested from
-  2026-11-10-deep-dive-review-remediation-plan.md at `7b1ae07`.)
+  2026-11-10-deep-dive-review-remediation-plan.md at `d8d7c79`.)
 
 - 2026-11-10: Per-thread generator guards must capture a unique lease token and
   the starting thread's identity on entry and delete that exact token in
   `finally` rather than re-reading `threading.get_ident()` on close. Python
   generators can be closed or garbage-collected on a foreign thread, so keying
   cleanup by the closer's thread identity strands the starter thread forever.
-  (Harvested from 2026-11-10-deep-dive-review-remediation-plan.md at `7b1ae07`.)
+  (Harvested from 2026-11-10-deep-dive-review-remediation-plan.md at `d8d7c79`.)
 
 - 2026-11-10: (revised 2026-11-10; was: push and pop per-operation `stop_event`
   tokens on a LIFO thread-local stack): Same-thread leased operations on a
@@ -120,7 +120,7 @@ pass; bootstrap source `2f93ee5`)
   exit before restoring `frames[-1]`. Generators on one thread are not strictly
   nested and can close out of order; a LIFO pop removes the wrong handle's
   `stop_event`. (Harvested from
-  2026-11-10-deep-dive-review-remediation-plan.md at `7b1ae07`.)
+  2026-11-10-deep-dive-review-remediation-plan.md at `d8d7c79`.)
 
 - 2026-11-10: Process-ownership guards across `fork()` must follow each
   underlying registration, not only the newest wrapper. A composite waiter

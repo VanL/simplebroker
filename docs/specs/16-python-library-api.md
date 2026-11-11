@@ -1478,7 +1478,7 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 
 ## Related Plans
 
-- retired: 2026-11-10-deep-dive-review-remediation-plan.md — source `7b1ae07`;
+- retired: 2026-11-10-deep-dive-review-remediation-plan.md — source `d8d7c79`;
   see the ledger in `docs/plans/README.md`:
   clarifies [SB-API-2] inline-password detection/redaction (`HR-1` owner
   sign-off), positive-integer `GENERATOR_BATCH_SIZE` validation, and PostgreSQL

@@ -474,7 +474,7 @@ findings must update source, registry, and policy evidence atomically.
 
 ## Related Plan
 
-- retired: 2026-11-10-deep-dive-review-remediation-plan.md — source `7b1ae07`;
+- retired: 2026-11-10-deep-dive-review-remediation-plan.md — source `d8d7c79`;
   see the ledger in `docs/plans/README.md`; aligns PostgreSQL `SM-POLLING` 30 s
   safety-recheck documentation, `BaseWatcher.run_in_thread` publication, and
   Lua-embedded Redis `PUBLISH` visibility.
