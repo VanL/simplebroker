@@ -1098,6 +1098,79 @@ narrative, are the evidence for correctness.
 After applying C1 and C2 the documentation gates, lint, the core mypy cohort
 and the default suite were rerun: all pass, 4288 passed and 18 skipped.
 
+### First CI run after landing, 2026-11-11
+
+The push of `226cf2b4` failed six jobs of the Test workflow (run 43104726049):
+Linux CPython 3.11, 3.12 and 3.13, macOS 3.14, Windows 3.13 and the Linux
+coverage job. No production code was at fault; four causes, all in tests:
+
+1. Tests that left a managed SQLite connection open. One live managed
+   connection makes every later fork in that process refuse SQLite, so two
+   leaking tests contaminated whichever xdist worker ran them and unrelated
+   fork tests failed afterwards: on Linux 3.11-3.13, where default
+   `multiprocessing` forks, and for direct `os.fork()` on macOS 3.14.
+   `test_queue_gc_finalizer_logs_cleanup_failure` injects a close failure and
+   `test_sqlite_runner_restores_optimization_settings_after_fork_detection`
+   simulates a PID change; both now close the connection they strand. A new
+   autouse fixture in `tests/conftest.py` fails the test that leaves a managed
+   connection open, so the next leak is reported at its source.
+2. `test_multiprocess_separate_queues` kept a `BrokerDB` open while starting
+   its watcher processes, which is the unsafe pattern D1 refuses under a
+   forking start method. It now creates the database, closes it, starts the
+   processes, and then opens its writer.
+3. Fault injection in `tests/test_sqlite_fork_admission.py` patched
+   `sqlite3.connect` and installed audit hooks for every SQLite connection in
+   the probe process. Under subprocess coverage, coverage.py's own data file
+   connections were paused or denied in the probe and its forked child (seven
+   failures in the coverage job only). The hooks now act only on managed
+   connections in the process that installed them.
+4. Windows 3.13: a plain `write` subprocess in
+   `tests/test_move_after_exclusion.py` exceeded a fixed 5-second timeout. No
+   changed code path explains it and four other Windows jobs passed; the three
+   fixed timeouts in that module now use the CI scaling helper like the rest
+   of the file. This cause is the most probable one, not a reproduced one.
+
+Why local gates missed 1-3: the full default suite was run on macOS only
+(default start method spawn, 16 workers), the Linux container runs covered
+four fork modules, not the suite, and no local run enabled subprocess
+coverage. A probe that holds one managed connection for the whole session
+makes every clean-process fork dependency fail deterministically; it found
+the same tests on macOS and Linux.
+
+Verification of the fixes: the CI Test command in Linux containers (private
+copy of the tree, environment built from the lockfile, four workers) passed on
+CPython 3.13 with CI settings (4269 passed, 29 skipped) and, apart from the
+note below, on 3.11 and 3.12; the CI coverage command with subprocess coverage
+passed on 3.12 (4269 passed). Locally on macOS: default suite 4288 passed;
+PostgreSQL wrapper 1832 and 532 passed; Redis wrapper 1826 and 452 passed;
+examples 146 passed; lint, format, the tests type-check cohort and the
+documentation gates pass. The coverage failures were first reproduced locally
+(7 failed, 36 passed) and then passed (43) after the change. The Windows
+change could not be exercised here.
+
+Review of these fixes: agy 1.5.6 / gemini-4-argon-medium with
+`--disable-slash-commands`, exit 0, status SUCCESS, no denied actions, 392.7s,
+working-tree status unchanged. Verdict PASS WITH FINDINGS; it judged the four
+causes sufficient for every failing test. T1 [P2] accepted: the `setup` route
+of the opening-site test paused on the version probe that the setup phase
+opens first, so it never exercised the setup open site (already true before
+these fixes). The barrier now pauses on the connection each route names, and
+a mutation that bypasses the managed factory at the setup open site now fails
+that case. T2 [P3] not adopted: when a test body has already failed while
+holding a connection, the fixture adds a teardown error and can mask a leak
+in the next test; the first failure is still reported, and an absolute-zero
+check would forbid any legitimately longer-lived fixture. T3 [P3] not
+adopted: the fixture stays off where `os.fork` is absent, because the hazard
+it guards does not exist there and it could not be exercised on Windows
+before this release.
+
+Unrelated observation from the container runs:
+`tests/test_path_security.py::test_filesystem_supported_posix_path_over_1024_reaches_sqlite`
+fails on Linux when the `CI` variable is unset, at the previous release
+baseline as well: the CLI's connection retries take about six seconds and the
+test helper's six-second diagnostic dump lands in the compared stderr. With
+`CI` set the timer is longer and the test passes. Not changed here.
+
 ### Open at this record
 
 - The owner authorized committing this change and merging it to `main` on

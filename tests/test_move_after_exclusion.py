@@ -83,7 +83,7 @@ def test_move_after_mutual_exclusion(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=5,
+        timeout=scale_timeout_for_ci(5.0),
     )
 
     # Should fail with error
@@ -109,7 +109,7 @@ def test_move_without_after_works(tmp_path: Path) -> None:
             "test message",
         ],
         check=True,
-        timeout=5,
+        timeout=scale_timeout_for_ci(5.0),
     )
 
     # Start move in background (without --quiet so we can see output)
@@ -150,7 +150,7 @@ def test_move_without_after_works(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=5,
+        timeout=scale_timeout_for_ci(5.0),
     )
     assert result.returncode == 0
     assert "test message" in result.stdout

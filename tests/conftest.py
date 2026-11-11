@@ -9,6 +9,7 @@ exactly how an end-user would invoke it.
 from __future__ import annotations
 
 import contextlib
+import gc
 import hashlib
 import json
 import logging
@@ -16,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from functools import cache
@@ -25,7 +27,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from hypothesis import settings as hypothesis_settings
 
-from simplebroker import Queue
+from simplebroker import Queue, _sqlite_fork
 from simplebroker._project_config import (
     PROJECT_CONFIG_FILENAME,
     find_project_config,
@@ -736,6 +738,31 @@ def queue_factory(broker_target: BrokerTarget) -> Iterator[Callable[..., Queue]]
 # --------------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _no_sqlite_connection_outlives_its_test() -> Iterator[None]:
+    """Fail the test that leaves a managed SQLite connection open.
+
+    One live managed connection makes every later fork in this process refuse
+    SQLite ([SB-API-11]). Without this check the leak surfaces as a failure in
+    whichever unrelated fork test the same worker runs next.
+    """
+    if not hasattr(os, "fork"):
+        yield
+        return
+    before = _sqlite_fork._active_lifetimes
+    yield
+    deadline = time.monotonic() + scale_timeout_for_ci(2.0)
+    while _sqlite_fork._active_lifetimes > before and time.monotonic() < deadline:
+        # Allow creator-process GC and a stopping worker thread to finish.
+        gc.collect()
+        time.sleep(0.01)
+    leaked = _sqlite_fork._active_lifetimes - before
+    assert leaked <= 0, (
+        f"{leaked} managed SQLite connection(s) left open by this test; "
+        "close them, or a later fork in this process is refused [SB-API-11]"
+    )
+
+
 @pytest.fixture
 def workdir(
     tmp_path: Path,

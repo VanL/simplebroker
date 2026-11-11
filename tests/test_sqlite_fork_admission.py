@@ -234,11 +234,37 @@ def _held_lock_probe(root, kind, action):
     return result
 
 
-def _temporary_probe(root, route):
+def _pause_parent_once(owner_pid, ready, release):
+    # Pause only the managed open under test, in the process that started it.
+    # Coverage tooling opens its own SQLite files here and in the forked child.
+    if os.getpid() == owner_pid and not ready.is_set():
+        ready.set()
+        assert release.wait(15)
+
+
+def _open_route(route, path):
     from simplebroker._backends.sqlite import runtime, validation
     from simplebroker._constants import resolve_config
 
+    if route == "validation":
+        validation.validate_database(Path(path))
+    elif route == "setup":
+        runtime.setup_connection_phase(path, config=resolve_config())
+    elif route == "version":
+        runtime.check_version()
+    else:
+        runner = SQLiteRunner(path)
+        try:
+            runner.get_connection()
+        finally:
+            runner.close()
+
+
+def _temporary_probe(root, route):
+    from simplebroker import _sqlite_fork
+
     path = str(root / "parent.db")
+    owner_pid = os.getpid()
     with Queue("seed", db_path=path) as seed:
         seed.write("seed")
     ready, release = threading.Event(), threading.Event()
@@ -249,16 +275,20 @@ def _temporary_probe(root, route):
 
         def audit(event, args):
             if event == "sqlite3.connect" and threading.get_ident() == worker_id:
-                ready.set()
-                assert release.wait(15)
+                _pause_parent_once(owner_pid, ready, release)
 
         sys.addaudithook(audit)
     else:
+        # The setup phase also opens version and validation connections
+        # first; pause on the open site this route names.
+        target = {"setup": path, "runner": path, "version": ":memory:"}.get(route)
 
         def paused_connect(*args, **kwargs):
             connection = actual_connect(*args, **kwargs)
-            ready.set()
-            assert release.wait(15)
+            if isinstance(connection, _sqlite_fork._ManagedConnection) and (
+                target is None or args[:1] == (target,)
+            ):
+                _pause_parent_once(owner_pid, ready, release)
             return connection
 
         sqlite3.connect = paused_connect
@@ -267,18 +297,7 @@ def _temporary_probe(root, route):
         nonlocal worker_id
         worker_id = threading.get_ident()
         try:
-            if route == "validation":
-                validation.validate_database(Path(path))
-            elif route == "setup":
-                runtime.setup_connection_phase(path, config=resolve_config())
-            elif route == "version":
-                runtime.check_version()
-            else:
-                runner = SQLiteRunner(path)
-                try:
-                    runner.get_connection()
-                finally:
-                    runner.close()
+            _open_route(route, path)
         except (sqlite3.Error, RuntimeError, AssertionError, OSError) as exc:
             errors.append(exc)
 
@@ -371,13 +390,20 @@ def _failed_close_probe(root):
     return result
 
 
+def _is_managed_handle(event, args):
+    """Limit fault injection to managed opens; other tooling uses sqlite3 too."""
+    from simplebroker._sqlite_fork import _ManagedConnection
+
+    return event == "sqlite3.connect/handle" and isinstance(args[0], _ManagedConnection)
+
+
 def _ambiguous_open_probe(root):
     from simplebroker._sqlite_fork import connect
 
     target = str(root / "audit.db")
 
     def reject_handle(event, args):
-        if event == "sqlite3.connect/handle":
+        if _is_managed_handle(event, args):
             raise RuntimeError("audit denied after native allocation")
 
     sys.addaudithook(reject_handle)
@@ -435,7 +461,7 @@ def _nested_cantopen_probe(root):
     retained: list[sqlite3.Connection] = []
 
     def reject_handle(event, args):
-        if event == "sqlite3.connect/handle" and not retained:
+        if _is_managed_handle(event, args) and not retained:
             retained.append(args[0])
             sqlite3.connect(str(root / "missing" / "nested.db"))
 
@@ -465,7 +491,7 @@ def _construction_gc_probe(root, mode):
             retained.append(self.connection)
 
     def reject_handle(event, args):
-        if event == "sqlite3.connect/handle":
+        if _is_managed_handle(event, args):
             if mode == "resurrect":
                 args[0].cycle = ResurrectConnection(args[0])
             # Avoid retaining the connection through this exception traceback.

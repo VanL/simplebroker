@@ -625,3 +625,19 @@ Dated moment-tier entries (foldable after age floor and distillation).
   must neutralize the rows it is not testing. Evidence: 2026-11-11
   runtime-boundaries plan integration; `tests/test_sqlite_admission.py`,
   `tests/test_doc_gates.py`, `tests/test_sqlite_fork_admission.py`.
+
+- 2026-11-11: A process-wide safety rule turns one test's leak into another
+  test's failure. After the SQLite fork refusal landed, two tests that
+  stranded a managed connection (an injected close failure, a simulated PID
+  change) made unrelated fork tests fail in whichever xdist worker ran next,
+  and only where the start method forks: three Linux jobs and one macOS job,
+  never the local macOS run. When a change adds process-global state, run the
+  full suite once with that state deliberately poisoned (here, a plugin that
+  holds one managed connection per worker) to list every test that depends on
+  a clean process, and add a per-test check that fails the test that leaves
+  the state dirty. Run the full default suite, not a module subset, on every
+  start-method family before push, and run new real-process tests once under
+  the CI coverage settings: global fault injection (`sqlite3.connect` patches,
+  audit hooks) also intercepts coverage.py's own SQLite files. Evidence:
+  Test workflow run 43104726049; `tests/conftest.py`
+  `_no_sqlite_connection_outlives_its_test`.

@@ -128,12 +128,19 @@ def test_sqlite_runner_restores_optimization_settings_after_fork_detection(
 
     with BrokerCore(runner):
         assert _rows(runner.run("PRAGMA cache_size", fetch=True))[0][0] == -25600
+        inherited = runner.get_connection()
 
         runner._pid = os.getpid() - 1
-        conn = runner.get_connection()
+        try:
+            conn = runner.get_connection()
 
-        assert SetupPhase.OPTIMIZATION in runner._completed_phases
-        assert conn.execute("PRAGMA cache_size").fetchone()[0] == -25600
+            assert SetupPhase.OPTIMIZATION in runner._completed_phases
+            assert conn.execute("PRAGMA cache_size").fetchone()[0] == -25600
+        finally:
+            # Recovery abandons the "inherited" connection without closing it.
+            # This process really owns it, and a live managed connection makes
+            # every later fork here refuse SQLite [SB-API-11].
+            inherited.close()
 
 
 def test_sqlite_runtime_closes_connection_setting_cursors() -> None:

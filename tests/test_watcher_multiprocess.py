@@ -430,7 +430,12 @@ def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.
     """Test multiple processes each watching their own queue."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
-        broker = BrokerDB(db_path)
+        # Create the database, then close it: no managed SQLite connection may
+        # be open in this process while the watcher processes start, because
+        # the default start method forks on some platforms [SB-API-11].
+        with BrokerDB(db_path):
+            pass
+        broker: BrokerDB | None = None
 
         num_processes = 5
         messages_per_queue = 20
@@ -496,6 +501,8 @@ def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.
                 p.start()
                 processes.append(p)
 
+            broker = BrokerDB(db_path)
+
             # Wait for ready
             ready_processes: set[int] = set()
             ready_deadline = _deadline_after(10.0)
@@ -554,7 +561,8 @@ def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.
             for p in processes:
                 _cleanup_process(p)
 
-            broker.close()
+            if broker is not None:
+                broker.close()
 
 
 def test_multiprocess_unrelated_write_does_not_drain_idle_watchers() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception

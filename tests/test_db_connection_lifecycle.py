@@ -224,16 +224,23 @@ def test_queue_gc_finalizer_logs_cleanup_failure(
     )
     assert queue.peek_one(with_timestamps=False) is None
     assert queue.conn is not None
-    failing_connection_id = id(queue.conn)
+    leaked_connection = queue.conn
+    failing_connection_id = id(leaked_connection)
     queue_ref = weakref.ref(queue)
 
-    with caplog.at_level("WARNING", logger="simplebroker.sbqueue"):
-        del queue
-        gc.collect()
+    try:
+        with caplog.at_level("WARNING", logger="simplebroker.sbqueue"):
+            del queue
+            gc.collect()
 
-    assert queue_ref() is None
-    assert "Error during Queue finalizer cleanup" in caplog.text
-    assert "semantic cleanup failure" in caplog.text
+        assert queue_ref() is None
+        assert "Error during Queue finalizer cleanup" in caplog.text
+        assert "semantic cleanup failure" in caplog.text
+    finally:
+        # The injected failure left the physical connection open. A live
+        # managed connection makes every later fork in this process refuse
+        # SQLite [SB-API-11], so release it for the tests that follow.
+        close(leaked_connection)
 
 
 @pytest.mark.parametrize(
