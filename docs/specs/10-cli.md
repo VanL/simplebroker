@@ -315,6 +315,7 @@ _Implementation mapping_:
 _Verification_:
 - `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_error_inventory_and_public_paths`
 - `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_post_parse_global_errors_preserve_json`
+- `tests/test_cli_contract_sb_cli.py::test_sb_cli_move_message_and_all_conflict_emits_json_error`
 - `tests/test_vacuum_compact.py::test_cli_vacuum_json_establishes_error_mode_without_success_payload`
 - `tests/test_vacuum_compact.py::test_cli_vacuum_json_structures_post_parse_target_error`
 - `tests/test_vacuum_compact.py::test_cli_vacuum_json_structures_corrupt_target_error`
@@ -567,7 +568,8 @@ _Implementation mapping_:
   no-success-document behavior, quiet commentary, and structured errors
 - `[SB-CLI-2]` ordinary diagnostic dialect:
   `tests/test_alias_cli.py::test_cmd_alias_add_remove_direct`,
-  `tests/test_commands_init.py::TestInitCommand::test_init_permission_error_database_creation`
+  `tests/test_commands_init.py::TestInitCommand::test_init_permission_error_database_creation`,
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_plain_stderr_sanitizes_terminal_control_and_newline_injection`
 - `[SB-CLI-2]` owned warning policy:
   `tests/test_json_output.py` (selector, timestamp, JSON, empty, quiet, and
   concurrent loud/quiet matrix, plus repeated direct and in-process CLI
@@ -576,8 +578,9 @@ _Implementation mapping_:
   `tests/test_dump_load.py::test_cmd_load_warning_policy_resets_after_success`,
   `tests/test_dump_load.py::test_cmd_load_warning_policy_resets_after_every_failure`,
   `tests/test_watcher_transition_tables.py::test_cmd_watch_quiet_suppresses_owned_newline_warning`,
-  `tests/test_watcher_transition_tables.py::test_cmd_watch_json_newline_payload_has_no_plain_framing_warning`, and
-  `tests/test_alias_cli.py::test_quiet_alias_policy_does_not_hide_concurrent_loud_warning`
+  `tests/test_watcher_transition_tables.py::test_cmd_watch_json_newline_payload_has_no_plain_framing_warning`,
+  `tests/test_alias_cli.py::test_quiet_alias_policy_does_not_hide_concurrent_loud_warning`, and
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_quiet_suppresses_move_cap_and_project_config_password_commentary`
 - `[SB-CLI-2]` relative SQLite containment and prepared-target behavior:
   `tests/test_symlink_security.py::test_legitimate_symlink_within_directory`,
   `tests/test_symlink_security.py::test_symlink_path_traversal_attack`,
@@ -588,6 +591,8 @@ _Implementation mapping_:
   `tests/test_symlink_security.py::test_relative_symlink_loop_json_failure_is_one_error_object`,
   `tests/test_symlink_security.py::test_quiet_does_not_suppress_relative_resolution_failure`,
   `tests/test_symlink_security.py::test_absolute_path_with_symlink`,
+  `tests/test_cleanup.py::test_cleanup_relative_symlink_escape_rejected_without_deleting_external_db`,
+  `tests/test_cleanup.py::test_cleanup_relative_symlink_in_root_and_loop_semantics`,
   `tests/test_cli_main.py::test_main_dispatches_validated_canonical_relative_target`,
   `tests/test_cli_main.py::test_main_status_uses_validated_canonical_relative_target`,
   `tests/test_cli_main.py::test_main_vacuum_uses_validated_canonical_relative_target`,
@@ -613,6 +618,7 @@ _Implementation mapping_:
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_sqlite_directory_and_scope_failures_are_invalid_arguments`,
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_relative_containment_rejection_is_invalid_argument`,
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_post_parse_global_errors_preserve_json`,
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_move_message_and_all_conflict_emits_json_error`,
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_emit_error_codes_are_closed_at_callsites`,
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_unknown_internal_error_code_fails_loudly`,
   `tests/test_cli_main.py::test_pre_dispatch_failures_use_cause_classifier_json`,
