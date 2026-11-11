@@ -1497,6 +1497,44 @@ def _validate_cli_database_filename(value: str) -> None:
         ) from error
 
 
+def _resolve_cleanup_sqlite_path(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    *,
+    config: Config,
+) -> tuple[Path, Path]:
+    """Validate and resolve a legacy SQLite cleanup path with relative containment."""
+    db_path = _require_legacy_sqlite_path(resolved_target)
+    containment_required = not (
+        Path(args.file).is_absolute() or resolved_target.used_project_scope
+    )
+    working_dir = (
+        Path(config["DEFAULT_DB_LOCATION"])
+        if (
+            config["DEFAULT_DB_LOCATION"]
+            and not getattr(args, "_dir_explicitly_provided", False)
+            and not getattr(args, "_file_explicitly_provided", False)
+        )
+        else args.dir
+    )
+    if not resolved_target.used_project_scope:
+        _validate_cli_database_filename(args.file)
+    try:
+        _validate_sqlite_filename(str(db_path))
+    except ValueError as error:
+        raise _ArgumentValidationError(str(error)) from error
+    resolved_db_path = _resolve_legacy_sqlite_path(
+        db_path,
+        working_dir=working_dir,
+        containment_required=containment_required,
+    )
+    try:
+        _validate_sqlite_filename(str(resolved_db_path))
+    except ValueError as error:
+        raise _ArgumentValidationError(str(error)) from error
+    return db_path, resolved_db_path
+
+
 def _run_cleanup(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
@@ -1507,14 +1545,13 @@ def _run_cleanup(
     """Clean the resolved target under the CLI diagnostic policy."""
     try:
         if resolved_target.legacy_sqlite_path_mode:
-            db_path = _require_legacy_sqlite_path(resolved_target)
-            if not resolved_target.used_project_scope:
-                _validate_cli_database_filename(args.file)
-            _validate_sqlite_filename(str(db_path))
-            _validate_sqlite_filename(str(db_path.resolve()))
-
+            db_path, resolved_db_path = _resolve_cleanup_sqlite_path(
+                args,
+                resolved_target,
+                config=config,
+            )
             file_existed = resolved_target.plugin.cleanup_target(
-                str(db_path),
+                str(resolved_db_path),
                 backend_options=resolved_target.backend_options,
                 config=config,
             )

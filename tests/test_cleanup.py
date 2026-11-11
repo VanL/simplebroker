@@ -882,3 +882,86 @@ def test_cleanup_order_with_other_flags(workdir):
             rc, out, err = run_cli("list", cwd=workdir)
             assert rc == 0, err
             assert out == ""
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink containment probe")
+def test_cleanup_relative_symlink_escape_rejected_without_deleting_external_db(
+    tmp_path: Path,
+) -> None:
+    """[SB-CLI-2] [SB-OPS-7] Relative -f symlink escape must fail closed before cleanup."""
+    outside_dir = tmp_path / "outside"
+    work_dir = tmp_path / "work"
+    outside_dir.mkdir()
+    work_dir.mkdir()
+
+    victim_db = outside_dir / "victim.db"
+    rc_init, _, err_init = run_cli(
+        "-f", str(victim_db), "write", "jobs", "precious", cwd=outside_dir
+    )
+    assert rc_init == 0, err_init
+    assert victim_db.exists()
+
+    escape_link = work_dir / "link.db"
+    escape_link.symlink_to(Path("..") / "outside" / "victim.db")
+
+    # Plain mode: exit 1, victim untouched
+    rc_plain, out_plain, err_plain = run_cli("-f", "link.db", "--cleanup", cwd=work_dir)
+    assert rc_plain == 1
+    assert out_plain == ""
+    assert "within the working directory" in err_plain
+    assert victim_db.exists()
+
+    # JSON mode: exit 1 with INVALID_ARGUMENT, victim untouched
+    rc_json, out_json, err_json = run_cli(
+        "-f", "link.db", "--cleanup", "--json", cwd=work_dir
+    )
+    assert rc_json == 1
+    assert out_json == ""
+    payload = json.loads(err_json)
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert victim_db.exists()
+
+    # Verify victim message is still readable
+    rc_read, out_read, err_read = run_cli(
+        "-f", str(victim_db), "read", "jobs", cwd=outside_dir
+    )
+    assert rc_read == 0, err_read
+    assert out_read.strip() == "precious"
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink resolution probe")
+def test_cleanup_relative_symlink_in_root_and_loop_semantics(tmp_path: Path) -> None:
+    """[SB-CLI-2] [SB-CLI-4] In-root symlink cleans target; symlink loop maps to ERROR."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    actual_db = work_dir / "actual.db"
+    rc_init, _, err_init = run_cli(
+        "-f", "actual.db", "write", "jobs", "hello", cwd=work_dir
+    )
+    assert rc_init == 0, err_init
+    sidecar = work_dir / "actual.db.lock"
+    sidecar.write_bytes(b"")
+
+    in_root_link = work_dir / "alias.db"
+    in_root_link.symlink_to("actual.db")
+
+    rc_clean, out_clean, err_clean = run_cli(
+        "-f", "alias.db", "--cleanup", cwd=work_dir
+    )
+    assert rc_clean == 0, err_clean
+    assert out_clean == ""
+    assert not actual_db.exists()
+    assert not sidecar.exists()
+
+    loop_link = work_dir / "loop.db"
+    loop_link.symlink_to("loop.db")
+    rc_loop, out_loop, err_loop = run_cli(
+        "-f", "loop.db", "--cleanup", "--json", cwd=work_dir
+    )
+    assert rc_loop == 1
+    assert out_loop == ""
+    loop_payload = json.loads(err_loop)
+    assert loop_payload["error"] == "ERROR"
