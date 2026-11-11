@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.8.2] - 2026-11-11
+
+SimpleBroker 8.8.2, `simplebroker-pg` 4.8.2, and `simplebroker-redis` 4.8.2
+are the coordinated patch release set. Both extensions require SimpleBroker
+8.8.2 or newer, and the core `pg` and `redis` extras require the matching
+4.8.2 extension or newer.
+
 ### Fixed
 
 - SQLite refuses managed operations in a forked child when SimpleBroker had
@@ -27,42 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserved batch; advancing the inherited iterator raises RuntimeError.
 - PostgreSQL rejects schema names longer than 63 ASCII bytes before opening
   resources, preventing server truncation from merging distinct tenant names.
-
-### Changed
-
-- SQLite fork refusal is deliberately process-wide, including unrelated paths
-  and memory databases. It detects SimpleBroker-managed physical connections;
-  arbitrary external SQLite connections remain the application's responsibility.
-- Direct and structural PostgreSQL runner/waiter entry points now enforce the
-  same non-public schema rule as plugin configuration. Existing overlong or
-  `public` configurations require operator correction. Renaming configuration
-  cannot separate data that was already intermingled.
-
-### Documented
-
-- PostgreSQL cleanup ends the lifetime of every client of the physical schema.
-  Finish operations, stop watchers, close all owning sessions/runners across
-  processes, and construct fresh owners after recreation. The alias-version
-  counter introduced in 8.8.2 can reuse a version after recreation, leaving a
-  retained client's alias cache stale; the 8.8.1 timestamp version refreshed in
-  the reproduced case. This maintenance requirement narrows the support boundary;
-  it does not restore retained-client refresh across destructive replacement.
-- Built-in watcher retries are bounded by a processing-wait health witness,
-  three failures, 2/4-second delays, and a 300-second budget checked between
-  attempts. PostgreSQL listener expiry faster than a quiet 30–60-second wait can
-  exhaust that budget. Configure the broker DSN or role with a compatible idle
-  timeout (for example `options='-c idle_session_timeout=0'`); it covers LISTEN
-  and command connections. The library adds no heartbeat or server override.
-
-## [8.8.2] - 2026-11-11
-
-SimpleBroker 8.8.2, `simplebroker-pg` 4.8.2, and `simplebroker-redis` 4.8.2
-are the coordinated patch release set. Both extensions require SimpleBroker
-8.8.2 or newer, and the core `pg` and `redis` extras require the matching
-4.8.2 extension or newer.
-
-### Fixed
-
 - CLI `--cleanup` on ordinary relative legacy SQLite `-f` targets now enforces
   the same `[SB-CLI-2]` physical directory containment as other SQLite target
   admission paths, refusing symlinked filenames or symlinked parent components
@@ -87,7 +58,10 @@ are the coordinated patch release set. Both extensions require SimpleBroker
   publication under `_stop_lock`, raising
   `RuntimeError("Watcher is already running")` on duplicate starts while a run
   or `run_forever()` worker thread is active and allowing immediate restart as
-  soon as `run_forever()` exits (including after an uncaught crash).
+  soon as `run_forever()` exits with the stop event clear, for example after
+  retry exhaustion. A run that ended because an error handler raised leaves
+  the stop event set; a later `run_in_thread()` on that watcher returns a
+  thread that exits at once and leaves pending messages untouched.
 - Explicit generator `batch_size` arguments on `claim_generator`,
   `move_generator`, and `peek_generator` across all backends now reject
   non-positive or non-integer values with `ValueError`, and
@@ -119,6 +93,38 @@ are the coordinated patch release set. Both extensions require SimpleBroker
   `move_generator` / `peek_generator`, and tracks active `at_least_once`
   generator batches by per-lease owner token so foreign-thread generator closes
   release the owning thread cleanly.
+- `examples/dead_letter_queue.sh` treats only a JSON object as a retry
+  envelope, so a message whose body is a JSON number, string or array is
+  handled as plain text instead of failing in `jq`; it also passes message
+  text through `printf` rather than `echo`. `examples/sqlite_connect.py`
+  builds its read-only URI with `Path.as_uri()`, so a path containing
+  URI-reserved characters opens correctly.
+
+### Changed
+
+- SQLite fork refusal is deliberately process-wide, including unrelated paths
+  and memory databases. It detects SimpleBroker-managed physical connections;
+  arbitrary external SQLite connections remain the application's responsibility.
+- Direct and structural PostgreSQL runner/waiter entry points now enforce the
+  same non-public schema rule as plugin configuration. Existing overlong or
+  `public` configurations require operator correction. Renaming configuration
+  cannot separate data that was already intermingled.
+
+### Documented
+
+- PostgreSQL cleanup ends the lifetime of every client of the physical schema.
+  Finish operations, stop watchers, close all owning sessions/runners across
+  processes, and construct fresh owners after recreation. The alias-version
+  counter introduced in this release can reuse a version after recreation, leaving a
+  retained client's alias cache stale; the 8.8.1 timestamp version refreshed in
+  the reproduced case. This maintenance requirement narrows the support boundary;
+  it does not restore retained-client refresh across destructive replacement.
+- Built-in watcher retries are bounded by a processing-wait health witness,
+  three failures, 2/4-second delays, and a 300-second budget checked between
+  attempts. PostgreSQL listener expiry faster than a quiet 30–60-second wait can
+  exhaust that budget. Configure the broker DSN or role with a compatible idle
+  timeout (for example `options='-c idle_session_timeout=0'`); it covers LISTEN
+  and command connections. The library adds no heartbeat or server override.
 
 ## [8.8.1] - 2026-11-10
 
@@ -260,6 +266,8 @@ are the coordinated minor release set. Both extensions require SimpleBroker
   declaration whose doubled recheck range would overflow. Waiters that
   declare nothing, including Redis/Valkey, keep the existing
   `max(1, 10 * max_interval)` recheck.
+- `simplebroker-pg` 4.8.0 requires `psycopg[binary]` 3.3.8 or newer; the
+  previous floor was 3.3.6. This entry was added after the release.
 
 ### Fixed
 

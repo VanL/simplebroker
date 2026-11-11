@@ -1103,6 +1103,12 @@ and the default suite were rerun: all pass, 4288 passed and 18 skipped.
 - The owner authorized committing this change and merging it to `main` on
   2026-11-11; `git log` is the record. Publishing a release is a separate
   owner step.
+- Release numbering, owner decision 2026-11-11: 8.8.2 / 4.8.2 / 4.8.2 were
+  prepared on `main` but never tagged or published (the package index and the
+  remote tags end at 8.8.1 / 4.8.1), so no version or floor changes. This
+  plan's changelog entries are folded into the existing `[8.8.2]` section,
+  and the alias-version counter is described there as introduced in that
+  release.
 - Task 6 stays open: the Weft companion plan needs owner adoption and can land
   only with a released SimpleBroker that contains D1, because Weft resolves
   SimpleBroker from the package index. Until then downstream compatibility is
