@@ -34,10 +34,12 @@ requires full history. (Adopted from agent-theory @ 0423923.)
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -47,8 +49,9 @@ SHA_RE = re.compile(r"`([0-9a-f]{7,40})`")
 CUE_RE = re.compile(r"git show ([0-9a-f]{7,40}):([A-Za-z0-9_./-]+)")
 
 # Foreign attribution is a REPORTING aid, never a resolution mechanism: it
-# names repositories this repo's own citations refer to, makes no filesystem
-# assumption, and resolves nothing.
+# names foreign repositories this repo's own citations refer to, makes no
+# filesystem assumption, and resolves nothing. Never include this repo's own
+# name ("simplebroker") here.
 FOREIGN_MARKERS = (
     "agent-theory",
     "agent-guidance",
@@ -57,10 +60,12 @@ FOREIGN_MARKERS = (
     "taut",
     "backstitch",
     "engram",
-    "simplebroker",
 )
-FOREIGN_MARKER_RE = re.compile(
-    r"\b(" + "|".join(re.escape(m) for m in FOREIGN_MARKERS) + r")\b"
+FOREIGN_ATTRIBUTION_RE = re.compile(
+    r"\b("
+    + "|".join(re.escape(m) for m in FOREIGN_MARKERS)
+    + r")\s*(?:@\s*(?:`[0-9a-f]{7,40}`\s*\(\s*via\s*)?|(?:commit|pin|sha|source)\s+)$",
+    re.IGNORECASE,
 )
 
 # Opt-in local convenience, unset by default. A sibling working copy is an
@@ -84,13 +89,16 @@ def git(
 
 
 def attributed_repo(text: str, pos: int) -> str | None:
-    """Does the citation name the repository it came from? Reporting only."""
-    ctx = text[max(0, pos - 80) : pos].lower()
-    hits = list(FOREIGN_MARKER_RE.finditer(ctx))
-    return hits[-1].group(1) if hits else None
+    """Return explicit foreign-repo attribution immediately preceding ``pos``."""
+    window = text[max(0, pos - 80) : pos]
+    clause = re.split(r"[\r\n|;]", window)[-1]
+    match = FOREIGN_ATTRIBUTION_RE.search(clause)
+    return match.group(1).lower() if match else None
 
 
-def batch_object_info(expressions: set[str]) -> dict[str, tuple[str, str] | None]:
+def batch_object_info(
+    expressions: set[str], *, repo: Path | None = None
+) -> dict[str, tuple[str, str] | None]:
     """Resolve every object expression through one long-lived Git process."""
     ordered = sorted(expressions)
     if not ordered:
@@ -98,6 +106,7 @@ def batch_object_info(expressions: set[str]) -> dict[str, tuple[str, str] | None
     result = git(
         "cat-file",
         "--batch-check=%(objectname) %(objecttype)",
+        repo=repo,
         stdin="\n".join(ordered) + "\n",
     )
     if result.returncode != 0:
@@ -117,11 +126,19 @@ def batch_object_info(expressions: set[str]) -> dict[str, tuple[str, str] | None
     return info
 
 
-def reachable_commits(remote_ref: str | None) -> set[str]:
+def reachable_commits(remote_ref: str | None, *, repo: Path | None = None) -> set[str]:
     """Return the commits published through the default remote branch."""
     if remote_ref is None:
         return set()
-    result = git("rev-list", remote_ref)
+    result = git("rev-list", remote_ref, repo=repo)
+    if result.returncode != 0:
+        return set()
+    return set(result.stdout.splitlines())
+
+
+def retained_ref_commits(*, repo: Path | None = None) -> set[str]:
+    """Return commits reachable from HEAD or retained branch/tag/remote refs."""
+    result = git("rev-list", "HEAD", "--branches", "--tags", "--remotes", repo=repo)
     if result.returncode != 0:
         return set()
     return set(result.stdout.splitlines())
@@ -195,17 +212,45 @@ def retired_plan_cues() -> list[tuple[str, str]]:
     return results
 
 
+def _classify_local_commit(
+    sha: str,
+    full_sha: str,
+    *,
+    retained_commits: set[str],
+    remote_ref: str | None,
+    remote_commits: set[str],
+    allow_local_only: bool,
+    local_only: list[str],
+    broken: list[str],
+) -> None:
+    if full_sha not in retained_commits:
+        if allow_local_only:
+            local_only.append(sha)
+        else:
+            broken.append(
+                f"`{sha}` resolves only to an unreachable loose Git object "
+                "(not reachable from HEAD or any retained ref)"
+            )
+        return
+    if remote_ref and full_sha not in remote_commits:
+        local_only.append(sha)
+
+
 def classify_sha_claims(
     text: str,
     *,
     remote_ref: str | None,
     object_info: dict[str, tuple[str, str] | None],
     remote_commits: set[str],
+    retained_commits: set[str],
+    allow_local_only: bool = False,
 ) -> tuple[set[str], list[str], list[str], list[str]]:
     """Classify each distinct cited commit without changing retrieval truth."""
 
     sha_hits = ((match.group(1), match.start()) for match in SHA_RE.finditer(text))
-    broken, local_only, foreign = [], [], []
+    broken: list[str] = []
+    local_only: list[str] = []
+    foreign: list[str] = []
     seen: set[str] = set()
     for sha, pos in sha_hits:
         if sha in seen:
@@ -213,8 +258,16 @@ def classify_sha_claims(
         seen.add(sha)
         commit = object_info.get(f"{sha}^{{commit}}")
         if commit is not None and commit[1] == "commit":
-            if remote_ref and commit[0] not in remote_commits:
-                local_only.append(sha)
+            _classify_local_commit(
+                sha,
+                commit[0],
+                retained_commits=retained_commits,
+                remote_ref=remote_ref,
+                remote_commits=remote_commits,
+                allow_local_only=allow_local_only,
+                local_only=local_only,
+                broken=broken,
+            )
             continue
         who = attributed_repo(text, pos)
         if who:
@@ -239,18 +292,28 @@ def broken_retrieval_cues(
     remote_ref: str | None,
     object_info: dict[str, tuple[str, str] | None],
     remote_commits: set[str],
+    retained_commits: set[str],
+    allow_local_only: bool = False,
 ) -> list[str]:
     """Return every explicit git-show or retired-plan cue that cannot be retrieved locally."""
 
-    broken = []
+    broken: list[str] = []
     for sha, path in cues:
         commit = object_info.get(f"{sha}^{{commit}}")
         target = object_info.get(f"{sha}:{path}")
         if commit is None or commit[1] != "commit" or target is None:
             broken.append(f"cue `git show {sha}:{path}` does not resolve here")
-        elif sha not in seen:
+            continue
+        if commit[0] not in retained_commits and not allow_local_only:
+            broken.append(
+                f"cue `git show {sha}:{path}` relies on unreachable loose commit `{sha}`"
+            )
+            continue
+        if sha not in seen:
             seen.add(sha)
-            if remote_ref and commit[0] not in remote_commits:
+            if commit[0] not in retained_commits or (
+                remote_ref and commit[0] not in remote_commits
+            ):
                 local_only.append(sha)
     return broken
 
@@ -298,10 +361,11 @@ def report_results(
             + ", ".join(foreign)
         )
     if local_only:
+        where = remote_ref or "HEAD/retained refs"
         print(
             f"  local-only pin ({len(local_only)}): "
             + ", ".join(local_only)
-            + f"  [not in {remote_ref} — published history cannot verify these]"
+            + f"  [not in {where} — published history cannot verify these]"
         )
     if broken:
         print(f"  BROKEN ({len(broken)}):")
@@ -315,7 +379,102 @@ def report_results(
     return 0
 
 
-def main() -> int:
+def self_test() -> int:
+    """Firing self-tests for reachable ancestry and foreign attribution."""
+    failures: list[str] = []
+    if attributed_repo("In simplebroker commit ", 23) is not None:
+        failures.append("self-repo marker 'simplebroker' was treated as foreign")
+    if attributed_repo("source agent-theory @ `296a7cd`; landed ", 40) is not None:
+        failures.append("foreign marker leaked across semicolon clause boundary")
+    if attributed_repo("source agent-theory @ ", 22) != "agent-theory":
+        failures.append("explicit 'agent-theory @' prefix did not attribute")
+    if attributed_repo("source agent-theory @ `296a7cd` (via ", 37) != "agent-theory":
+        failures.append(
+            "explicit 'agent-theory @ <sha> (via ' prefix did not attribute"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="coalesce-check-") as td:
+        repo = Path(td)
+        git_env = {
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@example.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@example.com",
+            "PATH": os.environ.get("PATH", ""),
+        }
+
+        def run_git(*args: str) -> str:
+            proc = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                env=git_env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return proc.stdout.strip()
+
+        run_git("init", "-b", "main")
+        (repo / "README.md").write_text("v1\n", encoding="utf-8")
+        run_git("add", "README.md")
+        run_git("commit", "-m", "v1")
+        v1 = run_git("rev-parse", "--short", "HEAD")
+
+        (repo / "README.md").write_text("v2\n", encoding="utf-8")
+        run_git("add", "README.md")
+        run_git("commit", "-m", "v2")
+        loose = run_git("rev-parse", "--short", "HEAD")
+        run_git("reset", "--hard", "HEAD~1")
+
+        sample = f"Published `{v1}` and rebased `{loose}`.\n"
+        info = batch_object_info({f"{v1}^{{commit}}", f"{loose}^{{commit}}"}, repo=repo)
+        retained = retained_ref_commits(repo=repo)
+        _, broken_default, _, _ = classify_sha_claims(
+            sample,
+            remote_ref=None,
+            object_info=info,
+            remote_commits=set(),
+            retained_commits=retained,
+            allow_local_only=False,
+        )
+        if not broken_default:
+            failures.append(
+                "unreachable loose commit passed without --allow-local-only"
+            )
+        _, broken_allowed, local_allowed, _ = classify_sha_claims(
+            sample,
+            remote_ref=None,
+            object_info=info,
+            remote_commits=set(),
+            retained_commits=retained,
+            allow_local_only=True,
+        )
+        if broken_allowed or local_allowed != [loose]:
+            failures.append("--allow-local-only did not classify loose commit cleanly")
+
+    if failures:
+        for f in failures:
+            print(f"coalesce-check self-test FAIL: {f}")
+        return 1
+    print("coalesce-check self-test: all reachability and attribution probes pass")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--allow-local-only",
+        action="store_true",
+        help="allow SHAs that exist only as unreachable local Git objects",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run firing self-tests for reachability and attribution",
+    )
+    args = parser.parse_args(argv)
+    if args.self_test:
+        return self_test()
+
     if not STATE.is_file():
         print("coalesce-check: no docs/coalescing.md — nothing to check")
         return 0
@@ -349,11 +508,14 @@ def main() -> int:
         }
     )
     remote_commits = reachable_commits(remote_ref)
+    retained_commits = retained_ref_commits()
     seen, broken, local_only, foreign = classify_sha_claims(
         text,
         remote_ref=remote_ref,
         object_info=object_info,
         remote_commits=remote_commits,
+        retained_commits=retained_commits,
+        allow_local_only=args.allow_local_only,
     )
     broken.extend(
         broken_retrieval_cues(
@@ -363,6 +525,8 @@ def main() -> int:
             remote_ref=remote_ref,
             object_info=object_info,
             remote_commits=remote_commits,
+            retained_commits=retained_commits,
+            allow_local_only=args.allow_local_only,
         )
     )
     return report_results(

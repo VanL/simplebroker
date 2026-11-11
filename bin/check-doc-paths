@@ -35,23 +35,28 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Surfaces whose path claims are normative. docs/lessons.md and plans are
 # excluded: lessons legitimately cite foreign/sibling paths as history,
 # and plans cite paths that may retire after closure.
-SCAN_DIRS = ["docs/agent-context", "docs/specs", "skills"]
+SCAN_DIRS = ["docs/agent-context", "docs/specs", "docs/implementation", "skills"]
 SCAN_FILES = [
     "AGENTS.md",
     "docs/README.md",
     "docs/coalescing.md",
+    "docs/program-theory.md",
     "docs/agent-kernel.md",
     "llms.txt",
 ]
 
 # A claim is a single-line backticked token that looks like a repo path.
-# Guidance roots only. Product roots (`tests/`, `simplebroker/`, ...) were
-# tried and reverted during adoption: the runbooks cite them in explicitly
-# hypothetical form ("e.g. `tests/acceptance/`", a probe home some *other*
-# repository might have), which the regex cannot distinguish from a claim.
-# A gate that flags a hypothetical is a false positive, and a gate that
-# cries wolf gets ignored.
-CLAIM_RE = re.compile(r"`((?:docs|skills|bin)/[A-Za-z0-9_./-]+)`")
+# Guidance roots and top-level repository documents only. Product roots
+# (`tests/`, `simplebroker/`, ...) were tried and reverted during adoption:
+# the runbooks cite them in explicitly hypothetical form ("e.g.
+# `tests/acceptance/`", a probe home some *other* repository might have),
+# which the regex cannot distinguish from a claim. Optional `#fragment`,
+# `:line(-end)`, and `::symbol` suffixes are stripped before resolving.
+CLAIM_RE = re.compile(
+    r"`((?:(?:docs|skills|bin)/[A-Za-z0-9_./-]+|(?:AGENTS|README|CONTRIBUTING|SECURITY|CHANGELOG)\.md|llms\.txt)"
+    r"(?::\d+(?:-\d+)?|::[A-Za-z0-9_.:-]+|#[A-Za-z0-9_./-]+)?)`"
+)
+CLAIM_SUFFIX_RE = re.compile(r"(?::\d+(?:-\d+)?|::[A-Za-z0-9_.:-]+|#[A-Za-z0-9_./-]+)$")
 
 # Suffixes/patterns that are templates or globs, not claims.
 NON_CLAIM = re.compile(r"[*{}<>]|YYYY|<[a-z]|\.\.\.")
@@ -114,7 +119,7 @@ def _stale_allowlist_failures(root: Path, declared_future: set[str]) -> list[str
         "listed in DECLARED_FUTURE_ARTIFACTS — remove the stale "
         "suppression entry"
         for declared in sorted(declared_future)
-        if (root / declared).exists() or (root / declared).is_symlink()
+        if (root / declared).exists()
     ]
 
 
@@ -122,7 +127,12 @@ def _scan_claims(root: Path, declared_future: set[str]) -> tuple[list[str], set[
     failures: list[str] = []
     claimed_allowlisted: set[str] = set()
     for f in iter_files(root):
-        text = f.read_text(errors="replace")
+        try:
+            text = f.read_text(errors="replace")
+        except OSError as exc:
+            detail = exc.strerror or str(exc)
+            failures.append(f"{f.relative_to(root)}:1: cannot read document ({detail})")
+            continue
         line_iter = (
             _prose_lines(text)
             if f.suffix == ".md"
@@ -130,16 +140,17 @@ def _scan_claims(root: Path, declared_future: set[str]) -> tuple[list[str], set[
         )
         for lineno, line in line_iter:
             for m in CLAIM_RE.finditer(line):
-                claim = m.group(1)
+                raw_claim = m.group(1)
+                claim = CLAIM_SUFFIX_RE.sub("", raw_claim)
                 if NON_CLAIM.search(claim):
                     continue
                 if claim in declared_future:
                     claimed_allowlisted.add(claim)
                     continue
                 target = root / claim
-                if not (target.exists() or target.is_symlink()):
+                if not target.exists():
                     failures.append(
-                        f"{f.relative_to(root)}:{lineno}: `{claim}` does not resolve"
+                        f"{f.relative_to(root)}:{lineno}: `{raw_claim}` does not resolve"
                     )
     return failures, claimed_allowlisted
 
@@ -268,13 +279,47 @@ def self_test() -> int:
             ("docs/specs/link.md", "01-sample.md"),
             0,
         ),
+        (
+            "dangling symlink claim passed",
+            "`bin/dangling-tool`\n",
+            set(),
+            None,
+            ("bin/dangling-tool", "nonexistent-tool"),
+            1,
+        ),
+        (
+            "dangling scanned-dir symlink crashed or passed",
+            "ok\n",
+            set(),
+            None,
+            ("docs/specs/dangling-link.md", "nonexistent-target.md"),
+            1,
+        ),
+        (
+            "suffixed missing claim passed",
+            "`docs/specs/missing.md#anchor`\n",
+            set(),
+            None,
+            None,
+            1,
+        ),
+        (
+            "suffixed existing claim was wrongly flagged",
+            "`docs/specs/01-sample.md:1`\n",
+            set(),
+            None,
+            None,
+            0,
+        ),
     ]
     failures: list[str] = []
     for name, spec_text, declared, materialize, symlink, expected in probes:
         with tempfile.TemporaryDirectory() as td:
             root = build(td, spec_text=spec_text, materialize=materialize)
             if symlink is not None:
-                (root / symlink[0]).symlink_to(symlink[1])
+                link_path = root / symlink[0]
+                link_path.parent.mkdir(parents=True, exist_ok=True)
+                link_path.symlink_to(symlink[1])
             if quiet_check(root, declared) != expected:
                 failures.append(name)
     if failures:

@@ -2598,3 +2598,109 @@ def test_release_fires_transition_table(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     transition_case.payload(monkeypatch, capsys)
+
+
+def _load_require_green_workflows_module() -> ModuleType:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "scripts"
+        / "require_green_workflows.py"
+    )
+    spec = importlib.util.spec_from_file_location("require_green_workflows_gate", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_github_api_get_retries_transient_http_and_transport_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import email.message
+    import io
+    import urllib.error
+
+    gate_mod = _load_require_green_workflows_module()
+    sleeps: list[float] = []
+    monkeypatch.setattr(gate_mod.time, "sleep", sleeps.append)
+
+    headers_429 = email.message.Message()
+    headers_429["Retry-After"] = "3"
+    attempts: list[int] = []
+    outcomes: list[Callable[[], Any]] = [
+        lambda: (_ for _ in ()).throw(
+            urllib.error.HTTPError(
+                "https://api.github.com/test",
+                429,
+                "rate limited",
+                headers_429,
+                io.BytesIO(b"slow down"),
+            )
+        ),
+        lambda: (_ for _ in ()).throw(urllib.error.URLError("temporary dns failure")),
+        lambda: (_ for _ in ()).throw(TimeoutError("read timed out")),
+        lambda: io.BytesIO(b'{"workflow_runs": []}'),
+    ]
+
+    def fake_urlopen(request: Any, timeout: float = 30) -> Any:
+        attempts.append(1)
+        return outcomes.pop(0)()
+
+    monkeypatch.setattr(gate_mod.urllib.request, "urlopen", fake_urlopen)
+    payload = gate_mod.github_api_get("https://api.github.com/test", token="tok")
+    assert payload == {"workflow_runs": []}
+    assert len(attempts) == 4
+    assert sleeps[0] == 3.0
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 404])
+def test_github_api_get_fails_fast_on_non_transient_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    import email.message
+    import io
+    import urllib.error
+
+    gate_mod = _load_require_green_workflows_module()
+    calls = 0
+    monkeypatch.setattr(
+        gate_mod.time,
+        "sleep",
+        lambda _s: (_ for _ in ()).throw(AssertionError("should not sleep")),
+    )
+
+    def fake_urlopen(request: Any, timeout: float = 30) -> Any:
+        nonlocal calls
+        calls += 1
+        raise urllib.error.HTTPError(
+            "https://api.github.com/test",
+            status_code,
+            "client error",
+            email.message.Message(),
+            io.BytesIO(b"denied"),
+        )
+
+    monkeypatch.setattr(gate_mod.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match=f"GitHub API request failed: {status_code}"):
+        gate_mod.github_api_get("https://api.github.com/test", token="tok")
+    assert calls == 1
+
+
+def test_github_api_get_raises_runtime_error_after_exhausting_transient_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate_mod = _load_require_green_workflows_module()
+    sleeps: list[float] = []
+    monkeypatch.setattr(gate_mod.time, "sleep", sleeps.append)
+
+    def fake_urlopen(request: Any, timeout: float = 30) -> Any:
+        raise TimeoutError("socket read timed out")
+
+    monkeypatch.setattr(gate_mod.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match="GitHub API request failed"):
+        gate_mod.github_api_get("https://api.github.com/test", token="tok")
+    assert len(sleeps) >= 2

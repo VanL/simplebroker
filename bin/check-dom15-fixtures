@@ -19,9 +19,11 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 DEFAULT_SPEC = "docs/specs/01-development-documentation-operating-model.md"
 
@@ -305,9 +307,17 @@ def self_test() -> int:
         if not check(mutated):
             failures.append(f"mutation not caught: {name}")
     failures.extend(_fence_probe_failures())
-    # probe: missing target is an invocation error, not a crash
-    if run(["--spec", "/nonexistent/dom15-spec.md"]) != 2:
-        failures.append("missing spec file did not exit with invocation-error class")
+    # probe: missing target and malformed CLI flags are invocation errors, not crashes
+    for bad_argv in (
+        ["--spec", "/nonexistent/dom15-spec.md"],
+        ["--spec=/nonexistent/dom15-spec.md"],
+        ["--spec"],
+        ["--unknown-flag"],
+    ):
+        if run(bad_argv) != 2:
+            failures.append(
+                f"invocation-error probe {bad_argv!r} did not exit with code 2"
+            )
     if failures:
         for f in failures:
             print(f"check-dom15-fixtures self-test FAIL: {f}")
@@ -316,16 +326,32 @@ def self_test() -> int:
     return 0
 
 
+class _UsageError(Exception):
+    """Malformed CLI arguments rejected cleanly without SystemExit or traceback."""
+
+
+class _NoExitArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise _UsageError(message)
+
+
+def _build_parser() -> _NoExitArgumentParser:
+    parser = _NoExitArgumentParser(prog="check-dom15-fixtures", add_help=True)
+    parser.add_argument("--spec", default=DEFAULT_SPEC)
+    parser.add_argument("--self-test", action="store_true")
+    return parser
+
+
 def run(argv: list[str]) -> int:
-    spec = Path(DEFAULT_SPEC)
-    args = list(argv)
-    if "--spec" in args:
-        i = args.index("--spec")
-        try:
-            spec = Path(args[i + 1])
-        except IndexError:
-            print("check-dom15-fixtures: --spec requires a path")
-            return 2
+    parser = _build_parser()
+    try:
+        parsed = parser.parse_args(argv)
+    except _UsageError as exc:
+        print(f"check-dom15-fixtures: {exc}")
+        return 2
+    if parsed.self_test:
+        return self_test()
+    spec = Path(parsed.spec)
     try:
         text = spec.read_text(encoding="utf-8")
     except OSError as exc:
@@ -345,10 +371,7 @@ def run(argv: list[str]) -> int:
 
 
 def main() -> int:
-    argv = sys.argv[1:]
-    if "--self-test" in argv:
-        return self_test()
-    return run(argv)
+    return run(sys.argv[1:])
 
 
 if __name__ == "__main__":

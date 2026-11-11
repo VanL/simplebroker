@@ -34,6 +34,13 @@ IN_FLIGHT_STATUSES = frozenset({"draft", "active", "status-review"})
 INDEX_ROW_RE = re.compile(r"^\|\s*([^|]+\.md)\s*\|\s*([^|]+)\|", re.MULTILINE)
 PATH_CLAIM_RE = re.compile(r"`([^`\r\n]+)`")
 PATH_NON_CLAIM_RE = re.compile(r"[*{}<>]|YYYY|<[a-z]|\.\.\.")
+PATH_SUFFIX_RE = re.compile(r"(?:#[^`\s]+|::[A-Za-z_][A-Za-z0-9_.]*|:\d+(?:-\d+)?)$")
+GIT_PIN_RE = re.compile(r"^[0-9a-f]{7,40}:")
+ROOT_FILE_CLAIM_RE = re.compile(
+    r"^[A-Za-z0-9._-]+(?:\.(?:md|py|rst|txt|toml|yaml|yml|json|sh|cfg|ini))$",
+    re.IGNORECASE,
+)
+EXTENSIONLESS_ROOT_FILES = frozenset({"LICENSE", "Makefile", "Dockerfile"})
 SOURCE_WAIVER_RE = re.compile(
     r"^[ \t]*(?:[-*+][ \t]+)?Source spec:[ \t]+None[ \t]+—[ \t]+\S[^\r\n]*$",
     re.MULTILINE,
@@ -155,10 +162,21 @@ def _family_token(raw: str) -> str:
     return words[0].lower().strip("*_,;`()[]")
 
 
-def check_review_loop_section(plan_name: str, plan_text: str) -> list[str]:
-    """Validate cross-family review declarations when ## Independent Review Loop exists."""
+def check_review_loop_section(
+    plan_name: str, status_cell: str, plan_text: str
+) -> list[str]:
+    """Validate cross-family review declarations and require them on active/status-review class >= 3."""
     section = extract_section(plan_text, "## Independent Review Loop")
     if section is None:
+        status = primary_status(status_cell)
+        cls = effective_class(status_cell, plan_text)
+        if status in {"active", "status-review"} and cls is not None and cls >= 3:
+            return [
+                (
+                    f"{plan_name}: {status} class >= 3 plan requires "
+                    "## Independent Review Loop section"
+                )
+            ]
         return []
     author_match = AUTHOR_FAMILY_RE.search(section)
     reviewer_match = REVIEWER_FAMILY_RE.search(section)
@@ -195,23 +213,50 @@ def effective_class(index_status: str, plan_text: str) -> int | None:
     return max(base, 5) if match.group(2) else base
 
 
-def has_resolving_path(section: str, root: Path) -> bool:
-    """Return whether at least one concrete backticked repo path resolves."""
+def _normalize_repo_path_claim(raw_claim: str) -> str | None:
+    """Return normalized repo-path text if ``raw_claim`` is a concrete path claim."""
+    claim = raw_claim.strip()
+    if not claim or any(ch.isspace() for ch in claim):
+        return None
+    if claim.startswith("[") and claim.endswith("]"):
+        return None
+    if "://" in claim or GIT_PIN_RE.match(claim) or PATH_NON_CLAIM_RE.search(claim):
+        return None
+    stripped = PATH_SUFFIX_RE.sub("", claim)
+    if not stripped:
+        return None
+    if "/" in stripped or "\\" in stripped:
+        return stripped
+    if (
+        ROOT_FILE_CLAIM_RE.match(stripped) is not None
+        or stripped in EXTENSIONLESS_ROOT_FILES
+    ):
+        return stripped
+    return None
+
+
+def inspect_source_paths(section: str, root: Path) -> tuple[int, list[str]]:
+    """Return ``(resolving_count, broken_claims)`` across all concrete path claims."""
     resolved_root = root.resolve()
+    resolving_count = 0
+    broken_claims: list[str] = []
     for match in PATH_CLAIM_RE.finditer(section):
-        claim = match.group(1)
-        if PATH_NON_CLAIM_RE.search(claim):
+        raw_claim = match.group(1)
+        normalized = _normalize_repo_path_claim(raw_claim)
+        if normalized is None:
             continue
-        claim_path = Path(claim)
+        claim_path = Path(normalized)
         if claim_path.is_absolute():
+            broken_claims.append(raw_claim)
             continue
         target = root / claim_path
         try:
             target.resolve(strict=True).relative_to(resolved_root)
         except (OSError, RuntimeError, ValueError):
+            broken_claims.append(raw_claim)
             continue
-        return True
-    return False
+        resolving_count += 1
+    return resolving_count, broken_claims
 
 
 def check_plan_text(
@@ -223,10 +268,16 @@ def check_plan_text(
         return [f"{plan_name}: missing ## Source Documents* section"]
 
     problems: list[str] = []
-    if not has_resolving_path(section, root) and not SOURCE_WAIVER_RE.search(section):
+    resolving_count, broken_claims = inspect_source_paths(section, root)
+    if resolving_count == 0 and not SOURCE_WAIVER_RE.search(section):
         problems.append(
             f"{plan_name}: Source Documents has no resolving backticked repo "
             "path and no exact 'Source spec: None — <reason>' waiver"
+        )
+    for broken in broken_claims:
+        problems.append(
+            f"{plan_name}: Source Documents backticked repo path `{broken}` "
+            "does not resolve inside repo root"
         )
 
     if effective_class(status_cell, plan_text) == 5 and not (
@@ -237,7 +288,7 @@ def check_plan_text(
             "THEORY/REV/ALT record or exact 'Theory: N/A — <reason>' waiver"
         )
 
-    problems.extend(check_review_loop_section(plan_name, plan_text))
+    problems.extend(check_review_loop_section(plan_name, status_cell, plan_text))
     return problems
 
 
@@ -340,6 +391,11 @@ def fixture_index() -> str:
 def fixture_plans() -> dict[str, str]:
     """Return a passing corpus covering every declared grammar branch."""
     path_source = "- `docs/specs/source.md`"
+    review_loop = """## Independent Review Loop
+
+- Author family: Gemini
+- Reviewer family: Claude
+- Review invocation: `skills/call-agent/SKILL.md` (`claude -p ...`, 540s bound)"""
     return {
         "active.md": f"""# Active
 Class: 5
@@ -348,25 +404,25 @@ Class: 5
 
 {path_source}
 
-## Independent Review Loop
-
-- Author family: Gemini
-- Reviewer family: Claude
-- Review invocation: `skills/call-agent/SKILL.md` (`claude -p ...`, 540s bound)
+{review_loop}
 """,
-        "code-source.md": """# Code source
+        "code-source.md": f"""# Code source
 Class: 3
 
 ## Source Documents
 
 - `simplebroker/db.py`
+
+{review_loop}
 """,
-        "root-source.md": """# Root source
+        "root-source.md": f"""# Root source
 Class: 3
 
 ## Source Documents
 
 - `README.md`
+
+{review_loop}
 """,
         "draft-waiver.md": """# Draft waiver
 Class: 5
@@ -383,6 +439,8 @@ Class: 5
 
 {path_source}
 - `docs/program-theory.md` [THEORY-1]
+
+{review_loop}
 """,
         "revision.md": f"""# Revision
 Class: 5
@@ -391,6 +449,8 @@ Class: 5
 
 {path_source}
 - `docs/program-theory.md` [REV-THEORY-001]
+
+{review_loop}
 """,
         "alternative.md": f"""# Alternative
 Class: 5
@@ -407,6 +467,8 @@ Class: 3+P
 
 {path_source}
 Theory: N/A — no governing product-theory record.
+
+{review_loop}
 """,
         "fallback.md": f"""# Fallback
 Class: 5
@@ -432,6 +494,8 @@ Class: 5
 
 {path_source}
 - `docs/program-theory.md` [THEORY-INDENT]
+
+{review_loop}
 """,
         "unclassified.md": f"""# Unclassified
 
@@ -687,6 +751,18 @@ def mutation_probe_failures(root: Path) -> list[str]:
             "- Tier-1 attempts: `claude -p ...` (540s, timed out); `codex exec ...` (540s, auth error)\n",
             "",
             "is not a distinct cross-family reviewer",
+        ),
+        "missing review-loop section on active class 3": (
+            "code-source.md",
+            "## Independent Review Loop",
+            "## Review Notes",
+            "class >= 3 plan requires ## Independent Review Loop",
+        ),
+        "broken second path in Source Documents": (
+            "active.md",
+            "- `docs/specs/source.md`",
+            "- `docs/specs/source.md`\n- `docs/specs/missing-second.md`",
+            "missing-second.md` does not resolve",
         ),
     }
     for name, (plan_name, old, new, expected) in mutations.items():

@@ -193,8 +193,28 @@ def fetch_workflow_runs(
         page += 1
 
 
+TRANSIENT_HTTP_STATUS_CODES = frozenset({429, 502, 503, 504})
+GITHUB_API_MAX_ATTEMPTS = 4
+GITHUB_API_BASE_BACKOFF_SECONDS = 1.0
+GITHUB_API_MAX_BACKOFF_SECONDS = 60.0
+
+
+def _retry_delay_seconds(attempt: int, retry_after_header: str | None) -> float:
+    if retry_after_header is not None:
+        try:
+            parsed = float(retry_after_header.strip())
+        except ValueError:
+            parsed = -1.0
+        if parsed >= 0:
+            return min(parsed, GITHUB_API_MAX_BACKOFF_SECONDS)
+    return min(
+        GITHUB_API_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)),
+        GITHUB_API_MAX_BACKOFF_SECONDS,
+    )
+
+
 def github_api_get(url: str, *, token: str) -> dict[str, object]:
-    """Return a JSON object from the GitHub API."""
+    """Return a JSON object from the GitHub API with bounded transient retry."""
 
     request = urllib.request.Request(
         url,
@@ -205,14 +225,34 @@ def github_api_get(url: str, *, token: str) -> dict[str, object]:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"GitHub API request failed: {exc.code} {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"GitHub API request failed: {exc}") from exc
+    payload: object = None
+    for attempt in range(1, GITHUB_API_MAX_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.load(response)
+            break
+        except urllib.error.HTTPError as exc:
+            retry_after = (
+                exc.headers.get("Retry-After") if exc.headers is not None else None
+            )
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")
+            finally:
+                exc.close()
+            if (
+                exc.code in TRANSIENT_HTTP_STATUS_CODES
+                and attempt < GITHUB_API_MAX_ATTEMPTS
+            ):
+                time.sleep(_retry_delay_seconds(attempt, retry_after))
+                continue
+            raise RuntimeError(
+                f"GitHub API request failed: {exc.code} {detail}"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt < GITHUB_API_MAX_ATTEMPTS:
+                time.sleep(_retry_delay_seconds(attempt, None))
+                continue
+            raise RuntimeError(f"GitHub API request failed: {exc}") from exc
 
     match payload:
         case dict():

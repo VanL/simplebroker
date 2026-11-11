@@ -206,7 +206,7 @@ Pressure: The implementation grew through real use, optional backends, and safet
 Evidence:
 - contemporaneous: [THEORY-7] source-pinned founding evidence, lines 12 and 239
 - contemporaneous: commit `8b36b81200d9a09aa7b4710fbca15f389b0ce005`, whose README diff replaces the 1,000-line ceiling with afternoon understandability
-- contemporaneous: `docs/agent-context/engineering-principles.md` §14 and `docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md` at `2daa2fb48dd478fee5c01bec86add53793d55940`
+- contemporaneous: `docs/agent-context/engineering-principles.md` §14 and source-pinned `2daa2fb48dd478fee5c01bec86add53793d55940:docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md`
 - owner-recalled: approved [THEORY-1] and [THEORY-4] account in the related plan
 
 ### [REV-THEORY-002] Topology widened without becoming a broker platform

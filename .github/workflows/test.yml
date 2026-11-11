@@ -215,6 +215,8 @@ jobs:
       UV_PYTHON: "3.12"
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        fetch-depth: 0
 
     - name: Set up Python
       id: sync-python
@@ -238,6 +240,13 @@ jobs:
     - name: Install dependencies
       run: |
         uv sync --frozen --extra dev --extra pg --extra redis --python "${{ steps.sync-python.outputs.python-path }}"
+
+    - name: Run documentation and governance gates
+      run: |
+        uv run --frozen --no-sync python bin/coalesce-check
+        uv run --frozen --no-sync python bin/check-doc-paths
+        uv run --frozen --no-sync python bin/check-plan-context
+        uv run --frozen --no-sync python bin/check-dom15-fixtures
 
     - name: Install ShellCheck
       run: |
