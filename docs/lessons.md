@@ -97,6 +97,42 @@ pass; bootstrap source `2f93ee5`)
 
 ## Ledger
 
+- 2026-11-10: Wrapping a client library's URL parser (`redis.connection.parse_url`)
+  with `urllib.parse.urlsplit` for validation or credential supplementation must
+  check the driver parser's effective option dictionary rather than assuming
+  `parsed.hostname` or `parsed.password` is populated. Drivers accept hostless
+  defaults (`redis://`, `redis:///2`), query-supplied hosts (`?host=localhost`),
+  and query-supplied credentials (`?password=explicit`), and injecting userinfo
+  credentials overwrites query parameters on re-parse. (Harvested from
+  2026-11-10-deep-dive-review-remediation-plan.md at `7b1ae07`.)
+
+- 2026-11-10: Re-entrant same-thread operations on a shared session core
+  (`_ProcessBrokerSession`) must push and restore per-operation `stop_event`
+  tokens on a thread-local stack rather than resetting to `None` on exit, or an
+  inner un-cancelled helper operation (`outbox.write(...)` inside
+  `inbox.read_generator()`) silently strips cancellation from the outer caller.
+  (Harvested from 2026-11-10-deep-dive-review-remediation-plan.md at `7b1ae07`.)
+
+- 2026-11-10: Process-ownership guards across `fork()` must follow each
+  underlying registration, not only the newest wrapper. A composite waiter
+  (`RedisMultiQueueActivityWaiter`) constructed in the child carries the child's
+  PID, yet its shared-listener fast path would still acquire the parent
+  listener's lock if it did not also verify that every open constituent was
+  created in the child's process. (Harvested from
+  2026-11-10-fork-inherited-activity-waiter-plan.md at `0ac2cfc`.)
+
+- 2026-11-10: Client drivers (`psycopg`/libpq, `sqlite3`, `redis-py`) do not
+  serialize `close()` from a releasing thread against a statement or PRAGMA
+  executing on another thread, turning cross-thread teardown into freed-memory
+  corruption, segfaults, or mid-command socket errors. Only the execution
+  context mid-operation on a connection may finish, return, or close it:
+  listeners close their own connection in `finally` after signaling/joining,
+  SQLite settings run before publication or under `_operation_lock`, PostgreSQL
+  re-entrant releases defer to outermost scope exit, and `RedisRunner.close()`
+  acquires `BlockingConnectionPool` queue slots exclusively rather than calling
+  `pool.disconnect()` across live checkouts. (Harvested from
+  2026-11-10-backend-thread-ownership-plan.md at `4cea0cb`.)
+
 - 2026-11-10: Dropping an inherited cache can run finalizers in the forked
   child, even when the cache's own lock was replaced. A finalizer can block on
   a lock held by a vanished parent thread. Child recovery must distinguish

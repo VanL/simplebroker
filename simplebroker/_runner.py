@@ -365,7 +365,7 @@ class SQLiteRunner:
             # Configure before publication: close() reaches only tracked
             # connections, and Python's sqlite3 wrapper is not safe against a
             # foreign close() during a statement. Plan:
-            # docs/plans/2026-11-10-backend-thread-ownership-plan.md (D8).
+            # 2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (D8).
             try:
                 self._apply_connection_settings(conn)
                 if getattr(self._thread_local, "setup_busy_timeout", False):
@@ -439,7 +439,7 @@ class SQLiteRunner:
         here: ``close()`` may close every tracked connection from another
         thread, and it does so under ``_operation_lock`` (SM-SQLITE-RUNNER).
 
-        Spec: [SB-API-11]. Plan: docs/plans/2026-11-10-backend-thread-ownership-plan.md (D8).
+        Spec: [SB-API-11]. Plan: 2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (D8).
         """
         self._recover_after_fork_if_needed()
         with (

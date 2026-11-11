@@ -65,7 +65,7 @@ class _ClosingConnectionPool(redis.BlockingConnectionPool):
     and none is touched while a thread still holds it. A slot still out at the
     bound comes back through its owner's release, which disconnects the
     connection on the owner's thread. Plan:
-    docs/plans/2026-11-10-backend-thread-ownership-plan.md (D5, owner decision
+    2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (D5, owner decision
     Q4 option b).
     """
 
@@ -146,7 +146,7 @@ class RedisRunner:
         self._check_fork()
         # Read once: a concurrent close() may clear the attribute between a
         # check and a second read. Plan:
-        # docs/plans/2026-11-10-backend-thread-ownership-plan.md (D6).
+        # 2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (D6).
         client = self._client
         if client is None:
             with self._client_lock:

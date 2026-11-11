@@ -339,7 +339,7 @@ def _raise_if_inherited(owner_pid: int) -> None:
 
     A forked child inherits the waiter and its listener object but not the
     listener thread, and a lock a parent thread held at the fork stays held.
-    Plan: docs/plans/2026-11-10-fork-inherited-activity-waiter-plan.md (D3).
+    Plan: 2026-11-10-fork-inherited-activity-waiter-plan.md at 0ac2cfc (D3).
     """
     if os.getpid() != owner_pid:
         raise OperationalError(_INHERITED_WAITER_MESSAGE)

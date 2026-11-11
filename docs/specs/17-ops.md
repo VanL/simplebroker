@@ -289,7 +289,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- [Deep-dive review remediation](../plans/2026-11-10-deep-dive-review-remediation-plan.md):
+- retired: 2026-11-10-deep-dive-review-remediation-plan.md — source `7b1ae07`;
+  see the ledger in `docs/plans/README.md`:
   aligns [SB-OPS-7] CLI relative legacy-SQLite cleanup containment with
   [SB-CLI-2] (owner decision Q1) and repairs [SB-OPS-6] Redis multi-batch
   `vacuum()` draining.

@@ -693,7 +693,7 @@ class _SharedActivityListener:
         connection without taking the connection lock. The thread sees the
         stop request after that statement returns and closes the connection in
         ``_run``'s ``finally``; this call returns after the bounded join either
-        way. Plan: docs/plans/2026-11-10-backend-thread-ownership-plan.md (D1).
+        way. Plan: 2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (D1).
         """
         self._stop_event.set()
         self._wake()
@@ -789,7 +789,7 @@ def _raise_if_inherited(owner_pid: int) -> None:
 
     A forked child inherits the waiter and its listener object but not the
     listener thread, and a lock a parent thread held at the fork stays held.
-    Plan: docs/plans/2026-11-10-fork-inherited-activity-waiter-plan.md (D3).
+    Plan: 2026-11-10-fork-inherited-activity-waiter-plan.md at 0ac2cfc (D3).
     """
     if os.getpid() != owner_pid:
         raise OperationalError(_INHERITED_WAITER_MESSAGE)
@@ -1256,7 +1256,7 @@ class PostgresRunner:
         after the operation's own cleanup: before that the operation may be
         between checkout and ``execute()``, inside a statement, or between the
         statements of its transaction. Plan:
-        docs/plans/2026-11-10-backend-thread-ownership-plan.md (D3, D4).
+        2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (D3, D4).
         """
         depth = int(getattr(self._thread_local, "operation_depth", 0))
         self._thread_local.operation_depth = depth + 1

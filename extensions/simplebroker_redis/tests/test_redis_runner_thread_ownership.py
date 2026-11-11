@@ -5,7 +5,7 @@ returns. ``RedisRunner.close()`` may run concurrently from another thread
 ([SB-API-11]); it must not close that connection under the command or hand a
 caller a half-closed client.
 
-Plan: docs/plans/2026-11-10-backend-thread-ownership-plan.md (F6, F7; Q4 option b).
+Plan: 2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (F6, F7; Q4 option b).
 """
 
 from __future__ import annotations

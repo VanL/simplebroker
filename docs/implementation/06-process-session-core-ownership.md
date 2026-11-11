@@ -377,7 +377,7 @@ without taking the connection lock, and every last-waiter close requests an
 UNLISTEN batch first, so closing from the releasing thread freed the connection
 under that statement (heap corruption). Wakes and the listener's close of its
 socket pair are serialized, so a wake after close writes nothing. Plan:
-`2026-11-10-backend-thread-ownership-plan.md`. Narrowing channels cannot reduce PostgreSQL 18 server work:
+`2026-11-10-backend-thread-ownership-plan.md` at `4cea0cb`. Narrowing channels cannot reduce PostgreSQL 18 server work:
 through 18, every NOTIFY signals every listening session in the database and
 each runs a read transaction. PostgreSQL 19 signals only sessions listening on
 the notified channel. A schema-wide channel can never benefit, because every
@@ -445,7 +445,7 @@ constituent's own refusal. This covers waiter operations only. An inherited
 `BaseWatcher` still takes its `_stop_lock` in `stop()`, which its
 interpreter-exit finalizer also calls, before any waiter cleanup, and an
 inherited SQL-backed Queue session rejects use; neither is recovered across
-`fork()`. Plan: `2026-11-10-fork-inherited-activity-waiter-plan.md`.
+`fork()`. Plan: `2026-11-10-fork-inherited-activity-waiter-plan.md` at `0ac2cfc`.
 
 The process-session registry checks PID before acquire, release, or shutdown
 takes its global lock. Child recovery retains the inherited entry graph without
@@ -520,7 +520,7 @@ operation owns its checkout from acquisition through its own cleanup: a
 `release_thread_connection()` or `shutdown()` that runs re-entrantly on that
 thread is performed after the operation, and shutdown leaves a live thread's
 leased checkout to that thread, whose release returns it into the closed pool,
-which closes it there. Plan: `2026-11-10-backend-thread-ownership-plan.md`.
+which closes it there. Plan: `2026-11-10-backend-thread-ownership-plan.md` at `4cea0cb`.
 
 Runner close is resource-scoped, not terminal. At its linearization point,
 `SQLiteRunner.close()` advances the connection generation and snapshots all
@@ -856,6 +856,15 @@ in `tests/test_process_broker_session.py` (`project_admission` tests) and on
 real PostgreSQL in `extensions/simplebroker_pg/tests/test_pg_project_admission.py`.
 
 ## Related Plans
+
+- retired: 2026-11-10-fork-inherited-activity-waiter-plan.md — source `0ac2cfc`;
+  see the ledger in `docs/plans/README.md`; PostgreSQL and Redis activity
+  waiters inherited across `fork()` abandon the parent listener and check
+  per-constituent PIDs on Redis composites.
+- retired: 2026-11-10-backend-thread-ownership-plan.md — source `4cea0cb`;
+  see the ledger in `docs/plans/README.md`; owning-context connection teardown
+  across PostgreSQL listeners/runners, SQLite runner setup, and slot-acquiring
+  `RedisRunner.close()`.
 
 - retired: 2026-11-08-pg-notify-fanout-plan.md — source `178822b`;
   see the ledger in `docs/plans/README.md`; PostgreSQL per-queue

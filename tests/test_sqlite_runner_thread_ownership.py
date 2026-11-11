@@ -8,7 +8,7 @@ concurrent ``close()`` of a connection created with ``check_same_thread=False``
 (a reproducer of the unlocked admission read racing ``runner.close()``
 segfaults within seconds).
 
-Plan: docs/plans/2026-11-10-backend-thread-ownership-plan.md (F10, D8).
+Plan: 2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (F10, D8).
 """
 
 from __future__ import annotations

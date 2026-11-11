@@ -441,7 +441,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- [Deep-dive review remediation](../plans/2026-11-10-deep-dive-review-remediation-plan.md):
+- retired: 2026-11-10-deep-dive-review-remediation-plan.md — source `7b1ae07`;
+  see the ledger in `docs/plans/README.md`:
   extends [SB-CLI-2] relative legacy-SQLite physical containment to `--cleanup`
   (owner decision Q1), specifies plain-text stderr control/escape sanitization
   and `--quiet` suppression of `move` cap and CLI inline-password commentary,

@@ -7,7 +7,7 @@ out by another thread under that statement. Each test pins a statement in
 flight by hooking ``Connection.wait``, which psycopg calls inside that lock, and
 spies on ``ConnectionPool.putconn``.
 
-Plan: docs/plans/2026-11-10-backend-thread-ownership-plan.md (F4, F5; review R1).
+Plan: 2026-11-10-backend-thread-ownership-plan.md at 4cea0cb (F4, F5; review R1).
 """
 
 from __future__ import annotations

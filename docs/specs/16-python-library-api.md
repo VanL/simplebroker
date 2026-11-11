@@ -1478,14 +1478,16 @@ _Implementation mapping_: `extensions/simplebroker_pg/simplebroker_pg/connection
 
 ## Related Plans
 
-- [Deep-dive review remediation](../plans/2026-11-10-deep-dive-review-remediation-plan.md):
+- retired: 2026-11-10-deep-dive-review-remediation-plan.md — source `7b1ae07`;
+  see the ledger in `docs/plans/README.md`:
   clarifies [SB-API-2] inline-password detection/redaction (`HR-1` owner
   sign-off) and PostgreSQL unknown-option rejection across plugin entry points,
   aligns [SB-API-11] v8 historical wording with v9, and repairs same-thread
   `_stop_event` restoration, SQL/Redis `alias_version` monotonicity, watcher
   thread publication, and Redis `OperationalError` / Lua-`PUBLISH` parity.
 
-- [Backend thread ownership](../plans/2026-11-10-backend-thread-ownership-plan.md):
+- retired: 2026-11-10-backend-thread-ownership-plan.md — source `4cea0cb`;
+  see the ledger in `docs/plans/README.md`:
   only the owning context closes or uses a backend connection (PostgreSQL
   listener close, runner release and shutdown, SQLite runner setup, Redis
   client publication) under the existing [SB-API-6] and [SB-API-11]

@@ -7,7 +7,7 @@ forever in the child. Inherited state is abandoned, never locked or finalized:
 ``wait()`` must report the inheritance as an ``OperationalError`` so the owner
 creates a fresh waiter, which the reset registry backs with a new listener.
 
-Plan: docs/plans/2026-11-10-fork-inherited-activity-waiter-plan.md.
+Plan: 2026-11-10-fork-inherited-activity-waiter-plan.md at 0ac2cfc.
 """
 
 from __future__ import annotations
