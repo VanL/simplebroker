@@ -29,7 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-11-11-runtime-boundaries-and-failure-handling-plan.md | active — owner adopted plan; D1–D7 promoted; code slices implemented, reviewed, gate-green and committed; Weft companion adoption and release coordination open |
+| 2026-11-11-runtime-boundaries-and-failure-handling-plan.md | completed — implemented, reviewed and released as 8.8.2 / 4.8.2 / 4.8.2 (tag commit `984ce3ca`); Weft companion change landed in Weft as `87e5aeb5` |
 | 2026-11-10-deep-dive-review-remediation-plan.md | retired-pending — soft-retired 2026-11-10; source `d8d7c79` is local-only until published; dedicated deletion pass requires publication and current-tree harvest verification |
 | 2026-11-10-fork-inherited-activity-waiter-plan.md | retired-pending — soft-retired 2026-11-10; published source `0ac2cfc`; dedicated deletion pass requires current-tree harvest verification |
 | 2026-11-10-backend-thread-ownership-plan.md | retired-pending — soft-retired 2026-11-10; published source `4cea0cb`; dedicated deletion pass requires current-tree harvest verification |

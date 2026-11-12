@@ -1,7 +1,7 @@
 # Runtime boundaries and failure handling
 
 Class: 5 — public fork, target-lifetime, validation, CLI failure, and retry-contract changes; [DOM-5] risky triggers include cross-process ownership, deferred generator cleanup, and compatibility surfaces. Hardening applies. No program-theory or process-guidance revision is proposed.
-Status: active
+Status: completed
 Date: 2026-11-11
 Owner: SimpleBroker product owner; implementing agent for the approved slices.
 Boundary: the seven investigated reports R1–R7 below, plus downstream Weft compatibility for R1.
@@ -550,7 +550,7 @@ plan remains open until all seven reports and downstream coordination are closed
    slice and author a revised delta with generation identity or a stronger
    recovery witness; do not quietly change this plan's disposition.
 
-6. [ ] **Downstream and integration closure.** Complete Weft compatibility
+6. [x] **Downstream and integration closure.** Complete Weft compatibility
    checks below, the final gates, independent combined review, and reciprocal
    spec/test/implementation links. Evaluate skill/runbook improvement candidates
    without silently promoting process rules. Record durable implementation
@@ -1189,10 +1189,42 @@ test helper's six-second diagnostic dump lands in the compared stderr. With
   plan's changelog entries are folded into the existing `[8.8.2]` section,
   and the alias-version counter is described there as introduced in that
   release.
-- Task 6 stays open: the Weft companion plan needs owner adoption and can land
-  only with a released SimpleBroker that contains D1, because Weft resolves
-  SimpleBroker from the package index. Until then downstream compatibility is
-  not claimed, and the Status Index row stays active.
+- Task 6 stayed open at that record pending the Weft companion change. It is
+  closed below.
+
+### Release and downstream closure, 2026-11-11
+
+Released: simplebroker 8.8.2, simplebroker-pg 4.8.2 and simplebroker-redis
+4.8.2, tagged at `984ce3ca` after the Test, PostgreSQL and Redis workflows
+were green on that commit; the three release-gate workflows published to the
+package index and created the GitHub Releases.
+
+Weft: the companion plan
+`2026-11-11-simplebroker-sqlite-fork-compatibility-plan.md` was carried out
+and committed in the Weft repository as `87e5aeb5`, one change holding the
+dependency floors (8.8.2 / 4.8.2), the five spec deltas and the rewritten
+real-fork tests. No Weft runtime module changed. Against the installed
+release its full default suite passed (6988 passed, 51 skipped), the rewritten
+tests passed on SQLite and on PostgreSQL 18, and they fail against the 8.8.1
+source for the intended reason. Its completion review (agy) approved. That
+commit is local to the Weft checkout until its owner pushes it.
+
+Possession probe ([THEORY-6]), self-administered at completion. Hypothetical:
+make forked children "just work" by closing the parent's SQLite connections
+in a before-fork hook, or by reopening in the child. Placement: refused. It is
+the locally plausible regression [THEORY-0] names (closing inherited handles
+around `os.fork()`), it claims recovery across an incompatible execution
+context ([REV-THEORY-005]), and it trades a narrow named guarantee for
+magical recovery ([THEORY-4]); the plan's alternatives register reaches the
+same answer from the mechanics. Prediction: missed. The account should have
+predicted the class of defect the first CI run then showed, process-global
+state poisoned by an unrelated owner that never released it, and the local
+gates were not shaped to look for it. The lesson dated 2026-11-11 records the
+correction.
+
+This closes Task 6 and the plan. Not done here, by owner choice or absence of
+a platform: the failed-open witness stays as reviewed (S3), and Windows was
+exercised only by CI.
 ## Out of Scope
 
 No runtime implementation in the planning turn; no release, deployment, commit,
